@@ -1,0 +1,25 @@
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+certs/
+private/
+
+# Storage data and backups
+data/
+volumes/
+backups/
+*.backup
+*.dump
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
