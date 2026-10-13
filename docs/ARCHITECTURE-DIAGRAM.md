@@ -1,75 +1,88 @@
 # AURA Storage — Architecture Diagram
 
-This is the rendered Mermaid version of the target architecture for the initial single-node MVP. It is a design diagram, not a statement that the current Compose deployment has already been validated.
+This color-coded Mermaid diagram describes the intended initial single-node MVP. It is a target architecture, not a claim that the VPS has already been provisioned or that all services have been tested.
 
 ```mermaid
 flowchart TB
-    subgraph CLIENTS["Clients and applications"]
-      ADMIN["Operator / S3 client<br/>AWS CLI · rclone · Cyberduck"]
-      APPS["Applications<br/>OpenBooks · future Axiom integrations"]
-      USERS["End users<br/>Authorised downloads"]
+    %% AURA Storage — target architecture, initial single-node MVP
+    classDef client fill:#102A56,stroke:#38BDF8,color:#FFFFFF,stroke-width:2px
+    classDef proxy fill:#312E81,stroke:#A78BFA,color:#FFFFFF,stroke-width:2px
+    classDef api fill:#082F49,stroke:#22D3EE,color:#FFFFFF,stroke-width:2px
+    classDef storage fill:#064E3B,stroke:#34D399,color:#FFFFFF,stroke-width:2px
+    classDef ops fill:#3B0764,stroke:#C084FC,color:#FFFFFF,stroke-width:2px
+    classDef backup fill:#713F12,stroke:#FACC15,color:#FFFFFF,stroke-width:2px
+    classDef future fill:#431407,stroke:#FB923C,color:#FFFFFF,stroke-width:2px
+
+    subgraph CLIENTS["Clients et applications"]
+      OPERATOR["Administrateur / clients S3<br/>AWS CLI · rclone · Cyberduck"]
+      APPS["Applications clientes<br/>OpenBooks · autres services"]
+      USERS["Utilisateurs autorisés<br/>via leurs applications"]
     end
 
-    subgraph EDGE["Public edge"]
-      DNS["DNS: storage.example.tld"]
-      TLS["HTTPS reverse proxy<br/>TLS certificate · request limits"]
+    subgraph AURA["AURA-001 · VPS de stockage"]
+      direction TB
+      HOST["Ubuntu Server LTS<br/>Docker Engine + Docker Compose"]
+      TRAEFIK["Traefik<br/>Reverse proxy · HTTPS · Let's Encrypt<br/>Dashboard protégé"]
+      MGMT["AURA Management API<br/>Catalogue · dossiers · métadonnées<br/>Imports · opérations autorisées"]
+      S3["SeaweedFS Filer + S3 API<br/>API de données privée"]
+      MASTER["SeaweedFS Master<br/>topologie et métadonnées"]
+      VOLUME["SeaweedFS Volume server<br/>contenu des objets"]
+      DISK[("Volumes persistants<br/>données et métadonnées")]
+      HOST --> TRAEFIK
+      HOST --> MGMT
+      HOST --> S3
+      TRAEFIK -->|"routes privées"| MGMT
+      TRAEFIK -->|"route S3 HTTPS"| S3
+      MGMT -->|"API interne / SDK"| S3
+      S3 --> MASTER
+      S3 --> VOLUME
+      MASTER --> VOLUME
+      VOLUME --> DISK
     end
 
-    subgraph VPS["AURA-001 · Storage VPS"]
-      FW["Host firewall<br/>Only required ports exposed"]
-      S3["SeaweedFS S3 endpoint<br/>Private object API"]
-      FILER["SeaweedFS Filer<br/>Namespace and metadata"]
-      MASTER["SeaweedFS Master<br/>Volume topology"]
-      VOLUME["SeaweedFS Volume server<br/>Object data"]
-      DISK[("Persistent host disk<br/>Data and metadata")]
-      OPS["Operations<br/>Health · logs · capacity"]
+    subgraph OPERATIONS["Sécurité et exploitation"]
+      SSH["SSH par clés<br/>accès restreint"]
+      MON["Surveillance<br/>santé · disque · trafic · journaux"]
+      SECRETS["Secrets hors Git<br/>identités S3 par application"]
     end
 
-    subgraph BACKUP["Independent backup destination"]
-      SNAP["Consistent backup process"]
-      VAULT[("Separate VPS / provider / storage")]
-      RESTORE["Scheduled restore test<br/>Integrity verification"]
+    subgraph RECOVERY["Protection des données"]
+      BACKUP[("Sauvegarde indépendante<br/>autre VPS / compte / fournisseur")]
+      RESTORE["Restauration testée<br/>intégrité vérifiée"]
     end
 
-    ADMIN -->|"S3 API over HTTPS"| DNS
-    APPS -->|"S3 API / signed URLs"| DNS
-    USERS -->|"HTTPS download"| DNS
-    DNS --> TLS
-    TLS --> FW
-    FW -->|"Forward only to S3 endpoint"| S3
-    S3 --> FILER
-    FILER <--> MASTER
-    FILER --> VOLUME
-    MASTER --> VOLUME
-    VOLUME <--> DISK
-    FILER <--> DISK
-    VPS -. "metrics and logs" .-> OPS
-    DISK --> SNAP
-    SNAP --> VAULT
-    VAULT --> RESTORE
+    subgraph FUTURE["Intégrations ultérieures"]
+      AXIOM["Axiom<br/>supervision via API authentifiée"]
+      AURA2["AURA-002<br/>capacité supplémentaire"]
+    end
 
-    classDef client fill:#12345a,stroke:#38bdf8,color:#ffffff,stroke-width:2px
-    classDef edge fill:#2e185e,stroke:#a78bfa,color:#ffffff,stroke-width:2px
-    classDef service fill:#063d4b,stroke:#22d3ee,color:#ffffff,stroke-width:2px
-    classDef disk fill:#123d2a,stroke:#4ade80,color:#ffffff,stroke-width:2px
-    classDef backup fill:#4a3108,stroke:#facc15,color:#ffffff,stroke-width:2px
-    classDef ops fill:#402020,stroke:#fb7185,color:#ffffff,stroke-width:2px
+    OPERATOR -->|"SSH sécurisé"| SSH
+    OPERATOR -->|"HTTPS / S3"| TRAEFIK
+    APPS -->|"HTTPS / API S3<br/>clés limitées ou URL signées"| TRAEFIK
+    USERS -->|"accès autorisé"| APPS
+    SECRETS -. "authentification" .-> S3
+    MON -. "contrôles locaux" .-> HOST
+    DISK -->|"sauvegarde cohérente planifiée"| BACKUP
+    BACKUP --> RESTORE
+    MGMT -. "API authentifiée, plus tard" .-> AXIOM
+    AURA -. "extension future" .-> AURA2
 
-    class ADMIN,APPS,USERS client
-    class DNS,TLS,FW edge
-    class S3,FILER,MASTER,VOLUME service
-    class DISK disk
-    class SNAP,VAULT,RESTORE backup
-    class OPS ops
+    class OPERATOR,APPS,USERS client
+    class TRAEFIK proxy
+    class MGMT,S3 api
+    class HOST,MASTER,VOLUME,DISK storage
+    class SSH,MON,SECRETS ops
+    class BACKUP,RESTORE backup
+    class AXIOM,AURA2 future
 ```
 
-## Reading the diagram
+## Color legend
 
 - **Blue:** clients and applications.
-- **Purple:** public edge and HTTPS.
-- **Cyan:** internal storage services.
-- **Green:** persistent primary storage.
-- **Yellow:** independent backup destination.
-- **Red:** operations and diagnostics.
+- **Purple:** Traefik reverse proxy and operations/security controls.
+- **Cyan:** APIs.
+- **Green:** storage engine and persistent data.
+- **Yellow:** independent backup and restore.
+- **Orange:** future integrations and expansion.
 
-The current VPS is not yet provisioned. Before production, validate the exact SeaweedFS topology, image flags, S3 authorization, TLS path, and backup consistency against the selected release.
+Traefik handles HTTPS routing and certificate automation. Its dashboard must be protected. SeaweedFS internal ports remain private. The AURA Management API is a separate planned component for catalogue, logical folders, metadata and import jobs; its implementation and contract still need to be built and tested. A single VPS is not high availability.
