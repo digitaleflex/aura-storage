@@ -1,64 +1,65 @@
 # AURA Storage
 
-AURA is an independently deployable, S3-compatible storage service for private objects used by applications such as OpenBooks and, later, Axiom.
+**AURA** is an independently operated storage service for private files. The initial deployment target is one Ubuntu Server LTS VPS with Docker Compose, Traefik, and SeaweedFS exposing an S3-compatible endpoint.
 
-> Status: bootstrap repository. The VPS has not yet been provisioned. This repository is a starting baseline, not proof of production readiness.
+> **Status:** preparation stage. The InterServer VPS has not yet been purchased. Files in this repository are an implementation baseline and detailed plan; the stack has not yet been validated on the real provider VPS.
 
-## Architecture
+## Architecture and documentation
 
-- [Rendered Mermaid architecture diagram](docs/ARCHITECTURE-DIAGRAM.md)
+- [Rendered architecture diagram](docs/ARCHITECTURE-DIAGRAM.md)
 - [Mermaid source](docs/ARCHITECTURE.mmd)
-- [Architecture explanation](docs/ARCHITECTURE.md)
+- [Architecture decisions and boundaries](docs/ARCHITECTURE.md)
+- [Detailed deployment runbook](docs/DEPLOYMENT.md)
+- [Security baseline](docs/SECURITY.md)
+- [API specification (proposal, not implemented)](docs/API-SPECIFICATION.md)
+- [OpenAPI contract draft](docs/openapi.yaml)
+- [Proposed catalogue data model](docs/DATA-MODEL.md)
+- [Operations playbook](docs/OPERATIONS-PLAYBOOK.md)
+- [Backup and restore](docs/BACKUP-RESTORE.md)
+- [Traefik configuration notes](config/traefik/README.md)
 
-The diagram describes the intended single-node MVP, including the public HTTPS edge, private SeaweedFS services, persistent storage, operations, and an independent backup destination. Validate the final Compose topology against the selected SeaweedFS release before production.
+## Intended topology
 
-## Initial design
+- **Traefik** publishes ports 80/443, routes HTTPS, and manages Let's Encrypt certificates through the HTTP-01 challenge.
+- **SeaweedFS master, volume and filer/S3 gateway** run as separate containers on a private storage network.
+- Only the S3 hostname is routed by the initial Traefik configuration. SeaweedFS administrative endpoints are not published on host ports.
+- Persistent data is mounted from the host filesystem.
+- **AURA Management API + PostgreSQL catalogue** are planned components. They are not implemented or included in the current Compose stack.
+- Independent backups and a successful restore test are mandatory before production imports.
 
-- One Ubuntu Server LTS VPS (initial single-node deployment).
-- Docker Engine and Compose.
-- Traefik for HTTPS routing and automatic certificate management; its dashboard must be protected.
-- SeaweedFS Filer + S3 API, with internal administration ports kept private.
-- Persistent host storage, not container writable layers.
-- A separate AURA Management API is planned for catalogue, logical folders, metadata and import jobs; it is not yet implemented.
-- Independent encrypted backup destination and tested restore procedure.
-- App-specific S3 identities with least privilege. Normal object access must not depend on Axiom or Azure.
+A single VPS is a single point of failure, not high availability. An S3-compatible endpoint does not itself provide redundancy.
 
-One VPS is a single point of failure; a single node is not high availability.
+## Before deployment
 
-## Before production
+1. Provision the VPS and verify actual OS, disk layout/mount, IP, transfer quota and renewal terms.
+2. Point the selected S3 DNS hostname at the VPS and configure firewall rules.
+3. Copy .env.example to .env and replace every example value locally.
+4. Create config/seaweedfs/s3.json from config/seaweedfs/s3.json.example, using the same generated credentials and a policy syntax verified for the chosen SeaweedFS release.
+5. Review and validate image versions, command flags, healthchecks, persistence behavior and Traefik labels.
+6. Run authenticated S3 upload/download, large-file/Range, restart persistence, independent backup and restore tests.
 
-1. Verify VPS disk layout, mount, transfer quota, region, renewal terms, and backup options.
-2. Secure SSH and host firewall.
-3. Generate local secrets; never commit `.env` or real credentials.
-4. Validate SeaweedFS image version, command flags, S3 policy syntax, and persistent data behavior.
-5. Configure DNS and HTTPS.
-6. Test authenticated upload/download, large files, Range requests, restart persistence, independent backup and restore.
+## Quick start after provisioning
 
-## Quick start (after provisioning and review)
+Do not run this as a blind copy/paste. Complete and review the deployment runbook first.
 
 ```bash
+git clone https://github.com/digitaleflex/aura-storage.git
+cd aura-storage
 cp .env.example .env
-# Generate credentials and update local configuration; never commit .env.
-# Create config/seaweedfs/s3.json from its example with matching credentials.
+# Edit .env locally: real hostname, email, pinned image versions, generated secrets.
+# Create config/seaweedfs/s3.json from the example; keep it local and chmod 600.
 docker compose config --quiet
 ```
 
-The included deployment configuration is a draft baseline. Review `docs/DEPLOYMENT.md` before running it and do not load important data until the acceptance checklist passes.
-
-## Repository structure
-
-- `docker-compose.yml`: initial topology.
-- `.env.example`: placeholders only.
-- `config/seaweedfs/s3.json.example`: policy template, to validate against selected SeaweedFS release.
-- `scripts/`: deployment validation and smoke-test helpers.
-- `docs/`: architecture, security, deployment, operations, backup and restore.
-- `tests/`: authenticated S3 smoke-test script.
+The initial Compose stack is not production-certified until its exact flags and S3 policy have been tested against the selected releases and actual VPS.
 
 ## Security rules
 
-- Never commit secrets, private keys, certificates, customer files, or backups.
-- Do not expose SeaweedFS master, filer, volume, metrics, or admin interfaces publicly.
-- Pin reviewed image versions; no `latest` in production.
-- Primary VPS storage is not a backup.
+- Never commit .env, config/seaweedfs/s3.json, secrets, keys, certificates, user files, or backups.
+- Only Traefik publishes ports 80 and 443 in the baseline.
+- Keep SeaweedFS master, volume, filer UI/admin, metrics, and other internal ports private.
+- Traefik's dashboard is not a file-management interface and has no public router by default.
+- Use separate least-privilege credentials per application.
+- The VPS is not a backup; use a separate destination and test restoration.
 
-No project license is selected yet. Do not assume reuse rights until one is chosen.
+No repository license has been selected. Do not assume reuse rights until a license is deliberately chosen.
