@@ -1,0 +1,40 @@
+name: aura-storage
+
+services:
+  seaweedfs:
+    image: ${SEAWEEDFS_IMAGE:?Set SEAWEEDFS_IMAGE in .env}
+    container_name: ${AURA_INSTANCE_ID:-aura-001}-seaweedfs
+    restart: unless-stopped
+    command:
+      - server
+      - -dir=/data
+      - -s3
+      - -s3.port=8333
+      - -s3.config=/etc/seaweedfs/s3.json
+      - -master.port=9333
+      - -volume.port=8080
+      - -filer
+      - -filer.port=8888
+    environment:
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${S3_BIND_ADDRESS:-127.0.0.1}:${S3_HOST_PORT:-8333}:8333"
+    volumes:
+      - ${AURA_DATA_DIR:-./data}:/data
+      - ./config/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    networks:
+      - storage-internal
+    security_opt:
+      - no-new-privileges:true
+    # Review image behavior and healthcheck tooling before production.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  storage-internal:
+    driver: bridge
+    internal: true
