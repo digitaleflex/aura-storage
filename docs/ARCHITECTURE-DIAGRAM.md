@@ -1,0 +1,75 @@
+# AURA Storage — Architecture Diagram
+
+This is the rendered Mermaid version of the target architecture for the initial single-node MVP. It is a design diagram, not a statement that the current Compose deployment has already been validated.
+
+```mermaid
+flowchart TB
+    subgraph CLIENTS["Clients and applications"]
+      ADMIN["Operator / S3 client<br/>AWS CLI · rclone · Cyberduck"]
+      APPS["Applications<br/>OpenBooks · future Axiom integrations"]
+      USERS["End users<br/>Authorised downloads"]
+    end
+
+    subgraph EDGE["Public edge"]
+      DNS["DNS: storage.example.tld"]
+      TLS["HTTPS reverse proxy<br/>TLS certificate · request limits"]
+    end
+
+    subgraph VPS["AURA-001 · Storage VPS"]
+      FW["Host firewall<br/>Only required ports exposed"]
+      S3["SeaweedFS S3 endpoint<br/>Private object API"]
+      FILER["SeaweedFS Filer<br/>Namespace and metadata"]
+      MASTER["SeaweedFS Master<br/>Volume topology"]
+      VOLUME["SeaweedFS Volume server<br/>Object data"]
+      DISK[("Persistent host disk<br/>Data and metadata")]
+      OPS["Operations<br/>Health · logs · capacity"]
+    end
+
+    subgraph BACKUP["Independent backup destination"]
+      SNAP["Consistent backup process"]
+      VAULT[("Separate VPS / provider / storage")]
+      RESTORE["Scheduled restore test<br/>Integrity verification"]
+    end
+
+    ADMIN -->|"S3 API over HTTPS"| DNS
+    APPS -->|"S3 API / signed URLs"| DNS
+    USERS -->|"HTTPS download"| DNS
+    DNS --> TLS
+    TLS --> FW
+    FW -->|"Forward only to S3 endpoint"| S3
+    S3 --> FILER
+    FILER <--> MASTER
+    FILER --> VOLUME
+    MASTER --> VOLUME
+    VOLUME <--> DISK
+    FILER <--> DISK
+    VPS -. "metrics and logs" .-> OPS
+    DISK --> SNAP
+    SNAP --> VAULT
+    VAULT --> RESTORE
+
+    classDef client fill:#12345a,stroke:#38bdf8,color:#ffffff,stroke-width:2px
+    classDef edge fill:#2e185e,stroke:#a78bfa,color:#ffffff,stroke-width:2px
+    classDef service fill:#063d4b,stroke:#22d3ee,color:#ffffff,stroke-width:2px
+    classDef disk fill:#123d2a,stroke:#4ade80,color:#ffffff,stroke-width:2px
+    classDef backup fill:#4a3108,stroke:#facc15,color:#ffffff,stroke-width:2px
+    classDef ops fill:#402020,stroke:#fb7185,color:#ffffff,stroke-width:2px
+
+    class ADMIN,APPS,USERS client
+    class DNS,TLS,FW edge
+    class S3,FILER,MASTER,VOLUME service
+    class DISK disk
+    class SNAP,VAULT,RESTORE backup
+    class OPS ops
+```
+
+## Reading the diagram
+
+- **Blue:** clients and applications.
+- **Purple:** public edge and HTTPS.
+- **Cyan:** internal storage services.
+- **Green:** persistent primary storage.
+- **Yellow:** independent backup destination.
+- **Red:** operations and diagnostics.
+
+The current VPS is not yet provisioned. Before production, validate the exact SeaweedFS topology, image flags, S3 authorization, TLS path, and backup consistency against the selected release.
