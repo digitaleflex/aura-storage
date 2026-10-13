@@ -91,8 +91,8 @@ The helper scripts are conveniences, not substitutes for this review.
 After reviewing the stack:
 
 ```bash
-./scripts/bootstrap.sh
-./scripts/deploy.sh
+bash ./scripts/bootstrap.sh
+bash ./scripts/deploy.sh
 docker compose ps
 docker compose logs --tail=150 traefik seaweed-master seaweed-volume seaweed-filer
 ```
