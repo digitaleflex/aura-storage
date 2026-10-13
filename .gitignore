@@ -1,7 +1,8 @@
-# Secrets / local configuration
+# Local deployment secrets and generated configuration
 .env
 .env.*
 !.env.example
+/config/seaweedfs/s3.json
 *.pem
 *.key
 *.p12
