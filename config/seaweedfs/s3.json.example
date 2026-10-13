@@ -1,0 +1,14 @@
+{
+  "identities": [
+    {
+      "name": "aura-bootstrap-admin",
+      "credentials": [
+        {
+          "accessKey": "REPLACE_WITH_GENERATED_ACCESS_KEY",
+          "secretKey": "REPLACE_WITH_GENERATED_LONG_RANDOM_SECRET"
+        }
+      ],
+      "actions": ["Admin", "Read", "Write", "List"]
+    }
+  ]
+}
