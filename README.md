@@ -6,7 +6,8 @@ AURA is an independently deployable, S3-compatible storage service for private o
 
 ## Architecture
 
-- [Mermaid architecture source](docs/ARCHITECTURE.mmd)
+- [Rendered Mermaid architecture diagram](docs/ARCHITECTURE-DIAGRAM.md)
+- [Mermaid source](docs/ARCHITECTURE.mmd)
 - [Architecture explanation](docs/ARCHITECTURE.md)
 
 The diagram describes the intended single-node MVP, including the public HTTPS edge, private SeaweedFS services, persistent storage, operations, and an independent backup destination. Validate the final Compose topology against the selected SeaweedFS release before production.
