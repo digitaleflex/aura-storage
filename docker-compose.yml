@@ -48,6 +48,7 @@ services:
     command:
       - master
       - -ip=seaweed-master
+      - -ip.bind=0.0.0.0
       - -mdir=/data
       - -volumeSizeLimitMB=${SEAWEED_VOLUME_SIZE_LIMIT_MB:-30000}
     volumes:
@@ -56,12 +57,7 @@ services:
       - storage
     security_opt:
       - no-new-privileges:true
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+
 
   seaweed-volume:
     image: ${SEAWEEDFS_IMAGE:?Set SEAWEEDFS_IMAGE in .env}
@@ -71,6 +67,7 @@ services:
       - volume
       - -mserver=seaweed-master:9333
       - -ip=seaweed-volume
+      - -ip.bind=0.0.0.0
       - -dir=/data
       - -port=8080
       - -max=${SEAWEED_VOLUME_MAX:-0}
@@ -92,6 +89,7 @@ services:
       - filer
       - -master=seaweed-master:9333
       - -ip=seaweed-filer
+      - -ip.bind=0.0.0.0
       - -port=8888
       - -s3
       - -s3.port=8333
