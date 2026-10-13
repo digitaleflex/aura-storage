@@ -66,3 +66,10 @@ Use PostgreSQL for catalogue metadata, not file bytes. The schema should include
 - Bulk imports can resume/retry without duplicating catalogue records.
 - Health endpoints reveal no secrets.
 - API contract is versioned and tested.
+
+
+## Implementation references
+
+- SeaweedFS official repository and Compose example: https://github.com/seaweedfs/seaweedfs/blob/master/docker/seaweedfs-compose.yml
+- SeaweedFS S3 credential model: https://github.com/seaweedfs/seaweedfs/wiki/S3-Credentials
+- The S3 gateway and filer relationship must be verified against the exact pinned release before production.
