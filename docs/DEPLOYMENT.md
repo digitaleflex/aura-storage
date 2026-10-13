@@ -18,7 +18,7 @@ This runbook describes the planned initial single-VPS deployment. The provider V
 - [ ] Verify price, renewal terms, advertised storage, disk type, monthly transfer quota, backup policy and upgrade path.
 - [ ] Provision a supported Ubuntu Server LTS if offered.
 - [ ] Record VPS IP, region, hostname, disk device/mount, rescue console and support route in a private inventory.
-- [ ] Confirm the full advertised capacity using lsblk, df -h, and df -i.
+- [ ] Confirm the full advertised capacity using `lsblk`, `df -h`, and `df -i`.
 - [ ] Verify SSH key access in a second session before changing SSH configuration.
 - [ ] Apply OS security updates.
 - [ ] Configure default-deny inbound firewall: SSH from restricted sources when feasible, plus TCP 80/443 for Traefik. Do not open SeaweedFS ports.
@@ -27,8 +27,8 @@ This runbook describes the planned initial single-VPS deployment. The provider V
 
 ## 2. DNS and TLS prerequisites
 
-1. Choose a dedicated hostname, for example storage.example.com.
-2. Set S3_DOMAIN in the local .env to that hostname and ACME_EMAIL to a monitored email address.
+1. Use `s3.aura.eurinhash.com` initially if you control the `eurinhash.com` DNS zone, or set another hostname you control.
+2. Set `S3_DOMAIN` in the local `.env` to that hostname and `ACME_EMAIL` to a monitored email address.
 3. Create an A record pointing to the VPS public IPv4. Add AAAA only if IPv6 is correctly configured end-to-end.
 4. Ensure inbound TCP 80 and 443 reach Traefik directly or through a correctly configured upstream proxy.
 5. The Compose baseline uses Let's Encrypt HTTP-01. Certificate issuance fails if DNS is wrong, port 80 is blocked, or another service intercepts the challenge.
@@ -42,24 +42,37 @@ Clone the repository and inspect all scripts/configuration before running them:
 git clone https://github.com/digitaleflex/aura-storage.git
 cd aura-storage
 cp .env.example .env
+chmod 600 .env
 ```
 
-Edit .env locally:
-- Replace the example hostname and email.
-- Confirm exact pinned Traefik and SeaweedFS image versions.
-- Set the intended data directory on the verified large filesystem.
-- Generate unique random S3 credentials using a cryptographically secure generator.
+Edit `.env` locally:
 
-Create the local S3 configuration:
+- Set the real S3 hostname and monitored ACME email.
+- Confirm exact pinned Traefik and SeaweedFS image versions.
+- Set `AURA_DATA_DIR` to the intended directory on the verified large filesystem.
+- Generate unique random S3 credentials. Prefer alphanumeric/hex values so they can safely be read by the shell-based environment scripts; never reuse production credentials elsewhere.
+- Never commit or share `.env`.
+
+The current sample uses `/srv/aura-storage`. Before running bootstrap as a non-root Docker administrator, create the directory and grant ownership to the chosen deployment user, for example after verifying the actual username and mounted filesystem:
 
 ```bash
-cp config/seaweedfs/s3.json.example config/seaweedfs/s3.json
-chmod 600 .env config/seaweedfs/s3.json
+sudo mkdir -p /srv/aura-storage
+sudo chown "$USER":"$USER" /srv/aura-storage
+chmod 700 /srv/aura-storage
 ```
 
-Replace every placeholder in both files. The S3 access key and secret in s3.json must match the intended generated values. Confirm identity policy syntax and action names against the selected SeaweedFS release. The example is a bootstrap template, not a recommended long-term all-powerful application identity.
+Do not run those ownership commands blindly if the directory already contains data or is shared with another service.
 
-Confirm the local file is ignored by Git:
+Generate the local SeaweedFS S3 configuration from `.env`:
+
+```bash
+bash ./scripts/generate-config.sh
+chmod 600 config/seaweedfs/s3.json
+```
+
+The generator creates `config/seaweedfs/s3.json` from the tracked example and injects the S3 credentials. Review the identity's permissions and validate policy/action names against the exact SeaweedFS release. Do not use a broad Admin identity for routine application traffic.
+
+Confirm both sensitive files are ignored by Git:
 
 ```bash
 git check-ignore .env config/seaweedfs/s3.json
@@ -71,17 +84,17 @@ Do not paste secrets into issues, chat, shell history, logs, or committed files.
 
 ```bash
 docker compose config --quiet
-docker compose config
 ```
 
-Review rendered configuration privately before sharing output; it can contain sensitive environment values. Validate:
+If detailed inspection is necessary, review `docker compose config` locally and do not share its output publicly; it may contain resolved configuration values. Validate:
+
 - Only Traefik publishes host ports 80 and 443.
 - SeaweedFS master, volume and filer administration ports have no host port mappings.
-- The S3 hostname rule matches S3_DOMAIN.
+- The S3 hostname rule matches `S3_DOMAIN`.
 - Traefik and SeaweedFS share the intended edge network; SeaweedFS components share the private storage network.
 - Host directories map to the intended persistent filesystem.
 - Image versions, command flags and healthchecks match the selected releases.
-- The local S3 config exists and is readable by the container.
+- The generated S3 config exists and is readable by the container.
 - No placeholder values remain.
 
 The helper scripts are conveniences, not substitutes for this review.
@@ -128,4 +141,6 @@ A running container is not proof that S3 authentication or durability works.
 - Single VPS means a single point of failure.
 - Management API and PostgreSQL catalogue are not implemented in this initial stack.
 - S3 policy, healthcheck commands, SeaweedFS persistence semantics and image flags require validation against exact releases.
+- Changing `AURA_DATA_DIR` points to another location; it does not move existing data.
+- Changing `S3_DOMAIN` does not update DNS or endpoint configuration in external clients.
 - Independent backup, restore and production security review remain deployment gates.
