@@ -4,6 +4,13 @@ AURA is an independently deployable, S3-compatible storage service for private o
 
 > Status: bootstrap repository. The VPS has not yet been provisioned. This repository is a starting baseline, not proof of production readiness.
 
+## Architecture
+
+- [Mermaid architecture source](docs/ARCHITECTURE.mmd)
+- [Architecture explanation](docs/ARCHITECTURE.md)
+
+The diagram describes the intended single-node MVP, including the public HTTPS edge, private SeaweedFS services, persistent storage, operations, and an independent backup destination. Validate the final Compose topology against the selected SeaweedFS release before production.
+
 ## Initial design
 
 - One Ubuntu Server LTS VPS (initial single-node deployment).
