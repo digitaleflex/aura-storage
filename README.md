@@ -16,9 +16,10 @@ The diagram describes the intended single-node MVP, including the public HTTPS e
 
 - One Ubuntu Server LTS VPS (initial single-node deployment).
 - Docker Engine and Compose.
-- SeaweedFS S3 gateway, with internal administration ports kept private.
+- Traefik for HTTPS routing and automatic certificate management; its dashboard must be protected.
+- SeaweedFS Filer + S3 API, with internal administration ports kept private.
 - Persistent host storage, not container writable layers.
-- HTTPS at a reviewed reverse proxy configured for the actual domain.
+- A separate AURA Management API is planned for catalogue, logical folders, metadata and import jobs; it is not yet implemented.
 - Independent encrypted backup destination and tested restore procedure.
 - App-specific S3 identities with least privilege. Normal object access must not depend on Axiom or Azure.
 
