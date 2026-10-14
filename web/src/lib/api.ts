@@ -43,6 +43,8 @@ export interface UploadIntentRequest {
   bucket: string;
   display_name: string;
   content_type: string;
+  /** Exact object size in bytes; the API signs it into the presigned URL. */
+  size_bytes: number;
   folder_id?: string | null;
 }
 

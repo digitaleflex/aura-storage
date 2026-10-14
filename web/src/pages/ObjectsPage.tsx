@@ -52,6 +52,7 @@ export function ObjectsPage() {
           bucket: "aura",
           display_name: selected.name,
           content_type: selected.type || "application/octet-stream",
+          size_bytes: selected.size,
         },
         csrf,
       );
