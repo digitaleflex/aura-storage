@@ -22,6 +22,10 @@ jobs:
           bash -n scripts/deploy.sh
           bash -n scripts/healthcheck.sh
           bash -n tests/sse-s3-smoke-test.sh
+          bash -n tests/s3-smoke-test.sh
+          bash -n tests/test-s3-smoke-validation.sh
+      - name: Run offline regression tests
+        run: bash tests/test-s3-smoke-validation.sh
       - name: Check sample S3 JSON
         run: python3 -m json.tool config/seaweedfs/s3.json.example >/dev/null
       - name: Prepare disposable validation environment
