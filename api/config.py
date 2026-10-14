@@ -20,6 +20,11 @@ class Settings:
     s3_region: str = os.environ.get("AURA_S3_REGION", "us-east-1")
     # Catalogue database path (SQLite for #18; PostgreSQL replaces it in #19).
     db_path: str = os.environ.get("AURA_API_DB", "aura-catalogue.db")
+    # Backend: 'sqlite' (default, dev/test) or 'postgres' (pilot, #19).
+    db_backend: str = os.environ.get("AURA_API_BACKEND", "sqlite")
+    # PostgreSQL DSN, e.g. postgresql://aura:PASSWORD@localhost:5432/aura.
+    # Only used when backend is 'postgres'. Never logged.
+    db_dsn: str = os.environ.get("AURA_API_DSN", "")
     # Lifetimes (seconds).
     session_ttl: int = int(os.environ.get("AURA_SESSION_TTL", "28800"))
     intent_ttl: int = int(os.environ.get("AURA_INTENT_TTL", "900"))

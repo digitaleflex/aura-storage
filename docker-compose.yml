@@ -132,6 +132,28 @@ services:
       - no-new-privileges:true
     # No SeaweedFS master/volume/filer admin ports are published to the host.
 
+  postgres:
+    image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE in .env}
+    container_name: ${AURA_INSTANCE_ID:-aura-001}-postgres
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Africa/Porto-Novo}
+      POSTGRES_DB: ${POSTGRES_DB:-aura}
+      POSTGRES_USER: ${POSTGRES_USER:-aura}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - storage
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-aura} -d $${POSTGRES_DB:-aura}"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    # No host ports published: catalogue DB reachable only on the internal network.
+
 networks:
   edge:
     name: aura-edge
@@ -141,3 +163,4 @@ networks:
 
 volumes:
   traefik-acme:
+  pgdata:

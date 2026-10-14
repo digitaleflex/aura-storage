@@ -2,46 +2,10 @@
 import sqlite3
 import time
 import uuid
+from pathlib import Path
 from typing import Optional
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  username TEXT UNIQUE NOT NULL,
-  pass_hash TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id),
-  csrf TEXT NOT NULL,
-  expires_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS folders (
-  id TEXT PRIMARY KEY,
-  owner_id TEXT NOT NULL REFERENCES users(id),
-  parent_id TEXT REFERENCES folders(id),
-  name TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS objects (
-  id TEXT PRIMARY KEY,
-  bucket TEXT NOT NULL,
-  object_key TEXT NOT NULL,
-  display_name TEXT NOT NULL,
-  content_type TEXT NOT NULL,
-  size_bytes INTEGER NOT NULL DEFAULT -1,
-  checksum_sha256 TEXT NOT NULL DEFAULT '',
-  folder_id TEXT REFERENCES folders(id),
-  owner_id TEXT NOT NULL REFERENCES users(id),
-  visibility TEXT NOT NULL DEFAULT 'private',
-  status TEXT NOT NULL DEFAULT 'pending',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  UNIQUE (bucket, object_key)
-);
-CREATE INDEX IF NOT EXISTS idx_objects_owner ON objects(owner_id, status);
-"""
+SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
 
 
 class Repository:
@@ -127,4 +91,21 @@ class Repository:
             "UPDATE objects SET status = 'available', size_bytes = ?, checksum_sha256 = ?, updated_at = ? WHERE id = ?",
             (size_bytes, checksum_sha256, self.now(), oid),
         )
+        self.conn.commit()
+
+    def list_pending_before(self, cutoff: int):
+        return self.conn.execute(
+            "SELECT * FROM objects WHERE status = 'pending' AND created_at < ?",
+            (cutoff,),
+        ).fetchall()
+
+    def set_status(self, oid: str, status: str) -> None:
+        self.conn.execute(
+            "UPDATE objects SET status = ?, updated_at = ? WHERE id = ?",
+            (status, self.now(), oid),
+        )
+        self.conn.commit()
+
+    def delete_object_row(self, oid: str) -> None:
+        self.conn.execute("DELETE FROM objects WHERE id = ?", (oid,))
         self.conn.commit()
