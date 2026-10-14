@@ -1,0 +1,46 @@
+name: Validate storage configuration
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: |
+          bash -n scripts/bootstrap.sh
+          bash -n scripts/generate-config.sh
+          bash -n scripts/deploy.sh
+          bash -n scripts/healthcheck.sh
+          bash -n tests/sse-s3-smoke-test.sh
+      - name: Check sample S3 JSON
+        run: python3 -m json.tool config/seaweedfs/s3.json.example >/dev/null
+      - name: Prepare disposable validation environment
+        run: |
+          cp .env.example .env
+          python3 - <<'PY'
+          from pathlib import Path
+          import secrets
+          p = Path(".env")
+          s = p.read_text()
+          s = s.replace("REPLACE_WITH_GENERATED_ACCESS_KEY", secrets.token_hex(12))
+          s = s.replace("REPLACE_WITH_GENERATED_LONG_RANDOM_SECRET", secrets.token_hex(32))
+          s = s.replace("REPLACE_WITH_64_HEX_CHARACTERS", secrets.token_hex(32))
+          p.write_text(s)
+          PY
+          chmod 600 .env
+      - name: Generate ignored S3 config
+        run: bash scripts/generate-config.sh
+      - name: Validate Docker Compose
+        run: docker compose config --quiet
+      - name: Confirm secrets are ignored
+        run: git check-ignore .env config/seaweedfs/s3.json
