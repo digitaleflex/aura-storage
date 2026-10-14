@@ -123,6 +123,10 @@ export const api = {
     return request<ObjectsListResponse>("/api/v1/objects");
   },
 
+  me(): Promise<{ id: string }> {
+    return request<{ id: string }>("/api/v1/me");
+  },
+
   getObject(id: string): Promise<ObjectItem> {
     return request<ObjectItem>(`/api/v1/objects/${encodeURIComponent(id)}`);
   },

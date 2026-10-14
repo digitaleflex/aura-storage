@@ -12,9 +12,7 @@ import { ObjectsPage } from "./pages/ObjectsPage";
 const rootRoute = createRootRoute({
   component: () => (
     <AuthProvider>
-      <Layout>
-        <Outlet />
-      </Layout>
+      <Outlet />
     </AuthProvider>
   ),
 });
@@ -23,9 +21,11 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: () => (
-    <RequireAuth>
-      <ObjectsPage />
-    </RequireAuth>
+    <Layout>
+      <RequireAuth>
+        <ObjectsPage />
+      </RequireAuth>
+    </Layout>
   ),
 });
 

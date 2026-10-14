@@ -114,6 +114,15 @@ def test_objects_require_auth():
     assert client.get("/api/v1/objects").status_code == 401
 
 
+def test_me_endpoint():
+    from fastapi.testclient import TestClient as TC
+
+    assert client.get("/api/v1/me").status_code == 401
+    c2 = TC(main.app)
+    login(c2)
+    assert c2.get("/api/v1/me").json()["id"]
+
+
 def test_mutation_requires_csrf():
     c, _ = authed_client()
     r = c.post(

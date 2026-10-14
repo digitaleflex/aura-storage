@@ -7,21 +7,32 @@ import { useAuth } from "../lib/auth";
 
 function formatBytes(size: number): string {
   if (!Number.isFinite(size) || size < 0) {
-    return "unknown size";
+    return "taille inconnue";
   }
   if (size === 0) {
-    return "0 B";
+    return "0 o";
   }
-  const units = ["B", "KB", "MB", "GB", "TB"];
+  const units = ["o", "Ko", "Mo", "Go", "To"];
   const index = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
   const value = size / 1024 ** index;
   return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function statusChip(status: string) {
+  if (status === "available") {
+    return <span className="chip chip-ok">Disponible</span>;
+  }
+  if (status === "pending") {
+    return <span className="chip chip-warn">En cours</span>;
+  }
+  return <span className="chip chip-muted">{status}</span>;
 }
 
 export function ObjectsPage() {
   const { csrf } = useAuth();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
+  const [filter, setFilter] = useState("");
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
@@ -33,9 +44,9 @@ export function ObjectsPage() {
   const uploadMutation = useMutation({
     mutationFn: async (selected: File) => {
       if (!csrf) {
-        throw new Error("Not authenticated.");
+        throw new Error("Session expirée. Reconnectez-vous.");
       }
-      // Step 1: ask the API for a short-lived upload intent.
+      // Étape 1 : demander une intention d'envoi de courte durée.
       const intent = await api.createUploadIntent(
         {
           bucket: "aura",
@@ -44,9 +55,9 @@ export function ObjectsPage() {
         },
         csrf,
       );
-      // Step 2: PUT the bytes directly to the presigned URL.
+      // Étape 2 : envoyer les octets directement vers l'URL présignée.
       await putToPresignedUrl(intent.upload_url, selected);
-      // Step 3: commit so the catalogue marks the object available.
+      // Étape 3 : valider pour que le catalogue marque l'objet disponible.
       return api.commitObject(intent.id, csrf);
     },
     onSuccess: () => {
@@ -55,7 +66,7 @@ export function ObjectsPage() {
       void queryClient.invalidateQueries({ queryKey: ["objects"] });
     },
     onError: (err: unknown) => {
-      setUploadError(err instanceof Error ? err.message : "Upload failed.");
+      setUploadError(err instanceof Error ? err.message : "Envoi impossible.");
     },
   });
 
@@ -63,7 +74,7 @@ export function ObjectsPage() {
     event.preventDefault();
     setUploadError(null);
     if (!file) {
-      setUploadError("Select a file first.");
+      setUploadError("Choisissez d'abord un fichier.");
       return;
     }
     uploadMutation.mutate(file);
@@ -72,7 +83,7 @@ export function ObjectsPage() {
   async function handleDownload(item: ObjectItem) {
     setDownloadError(null);
     if (!csrf) {
-      setDownloadError("Not authenticated.");
+      setDownloadError("Session expirée. Reconnectez-vous.");
       return;
     }
     try {
@@ -80,45 +91,74 @@ export function ObjectsPage() {
       window.open(intent.download_url, "_blank", "noopener");
     } catch (err) {
       setDownloadError(
-        err instanceof ApiError ? `Download refused: ${err.detail}` : "Download failed.",
+        err instanceof ApiError
+          ? `Téléchargement refusé : ${err.detail}`
+          : "Téléchargement impossible.",
       );
     }
   }
 
   const items = objectsQuery.data?.items ?? [];
+  const needle = filter.trim().toLowerCase();
+  const visible = needle
+    ? items.filter((item) => item.display_name.toLowerCase().includes(needle))
+    : items;
 
   return (
     <div className="stack">
-      <section className="card">
-        <h1>Objects</h1>
-        {objectsQuery.isPending ? (
-          <p className="muted">Loading catalogue…</p>
-        ) : objectsQuery.isError ? (
-          <p role="alert" className="alert alert-error">
-            Catalogue unavailable. No cached data is shown as current.
-          </p>
-        ) : items.length === 0 ? (
-          <p className="empty">No objects yet — the catalogue is empty.</p>
-        ) : (
+      <h1>Fichiers</h1>
+      <p className="muted">
+        {items.length === 0
+          ? "Votre coffre est vide."
+          : `${items.length} objet${items.length > 1 ? "s" : ""} chiffré${items.length > 1 ? "s" : ""} au repos.`}
+      </p>
+
+      <div className="search">
+        <label className="field">
+          <span className="visually-hidden">Rechercher un fichier</span>
+          <input
+            type="text"
+            name="filter"
+            placeholder="Rechercher par nom…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+        </label>
+      </div>
+
+      {objectsQuery.isPending ? (
+        <p className="muted">Chargement du catalogue…</p>
+      ) : objectsQuery.isError ? (
+        <p role="alert" className="alert alert-error">
+          Catalogue indisponible. Aucune donnée en cache n'est présentée comme actuelle.
+        </p>
+      ) : visible.length === 0 ? (
+        <p className="empty">
+          {needle
+            ? "Aucun fichier ne correspond à cette recherche."
+            : "Aucun fichier pour l'instant — importez votre premier objet ci-dessous."}
+        </p>
+      ) : (
+        <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
-                <th scope="col">Name</th>
+                <th scope="col">Nom</th>
                 <th scope="col">Type</th>
-                <th scope="col">Size</th>
-                <th scope="col">Status</th>
+                <th scope="col">Taille</th>
+                <th scope="col">État</th>
                 <th scope="col">
                   <span className="visually-hidden">Actions</span>
                 </th>
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
+              {visible.map((item) => (
                 <tr key={item.id}>
-                  <td>{item.display_name}</td>
+                  <td className="name">{item.display_name}</td>
                   <td className="muted">{item.content_type}</td>
-                  <td>{formatBytes(item.size_bytes)}</td>
-                  <td>{item.status}</td>
+                  <td className="num">{formatBytes(item.size_bytes)}</td>
+                  <td>{statusChip(item.status)}</td>
                   <td>
                     <button
                       type="button"
@@ -126,27 +166,30 @@ export function ObjectsPage() {
                       disabled={item.status !== "available"}
                       onClick={() => void handleDownload(item)}
                     >
-                      Download
+                      Télécharger
                     </button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        )}
-        {downloadError ? (
-          <p role="alert" className="alert alert-error">{downloadError}</p>
-        ) : null}
-      </section>
+        </div>
+      )}
+      {downloadError ? (
+        <p role="alert" className="alert alert-error">
+          {downloadError}
+        </p>
+      ) : null}
 
-      <section className="card">
-        <h2>Upload</h2>
+      <section className="card" aria-labelledby="upload-title">
+        <h2 id="upload-title">Importer</h2>
         <p className="muted">
-          Three steps: upload intent → direct PUT to the short-lived URL → commit.
+          Intention d'envoi → dépôt direct vers l'URL à courte durée → validation
+          avec contrôle d'intégrité.
         </p>
         <form onSubmit={(e) => void handleUpload(e)} className="form form-inline">
           <label className="field">
-            <span>File</span>
+            <span>Fichier</span>
             <input
               type="file"
               name="file"
@@ -158,14 +201,18 @@ export function ObjectsPage() {
             className="btn btn-primary"
             disabled={uploadMutation.isPending}
           >
-            {uploadMutation.isPending ? "Uploading…" : "Upload and commit"}
+            {uploadMutation.isPending ? "Envoi…" : "Importer et valider"}
           </button>
         </form>
         {uploadError ? (
-          <p role="alert" className="alert alert-error">{uploadError}</p>
+          <p role="alert" className="alert alert-error">
+            {uploadError}
+          </p>
         ) : null}
         {uploadMutation.isSuccess ? (
-          <p role="status" className="alert alert-ok">Upload committed.</p>
+          <p role="status" className="alert alert-ok">
+            Import validé et vérifié.
+          </p>
         ) : null}
       </section>
     </div>
