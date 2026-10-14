@@ -11,6 +11,7 @@
 - [Architecture decisions and boundaries](docs/ARCHITECTURE.md)
 - [Detailed deployment runbook](docs/DEPLOYMENT.md)
 - [Reproducible VPS setup and recovery guide](docs/REPRODUCIBLE-SETUP.md)
+- [SSH access and per-device key management (no private keys)](docs/SSH-ACCESS-AND-KEY-MANAGEMENT.md)
 - [Network architecture and throughput test plan (documentation only)](docs/NETWORK-AND-THROUGHPUT-PLAN.md)
 - [Read-only host preflight diagnostic](scripts/host-preflight.sh)
 - [Deployment verification log template](docs/verification-log-template.md)
