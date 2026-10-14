@@ -2,7 +2,7 @@
 
 **AURA** is an independently operated storage service for private files. The initial deployment target is one Ubuntu Server LTS VPS with Docker Compose, Traefik, and SeaweedFS exposing an S3-compatible endpoint.
 
-> **Status:** preparation stage. The VPS has not yet been provisioned. This repository is a baseline and plan; the stack has not yet been validated on the real provider VPS.
+> **Status:** VPS provisioned; initial OS maintenance and access hardening are in progress. The host profile and bootstrap checklist are documented in [Server Profile](docs/SERVER-PROFILE.md) and [Host Bootstrap Checklist](docs/HOST-BOOTSTRAP-CHECKLIST.md). The AURA stack has not yet been validated on the real provider VPS.
 
 ## Architecture and documentation
 
@@ -10,6 +10,8 @@
 - [Mermaid source](docs/ARCHITECTURE.mmd)
 - [Architecture decisions and boundaries](docs/ARCHITECTURE.md)
 - [Detailed deployment runbook](docs/DEPLOYMENT.md)
+- [VPS server profile](docs/SERVER-PROFILE.md)
+- [Host bootstrap and hardening checklist](docs/HOST-BOOTSTRAP-CHECKLIST.md)
 - [Environment configuration and domain migration](docs/ENVIRONMENT-CONFIGURATION.md)
 - [Security baseline](docs/SECURITY.md)
 - [API specification (proposal, not implemented)](docs/API-SPECIFICATION.md)
