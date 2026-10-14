@@ -260,3 +260,8 @@ The pilot is not accepted until all relevant items are evidenced:
 ## Network performance and optional personal VPN
 
 See [Network architecture and throughput test plan](NETWORK-AND-THROUGHPUT-PLAN.md) for the design and test matrix covering AURA transfers, Internet downloads and transfers between devices. This is documentation only. Do not install WireGuard, benchmark tools, change firewall/routing or deploy AURA until the SSH safety gate and live host preflight have been reviewed. Keep AURA storage traffic and the optional full-tunnel personal VPN logically separate; do not assume a VPN will increase throughput.
+
+
+## SSH access inventory and device keys
+
+Use [SSH access and key management](SSH-ACCESS-AND-KEY-MANAGEMENT.md) for the recorded VPS connection details, per-device SSH key policy, fingerprint inventory and safe validation sequence. This document contains no private keys. SSH public keys and WireGuard keys serve different purposes. Actual device keys must be generated locally and tested; their existence is not implied by the documentation.
