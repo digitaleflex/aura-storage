@@ -82,3 +82,19 @@ Approval to migrate originals (must be explicit):
 - Decision and blockers:
 
 > Do not run tests or change the VPS merely to fill this template. Use synthetic, non-sensitive files; record sanitized results only.
+
+## SSH access verification
+
+- Provider recovery console available and tested:
+- Hostname/IP reconfirmed in provider panel:
+- Actual SSH port/listener confirmed:
+- Main PC SSH public-key SHA-256 fingerprint (fingerprint only):
+- Main PC key login verified in second independent session:
+- `sudo -v` and `sudo id -u` verified:
+- Separate Linux-client key tested, if applicable:
+- iPhone SSH client/key tested, if applicable:
+- Android SSH client/key tested, if applicable:
+- Lost-device/key revocation procedure reviewed:
+- SSH socket/service activation and firewall reviewed:
+
+> Never enter private-key contents, passwords or WireGuard private keys in this log or GitHub.
