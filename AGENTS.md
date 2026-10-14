@@ -15,11 +15,22 @@ real VPS. Do not treat a passing CI check or `docker compose config` as producti
   `docs/REPRODUCIBLE-SETUP.md`, host checklist: `docs/HOST-BOOTSTRAP-CHECKLIST.md`,
   server facts: `docs/SERVER-PROFILE.md`.
 
+## Implemented (code + offline tests)
+
+- Management API (`api/`) with session auth, CSRF, presigned S3 intents, role-based
+  authorization and machine-to-machine identities. See `docs/AUTHORIZATION-MATRIX.md`.
+- Catalogue backends: SQLite (dev/test) and PostgreSQL (`api/db.py`, `api/db_pg.py`),
+  with additive migrations in `api/migrations.py`.
+- Offline test suite under `tests/` (run with `pytest tests/`).
+
+Implemented in code is **not** the same as validated on the pilot: no end-to-end
+run on the real VPS has happened yet.
+
 ## Specified only (NOT implemented)
 
-Management API, PostgreSQL catalogue, OpenBooks/Axiom integrations.
-References: `docs/API-SPECIFICATION.md`, `docs/DATA-MODEL.md`, `docs/openapi.yaml`.
-Never present these endpoints as available.
+OpenBooks/Axiom integrations. Additional endpoint drafts live in
+`docs/API-SPECIFICATION.md` and `docs/openapi.yaml`; treat anything not listed in
+`docs/AUTHORIZATION-MATRIX.md` as unavailable.
 
 ## Local validation (non-destructive only)
 
@@ -28,6 +39,9 @@ git status --short --branch && git log -3 --oneline
 bash -n scripts/*.sh tests/*.sh
 bash tests/test-s3-smoke-validation.sh
 python3 -m json.tool config/seaweedfs/s3.json.example > /dev/null
+AURA_API_ADMIN_PASSWORD=ci AURA_S3_ACCESS_KEY=ci-1234567890 \
+  AURA_S3_SECRET_KEY=ci-12345678901234567890 AURA_S3_ENDPOINT=https://127.0.0.1:9 \
+  AURA_API_DB=:memory: AURA_COOKIE_SECURE=0 python3 -m pytest tests/ -q
 git diff --check
 ```
 

@@ -27,3 +27,39 @@
 - Never commit .env, keys, certificates, production config, customer data or backups.
 - Document credential revocation, secret rotation, disk-full response, backup restore and rollback.
 - The VPS is not a backup. Keep originals locally until an independent backup has been restored successfully.
+
+## API authorization and multi-platform isolation (#35, #36)
+- Every sensitive API route declares the capability it needs server-side; a route that
+  is not classified stays closed. The full route × capability matrix is in
+  `docs/AUTHORIZATION-MATRIX.md`.
+- A valid session or CSRF token is authentication, not authorization: administrative
+  and destructive actions (purge, reconcile, provisioning) require the matching role
+  or scope and are refused with 403 otherwise.
+- Objects carry an application/space/environment boundary. Catalogue queries are
+  always filtered by the caller's space, and human users are further limited to their
+  own objects.
+- Client-supplied tenant, owner, bucket or object-key values never grant access:
+  object keys are generated server-side and buckets must be registered to the caller's
+  space.
+- Presigned URLs are short-lived and scoped to a single object and operation; they are
+  never logged and never embedded in the frontend bundle.
+
+## Machine-to-machine identities (#38)
+- Platforms call AURA with a service identity (`Authorization: Bearer aura_<id>_<secret>`),
+  not with a human session and not with the bootstrap SeaweedFS S3 key.
+- AURA stores only the SHA-256 fingerprint of the secret; the token is shown once at
+  creation or rotation. Unknown, revoked and expired tokens all return 401.
+- Grant the minimum scopes per identity and one identity per application/environment.
+- Provision, rotate and revoke through the admin API (see
+  `docs/AUTHORIZATION-MATRIX.md`). Revocation is immediate and isolated to one identity.
+- Failed machine authentication is rate-limited per client IP; secrets never appear in
+  logs, errors, subsequent responses or the frontend bundle.
+
+## Transfer integrity and resource limits (#37, #40)
+- Commit streams the object to compute SHA-256 without loading it fully into memory,
+  enforces a maximum size, and verifies the streamed size against storage metadata.
+  Truncated, oversized or mismatched uploads are never marked available.
+- Upload intents expire; commits after the intent TTL (plus a grace period) are
+  refused. Repeated commits are idempotent.
+- Technical guard rails (max object size, pending-intent cap, rate limits) protect the
+  service from abuse. These are safety limits, not billing or subscription policy.

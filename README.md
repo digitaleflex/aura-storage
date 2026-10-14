@@ -19,6 +19,7 @@
 - [Host bootstrap and hardening checklist](docs/HOST-BOOTSTRAP-CHECKLIST.md)
 - [Environment configuration and domain migration](docs/ENVIRONMENT-CONFIGURATION.md)
 - [Security baseline](docs/SECURITY.md)
+- [Authorization matrix and identity model](docs/AUTHORIZATION-MATRIX.md)
 - [API specification (proposal, not implemented)](docs/API-SPECIFICATION.md)
 - [OpenAPI contract draft](docs/openapi.yaml)
 - [Proposed catalogue data model](docs/DATA-MODEL.md)
@@ -32,7 +33,8 @@
 - **SeaweedFS master, volume and filer/S3 gateway** run as separate containers on a private storage network.
 - Only the S3 hostname is routed by the initial Traefik configuration. SeaweedFS administrative endpoints are not published on host ports.
 - Persistent data is mounted from the host filesystem.
-- **AURA Management API + PostgreSQL catalogue** are planned components. They are not implemented or included in the current Compose stack.
+- **AURA Management API + PostgreSQL catalogue** are implemented and included in the Compose stack (the API is reachable only through the app proxy, with no host ports). They have not yet been validated on the pilot VPS.
+- **Authorization and machine-to-machine identities** are enforced server-side; see [Authorization matrix](docs/AUTHORIZATION-MATRIX.md).
 - Independent backups and a successful restore test are mandatory before production imports.
 
 A single VPS is a single point of failure, not high availability. An S3-compatible endpoint does not itself provide redundancy.

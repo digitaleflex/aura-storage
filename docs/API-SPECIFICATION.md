@@ -1,6 +1,9 @@
 # AURA Management API — initial specification
 
-**Status:** specification only; API is not implemented yet.
+**Status:** partially implemented. The routes listed in
+`docs/AUTHORIZATION-MATRIX.md` are implemented in `api/main.py` and covered by
+offline tests; `docs/openapi.yaml` is the current contract. The remaining
+resources below (folders CRUD, import jobs, search filters) are still proposals.
 
 ## Purpose and boundaries
 
