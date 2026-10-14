@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { Navigate } from "@tanstack/react-router";
@@ -46,10 +47,22 @@ export function useAuth(): AuthState {
   return ctx;
 }
 
-/** Route guard: unauthenticated users are sent back to /login. */
+/**
+ * Route guard verified against the SERVER, not memory: works right after
+ * login (no state-flush race) and survives page reloads while the session
+ * cookie is valid. Renders nothing while checking to avoid flashing login.
+ */
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { csrf } = useAuth();
-  if (!csrf) {
+  const sessionQuery = useQuery({
+    queryKey: ["session"],
+    queryFn: () => api.me(),
+    retry: false,
+  });
+
+  if (sessionQuery.isPending) {
+    return <p className="muted">Vérification de la session…</p>;
+  }
+  if (sessionQuery.isError) {
     return <Navigate to="/login" />;
   }
   return <>{children}</>;

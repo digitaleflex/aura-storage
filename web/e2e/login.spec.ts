@@ -9,10 +9,10 @@ import { test, expect } from "@playwright/test";
 test("login with wrong credentials is rejected", async ({ page }) => {
   await page.goto("/login");
 
-  await page.getByLabel("Username").fill("admin");
-  await page.getByLabel("Password").fill("wrong-password-for-smoke-test");
-  await page.getByRole("button", { name: "Log in", exact: true }).click();
+  await page.getByLabel("Identifiant").fill("admin");
+  await page.getByLabel("Mot de passe").fill("mauvais-mot-de-passe-test");
+  await page.getByRole("button", { name: "Se connecter", exact: true }).click();
 
-  await expect(page.getByRole("alert")).toContainText("Invalid credentials");
+  await expect(page.getByRole("alert")).toContainText("Identifiants invalides");
   await expect(page).toHaveURL(/\/login/);
 });

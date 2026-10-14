@@ -1,16 +1,66 @@
-/* Minimal house stylesheet — neutral scaffold, no visual direction yet. */
+/* AURA Vault — direction A « Coffre Linear ».
+ * One hero per screen, fixed type roles, colors with fixed jobs.
+ * Midnight + electric blue carry the interface; lime #C5F441 is reserved
+ * for the primary action and verified states only.
+ */
+
+/* Plus Jakarta Sans, self-hosted (OFL). */
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("/fonts/plus-jakarta-sans-v12-latin-regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("/fonts/plus-jakarta-sans-v12-latin-500.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("/fonts/plus-jakarta-sans-v12-latin-600.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("/fonts/plus-jakarta-sans-v12-latin-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("/fonts/plus-jakarta-sans-v12-latin-800.woff2") format("woff2");
+  font-weight: 800;
+  font-display: swap;
+}
 
 :root {
-  --bg: #f4f4f2;
+  --night-950: #060d1a;
+  --night-900: #0a1628;
+  --night-800: #10203a;
+  --night-700: #1a2f52;
+  --paper: #f4f6fa;
   --surface: #ffffff;
-  --ink: #1c1c1e;
-  --muted: #6b6f76;
-  --line: #dcdcdc;
-  --accent: #1f5eff;
+  --ink: #0e1a2e;
+  --muted: #55647e;
+  --faint: #8b96ac;
+  --line: #dfe5ef;
+  --electric: #2e7cf6;
+  --electric-deep: #1c5fd0;
+  --lime: #c5f441;
+  --lime-ink: #3d5203;
   --danger: #b3261e;
-  --ok: #146c2e;
-  --radius: 8px;
-  --max-width: 880px;
+  --danger-bg: #fdecea;
+  --ok: #1c7a3d;
+  --ok-bg: #e7f4ec;
+  --warn-bg: #fdf3e3;
+  --warn-ink: #8a5a00;
+  --radius: 10px;
+  --radius-small: 7px;
+  --sidebar-width: 248px;
+  --font: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 * {
@@ -19,149 +69,322 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--paper);
   color: var(--ink);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  line-height: 1.5;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.6;
 }
 
-.shell {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1.25rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-}
-
-.brand {
+/* Type roles: title 20/700, body 15, secondary 13.5 muted, captions 12.5 faint. */
+h1 {
+  font-size: 20px;
   font-weight: 700;
-  color: var(--ink);
-  text-decoration: none;
+  line-height: 1.3;
+  margin: 0 0 4px;
+  letter-spacing: -0.01em;
 }
 
-.content {
-  width: 100%;
-  max-width: var(--max-width);
-  margin: 0 auto;
-  padding: 1.5rem 1rem 3rem;
-}
-
-.stack {
-  display: grid;
-  gap: 1.25rem;
-}
-
-.card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 1.25rem;
-}
-
-.card h1,
-.card h2 {
-  margin: 0 0 0.5rem;
+h2 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0 0 8px;
 }
 
 .muted {
   color: var(--muted);
+  font-size: 13.5px;
 }
 
-.form {
+/* App frame: sidebar owns the columns, content owns its own spacing. */
+.shell {
+  min-height: 100vh;
   display: grid;
-  gap: 0.75rem;
-  margin-top: 1rem;
+  grid-template-columns: var(--sidebar-width) 1fr;
 }
 
-.form-inline {
-  grid-template-columns: 1fr auto;
-  align-items: end;
+.sidebar {
+  background: var(--night-900);
+  color: #dbe4f3;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
 }
 
-.field {
-  display: grid;
-  gap: 0.25rem;
-  font-size: 0.95rem;
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #ffffff;
+  text-decoration: none;
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: -0.01em;
 }
 
-.field input {
-  padding: 0.5rem 0.6rem;
+.brand svg {
+  flex: none;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav a,
+.nav button,
+.nav .nav-user {
+  color: #aeb9cf;
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 8px 10px;
+  border-radius: var(--radius-small);
+}
+
+.nav a[aria-current="page"] {
+  background: var(--night-700);
+  color: #ffffff;
+}
+
+.sidebar .spacer {
+  flex: 1;
+}
+
+.sidebar .whoami {
+  font-size: 12.5px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 10px;
+}
+
+.content {
+  padding: 28px 32px 64px;
+  max-width: 1024px;
+}
+
+/* Cards only where grouping is needed; lists live on the canvas. */
+.card {
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  font: inherit;
+  padding: 20px 22px;
+  margin-bottom: 20px;
 }
 
+/* Controls share one grammar: 7px radius, 1px line, 6px focus ring. */
 .btn {
-  font: inherit;
-  padding: 0.5rem 1rem;
-  border-radius: var(--radius);
+  appearance: none;
   border: 1px solid var(--line);
   background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: var(--radius-small);
+  padding: 9px 16px;
   cursor: pointer;
 }
 
+.btn:hover {
+  border-color: var(--faint);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--electric);
+  outline-offset: 2px;
+}
+
 .btn:disabled {
-  opacity: 0.6;
-  cursor: wait;
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: var(--lime);
+  border-color: var(--lime);
+  color: var(--lime-ink);
+}
+
+.btn-primary:hover {
+  border-color: var(--lime-ink);
 }
 
 .btn-ghost {
-  text-decoration: none;
-  color: var(--ink);
-}
-
-.btn-small {
-  padding: 0.25rem 0.6rem;
-  font-size: 0.85rem;
-}
-
-.alert {
-  padding: 0.6rem 0.8rem;
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
-}
-
-.alert-error {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-
-.alert-ok {
-  color: var(--ok);
-  border-color: var(--ok);
-}
-
-.empty {
-  padding: 1rem;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius);
+  border-color: transparent;
   color: var(--muted);
 }
 
+.btn-small {
+  font-size: 13px;
+  padding: 6px 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.field input[type="text"],
+.field input[type="password"],
+.field input[type="file"] {
+  font: inherit;
+  font-weight: 400;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  padding: 9px 12px;
+  background: var(--surface);
+  color: var(--ink);
+  max-width: 420px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.form-inline {
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.search {
+  margin: 14px 0 4px;
+  max-width: 420px;
+}
+
+/* Table: scanning-first, single hairlines, tabular numerals for sizes. */
 .table {
   width: 100%;
   border-collapse: collapse;
-  margin-top: 0.75rem;
+  font-size: 14px;
+  margin-top: 12px;
 }
 
-.table th,
-.table td {
+.table th {
   text-align: left;
-  padding: 0.5rem;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 8px 10px;
   border-bottom: 1px solid var(--line);
+}
+
+.table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table .num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.table .name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Status chips: lime reserved for verified states; text always present. */
+.chip {
+  display: inline-block;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+
+.chip-ok {
+  background: var(--lime);
+  color: var(--lime-ink);
+}
+
+.chip-warn {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.chip-muted {
+  background: var(--paper);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.alert {
+  border-radius: var(--radius-small);
+  padding: 10px 14px;
+  font-size: 14px;
+  margin: 12px 0 0;
+}
+
+.alert-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.alert-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.empty {
+  padding: 28px 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* Login: centered narrow card on paper; vault mark above the title. */
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--night-900);
+}
+
+.login-card {
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 32px 34px;
+  width: 100%;
+  max-width: 400px;
+}
+
+.login-mark {
+  margin-bottom: 14px;
 }
 
 .visually-hidden {
@@ -170,4 +393,37 @@ body {
   height: 1px;
   overflow: hidden;
   clip: rect(0 0 0 0);
+}
+
+/* Narrow screens: sidebar becomes a top bar; table scrolls horizontally. */
+@media (max-width: 760px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    padding: 12px 16px;
+  }
+
+  .sidebar .nav {
+    flex-direction: row;
+    margin-left: auto;
+  }
+
+  .sidebar .spacer,
+  .sidebar .whoami {
+    display: none;
+  }
+
+  .content {
+    padding: 20px 16px 48px;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+  }
 }
