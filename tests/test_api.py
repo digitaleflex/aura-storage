@@ -21,9 +21,17 @@ import api.main as main  # noqa: E402
 # NOTE: the SigV4 access key *ID* legitimately appears in presigned URLs
 # (X-Amz-Credential); it is an identifier, not a secret. Only the secret
 # key and the admin password must never appear.
+# A marker shorter than MIN_MARKER_LEN cannot be asserted meaningfully: a short
+# dummy (e.g. a 2-char password) also occurs by coincidence inside unrelated
+# data, such as the access-key ID in a presigned credential.
+MIN_MARKER_LEN = 8
 SECRET_MARKERS = [
-    os.environ["AURA_S3_SECRET_KEY"],
-    os.environ["AURA_API_ADMIN_PASSWORD"],
+    marker
+    for marker in (
+        os.environ["AURA_S3_SECRET_KEY"],
+        os.environ["AURA_API_ADMIN_PASSWORD"],
+    )
+    if len(marker) >= MIN_MARKER_LEN
 ]
 
 client = TestClient(main.app)
@@ -81,7 +89,7 @@ def test_audit_log_records_ids_and_no_secrets(tmp_path, monkeypatch):
     csrf = login(c)
     c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "test-bucket", "display_name": "audit.txt"},
+        json={"bucket": "aura", "display_name": "audit.txt"},
         headers={"X-CSRF-Token": csrf},
     )
     lines = log.read_text(encoding="utf-8").strip().splitlines()
@@ -127,13 +135,13 @@ def test_mutation_requires_csrf():
     c, _ = authed_client()
     r = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "b", "display_name": "x.txt"},
+        json={"bucket": "aura", "display_name": "x.txt"},
         headers={"X-CSRF-Token": ""},
     )
     assert r.status_code == 403
     r = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "b", "display_name": "x.txt"},
+        json={"bucket": "aura", "display_name": "x.txt"},
         headers={"X-CSRF-Token": "bogus"},
     )
     assert r.status_code == 403
@@ -143,7 +151,7 @@ def test_upload_intent_returns_scoped_url_and_leaks_nothing():
     c, headers = authed_client()
     r = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "test-bucket", "display_name": "hello.txt",
+        json={"bucket": "aura", "display_name": "hello.txt",
               "content_type": "text/plain"},
         headers=headers,
     )
@@ -165,7 +173,7 @@ def test_soft_delete_and_purge():
     c, headers = authed_client()
     oid = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "b", "display_name": "todelete.txt"},
+        json={"bucket": "aura", "display_name": "todelete.txt"},
         headers=headers,
     ).json()["id"]
     r = c.delete(f"/api/v1/objects/{oid}", headers=headers)
@@ -188,7 +196,7 @@ def test_reconcile_expires_stale_pending():
     c, headers = authed_client()
     oid = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "b", "display_name": "stale.txt"},
+        json={"bucket": "aura", "display_name": "stale.txt"},
         headers=headers,
     ).json()["id"]
     # backdate the pending row past the grace period
@@ -208,7 +216,7 @@ def test_reconcile_expires_stale_pending():
     # fresh pending objects are untouched; only the stale one expires
     fresh = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "b", "display_name": "fresh.txt"},
+        json={"bucket": "aura", "display_name": "fresh.txt"},
         headers=headers,
     ).json()["id"]
     # stub storage (offline): reconcile must not require real S3
@@ -229,7 +237,7 @@ def test_cross_owner_isolation():
     c, headers = authed_client()
     oid = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "b", "display_name": "private.txt"},
+        json={"bucket": "aura", "display_name": "private.txt"},
         headers=headers,
     ).json()["id"]
     # second user, created directly (unique per run: PG persists across runs)

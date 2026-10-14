@@ -149,7 +149,7 @@ A running container is not proof that S3 authentication or durability works.
 ## Known limitations
 
 - Single VPS means a single point of failure.
-- Management API and PostgreSQL catalogue are not implemented in this initial stack.
+- Management API and PostgreSQL catalogue are implemented in the stack but have not been validated on the pilot VPS; treat them as unverified until the acceptance tests pass.
 - S3 policy, healthcheck commands, SeaweedFS persistence semantics and image flags require validation against exact releases.
 - Changing `AURA_DATA_DIR` points to another location; it does not move existing data.
 - Changing `S3_DOMAIN` does not update DNS or endpoint configuration in external clients.
