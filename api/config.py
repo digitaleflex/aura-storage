@@ -25,6 +25,11 @@ class Settings:
     intent_ttl: int = int(os.environ.get("AURA_INTENT_TTL", "900"))
     # Cookie security.
     cookie_secure: bool = os.environ.get("AURA_COOKIE_SECURE", "1") == "1"
+    # Audit log (JSON-lines, IDs and statuses only — never secrets or URLs).
+    audit_log: str = os.environ.get("AURA_AUDIT_LOG", "aura-audit.jsonl")
+    # Login rate limit (attempts per window, per client IP).
+    login_rate_limit: int = int(os.environ.get("AURA_LOGIN_RATE_LIMIT", "10"))
+    login_rate_window: int = int(os.environ.get("AURA_LOGIN_RATE_WINDOW", "60"))
 
 
 settings = Settings()

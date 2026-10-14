@@ -1,5 +1,6 @@
 """Issue #18 tests. Offline by default; live S3 round-trip behind AURA_LIVE_S3=1."""
 import hashlib
+import json
 import os
 
 import pytest
@@ -11,6 +12,7 @@ os.environ.setdefault("AURA_S3_SECRET_KEY", "testsecret4567890123456789012345678
 os.environ.setdefault("AURA_S3_ENDPOINT", "https://127.0.0.1:9")
 os.environ.setdefault("AURA_API_DB", ":memory:")
 os.environ.setdefault("AURA_COOKIE_SECURE", "0")
+os.environ.setdefault("AURA_AUDIT_LOG", "/tmp/opencode/aura-test-audit.jsonl")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -46,6 +48,57 @@ def authed_client(username="admin", password=None):
 
 
 client = make_client()
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limit():
+    main.reset_login_attempts()
+    yield
+    main.reset_login_attempts()
+
+
+def test_security_headers_present():
+    r = client.get("/health/live")
+    assert r.headers.get("X-Content-Type-Options") == "nosniff"
+    assert r.headers.get("X-Frame-Options") == "DENY"
+
+
+def test_login_rate_limit_429_after_window_exhausted():
+    c = make_client()
+    for _ in range(10):
+        r = c.post("/api/v1/login", json={"username": "admin", "password": "wrong"})
+        assert r.status_code == 401
+    r = c.post("/api/v1/login", json={"username": "admin", "password": "wrong"})
+    assert r.status_code == 429
+
+
+def test_audit_log_records_ids_and_no_secrets(tmp_path, monkeypatch):
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("AURA_AUDIT_LOG", str(log))
+    c = make_client()
+    secret_pw = os.environ["AURA_API_ADMIN_PASSWORD"]
+    c.post("/api/v1/login", json={"username": "admin", "password": "wrong"})
+    csrf = login(c)
+    c.post(
+        "/api/v1/objects/upload-intents",
+        json={"bucket": "test-bucket", "display_name": "audit.txt"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    lines = log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) >= 3
+    records = [json.loads(line) for line in lines]
+    for rec in records:
+        assert {"ts", "actor", "action", "result"} <= set(rec)
+    actions = {(rec["action"], rec["result"]) for rec in records}
+    assert ("login", "failure") in actions
+    assert ("login", "success") in actions
+    assert ("upload-intent", "success") in actions
+    blob = log.read_text(encoding="utf-8")
+    for marker in SECRET_MARKERS + [secret_pw]:
+        assert marker not in blob, "secret material leaked in audit log"
+    assert "X-Amz-Signature" not in blob
+    assert "upload_url" not in blob
+    assert "download_url" not in blob
 
 
 def test_live_and_open_health():

@@ -1,0 +1,19 @@
+{
+  "_note": "EXAMPLE ONLY for issue #22 hardening prep. NOT wired into docker-compose or generate-config.sh; NOT used in production. Bucket/prefix-scoped read/write identity for the API test bucket. Action/bucket scoping syntax MUST be validated against the exact SeaweedFS release before any use.",
+  "identities": [
+    {
+      "name": "aura-api-test-scoped",
+      "credentials": [
+        {
+          "accessKey": "REPLACE_WITH_GENERATED_TEST_ACCESS_KEY",
+          "secretKey": "REPLACE_WITH_GENERATED_TEST_LONG_RANDOM_SECRET"
+        }
+      ],
+      "actions": [
+        "Read:aura-api-test",
+        "Write:aura-api-test",
+        "List:aura-api-test"
+      ]
+    }
+  ]
+}
