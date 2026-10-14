@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-: "\${S3_ENDPOINT:?Set S3_ENDPOINT, e.g. https://storage.example.tld}"
-: "\${S3_BUCKET:?Set S3_BUCKET to a pre-created test bucket}"
-: "\${AWS_ACCESS_KEY_ID:?Set a restricted test access key}"
-: "\${AWS_SECRET_ACCESS_KEY:?Set the restricted test secret}"
+: "${S3_ENDPOINT:?Set S3_ENDPOINT, e.g. https://storage.example.tld}"
+: "${S3_BUCKET:?Set S3_BUCKET to a pre-created test bucket}"
+: "${AWS_ACCESS_KEY_ID:?Set a restricted test access key}"
+: "${AWS_SECRET_ACCESS_KEY:?Set the restricted test secret}"
 command -v aws >/dev/null 2>&1 || { echo "ERROR: AWS CLI is required." >&2; exit 1; }
 
 tmp="$(mktemp)"
