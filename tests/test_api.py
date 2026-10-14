@@ -159,3 +159,11 @@ def test_live_round_trip_with_integrity():
         "/api/v1/objects", headers={"Cookie": "aura_session=bogus"}
     )
     assert bad.status_code == 401
+    # a presigned URL past its TTL is rejected by storage (real expiry proof)
+    import time as _time
+
+    from api.s3 import presigned_put as _presign
+    short_url = _presign(main.s3, bucket, "expiry-probe", "text/plain", 2)
+    _time.sleep(4)
+    expired = httpx.put(short_url, content=b"x", headers={"Content-Type": "text/plain"}, timeout=30)
+    assert expired.status_code == 403, expired.text
