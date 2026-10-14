@@ -214,6 +214,43 @@ services:
       - no-new-privileges:true
     # Only 80/443 via Traefik (shared entrypoints); no direct ports published.
 
+  # Landing page answering the S3 root for humans: a browser opening S3_DOMAIN
+  # without signing gets an explanation and a link to the app instead of raw XML.
+  # The router matches ONLY an unsigned GET on `/`; every signed or non-root
+  # request keeps going to SeaweedFS through the `aura-s3` router.
+  s3-landing:
+    image: nginx:1.28.3-alpine
+    container_name: ${AURA_INSTANCE_ID:-aura-001}-s3-landing
+    restart: unless-stopped
+    environment:
+      S3_DOMAIN: ${S3_DOMAIN:?Set S3_DOMAIN in .env}
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in .env}
+    command: ["/bin/sh", "/opt/aura-landing/entrypoint.sh"]
+    volumes:
+      - ./landing:/opt/aura-landing:ro
+      - ./web/dist/fonts:/opt/aura-landing-fonts:ro
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aura-edge
+      - traefik.http.routers.aura-s3-landing.rule=Host(`${S3_DOMAIN:?Set S3_DOMAIN in .env}`) && Path(`/`) && Method(`GET`) && !HeaderRegexp(`Authorization`, `.+`)
+      # Explicit priority: the landing rule is longer than the S3 rule, but the
+      # intent must not depend on rule-length sorting.
+      - traefik.http.routers.aura-s3-landing.priority=1000
+      - traefik.http.routers.aura-s3-landing.entrypoints=websecure
+      - traefik.http.routers.aura-s3-landing.tls=true
+      - traefik.http.routers.aura-s3-landing.tls.certresolver=le
+      - traefik.http.services.aura-s3-landing.loadbalancer.server.port=80
+    security_opt:
+      - no-new-privileges:true
+    # No host ports, no access to the internal storage network.
+
 networks:
   edge:
     name: aura-edge

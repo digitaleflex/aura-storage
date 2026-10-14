@@ -33,6 +33,7 @@ This runbook describes the planned initial single-VPS deployment. The InterServe
 4. Ensure inbound TCP 80 and 443 reach Traefik directly or through a correctly configured upstream proxy.
 5. The Compose baseline uses Let's Encrypt HTTP-01. Certificate issuance fails if DNS is wrong, port 80 is blocked, or another service intercepts the challenge.
 6. Never publish the Traefik dashboard publicly without explicit authentication and network restrictions. The current baseline defines no public dashboard route.
+7. Opening `https://<S3_DOMAIN>/` in a browser returns XML `AccessDenied` by design; the Compose baseline answers that single unsigned root request with a static page pointing to the app (`docs/S3-ROOT-LANDING.md`).
 
 ## 3. Prepare local configuration
 

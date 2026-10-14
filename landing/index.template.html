@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <meta
+      name="description"
+      content="Cet hôte sert l'API S3 d'AURA Vault. L'interface de fichiers se trouve sur l'application."
+    />
+    <title>AURA Vault — endpoint S3</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 11 L16 4 L28 11 L16 18 Z' fill='%232E7CF6'/%3E%3Cpath d='M4 16.5 L16 23.5 L28 16.5 L28 19.5 L16 26.5 L4 19.5 Z' fill='%23C5F441'/%3E%3C/svg%3E"
+    />
+    <style>
+      /* AURA Vault — mêmes rôles de couleur et de type que l'application.
+       * Midnight + bleu électrique portent la page ; le lime est réservé à
+       * l'action principale. Page autonome, sans JavaScript. */
+      @font-face {
+        font-family: "Plus Jakarta Sans";
+        src: url("/fonts/plus-jakarta-sans-v12-latin-regular.woff2") format("woff2");
+        font-weight: 400;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: "Plus Jakarta Sans";
+        src: url("/fonts/plus-jakarta-sans-v12-latin-600.woff2") format("woff2");
+        font-weight: 600;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: "Plus Jakarta Sans";
+        src: url("/fonts/plus-jakarta-sans-v12-latin-700.woff2") format("woff2");
+        font-weight: 700;
+        font-display: swap;
+      }
+
+      :root {
+        --night-950: #060d1a;
+        --night-900: #0a1628;
+        --night-800: #10203a;
+        --night-700: #1a2f52;
+        /* Texte sur fond sombre : mêmes valeurs que la barre latérale de
+         * l'application (#dbe4f3 texte, #aeb9cf secondaire, --faint #8b96ac),
+         * toutes au-dessus de 4,5:1 sur le fond le plus clair de la page. */
+        --ink-on-dark: #dbe4f3;
+        --muted-on-dark: #aeb9cf;
+        --faint-on-dark: #8b96ac;
+        --electric: #2e7cf6;
+        --electric-soft: rgba(46, 124, 246, 0.18);
+        --lime: #c5f441;
+        --lime-ink: #3d5203;
+        --radius: 10px;
+        --font: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      body {
+        margin: 0;
+        padding: 32px 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background:
+          radial-gradient(1100px 560px at 50% -14%, var(--electric-soft), transparent 62%),
+          linear-gradient(180deg, var(--night-950) 0%, var(--night-900) 58%, var(--night-800) 100%);
+        color: var(--ink-on-dark);
+        font-family: var(--font);
+        font-size: 15px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      main {
+        width: 100%;
+        max-width: 620px;
+        animation: rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        main {
+          animation: none;
+        }
+      }
+
+      .wordmark {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 26px;
+      }
+
+      .wordmark svg {
+        display: block;
+      }
+
+      .wordmark span {
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .wordmark em {
+        font-style: normal;
+        font-weight: 400;
+        color: var(--faint-on-dark);
+      }
+
+      h1 {
+        margin: 0 0 14px;
+        font-size: clamp(26px, 4.4vw, 34px);
+        line-height: 1.18;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+      }
+
+      .lead {
+        margin: 0 0 26px;
+        max-width: 54ch;
+        color: var(--muted-on-dark);
+      }
+
+      .lead strong {
+        color: var(--ink-on-dark);
+        font-weight: 600;
+      }
+
+      section {
+        border: 1px solid var(--night-700);
+        border-radius: var(--radius);
+        background: rgba(6, 13, 26, 0.55);
+        padding: 18px;
+        margin: 0 0 22px;
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        font-size: 12.5px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: var(--faint-on-dark);
+      }
+
+      pre {
+        margin: 0;
+        overflow-x: auto;
+        font-family: var(--mono);
+        font-size: 12.5px;
+        line-height: 1.7;
+        color: var(--faint-on-dark);
+      }
+
+      pre b {
+        color: var(--muted-on-dark);
+        font-weight: 400;
+      }
+
+      .endpoint {
+        margin: 0;
+        font-size: 13.5px;
+        color: var(--muted-on-dark);
+      }
+
+      .endpoint code {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--ink-on-dark);
+        background: var(--night-800);
+        border: 1px solid var(--night-700);
+        border-radius: 7px;
+        padding: 2px 7px;
+        word-break: break-all;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .btn {
+        display: inline-block;
+        padding: 12px 22px;
+        border: 1px solid var(--lime);
+        border-radius: var(--radius);
+        background: var(--lime);
+        color: var(--lime-ink);
+        font-size: 15px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      /* Même grammaire d'interaction que les boutons de l'application :
+       * bordure au survol, enfoncement au clic. */
+      .btn:hover {
+        border-color: var(--lime-ink);
+      }
+
+      .btn:active {
+        transform: translateY(1px);
+      }
+
+      .btn:focus-visible {
+        outline: 2px solid var(--ink-on-dark);
+        outline-offset: 2px;
+      }
+
+      .actions .hint {
+        font-size: 13.5px;
+        color: var(--faint-on-dark);
+      }
+
+      @media (max-width: 420px) {
+        .actions {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .btn {
+          text-align: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="wordmark">
+        <svg width="26" height="26" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <path d="M4 11 L16 4 L28 11 L16 18 Z" fill="#2E7CF6" />
+          <path d="M4 16.5 L16 23.5 L28 16.5 L28 19.5 L16 26.5 L4 19.5 Z" fill="#C5F441" />
+          <path d="M4 22 L16 29 L28 22 L28 23.5 L16 30.5 L4 23.5 Z" fill="#8B96AC" opacity="0.7" />
+        </svg>
+        <span>AURA Vault <em>· stockage objet chiffré</em></span>
+      </p>
+
+      <h1>Cet hôte sert l’API S3, pas l’interface web.</h1>
+      <p class="lead">
+        L’adresse <strong>${S3_DOMAIN}</strong> est l’endpoint de stockage objet. Un navigateur qui
+        ouvre la racine envoie une requête S3 <strong>non signée</strong> : la réponse XML ci-dessous
+        est la réponse normale de l’API pour cette requête, pas une panne.
+      </p>
+
+      <section aria-labelledby="api-response">
+        <h2 id="api-response">Réponse de l’API</h2>
+        <pre><b>&lt;Error&gt;</b>
+  &lt;Code&gt;AccessDenied&lt;/Code&gt;
+  &lt;Message&gt;Access Denied.&lt;/Message&gt;
+  &lt;Resource&gt;/&lt;/Resource&gt;
+<b>&lt;/Error&gt;</b></pre>
+      </section>
+
+      <div class="actions">
+        <a class="btn" href="https://${APP_DOMAIN}/">Ouvrir AURA Vault</a>
+        <span class="hint">Connexion requise pour gérer les fichiers.</span>
+      </div>
+
+      <section aria-labelledby="clients" style="margin-top: 22px">
+        <h2 id="clients">Clients S3</h2>
+        <p class="endpoint">
+          AWS CLI, SDK et applications compatibles S3 : utilisez l’endpoint
+          <code>https://${S3_DOMAIN}</code>. Les requêtes signées sont servies normalement.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
