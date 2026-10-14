@@ -21,9 +21,17 @@ import api.main as main  # noqa: E402
 # NOTE: the SigV4 access key *ID* legitimately appears in presigned URLs
 # (X-Amz-Credential); it is an identifier, not a secret. Only the secret
 # key and the admin password must never appear.
+# A marker shorter than MIN_MARKER_LEN cannot be asserted meaningfully: a short
+# dummy (e.g. a 2-char password) also occurs by coincidence inside unrelated
+# data, such as the access-key ID in a presigned credential.
+MIN_MARKER_LEN = 8
 SECRET_MARKERS = [
-    os.environ["AURA_S3_SECRET_KEY"],
-    os.environ["AURA_API_ADMIN_PASSWORD"],
+    marker
+    for marker in (
+        os.environ["AURA_S3_SECRET_KEY"],
+        os.environ["AURA_API_ADMIN_PASSWORD"],
+    )
+    if len(marker) >= MIN_MARKER_LEN
 ]
 
 client = TestClient(main.app)
