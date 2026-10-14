@@ -23,6 +23,7 @@ This runbook describes the planned initial single-VPS deployment. The InterServe
 - [ ] Apply OS security updates.
 - [ ] Configure default-deny inbound firewall: SSH from restricted sources when feasible, plus TCP 80/443 for Traefik. Do not open SeaweedFS ports.
 - [ ] Install Docker Engine and the Compose plugin using official Docker instructions for the selected Ubuntu release.
+- [ ] Install Node.js and npm (LTS) to build the frontend asset served by the app container from `web/`.
 - [ ] Confirm Docker starts after reboot and only trusted administrators can control the Docker daemon.
 
 ## 2. DNS and TLS prerequisites
@@ -119,6 +120,8 @@ bash ./scripts/deploy.sh
 docker compose ps
 docker compose logs --tail=150 traefik seaweed-master seaweed-volume seaweed-filer
 ```
+
+`deploy.sh` rebuilds the static frontend (`web/dist`) before starting the stack. `web/dist` is git-ignored and bind-mounted read-only into the `app` container, so it is produced on the host by `npm ci && npm run build` inside `web/` (Node.js/npm required, see §1). A deploy that skips this step silently serves a stale bundle. The API image is rebuilt from `api/` and registry images are pulled, skipping locally-built images.
 
 Check that Traefik starts, ACME can reach Let's Encrypt, the S3 hostname receives a valid certificate, SeaweedFS services remain healthy, no unexpected port is public, the data directory is on the intended filesystem, and services survive a controlled container restart.
 

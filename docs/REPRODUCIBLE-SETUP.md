@@ -185,6 +185,8 @@ docker compose ps
 docker compose logs --tail=150 traefik seaweed-master seaweed-volume seaweed-filer
 ```
 
+`deploy.sh` builds the frontend bundle (`web/dist`, git-ignored, bind-mounted into the `app` container) with `npm ci && npm run build` before starting the stack, so Node.js and npm must be installed. It then rebuilds the API image from `api/` and pulls the remaining registry images.
+
 Use the service names from the current Compose file if they differ. Check DNS, certificate validity, expected container health, disk path, and absence of unintended public ports. Never publish full logs without checking for sensitive values.
 
 Run the encryption smoke test using the documented AWS CLI v2 prerequisites:
