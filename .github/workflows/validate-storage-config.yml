@@ -2,9 +2,9 @@ name: Validate storage configuration
 
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main, "feat/**", "chore/**", "docs/**"]
   pull_request:
-    branches: [main]
+    branches: [main, feat/secure-storage-pilot]
   workflow_dispatch:
 
 permissions:
