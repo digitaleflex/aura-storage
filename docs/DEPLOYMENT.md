@@ -27,7 +27,7 @@ This runbook describes the planned initial single-VPS deployment. The InterServe
 
 ## 2. DNS and TLS prerequisites
 
-1. Use `s3.aura.eurinhash.com` initially if you control the `eurinhash.com` DNS zone, or set another hostname you control.
+1. Use `aura-storage.eurinhash.com` for the pilot if you control the `eurinhash.com` DNS zone (verified resolving to the VPS on 2026-10-14), or set another hostname you control.
 2. Set `S3_DOMAIN` in the local `.env` to that hostname and `ACME_EMAIL` to a monitored email address.
 3. Create an A record pointing to the VPS public IPv4. Add AAAA only if IPv6 is correctly configured end-to-end.
 4. Ensure inbound TCP 80 and 443 reach Traefik directly or through a correctly configured upstream proxy.
