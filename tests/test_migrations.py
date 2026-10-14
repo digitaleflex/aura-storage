@@ -116,3 +116,67 @@ def test_rollback_reads_original_columns(tmp_path):
     row = conn.execute(f"SELECT {legacy_columns} FROM objects WHERE id = 'o1'").fetchone()
     assert row[0] == "o1" and row[6] == "pending"
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# #10: the postgres placeholder translation must be quote/operator aware.
+# ---------------------------------------------------------------------------
+def test_placeholder_translation_replaces_only_real_placeholders():
+    t = migrations._translate_placeholders
+    assert t("SELECT * FROM t WHERE a = ? AND b = ?") == \
+        "SELECT * FROM t WHERE a = %s AND b = %s"
+    # A '?' inside a string literal or a quoted identifier is preserved.
+    assert t("UPDATE t SET note = 'why?' WHERE id = ?") == \
+        "UPDATE t SET note = 'why?' WHERE id = %s"
+    assert t("SELECT 'it''s ok?' WHERE id = ?") == \
+        "SELECT 'it''s ok?' WHERE id = %s"
+    assert t('SELECT "weird?col" FROM t WHERE id = ?') == \
+        'SELECT "weird?col" FROM t WHERE id = %s'
+    # jsonb existence operators are not placeholders.
+    assert t("SELECT data ?| array['a'] FROM t WHERE id = ?") == \
+        "SELECT data ?| array['a'] FROM t WHERE id = %s"
+    assert t("SELECT data ?& array['a'] FROM t WHERE id = ?") == \
+        "SELECT data ?& array['a'] FROM t WHERE id = %s"
+    # No placeholders, nothing to do.
+    assert t("SELECT 1") == "SELECT 1"
+
+
+class _FakeCursor:
+    def __init__(self):
+        self.sql = None
+        self.params = None
+
+    def execute(self, sql, params=()):
+        self.sql, self.params = sql, params
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakePostgresConn:
+    def __init__(self):
+        self.cur = _FakeCursor()
+        self.executed = []
+
+    def cursor(self):
+        return self.cur
+
+    def execute(self, sql, params=()):  # sqlite-style path
+        self.executed.append((sql, params))
+        return self
+
+
+def test_runner_translates_placeholders_for_postgres_only():
+    pg = _FakePostgresConn()
+    migrations._Runner(pg, "postgres").exec(
+        "UPDATE t SET note = 'a?b' WHERE id = ?", ("1",)
+    )
+    assert pg.cur.sql == "UPDATE t SET note = 'a?b' WHERE id = %s"
+    assert pg.cur.params == ("1",)
+
+    sq = _FakePostgresConn()
+    migrations._Runner(sq, "sqlite").exec("UPDATE t SET x = ? WHERE id = ?", (1, 2))
+    assert sq.executed == [("UPDATE t SET x = ? WHERE id = ?", (1, 2))]
