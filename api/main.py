@@ -178,6 +178,11 @@ def commit_object(oid: str, user: dict = Depends(require_csrf)):
     return {"id": oid, "status": "available", "size_bytes": size, "checksum_sha256": digest}
 
 
+@app.get("/api/v1/me")
+def me(user: dict = Depends(current_user)):
+    return {"id": user["id"]}
+
+
 @app.get("/api/v1/objects")
 def list_objects(
     user: dict = Depends(current_user), limit: int = 50, offset: int = 0
