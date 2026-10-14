@@ -255,3 +255,8 @@ The pilot is not accepted until all relevant items are evidenced:
 - [Ubuntu Server WireGuard VPN](https://ubuntu.com/server/docs/how-to/wireguard-vpn/)
 - [Docker Engine on Ubuntu](https://docs.docker.com/engine/install/ubuntu/)
 - [WireGuard official quick start](https://www.wireguard.com/quickstart/)
+
+
+## Network performance and optional personal VPN
+
+See [Network architecture and throughput test plan](NETWORK-AND-THROUGHPUT-PLAN.md) for the design and test matrix covering AURA transfers, Internet downloads and transfers between devices. This is documentation only. Do not install WireGuard, benchmark tools, change firewall/routing or deploy AURA until the SSH safety gate and live host preflight have been reviewed. Keep AURA storage traffic and the optional full-tunnel personal VPN logically separate; do not assume a VPN will increase throughput.
