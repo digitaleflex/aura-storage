@@ -22,41 +22,6 @@ class Repository:
     def new_id(self) -> str:
         return str(uuid.uuid4())
 
-    # -- users ------------------------------------------------------------
-    def get_user_by_name(self, username: str) -> Optional[sqlite3.Row]:
-        return self.conn.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
-        ).fetchone()
-
-    def create_user(self, username: str, pass_hash: str) -> str:
-        uid = self.new_id()
-        self.conn.execute(
-            "INSERT INTO users (id, username, pass_hash, created_at) VALUES (?, ?, ?, ?)",
-            (uid, username, pass_hash, self.now()),
-        )
-        self.conn.commit()
-        return uid
-
-    # -- sessions ---------------------------------------------------------
-    def create_session(self, user_id: str, csrf: str, expires_at: int) -> str:
-        sid = self.new_id()
-        self.conn.execute(
-            "INSERT INTO sessions (id, user_id, csrf, expires_at) VALUES (?, ?, ?, ?)",
-            (sid, user_id, csrf, expires_at),
-        )
-        self.conn.commit()
-        return sid
-
-    def get_session(self, sid: str) -> Optional[sqlite3.Row]:
-        return self.conn.execute(
-            "SELECT * FROM sessions WHERE id = ? AND expires_at > ?",
-            (sid, self.now()),
-        ).fetchone()
-
-    def delete_session(self, sid: str) -> None:
-        self.conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
-        self.conn.commit()
-
     # -- objects ----------------------------------------------------------
     def create_pending_object(
         self, bucket: str, object_key: str, display_name: str,

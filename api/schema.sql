@@ -1,21 +1,11 @@
 -- AURA catalogue schema, shared by SQLite (#18) and PostgreSQL (#19).
 -- Column types use TEXT/INTEGER portable across both engines.
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  username TEXT UNIQUE NOT NULL,
-  pass_hash TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id),
-  csrf TEXT NOT NULL,
-  expires_at INTEGER NOT NULL
-);
+-- Ownership references the Better Auth "user"(id) by convention (no hard FK:
+-- Better Auth migrates its tables independently; integrity is enforced by the API).
 CREATE TABLE IF NOT EXISTS folders (
   id TEXT PRIMARY KEY,
-  owner_id TEXT NOT NULL REFERENCES users(id),
-  parent_id TEXT REFERENCES folders(id),
+  owner_id TEXT NOT NULL,
+  parent_id TEXT,
   name TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
@@ -28,7 +18,7 @@ CREATE TABLE IF NOT EXISTS objects (
   size_bytes INTEGER NOT NULL DEFAULT -1,
   checksum_sha256 TEXT NOT NULL DEFAULT '',
   folder_id TEXT REFERENCES folders(id),
-  owner_id TEXT NOT NULL REFERENCES users(id),
+  owner_id TEXT NOT NULL,
   visibility TEXT NOT NULL DEFAULT 'private',
   status TEXT NOT NULL DEFAULT 'pending',
   created_at INTEGER NOT NULL,

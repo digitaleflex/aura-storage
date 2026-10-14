@@ -22,43 +22,6 @@ class Repository:
     def new_id(self) -> str:
         return str(uuid.uuid4())
 
-    # -- users ------------------------------------------------------------
-    def get_user_by_name(self, username: str) -> Optional[dict]:
-        with self.conn.cursor() as cur:
-            cur.execute("SELECT * FROM users WHERE username = %s", (username,))
-            return cur.fetchone()
-
-    def create_user(self, username: str, pass_hash: str) -> str:
-        uid = self.new_id()
-        with self.conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO users (id, username, pass_hash, created_at) VALUES (%s, %s, %s, %s)",
-                (uid, username, pass_hash, self.now()),
-            )
-        return uid
-
-    # -- sessions ---------------------------------------------------------
-    def create_session(self, user_id: str, csrf: str, expires_at: int) -> str:
-        sid = self.new_id()
-        with self.conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO sessions (id, user_id, csrf, expires_at) VALUES (%s, %s, %s, %s)",
-                (sid, user_id, csrf, expires_at),
-            )
-        return sid
-
-    def get_session(self, sid: str) -> Optional[dict]:
-        with self.conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM sessions WHERE id = %s AND expires_at > %s",
-                (sid, self.now()),
-            )
-            return cur.fetchone()
-
-    def delete_session(self, sid: str) -> None:
-        with self.conn.cursor() as cur:
-            cur.execute("DELETE FROM sessions WHERE id = %s", (sid,))
-
     # -- objects ----------------------------------------------------------
     def create_pending_object(
         self, bucket: str, object_key: str, display_name: str,

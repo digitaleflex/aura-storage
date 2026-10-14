@@ -3,11 +3,10 @@ import hashlib
 import time
 import uuid
 
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .auth import hash_password, new_token, verify_password
 from .config import settings
 from .lifecycle import purge_object, reconcile_pending
 from .s3 import make_client, presigned_get, presigned_put
@@ -30,14 +29,8 @@ s3 = make_client(
     settings.s3_region,
 )
 
-# Bootstrap the single admin user on first boot (password hashed, never stored raw).
-if repo.get_user_by_name(settings.admin_user) is None:
-    repo.create_user(settings.admin_user, hash_password(settings.admin_password))
-
-
-class LoginIn(BaseModel):
-    username: str
-    password: str
+# Users and sessions are owned by Better Auth (auth/ service + session table).
+# This API only maps a live Better Auth session to an owner id.
 
 
 class UploadIntentIn(BaseModel):
@@ -47,21 +40,31 @@ class UploadIntentIn(BaseModel):
     folder_id: str | None = None
 
 
-def current_user(aura_session: str | None = Cookie(default=None)) -> dict:
-    if not aura_session:
-        raise HTTPException(status_code=401, detail="authentication required")
-    row = repo.get_session(aura_session)
-    if row is None:
-        raise HTTPException(status_code=401, detail="invalid or expired session")
-    return {"id": row["user_id"], "session_id": row["id"], "csrf": row["csrf"]}
-
-
-def require_csrf(
-    user: dict = Depends(current_user),
-    x_csrf_token: str | None = Header(default=None),
+def current_user(
+    aura_session_token: str | None = Cookie(default=None, alias="aura.session_token"),
 ) -> dict:
-    if not x_csrf_token or x_csrf_token != user["csrf"]:
-        raise HTTPException(status_code=403, detail="csrf validation failed")
+    """Authenticate via the Better Auth session cookie (HttpOnly).
+
+    The cookie holds <token>.<signature>; the token part is looked up in the
+    better-auth `session` table with freshness check. No S3 material involved.
+    """
+    from .ba_session import extract_token, lookup_session
+
+    user = lookup_session(repo, extract_token(aura_session_token))
+    if user is None:
+        raise HTTPException(status_code=401, detail="authentication required")
+    return user
+
+
+def require_origin(
+    user: dict = Depends(current_user),
+    origin: str | None = Header(default=None),
+) -> dict:
+    """CSRF guard for mutations: allow-listed Origin required (fail closed)."""
+    from .ba_session import TRUSTED_ORIGINS
+
+    if not origin or origin not in TRUSTED_ORIGINS:
+        raise HTTPException(status_code=403, detail="untrusted origin")
     return user
 
 
@@ -79,32 +82,8 @@ def ready():
         return JSONResponse(status_code=503, content={"status": "not ready"})
 
 
-@app.post("/api/v1/login")
-def login(body: LoginIn, response: Response):
-    row = repo.get_user_by_name(body.username)
-    if row is None or not verify_password(row["pass_hash"], body.password):
-        raise HTTPException(status_code=401, detail="invalid credentials")
-    csrf = new_token(16)
-    sid = repo.create_session(
-        row["id"], csrf, int(time.time()) + settings.session_ttl
-    )
-    response.set_cookie(
-        "aura_session", sid, httponly=True, secure=settings.cookie_secure,
-        samesite="strict", max_age=settings.session_ttl, path="/",
-    )
-    return {"csrf_token": csrf}
-
-
-@app.post("/api/v1/logout")
-def logout(user: dict = Depends(current_user), response: Response = None):
-    repo.delete_session(user["session_id"])
-    out = JSONResponse(content={"status": "logged out"})
-    out.delete_cookie("aura_session", path="/")
-    return out
-
-
 @app.post("/api/v1/objects/upload-intents")
-def upload_intent(body: UploadIntentIn, user: dict = Depends(require_csrf)):
+def upload_intent(body: UploadIntentIn, user: dict = Depends(require_origin)):
     key = f"aura/{user['id']}/{uuid.uuid4()}"
     oid = repo.create_pending_object(
         body.bucket, key, body.display_name, body.content_type, user["id"],
@@ -115,7 +94,7 @@ def upload_intent(body: UploadIntentIn, user: dict = Depends(require_csrf)):
 
 
 @app.post("/api/v1/objects/{oid}/commit")
-def commit_object(oid: str, user: dict = Depends(require_csrf)):
+def commit_object(oid: str, user: dict = Depends(require_origin)):
     row = repo.get_object(oid, user["id"])
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")
@@ -163,7 +142,7 @@ def get_object(oid: str, user: dict = Depends(current_user)):
 
 
 @app.delete("/api/v1/objects/{oid}")
-def soft_delete_object(oid: str, user: dict = Depends(require_csrf)):
+def soft_delete_object(oid: str, user: dict = Depends(require_origin)):
     row = repo.get_object(oid, user["id"])
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")
@@ -175,19 +154,19 @@ def soft_delete_object(oid: str, user: dict = Depends(require_csrf)):
 
 
 @app.post("/api/v1/objects/{oid}/purge")
-def purge(oid: str, user: dict = Depends(require_csrf)):
+def purge(oid: str, user: dict = Depends(require_origin)):
     if not purge_object(repo, s3, oid, user["id"]):
         raise HTTPException(status_code=404, detail="object not found")
     return {"id": oid, "status": "purged"}
 
 
 @app.post("/api/v1/admin/reconcile")
-def reconcile(user: dict = Depends(require_csrf)):
+def reconcile(user: dict = Depends(require_origin)):
     return reconcile_pending(repo, s3)
 
 
 @app.post("/api/v1/objects/{oid}/download-intent")
-def download_intent(oid: str, user: dict = Depends(require_csrf)):
+def download_intent(oid: str, user: dict = Depends(require_origin)):
     row = repo.get_object(oid, user["id"])
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")

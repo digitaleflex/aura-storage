@@ -1,56 +1,45 @@
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, useContext, useMemo } from "react";
 import type { ReactNode } from "react";
 import { Navigate } from "@tanstack/react-router";
-import { api, ApiError } from "./api";
+import { signIn, signOut, useSession } from "./auth-client";
 
 interface AuthState {
-  /** CSRF token kept in memory only; never persisted. Null = not logged in. */
-  csrf: string | null;
-  login: (username: string, password: string) => Promise<void>;
+  userEmail: string | null;
+  pending: boolean;
+  loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [csrf, setCsrf] = useState<string | null>(null);
+  const { data, isPending } = useSession();
 
-  const login = useCallback(async (username: string, password: string) => {
-    const res = await api.login(username, password);
-    setCsrf(res.csrf_token);
-  }, []);
-
-  const logout = useCallback(async () => {
-    if (csrf) {
-      try {
-        await api.logout(csrf);
-      } catch (err) {
-        // Session may already be gone; still clear local state.
-        if (!(err instanceof ApiError && err.status === 401)) {
-          throw err;
-        }
-      }
-    }
-    setCsrf(null);
-  }, [csrf]);
-
-  const value = useMemo(() => ({ csrf, login, logout }), [csrf, login, logout]);
+  const value = useMemo<AuthState>(
+    () => ({
+      userEmail: data?.user?.email ?? null,
+      pending: isPending,
+      loginWithGoogle: async () => {
+        await signIn.social({ provider: "google", callbackURL: "/" });
+      },
+      logout: async () => {
+        await signOut();
+      },
+    }),
+    [data, isPending]
+  );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {
   const ctx = useContext(AuthContext);
-  if (!ctx) {
-    throw new Error("useAuth must be used inside <AuthProvider>.");
-  }
+  if (!ctx) throw new Error("useAuth outside AuthProvider");
   return ctx;
 }
 
-/** Route guard: unauthenticated users are sent back to /login. */
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { csrf } = useAuth();
-  if (!csrf) {
-    return <Navigate to="/login" />;
-  }
+  const { userEmail, pending } = useAuth();
+  if (pending) return <p>Chargement…</p>;
+  if (!userEmail) return <Navigate to="/login" />;
   return <>{children}</>;
 }

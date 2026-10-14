@@ -3,7 +3,6 @@ import type { FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, putToPresignedUrl } from "../lib/api";
 import type { ObjectItem } from "../lib/api";
-import { useAuth } from "../lib/auth";
 
 function formatBytes(size: number): string {
   if (!Number.isFinite(size) || size < 0) {
@@ -19,7 +18,6 @@ function formatBytes(size: number): string {
 }
 
 export function ObjectsPage() {
-  const { csrf } = useAuth();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -32,22 +30,16 @@ export function ObjectsPage() {
 
   const uploadMutation = useMutation({
     mutationFn: async (selected: File) => {
-      if (!csrf) {
-        throw new Error("Not authenticated.");
-      }
       // Step 1: ask the API for a short-lived upload intent.
-      const intent = await api.createUploadIntent(
-        {
-          bucket: "aura",
-          display_name: selected.name,
-          content_type: selected.type || "application/octet-stream",
-        },
-        csrf,
-      );
+      const intent = await api.createUploadIntent({
+        bucket: "aura",
+        display_name: selected.name,
+        content_type: selected.type || "application/octet-stream",
+      });
       // Step 2: PUT the bytes directly to the presigned URL.
       await putToPresignedUrl(intent.upload_url, selected);
       // Step 3: commit so the catalogue marks the object available.
-      return api.commitObject(intent.id, csrf);
+      return api.commitObject(intent.id);
     },
     onSuccess: () => {
       setFile(null);
@@ -71,12 +63,8 @@ export function ObjectsPage() {
 
   async function handleDownload(item: ObjectItem) {
     setDownloadError(null);
-    if (!csrf) {
-      setDownloadError("Not authenticated.");
-      return;
-    }
     try {
-      const intent = await api.createDownloadIntent(item.id, csrf);
+      const intent = await api.createDownloadIntent(item.id);
       window.open(intent.download_url, "_blank", "noopener");
     } catch (err) {
       setDownloadError(

@@ -4,7 +4,8 @@
  * Security rules enforced here:
  * - Session is carried by the HttpOnly `aura_session` cookie
  *   (`credentials: "include"`); the app never sees or stores it.
- * - Mutations send the CSRF token in the `x-csrf-token` header.
+ * - Mutations rely on the session cookie plus same-origin fetch
+ *   (the API enforces an Origin allow-list).
  * - No S3 credentials exist in this bundle. Presigned URLs are opaque
  *   short-lived strings issued by the API; uploads PUT bytes to them.
  * - Only relative paths are used, so no backend address leaks into the UI.
@@ -20,10 +21,6 @@ export class ApiError extends Error {
     this.status = status;
     this.detail = detail;
   }
-}
-
-export interface LoginResponse {
-  csrf_token: string;
 }
 
 export interface ObjectItem {
@@ -67,7 +64,6 @@ export interface DownloadIntentResponse {
 interface RequestOptions {
   method?: string;
   body?: unknown;
-  csrf?: string | null;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -76,9 +72,6 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (options.body !== undefined) {
     headers["content-type"] = "application/json";
     body = JSON.stringify(options.body);
-  }
-  if (options.csrf) {
-    headers["x-csrf-token"] = options.csrf;
   }
   const res = await fetch(path, {
     method: options.method ?? "GET",
@@ -105,20 +98,6 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const api = {
-  login(username: string, password: string): Promise<LoginResponse> {
-    return request<LoginResponse>("/api/v1/login", {
-      method: "POST",
-      body: { username, password },
-    });
-  },
-
-  logout(csrf: string): Promise<{ status: string }> {
-    return request<{ status: string }>("/api/v1/logout", {
-      method: "POST",
-      csrf,
-    });
-  },
-
   listObjects(): Promise<ObjectsListResponse> {
     return request<ObjectsListResponse>("/api/v1/objects");
   },
@@ -127,25 +106,23 @@ export const api = {
     return request<ObjectItem>(`/api/v1/objects/${encodeURIComponent(id)}`);
   },
 
-  createUploadIntent(input: UploadIntentRequest, csrf: string): Promise<UploadIntentResponse> {
+  createUploadIntent(input: UploadIntentRequest): Promise<UploadIntentResponse> {
     return request<UploadIntentResponse>("/api/v1/objects/upload-intents", {
       method: "POST",
       body: input,
-      csrf,
     });
   },
 
-  commitObject(id: string, csrf: string): Promise<CommitResponse> {
+  commitObject(id: string): Promise<CommitResponse> {
     return request<CommitResponse>(`/api/v1/objects/${encodeURIComponent(id)}/commit`, {
-      method: "POST",
-      csrf,
-    });
-  },
+method: "POST",
+});
+},
 
-  createDownloadIntent(id: string, csrf: string): Promise<DownloadIntentResponse> {
+  createDownloadIntent(id: string): Promise<DownloadIntentResponse> {
     return request<DownloadIntentResponse>(
       `/api/v1/objects/${encodeURIComponent(id)}/download-intent`,
-      { method: "POST", csrf },
+      { method: "POST" },
     );
   },
 };

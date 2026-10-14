@@ -6,9 +6,9 @@ minimal house CSS (no Tailwind), Playwright for e2e.
 
 ## What it does
 
-- `POST /api/v1/login` with username/password; session travels in the
-  HttpOnly `aura_session` cookie, CSRF token kept in memory only and sent as
-  `x-csrf-token` on mutations.
+- Google sign-in via Better Auth (`/api/auth/*`, proxied to the auth service
+  in dev, same-origin in pilot). Session travels in the HttpOnly
+  `aura.session_token` cookie; mutations rely on cookie + Origin allow-list.
 - Protected `/` route (object list + upload), public `/login` route.
 - Typed API client (`src/lib/api.ts`): list objects, upload intent → PUT to
   the short-lived URL → commit, download intent → open short-lived GET URL.
@@ -35,19 +35,14 @@ npm run build    # tsc --noEmit + vite build -> web/dist/
 npm run preview  # serves web/dist on 127.0.0.1:5173
 ```
 
-## E2E smoke (login KO rejected)
+## E2E smoke (auth gate)
 
-Needs two local servers. The API runs with an in-memory catalogue and dummy
-S3 credentials; a rejected login never contacts S3.
+Needs the frontend dev server (Google OAuth itself cannot run headless; the
+specs assert the gate: Google button present, no password fields, protected
+routes redirect). No API or S3 contact needed.
 
 ```bash
-# Terminal 1 — API (from repo root; values are throwaway local-only secrets)
-AURA_API_ADMIN_PASSWORD=local-smoke-test-password \
-AURA_S3_ACCESS_KEY=dummy AURA_S3_SECRET_KEY=dummy \
-AURA_API_DB=':memory:' AURA_COOKIE_SECURE=0 \
-  .venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8081 --workers 1
-
-# Terminal 2 — frontend
+# Terminal 1 — frontend
 cd web && npm run dev
 
 # Terminal 3 — smoke test

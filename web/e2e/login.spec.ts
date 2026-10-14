@@ -1,18 +1,22 @@
 import { test, expect } from "@playwright/test";
 
 /**
- * Smoke test: a login with wrong credentials must be rejected.
- * Requires the local API (uvicorn 127.0.0.1:8081, SQLite :memory:) and the
- * Vite dev server (127.0.0.1:5173) running — see web/README.md.
- * Only the /api/v1/login path is exercised; no S3 contact happens on a 401.
+ * Smoke tests for the Google sign-in gate.
+ * Requires the Vite dev server (127.0.0.1:5173) running — see web/README.md.
+ * Google OAuth itself cannot run headless here; these tests assert the gate:
+ * unauthenticated users stay on /login with the Google button, and the
+ * protected catalogue never renders without a session.
  */
-test("login with wrong credentials is rejected", async ({ page }) => {
+test("login page offers Google sign-in only", async ({ page }) => {
   await page.goto("/login");
 
-  await page.getByLabel("Username").fill("admin");
-  await page.getByLabel("Password").fill("wrong-password-for-smoke-test");
-  await page.getByRole("button", { name: "Log in", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign in with Google" })
+  ).toBeVisible();
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+});
 
-  await expect(page.getByRole("alert")).toContainText("Invalid credentials");
+test("protected catalogue redirects to login when anonymous", async ({ page }) => {
+  await page.goto("/");
   await expect(page).toHaveURL(/\/login/);
 });

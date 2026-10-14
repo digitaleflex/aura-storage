@@ -1,9 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Dev-only proxy target for the management API (same process serves the
-// static build in production, so the app itself only uses relative paths).
+// Dev-only proxy targets (production serves same-origin via Traefik, #21).
 const API_TARGET = process.env.AURA_API_PROXY ?? "http://127.0.0.1:8081";
+const AUTH_TARGET = process.env.AURA_AUTH_PROXY ?? "http://127.0.0.1:8099";
 
 export default defineConfig({
   plugins: [react()],
@@ -12,6 +12,7 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
+      "/api/auth": { target: AUTH_TARGET, changeOrigin: false },
       "/api": { target: API_TARGET, changeOrigin: false },
       "/health": { target: API_TARGET, changeOrigin: false },
     },

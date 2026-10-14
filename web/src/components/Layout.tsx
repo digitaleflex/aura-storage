@@ -2,7 +2,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useAuth } from "../lib/auth";
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { csrf, logout } = useAuth();
+  const { userEmail, pending, logout } = useAuth();
   const navigate = useNavigate();
 
   async function handleLogout() {
@@ -17,10 +17,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
           AURA Storage
         </Link>
         <nav className="nav">
-          {csrf ? (
-            <button type="button" className="btn btn-ghost" onClick={handleLogout}>
-              Log out
-            </button>
+          {!pending && userEmail ? (
+            <>
+              <span className="muted">{userEmail}</span>
+              <button type="button" className="btn btn-ghost" onClick={handleLogout}>
+                Log out
+              </button>
+            </>
           ) : (
             <Link to="/login" className="btn btn-ghost">
               Log in

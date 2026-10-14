@@ -1,0 +1,17 @@
+{
+  "name": "aura-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "migrate": "node src/migrate.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "better-auth": "^1.4.0",
+    "hono": "^4.7.0",
+    "kysely": "^0.28.0",
+    "pg": "^8.13.0"
+  }
+}
