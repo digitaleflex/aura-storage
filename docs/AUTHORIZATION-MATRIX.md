@@ -31,8 +31,15 @@ Default-deny: a role only holds the capabilities listed here; anything else is r
 
 ### Capabilities (service identities)
 
-Service identities are granted a subset of the six capabilities above; the minimum
-set should be requested (e.g. a read-only consumer gets only `objects:read`).
+A service identity may hold **object capabilities only**: `objects:read`,
+`objects:write`, `objects:delete`, `objects:purge`. Requesting `admin:read` or
+`admin:write` is refused with **422** at creation time, and such a scope is never
+*effective* even if it is present on a stored row (defence in depth). Platform
+administration — creating applications, spaces or further identities — therefore
+stays with a human `operator`/`admin` session, so a leaked machine token cannot
+escalate its own reach.
+
+Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 
 ## Route matrix
 
@@ -84,8 +91,9 @@ Admin-only, via the API (no direct database editing required):
 2. **Space** — `POST /api/v1/admin/spaces {application_id, name, environment,
    default_bucket?}`. A dedicated bucket is registered for the space.
 3. **Identity** — `POST /api/v1/admin/identities {space_id, name, scopes,
-   ttl_seconds?}`. The response contains the token **exactly once**; store it in the
-   consuming platform's secret manager. AURA keeps only the SHA-256 fingerprint.
+   ttl_seconds?}` (object scopes only; `admin:*` is refused with 422). The response
+   contains the token **exactly once**; store it in the consuming platform's secret
+   manager. AURA keeps only the SHA-256 fingerprint.
 4. **Rotate** — `POST /api/v1/admin/identities/{id}/rotate`; the previous secret stops
    working immediately and the new token is returned once.
 5. **Revoke** — `POST /api/v1/admin/identities/{id}/revoke`; access stops immediately.

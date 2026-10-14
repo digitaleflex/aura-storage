@@ -22,6 +22,7 @@ from .authz import (
     OBJECTS_PURGE,
     OBJECTS_READ,
     OBJECTS_WRITE,
+    SERVICE_SCOPES,
     authorize,
     effective_scopes,
 )
@@ -416,6 +417,13 @@ def create_identity(body: IdentityIn, principal: dict = Depends(authorize(ADMIN_
     unknown = scopes - ALL_SCOPES
     if unknown:
         raise HTTPException(status_code=422, detail="unknown scopes requested")
+    forbidden = scopes - SERVICE_SCOPES
+    if forbidden:
+        # Machine identities are data-plane only: administration stays with a
+        # human operator/admin session (see docs/AUTHORIZATION-MATRIX.md).
+        raise HTTPException(
+            status_code=422, detail="scopes not allowed for service identities"
+        )
     identity_id = repo.new_id()
     secret = new_secret()
     expires_at = int(time.time()) + body.ttl_seconds if body.ttl_seconds else None

@@ -168,6 +168,53 @@ def test_service_identity_scope_is_enforced():
     assert c.get("/api/v1/admin/stats", headers=_svc(token)).status_code == 403
 
 
+def test_scope_capabilities_are_partitioned():
+    # Every capability is either a data-plane (service) capability or an admin
+    # one, so the service allow-list can never silently under-cover a new scope.
+    assert authz.SERVICE_SCOPES & authz.ADMIN_SCOPES == frozenset()
+    assert authz.SERVICE_SCOPES | authz.ADMIN_SCOPES == authz.ALL_SCOPES
+
+
+def test_service_identity_cannot_be_granted_admin_scopes():
+    # A machine token must never be able to administer the platform (create
+    # spaces, applications or further identities) — that stays human-only.
+    c, headers = _admin()
+    _, space, _ = _make_app_space(c, headers)
+    for scope in ("admin:read", "admin:write"):
+        r = c.post("/api/v1/admin/identities", json={
+            "space_id": space, "name": f"svc-{scope}", "scopes": [scope],
+        }, headers=headers)
+        assert r.status_code == 422, (scope, r.text)
+    # A mixed request is refused as a whole: no partial grant, no identity.
+    r = c.post("/api/v1/admin/identities", json={
+        "space_id": space, "name": "svc-mixed", "scopes": ["objects:read", "admin:write"],
+    }, headers=headers)
+    assert r.status_code == 422, r.text
+    names = {i["name"] for i in c.get("/api/v1/admin/identities", headers=headers).json()["items"]}
+    assert {"svc-admin:read", "svc-admin:write", "svc-mixed"} & names == set()
+
+
+def test_stored_admin_scope_is_never_effective():
+    # Defence in depth: a row that carries admin:write anyway (e.g. legacy data
+    # created before this rule) must not be able to exercise it.
+    c, headers = _admin()
+    app_id, space, _ = _make_app_space(c, headers)
+    iid = main.repo.new_id()
+    secret = identity.new_secret()
+    main.repo.create_identity(
+        iid, app_id, space, "legacy", identity.fingerprint(secret),
+        "objects:read,admin:read,admin:write",
+    )
+    token = identity.format_token(iid, secret)
+    assert c.get("/api/v1/admin/stats", headers=_svc(token)).status_code == 403
+    assert c.post("/api/v1/admin/spaces", json={
+        "application_id": app_id, "name": "x", "environment": "y",
+    }, headers=_svc(token)).status_code == 403
+    assert c.post("/api/v1/admin/reconcile", headers=_svc(token)).status_code == 403
+    # The legitimate object capability still works.
+    assert c.get("/api/v1/objects", headers=_svc(token)).status_code == 200
+
+
 def test_mutating_routes_require_csrf_for_sessions():
     name, password = _ordinary_user()
     c, _ = _login(name, password)
