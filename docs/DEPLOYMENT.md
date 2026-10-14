@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This runbook describes the planned initial single-VPS deployment. The provider VPS is not provisioned yet. Verify the actual OS, disk layout, network quota and supported image releases before executing commands. A successful Compose parse is not production certification.
+This runbook describes the planned initial single-VPS deployment. The InterServer pilot VPS is provisioned. See [Server Profile](SERVER-PROFILE.md) for observed host details and [Host Bootstrap Checklist](HOST-BOOTSTRAP-CHECKLIST.md) for the phased setup sequence. The OS update reported that a reboot was required; verify the live kernel and SSH access before installing Docker. Verify the actual disk allocation, network quota and supported image releases before executing commands. A successful Compose parse is not production certification.
 
 ## Target topology
 
