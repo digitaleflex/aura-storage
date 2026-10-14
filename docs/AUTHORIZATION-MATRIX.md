@@ -66,7 +66,8 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/admin/identities/{iid}/revoke` | `admin:write` | immediate revocation |
 
 A route that is not classified here is **closed**: `tests/test_security_isolation.py`
-asserts that every `/api/v1` route rejects anonymous callers (401/403/422/405).
+asserts that every `/api/v1` route rejects anonymous callers with 401 or 403 (a 422
+never counts as closed — it would let an auth-less route pass if its body were invalid).
 
 ## Isolation rules
 
@@ -79,6 +80,9 @@ asserts that every `/api/v1` route rejects anonymous callers (401/403/422/405).
   Client-supplied `object_key`, `owner_id`, `space_id` fields are rejected (422).
 - The **bucket is never client-chosen**: the caller's space has a registered bucket
   allow-list; an unregistered bucket is refused (403).
+- A space's default bucket name (derived or supplied) is validated against the S3
+  naming rules on creation; an invalid name is refused (422) so no space can point at
+  a bucket S3 would reject.
 - Tenant/application/space identifiers received in a request never grant access.
 - 401 (not authenticated) and 403 (not permitted) never reveal whether an object
   exists; cross-scope reads return 404.

@@ -67,3 +67,11 @@
   refused. Repeated commits are idempotent.
 - Technical guard rails (max object size, pending-intent cap, rate limits) protect the
   service from abuse. These are safety limits, not billing or subscription policy.
+- An upload intent declares the object's `size_bytes`; that value is bound into the
+  presigned URL as a **signed `Content-Length`**, so an uploader cannot push more than
+  the API authorised and fill the volume before commit. Declared sizes above the
+  configured maximum are refused up front (422), and the commit-time size check remains
+  as defence in depth (#40). Enforcement of the signed header is validated on the pilot.
+- Default bucket names (derived from the space name/environment, or supplied) are
+  validated against the S3 naming rules before the bucket is registered, so a space can
+  never point at a bucket name S3 would reject (`api/s3.py:is_valid_bucket_name`, #41).

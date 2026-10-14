@@ -98,7 +98,8 @@ def test_cross_space_objects_are_invisible():
     token_b = _make_identity(c, headers, space_b, ["objects:read", "objects:write", "objects:delete"])["token"]
 
     intent = c.post("/api/v1/objects/upload-intents",
-                    json={"display_name": "secret.txt"}, headers=_svc(token_a))
+                    json={"display_name": "secret.txt", "size_bytes": 1},
+                    headers=_svc(token_a))
     assert intent.status_code == 200, intent.text
     oid = intent.json()["id"]
 
@@ -114,7 +115,7 @@ def test_cross_space_objects_are_invisible():
 
     # A forged bucket and forged identity headers do not widen B's scope.
     forged = c.post("/api/v1/objects/upload-intents",
-                    json={"bucket": bucket_b, "display_name": "x"},
+                    json={"bucket": bucket_b, "display_name": "x", "size_bytes": 1},
                     headers={**_svc(token_a), "X-Space-Id": space_b, "X-Owner-Id": "admin"})
     assert forged.status_code == 403
 
@@ -125,7 +126,8 @@ def test_client_cannot_choose_object_key_or_owner():
     token = _make_identity(c, headers, space, ["objects:write"])["token"]
     # Unknown/forged fields are rejected outright (extra="forbid").
     r = c.post("/api/v1/objects/upload-intents",
-               json={"display_name": "x", "object_key": "aura/other/evil",
+               json={"display_name": "x", "size_bytes": 1,
+                     "object_key": "aura/other/evil",
                      "owner_id": "admin", "space_id": "forged"},
                headers=_svc(token))
     assert r.status_code == 422, r.text
@@ -142,7 +144,8 @@ def test_ordinary_user_is_forbidden_on_admin_and_purge():
 
     # Ordinary user can create + soft-delete its own object...
     oid = u.post("/api/v1/objects/upload-intents",
-                 json={"display_name": "mine.txt"}, headers=uheaders).json()["id"]
+                 json={"display_name": "mine.txt", "size_bytes": 1},
+                 headers=uheaders).json()["id"]
     assert u.delete(f"/api/v1/objects/{oid}", headers=uheaders).status_code == 200
     # ...but destructive/maintenance actions are refused even with a valid CSRF.
     assert u.post(f"/api/v1/objects/{oid}/purge", headers=uheaders).status_code == 403
@@ -163,9 +166,37 @@ def test_service_identity_scope_is_enforced():
     _, space, _ = _make_app_space(c, headers)
     token = _make_identity(c, headers, space, ["objects:read"])["token"]
     assert c.get("/api/v1/objects", headers=_svc(token)).status_code == 200
-    assert c.post("/api/v1/objects/upload-intents", json={"display_name": "x"},
+    assert c.post("/api/v1/objects/upload-intents",
+                  json={"display_name": "x", "size_bytes": 1},
                   headers=_svc(token)).status_code == 403
     assert c.get("/api/v1/admin/stats", headers=_svc(token)).status_code == 403
+
+
+def test_space_creation_rejects_invalid_bucket_name():
+    # #41: a derived or explicit default bucket must be a valid S3 bucket name,
+    # otherwise the space would be created pointing at a bucket S3 refuses.
+    c, headers = _admin()
+    suffix = uuid.uuid4().hex[:8]
+    app_id = c.post("/api/v1/admin/applications",
+                    json={"name": f"app-{suffix}"}, headers=headers).json()["id"]
+    # Uppercase/space in name/environment derives an invalid bucket.
+    r = c.post("/api/v1/admin/spaces", json={
+        "application_id": app_id, "name": "Bad Name", "environment": "Prod",
+    }, headers=headers)
+    assert r.status_code == 422, r.text
+    # An explicit, malformed default bucket is refused too.
+    r = c.post("/api/v1/admin/spaces", json={
+        "application_id": app_id, "name": f"good{suffix}", "environment": "test",
+        "default_bucket": "Bad_Bucket",
+    }, headers=headers)
+    assert r.status_code == 422, r.text
+    # A valid explicit bucket is accepted.
+    r = c.post("/api/v1/admin/spaces", json={
+        "application_id": app_id, "name": f"good{suffix}", "environment": "test",
+        "default_bucket": f"aura-{suffix}",
+    }, headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["bucket"] == f"aura-{suffix}"
 
 
 def test_scope_capabilities_are_partitioned():
@@ -219,12 +250,12 @@ def test_mutating_routes_require_csrf_for_sessions():
     name, password = _ordinary_user()
     c, _ = _login(name, password)
     oid = c.post("/api/v1/objects/upload-intents",
-                 json={"display_name": "csrf.txt"},
+                 json={"display_name": "csrf.txt", "size_bytes": 1},
                  headers={"X-CSRF-Token": "bogus"}).status_code
     assert oid == 403
     # No CSRF header at all is also refused on mutations.
     assert c.post("/api/v1/objects/upload-intents",
-                  json={"display_name": "csrf.txt"}).status_code == 403
+                  json={"display_name": "csrf.txt", "size_bytes": 1}).status_code == 403
 
 
 # ---------------------------------------------------------------------------

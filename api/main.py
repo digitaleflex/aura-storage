@@ -9,7 +9,7 @@ import uuid
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import authz, netinfo
 from .audit import audit_event
@@ -29,7 +29,14 @@ from .authz import (
 from .config import settings
 from .identity import fingerprint, format_token, new_secret
 from .lifecycle import purge_object, reconcile_pending
-from .s3 import ObjectTooLarge, make_clients, presigned_get, presigned_put, stream_sha256
+from .s3 import (
+    ObjectTooLarge,
+    is_valid_bucket_name,
+    make_clients,
+    presigned_get,
+    presigned_put,
+    stream_sha256,
+)
 from .store import repo
 
 app = FastAPI(title="AURA Management API", version="0.2.0")
@@ -123,7 +130,18 @@ class UploadIntentIn(BaseModel):
     bucket: str | None = Field(default=None, max_length=63)
     display_name: str = Field(min_length=1, max_length=255)
     content_type: str = Field(default="application/octet-stream", max_length=127)
+    # Declared upload size. It is bound into the presigned URL as a signed
+    # Content-Length so an uploader cannot exceed it (#40); the API refuses a
+    # declared size above the configured object cap before presigning.
+    size_bytes: int = Field(ge=1)
     folder_id: str | None = None
+
+    @field_validator("size_bytes")
+    @classmethod
+    def _within_object_cap(cls, value: int) -> int:
+        if value > settings.max_object_bytes:
+            raise ValueError("size_bytes exceeds the maximum allowed object size")
+        return value
 
 
 class ApplicationIn(BaseModel):
@@ -237,11 +255,17 @@ def upload_intent(body: UploadIntentIn, principal: dict = Depends(authorize(OBJE
         owner_id=owner_id, actor_id=principal["id"], actor_kind=principal["kind"],
         intent_expires_at=intent_expires_at, folder_id=body.folder_id,
     )
-    url = presigned_put(s3, bucket, key, body.content_type, settings.intent_ttl)
+    url = presigned_put(
+        s3, bucket, key, body.content_type, settings.intent_ttl, body.size_bytes
+    )
     audit_event("upload-intent", principal["id"], "success", {
         "object_id": oid, "bucket": bucket, "expires_in": settings.intent_ttl,
+        "size_bytes": body.size_bytes,
     })
-    return {"id": oid, "upload_url": url, "expires_in": settings.intent_ttl}
+    return {
+        "id": oid, "upload_url": url, "size_bytes": body.size_bytes,
+        "expires_in": settings.intent_ttl,
+    }
 
 
 @app.post("/api/v1/objects/{oid}/commit")
@@ -402,6 +426,9 @@ def create_space(body: SpaceIn, principal: dict = Depends(authorize(ADMIN_WRITE)
     if repo.get_application(body.application_id) is None:
         raise HTTPException(status_code=404, detail="application not found")
     bucket = body.default_bucket or f"aura-{body.name}-{body.environment}"
+    if not is_valid_bucket_name(bucket):
+        # Refuse up front rather than register a bucket name S3 will reject (#41).
+        raise HTTPException(status_code=422, detail="invalid bucket name")
     if repo.get_bucket_by_name(bucket) is not None:
         raise HTTPException(status_code=409, detail="bucket name already in use")
     sid = repo.create_space(body.application_id, body.name, body.environment)
