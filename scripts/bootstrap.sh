@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker is not installed. See docs/DEPLOYMENT.md." >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "ERROR: Docker Compose plugin is unavailable." >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 is required." >&2; exit 1; }
+command -v npm >/dev/null 2>&1 || { echo "ERROR: npm (Node.js) is required to build the web frontend. See docs/DEPLOYMENT.md." >&2; exit 1; }
 
 [[ -f .env ]] || { echo "ERROR: .env is missing. Copy .env.example and replace all placeholders." >&2; exit 1; }
 
