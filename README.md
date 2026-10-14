@@ -59,3 +59,10 @@ Changing `S3_DOMAIN` changes the hostname Traefik routes; it does not automatica
 - Validate S3 policy syntax/actions and image flags against the exact selected SeaweedFS release.
 
 No repository license has been selected. Do not assume reuse rights until a license is deliberately chosen.
+
+
+## Encryption gate for the pilot
+
+The sample passes a 256-bit key through WEED_S3_SSE_KEK for SeaweedFS SSE-S3 object encryption. Generate it locally with openssl rand -hex 32 and keep a protected offline copy outside the VPS and Git repository. Losing this key may make encrypted objects unrecoverable.
+
+Before transferring actual PDF/audio files, deploy the reviewed image and run bash tests/sse-s3-smoke-test.sh. Confirm the S3 response reports ServerSideEncryption=AES256 and the downloaded bytes match. The repository has not been tested against a real VPS yet; this smoke test, HTTPS, access control, persistence, and backup/restore remain acceptance gates. Keep the local originals until an independent backup has been restored successfully.
