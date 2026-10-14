@@ -11,7 +11,7 @@ from .audit import audit_event
 from .auth import hash_password, new_token, verify_password
 from .config import settings
 from .lifecycle import purge_object, reconcile_pending
-from .s3 import make_client, presigned_get, presigned_put
+from .s3 import make_clients, presigned_get, presigned_put
 
 if settings.db_backend == "postgres":
     if not settings.db_dsn:
@@ -59,9 +59,9 @@ def _login_allowed(client_ip: str, now: float | None = None) -> bool:
 def reset_login_attempts() -> None:
     _LOGIN_ATTEMPTS.clear()
 
-s3 = make_client(
-    settings.s3_endpoint, settings.s3_access_key, settings.s3_secret_key,
-    settings.s3_region,
+s3, s3ops = make_clients(
+    settings.s3_endpoint, settings.s3_internal_endpoint,
+    settings.s3_access_key, settings.s3_secret_key, settings.s3_region,
 )
 
 # Bootstrap the single admin user on first boot (password hashed, never stored raw).
@@ -107,7 +107,7 @@ def live():
 @app.get("/health/ready")
 def ready():
     try:
-        s3.list_buckets()
+        s3ops.list_buckets()
         return {"status": "ready"}
     except Exception as exc:  # never leak backend details
         return JSONResponse(status_code=503, content={"status": "not ready"})
@@ -167,8 +167,8 @@ def commit_object(oid: str, user: dict = Depends(require_csrf)):
     if row["status"] != "pending":
         raise HTTPException(status_code=409, detail="object already committed")
     try:
-        head = s3.head_object(Bucket=row["bucket"], Key=row["object_key"])
-        body = s3.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"].read()
+        head = s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
+        body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"].read()
     except Exception:
         raise HTTPException(status_code=422, detail="upload not found at storage")
     digest = hashlib.sha256(body).hexdigest()
@@ -222,14 +222,14 @@ def soft_delete_object(oid: str, user: dict = Depends(require_csrf)):
 
 @app.post("/api/v1/objects/{oid}/purge")
 def purge(oid: str, user: dict = Depends(require_csrf)):
-    if not purge_object(repo, s3, oid, user["id"]):
+    if not purge_object(repo, s3ops, oid, user["id"]):
         raise HTTPException(status_code=404, detail="object not found")
     return {"id": oid, "status": "purged"}
 
 
 @app.post("/api/v1/admin/reconcile")
 def reconcile(user: dict = Depends(require_csrf)):
-    return reconcile_pending(repo, s3)
+    return reconcile_pending(repo, s3ops)
 
 
 @app.post("/api/v1/objects/{oid}/download-intent")
