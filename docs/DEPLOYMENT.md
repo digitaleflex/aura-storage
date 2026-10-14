@@ -34,6 +34,16 @@ This runbook describes the planned initial single-VPS deployment. The InterServe
 5. The Compose baseline uses Let's Encrypt HTTP-01. Certificate issuance fails if DNS is wrong, port 80 is blocked, or another service intercepts the challenge.
 6. Never publish the Traefik dashboard publicly without explicit authentication and network restrictions. The current baseline defines no public dashboard route.
 
+**DNS provider and zone notes (pilot).** The `eurinhash.com` zone is hosted on Cloudflare. The
+pilot relies on a wildcard `*.aura-storage.eurinhash.com` A record pointing to the VPS, so new
+hostnames (for example a future `monitoring.` dashboard) resolve without adding a DNS entry;
+only the Traefik `Host(...)` router decides what is actually served. TLS certificates are still
+issued per hostname through Let's Encrypt HTTP-01 — a wildcard DNS record does not provide a
+wildcard certificate. Keep any Cloudflare API token used for occasional DNS changes out of the
+repository and out of logs: store it only in the local `.env` (`CLOUDFLARE_API_TOKEN`,
+admin-only, not consumed by any container) and never share `docker compose config --environment`
+output, which prints resolved values including that token.
+
 ## 3. Prepare local configuration
 
 Clone the repository and inspect all scripts/configuration before running them:
