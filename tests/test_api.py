@@ -106,10 +106,13 @@ def test_cross_owner_isolation():
         json={"bucket": "b", "display_name": "private.txt"},
         headers=headers,
     ).json()["id"]
-    # second user, created directly
+    # second user, created directly (unique per run: PG persists across runs)
+    import uuid as _uuid
+
     from api.auth import hash_password
-    main.repo.create_user("bob", hash_password("bob-pass"))
-    bob, _ = authed_client("bob", "bob-pass")
+    bob_name = f"bob-{_uuid.uuid4().hex[:8]}"
+    main.repo.create_user(bob_name, hash_password("bob-pass"))
+    bob, _ = authed_client(bob_name, "bob-pass")
     assert bob.get(f"/api/v1/objects/{oid}").status_code == 404
     assert bob.get("/api/v1/objects").json()["items"] == []
 

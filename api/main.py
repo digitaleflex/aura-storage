@@ -9,12 +9,21 @@ from pydantic import BaseModel, Field
 
 from .auth import hash_password, new_token, verify_password
 from .config import settings
-from .db import Repository
 from .s3 import make_client, presigned_get, presigned_put
+
+if settings.db_backend == "postgres":
+    if not settings.db_dsn:
+        raise RuntimeError("AURA_API_DSN is required with AURA_API_BACKEND=postgres")
+    from .db_pg import Repository
+
+    repo = Repository(settings.db_dsn)
+else:
+    from .db import Repository
+
+    repo = Repository(settings.db_path)
 
 app = FastAPI(title="AURA Management API", version="0.1.0")
 
-repo = Repository(settings.db_path)
 s3 = make_client(
     settings.s3_endpoint, settings.s3_access_key, settings.s3_secret_key,
     settings.s3_region,
