@@ -10,8 +10,19 @@ from pydantic import BaseModel, Field
 from .audit import audit_event
 from .auth import hash_password, new_token, verify_password
 from .config import settings
-from .db import Repository
+from .lifecycle import purge_object, reconcile_pending
 from .s3 import make_client, presigned_get, presigned_put
+
+if settings.db_backend == "postgres":
+    if not settings.db_dsn:
+        raise RuntimeError("AURA_API_DSN is required with AURA_API_BACKEND=postgres")
+    from .db_pg import Repository
+
+    repo = Repository(settings.db_dsn)
+else:
+    from .db import Repository
+
+    repo = Repository(settings.db_path)
 
 app = FastAPI(title="AURA Management API", version="0.1.0")
 
@@ -48,7 +59,6 @@ def _login_allowed(client_ip: str, now: float | None = None) -> bool:
 def reset_login_attempts() -> None:
     _LOGIN_ATTEMPTS.clear()
 
-repo = Repository(settings.db_path)
 s3 = make_client(
     settings.s3_endpoint, settings.s3_access_key, settings.s3_secret_key,
     settings.s3_region,
@@ -198,6 +208,30 @@ def get_object(oid: str, user: dict = Depends(current_user)):
     }
 
 
+@app.delete("/api/v1/objects/{oid}")
+def soft_delete_object(oid: str, user: dict = Depends(require_csrf)):
+    row = repo.get_object(oid, user["id"])
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    status = row["status"] if isinstance(row, dict) else row["status"]
+    if status not in ("available", "pending"):
+        raise HTTPException(status_code=409, detail="object not deletable")
+    repo.set_status(oid, "deleted")
+    return {"id": oid, "status": "deleted"}
+
+
+@app.post("/api/v1/objects/{oid}/purge")
+def purge(oid: str, user: dict = Depends(require_csrf)):
+    if not purge_object(repo, s3, oid, user["id"]):
+        raise HTTPException(status_code=404, detail="object not found")
+    return {"id": oid, "status": "purged"}
+
+
+@app.post("/api/v1/admin/reconcile")
+def reconcile(user: dict = Depends(require_csrf)):
+    return reconcile_pending(repo, s3)
+
+
 @app.post("/api/v1/objects/{oid}/download-intent")
 def download_intent(oid: str, user: dict = Depends(require_csrf)):
     row = repo.get_object(oid, user["id"])
@@ -206,8 +240,5 @@ def download_intent(oid: str, user: dict = Depends(require_csrf)):
     if row["status"] != "available":
         raise HTTPException(status_code=409, detail="object not available")
     url = presigned_get(s3, row["bucket"], row["object_key"], settings.intent_ttl)
-    audit_event("download-intent", user["id"], "success", {
-        "object_id": oid, "bucket": row["bucket"],
-        "expires_in": settings.intent_ttl,
-    })
+    audit_event("download-intent", user["id"], "success", {"object_id": oid})
     return {"download_url": url, "expires_in": settings.intent_ttl}

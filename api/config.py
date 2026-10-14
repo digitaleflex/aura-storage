@@ -20,16 +20,21 @@ class Settings:
     s3_region: str = os.environ.get("AURA_S3_REGION", "us-east-1")
     # Catalogue database path (SQLite for #18; PostgreSQL replaces it in #19).
     db_path: str = os.environ.get("AURA_API_DB", "aura-catalogue.db")
+    # Backend: 'sqlite' (default, dev/test) or 'postgres' (pilot, #19).
+    db_backend: str = os.environ.get("AURA_API_BACKEND", "sqlite")
+    # PostgreSQL DSN, e.g. postgresql://aura:PASSWORD@localhost:5432/aura.
+    # Only used when backend is 'postgres'. Never logged.
+    db_dsn: str = os.environ.get("AURA_API_DSN", "")
     # Lifetimes (seconds).
     session_ttl: int = int(os.environ.get("AURA_SESSION_TTL", "28800"))
     intent_ttl: int = int(os.environ.get("AURA_INTENT_TTL", "900"))
-    # Cookie security.
-    cookie_secure: bool = os.environ.get("AURA_COOKIE_SECURE", "1") == "1"
     # Audit log (JSON-lines, IDs and statuses only — never secrets or URLs).
     audit_log: str = os.environ.get("AURA_AUDIT_LOG", "aura-audit.jsonl")
     # Login rate limit (attempts per window, per client IP).
     login_rate_limit: int = int(os.environ.get("AURA_LOGIN_RATE_LIMIT", "10"))
     login_rate_window: int = int(os.environ.get("AURA_LOGIN_RATE_WINDOW", "60"))
+    # Cookie security.
+    cookie_secure: bool = os.environ.get("AURA_COOKIE_SECURE", "1") == "1"
 
 
 settings = Settings()

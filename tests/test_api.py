@@ -152,6 +152,70 @@ def test_upload_intent_returns_scoped_url_and_leaks_nothing():
     assert got["status"] == "pending"
 
 
+def test_soft_delete_and_purge():
+    c, headers = authed_client()
+    oid = c.post(
+        "/api/v1/objects/upload-intents",
+        json={"bucket": "b", "display_name": "todelete.txt"},
+        headers=headers,
+    ).json()["id"]
+    r = c.delete(f"/api/v1/objects/{oid}", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "deleted"
+    # deleted object is no longer downloadable
+    r = c.post(f"/api/v1/objects/{oid}/download-intent", headers=headers)
+    assert r.status_code == 409
+    # purge removes it permanently
+    r = c.post(f"/api/v1/objects/{oid}/purge", headers=headers)
+    assert r.status_code == 200, r.text
+    assert c.get(f"/api/v1/objects/{oid}").status_code == 404
+    # purging twice is a clean 404
+    assert c.post(f"/api/v1/objects/{oid}/purge", headers=headers).status_code == 404
+
+
+def test_reconcile_expires_stale_pending():
+    from api.lifecycle import reconcile_pending
+
+    c, headers = authed_client()
+    oid = c.post(
+        "/api/v1/objects/upload-intents",
+        json={"bucket": "b", "display_name": "stale.txt"},
+        headers=headers,
+    ).json()["id"]
+    # backdate the pending row past the grace period
+    old = 7200
+    if hasattr(main.repo, "conn") and "sqlite3" in type(main.repo.conn).__module__:
+        main.repo.conn.execute(
+            "UPDATE objects SET created_at = ? WHERE id = ?",
+            (main.repo.now() - old, oid),
+        )
+        main.repo.conn.commit()
+    else:
+        with main.repo.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE objects SET created_at = %s WHERE id = %s",
+                (main.repo.now() - old, oid),
+            )
+    # fresh pending objects are untouched; only the stale one expires
+    fresh = c.post(
+        "/api/v1/objects/upload-intents",
+        json={"bucket": "b", "display_name": "fresh.txt"},
+        headers=headers,
+    ).json()["id"]
+    # stub storage (offline): reconcile must not require real S3
+    class DummyS3:
+        def __init__(self):
+            self.deleted = []
+
+        def delete_object(self, Bucket, Key):
+            self.deleted.append((Bucket, Key))
+
+    out = reconcile_pending(main.repo, DummyS3(), expire_after_s=3600)
+    assert out == {"expired": 1, "storage_deletes_attempted": 1}
+    assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "expired"
+    assert c.get(f"/api/v1/objects/{fresh}").json()["status"] == "pending"
+
+
 def test_cross_owner_isolation():
     c, headers = authed_client()
     oid = c.post(
@@ -159,10 +223,13 @@ def test_cross_owner_isolation():
         json={"bucket": "b", "display_name": "private.txt"},
         headers=headers,
     ).json()["id"]
-    # second user, created directly
+    # second user, created directly (unique per run: PG persists across runs)
+    import uuid as _uuid
+
     from api.auth import hash_password
-    main.repo.create_user("bob", hash_password("bob-pass"))
-    bob, _ = authed_client("bob", "bob-pass")
+    bob_name = f"bob-{_uuid.uuid4().hex[:8]}"
+    main.repo.create_user(bob_name, hash_password("bob-pass"))
+    bob, _ = authed_client(bob_name, "bob-pass")
     assert bob.get(f"/api/v1/objects/{oid}").status_code == 404
     assert bob.get("/api/v1/objects").json()["items"] == []
 

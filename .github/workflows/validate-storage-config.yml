@@ -43,6 +43,8 @@ jobs:
           s = s.replace("REPLACE_WITH_GENERATED_ACCESS_KEY", secrets.token_hex(12))
           s = s.replace("REPLACE_WITH_GENERATED_LONG_RANDOM_SECRET", secrets.token_hex(32))
           s = s.replace("REPLACE_WITH_64_HEX_CHARACTERS", secrets.token_hex(32))
+          # Dummy dashboard identity for config validation only (never deployed).
+          s += "DASHBOARD_AUTH='ci-dummy:dummy'\n"
           p.write_text(s)
           PY
           chmod 600 .env

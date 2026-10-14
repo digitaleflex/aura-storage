@@ -1,0 +1,4 @@
+import {
+  require_react
+} from "./chunk-V647OYC2.js";
+export default require_react();

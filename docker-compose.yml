@@ -40,6 +40,18 @@ services:
       timeout: 5s
       retries: 3
     # The Traefik dashboard is enabled internally but is NOT routed publicly by this baseline.
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aura-edge
+      - traefik.http.routers.traefik-dashboard.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}`)
+      - traefik.http.routers.traefik-dashboard.entrypoints=websecure
+      - traefik.http.routers.traefik-dashboard.tls=true
+      - traefik.http.routers.traefik-dashboard.tls.certresolver=le
+      - traefik.http.routers.traefik-dashboard.service=api@internal
+      - traefik.http.routers.traefik-dashboard.middlewares=dash-auth
+      - traefik.http.middlewares.dash-auth.basicauth.users=${DASHBOARD_AUTH:?Set DASHBOARD_AUTH in .env}
+      # Port 8080 is never published to the host; the dashboard is reachable only
+      # through this HTTPS router with BasicAuth (bcrypt).
 
   seaweed-master:
     image: ${SEAWEEDFS_IMAGE:?Set SEAWEEDFS_IMAGE in .env}
@@ -120,6 +132,28 @@ services:
       - no-new-privileges:true
     # No SeaweedFS master/volume/filer admin ports are published to the host.
 
+  postgres:
+    image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE in .env}
+    container_name: ${AURA_INSTANCE_ID:-aura-001}-postgres
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Africa/Porto-Novo}
+      POSTGRES_DB: ${POSTGRES_DB:-aura}
+      POSTGRES_USER: ${POSTGRES_USER:-aura}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - storage
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-aura} -d $${POSTGRES_DB:-aura}"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    # No host ports published: catalogue DB reachable only on the internal network.
+
 networks:
   edge:
     name: aura-edge
@@ -129,3 +163,4 @@ networks:
 
 volumes:
   traefik-acme:
+  pgdata:
