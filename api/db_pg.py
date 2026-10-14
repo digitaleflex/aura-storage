@@ -98,3 +98,22 @@ class Repository:
                 "UPDATE objects SET status = 'available', size_bytes = %s, checksum_sha256 = %s, updated_at = %s WHERE id = %s",
                 (size_bytes, checksum_sha256, self.now(), oid),
             )
+
+    def list_pending_before(self, cutoff: int):
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM objects WHERE status = 'pending' AND created_at < %s",
+                (cutoff,),
+            )
+            return cur.fetchall()
+
+    def set_status(self, oid: str, status: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE objects SET status = %s, updated_at = %s WHERE id = %s",
+                (status, self.now(), oid),
+            )
+
+    def delete_object_row(self, oid: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM objects WHERE id = %s", (oid,))

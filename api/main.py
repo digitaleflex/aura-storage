@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from .auth import hash_password, new_token, verify_password
 from .config import settings
+from .lifecycle import purge_object, reconcile_pending
 from .s3 import make_client, presigned_get, presigned_put
 
 if settings.db_backend == "postgres":
@@ -159,6 +160,30 @@ def get_object(oid: str, user: dict = Depends(current_user)):
         "content_type": row["content_type"], "size_bytes": row["size_bytes"],
         "checksum_sha256": row["checksum_sha256"], "status": row["status"],
     }
+
+
+@app.delete("/api/v1/objects/{oid}")
+def soft_delete_object(oid: str, user: dict = Depends(require_csrf)):
+    row = repo.get_object(oid, user["id"])
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    status = row["status"] if isinstance(row, dict) else row["status"]
+    if status not in ("available", "pending"):
+        raise HTTPException(status_code=409, detail="object not deletable")
+    repo.set_status(oid, "deleted")
+    return {"id": oid, "status": "deleted"}
+
+
+@app.post("/api/v1/objects/{oid}/purge")
+def purge(oid: str, user: dict = Depends(require_csrf)):
+    if not purge_object(repo, s3, oid, user["id"]):
+        raise HTTPException(status_code=404, detail="object not found")
+    return {"id": oid, "status": "purged"}
+
+
+@app.post("/api/v1/admin/reconcile")
+def reconcile(user: dict = Depends(require_csrf)):
+    return reconcile_pending(repo, s3)
 
 
 @app.post("/api/v1/objects/{oid}/download-intent")

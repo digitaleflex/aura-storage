@@ -92,3 +92,20 @@ class Repository:
             (size_bytes, checksum_sha256, self.now(), oid),
         )
         self.conn.commit()
+
+    def list_pending_before(self, cutoff: int):
+        return self.conn.execute(
+            "SELECT * FROM objects WHERE status = 'pending' AND created_at < ?",
+            (cutoff,),
+        ).fetchall()
+
+    def set_status(self, oid: str, status: str) -> None:
+        self.conn.execute(
+            "UPDATE objects SET status = ?, updated_at = ? WHERE id = ?",
+            (status, self.now(), oid),
+        )
+        self.conn.commit()
+
+    def delete_object_row(self, oid: str) -> None:
+        self.conn.execute("DELETE FROM objects WHERE id = ?", (oid,))
+        self.conn.commit()
