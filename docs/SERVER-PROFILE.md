@@ -45,9 +45,9 @@ Values below were observed from the guest OS, not inferred from the commercial p
 |---|---|
 | Distribution | Ubuntu 26.04 LTS |
 | Codename | resolute |
-| Kernel currently running at last check | 7.0.0-28-generic |
+| Kernel currently running at last check | 7.0.0-38-generic (verified live 2026-10-14) |
 | New kernel installed | 7.0.0-38-generic |
-| Reboot status | **Reboot required; completion not yet confirmed** |
+| Reboot status | **Reboot completed and verified 2026-10-14; no reboot marker present** |
 | Package upgrade | APT upgrade reported 163 packages upgraded, 7 installed, 0 removed, and 5 held back due to phased updates |
 | Standard LTS security updates reported by APT | 122 |
 | APT download size reported | 390 MB |
@@ -58,7 +58,8 @@ After reboot, verify with:
     uname -r
     systemctl is-active ssh
 
-Expected kernel after a successful reboot: 7.0.0-38-generic. Do not mark this profile as rebooted until the live command confirms it.
+Expected kernel after a successful reboot: 7.0.0-38-generic. Verified live on 2026-10-14
+(`uname -r` → 7.0.0-38-generic, no `/var/run/reboot-required` marker).
 
 ## 4. Administrative access
 
