@@ -2,7 +2,7 @@
 import secrets
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import Argon2Error
 
 _ph = PasswordHasher()
 
@@ -12,9 +12,17 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(stored_hash: str, password: str) -> bool:
+    """Return True only for an exact match; never raise on a bad stored hash.
+
+    A wrong password raises ``VerificationError`` (an ``Argon2Error``), while a
+    malformed or unsupported stored hash raises ``InvalidHashError`` /
+    ``UnsupportedParametersError`` (both ``ValueError``). All of these mean
+    "no match" — surfacing a 500 would both leak that the hash is unusable and
+    mask the real 401.
+    """
     try:
         return _ph.verify(stored_hash, password)
-    except VerifyMismatchError:
+    except (Argon2Error, ValueError):
         return False
 
 

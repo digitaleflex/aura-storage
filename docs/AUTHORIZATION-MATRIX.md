@@ -47,7 +47,7 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 |---|---|---|---|
 | GET | `/health/live` | public | liveness only |
 | GET | `/health/ready` | public | does not leak backend details |
-| POST | `/api/v1/login` | public | rate-limited per client IP |
+| POST | `/api/v1/login` | public | failed attempts rate-limited per client IP |
 | POST | `/api/v1/logout` | authenticated **human** + CSRF | deletes the session |
 | GET | `/api/v1/me` | authenticated | principal metadata |
 | GET | `/api/v1/objects` | `objects:read` | scoped to space (+ owner for humans) |
@@ -107,7 +107,9 @@ Never place a token in logs, tickets, chat, the frontend bundle, or this reposit
 - Tokens are `aura_<uuid>_<64-hex>`; only `sha256(secret)` is stored.
 - Comparison is constant-time; unknown, revoked and expired tokens all yield 401.
 - Failed machine authentication is rate-limited per client IP (default 60/60s).
-- Login for humans is rate-limited per client IP (default 10/60s).
+- Failed human logins are rate-limited per client IP (default 10/60s); only
+  failures are counted and a success clears the counter, so legitimate logins
+  never lock a client out.
 - The client IP is resolved from `X-Forwarded-For` only when the immediate peer
   is a trusted proxy (`AURA_TRUSTED_PROXIES`, default loopback + RFC1918); the
   right-most untrusted entry wins, so a client cannot spoof its own address.

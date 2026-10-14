@@ -312,7 +312,9 @@ def test_every_sensitive_route_denies_unauthenticated():
         concrete = path.replace("{oid}", "does-not-exist").replace("{iid}", "does-not-exist")
         for method in methods - {"HEAD", "OPTIONS"}:
             resp = client.request(method, concrete, json={})
-            assert resp.status_code in (401, 403, 405, 422), (method, path, resp.status_code)
-            assert resp.status_code != 200, (method, path)
+            # Only 401/403 count as "closed". Accepting 422 would let a route that
+            # forgot its auth dependency pass this guard whenever its body is
+            # invalid (FastAPI validates the body and returns 422 on its own).
+            assert resp.status_code in (401, 403), (method, path, resp.status_code)
             tested += 1
     assert tested >= 10  # the guard must actually cover the sensitive surface

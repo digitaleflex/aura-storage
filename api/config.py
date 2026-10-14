@@ -48,7 +48,8 @@ class Settings:
     intent_grace_s: int = _int("AURA_INTENT_GRACE_SECONDS", 300)
     # Audit log (JSON-lines, IDs and statuses only — never secrets or URLs).
     audit_log: str = os.environ.get("AURA_AUDIT_LOG", "aura-audit.jsonl")
-    # Login rate limit (attempts per window, per client IP).
+    # Login rate limit (failed attempts per window, per client IP). A successful
+    # login clears the counter for that client.
     login_rate_limit: int = _int("AURA_LOGIN_RATE_LIMIT", 10)
     login_rate_window: int = _int("AURA_LOGIN_RATE_WINDOW", 60)
     # Machine-to-machine authentication failure rate limit (per client IP; #38).
