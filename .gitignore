@@ -26,3 +26,4 @@ Thumbs.db
 .idea/
 .venv/
 __pycache__/
+aura-audit.jsonl
