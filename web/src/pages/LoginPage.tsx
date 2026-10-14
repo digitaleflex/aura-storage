@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { VaultMark } from "../components/VaultMark";
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -21,11 +22,11 @@ export function LoginPage() {
       await navigate({ to: "/" });
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        setError("Invalid credentials. Access is rejected.");
+        setError("Identifiants invalides. Accès refusé.");
       } else if (err instanceof ApiError && err.status === 429) {
-        setError("Too many attempts. Please wait a minute and retry.");
+        setError("Trop de tentatives. Patientez une minute puis réessayez.");
       } else {
-        setError("Login failed: service unavailable or network error.");
+        setError("Connexion impossible : service indisponible ou réseau.");
       }
     } finally {
       setPending(false);
@@ -33,37 +34,46 @@ export function LoginPage() {
   }
 
   return (
-    <section className="card">
-      <h1>Log in</h1>
-      <p className="muted">Session is cookie-based; no secrets are stored in the browser.</p>
-      <form onSubmit={handleSubmit} className="form">
-        <label className="field">
-          <span>Username</span>
-          <input
-            type="text"
-            name="username"
-            autoComplete="username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-          />
-        </label>
-        <label className="field">
-          <span>Password</span>
-          <input
-            type="password"
-            name="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </label>
-        {error ? <p role="alert" className="alert alert-error">{error}</p> : null}
-        <button type="submit" className="btn btn-primary" disabled={pending}>
-          {pending ? "Logging in…" : "Log in"}
-        </button>
-      </form>
-    </section>
+    <div className="login-wrap">
+      <section className="login-card" aria-labelledby="login-title">
+        <div className="login-mark">
+          <VaultMark size={34} />
+        </div>
+        <h1 id="login-title">AURA Vault</h1>
+        <p className="muted">Stockage objet chiffré. Connectez-vous pour gérer vos fichiers.</p>
+        <form onSubmit={(e) => void handleSubmit(e)} className="form">
+          <label className="field">
+            <span>Identifiant</span>
+            <input
+              type="text"
+              name="username"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Mot de passe</span>
+            <input
+              type="password"
+              name="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </label>
+          <button type="submit" className="btn btn-primary" disabled={pending}>
+            {pending ? "Connexion…" : "Se connecter"}
+          </button>
+        </form>
+        {error ? (
+          <p role="alert" className="alert alert-error">
+            {error}
+          </p>
+        ) : null}
+      </section>
+    </div>
   );
 }
