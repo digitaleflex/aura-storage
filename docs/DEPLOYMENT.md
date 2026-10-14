@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This runbook describes the planned initial single-VPS deployment. The provider VPS is not provisioned yet. Verify the actual OS, disk layout, network quota and supported image releases before executing commands. A successful Compose parse is not production certification.
+This runbook describes the planned initial single-VPS deployment. The InterServer pilot VPS is provisioned. See [Server Profile](SERVER-PROFILE.md) for observed host details and [Host Bootstrap Checklist](HOST-BOOTSTRAP-CHECKLIST.md) for the phased setup sequence. The OS update reported that a reboot was required; verify the live kernel and SSH access before installing Docker. Verify the actual disk allocation, network quota and supported image releases before executing commands. A successful Compose parse is not production certification.
 
 ## Target topology
 
@@ -144,3 +144,17 @@ A running container is not proof that S3 authentication or durability works.
 - Changing `AURA_DATA_DIR` points to another location; it does not move existing data.
 - Changing `S3_DOMAIN` does not update DNS or endpoint configuration in external clients.
 - Independent backup, restore and production security review remain deployment gates.
+
+
+## SSE-S3 encryption gate for the one-month pilot
+
+The sample now pins SeaweedFS 4.48, which is newer than the previous 3.80 pin and aligns with the documented SSE-S3 configuration. Review the official release notes before deployment; do not silently downgrade to a version whose support is unverified.
+
+1. Generate a 256-bit key locally with openssl rand -hex 32.
+2. Put it in WEED_S3_SSE_KEK in the private .env file and keep a separate protected offline copy of the exact key.
+3. Run bootstrap and deploy only after reviewing the rendered Compose configuration locally.
+4. Run bash tests/sse-s3-smoke-test.sh with AWS CLI v2. It must report ServerSideEncryption=AES256 and a matching SHA-256 after download.
+5. If the test fails, do not import the actual PDF/audio collection. Inspect logs and image support; never assume encryption is active merely because the environment variable exists.
+6. Keep all originals locally. This test is not a backup test; no original may be deleted until an independent backup has been restored successfully.
+
+The smoke test uses the configured bootstrap S3 identity, which currently has broad permissions. Treat it as a controlled deployment test only; implement and verify a least-privilege runtime identity before multi-user production use.

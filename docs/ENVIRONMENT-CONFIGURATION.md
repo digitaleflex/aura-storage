@@ -57,3 +57,12 @@ May require code/config changes: service topology, adding a database/API, changi
 - Back up persistent data before upgrades or changing storage paths.
 - Changing `AURA_DATA_DIR` points services at a different directory; it does not move existing files. Copy/verify data separately before changing it.
 - Rotating S3 credentials requires updating the generated config and any clients using those credentials.
+
+
+## SSE-S3 at-rest encryption
+
+The pilot config pins SeaweedFS 4.48 because the older 3.80 sample predates the documented SSE-S3 configuration path. Before deploying, review the official SeaweedFS release notes and verify the exact image supports WEED_S3_SSE_KEK. A configured variable is not proof that objects are encrypted.
+
+Generate a key locally using openssl rand -hex 32, store it in WEED_S3_SSE_KEK in .env, and keep a separate protected offline copy. Loss of this key can make SSE-S3 objects unrecoverable. Do not rotate it on an existing data set without a tested migration and restore plan.
+
+After deployment, run bash tests/sse-s3-smoke-test.sh with AWS CLI v2 installed. The test creates a temporary bucket, uploads an AES256 object, checks the returned encryption field, downloads it, verifies SHA-256, then attempts cleanup. Do not import important files unless this test passes.

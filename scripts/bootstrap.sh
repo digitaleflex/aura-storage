@@ -21,9 +21,22 @@ set +a
 : "${S3_DOMAIN:?Set S3_DOMAIN in .env}"
 : "${ACME_EMAIL:?Set ACME_EMAIL in .env}"
 : "${AURA_DATA_DIR:?Set AURA_DATA_DIR in .env}"
+: "${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}"
+: "${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}"
+: "${WEED_S3_SSE_KEK:?Set WEED_S3_SSE_KEK in .env}"
 
 if grep -Eq 'REPLACE_WITH_|example\.com|example\.invalid|replace-with-' .env; then
   echo "ERROR: Placeholder values remain in .env. Replace them before deployment." >&2
+  exit 1
+fi
+
+if [[ ! "$WEED_S3_SSE_KEK" =~ ^[[:xdigit:]]{64}$ ]]; then
+  echo "ERROR: WEED_S3_SSE_KEK must be exactly 64 hexadecimal characters (32 bytes)." >&2
+  exit 1
+fi
+
+if [[ ${#S3_ACCESS_KEY} -lt 16 || ${#S3_SECRET_KEY} -lt 32 ]]; then
+  echo "ERROR: S3_ACCESS_KEY must be at least 16 chars and S3_SECRET_KEY at least 32 chars." >&2
   exit 1
 fi
 
@@ -35,4 +48,4 @@ mkdir -p "$AURA_DATA_DIR"/{master,volume,filer}
 chmod 700 "$AURA_DATA_DIR" "$AURA_DATA_DIR"/{master,volume,filer}
 
 docker compose config --quiet
-echo "Compose configuration syntax validated; production readiness is not implied."
+echo "Compose configuration syntax validated; verify SSE-S3 with tests/sse-s3-smoke-test.sh before importing valuable data."

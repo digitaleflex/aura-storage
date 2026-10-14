@@ -58,14 +58,13 @@ services:
     security_opt:
       - no-new-privileges:true
 
-
   seaweed-volume:
     image: ${SEAWEEDFS_IMAGE:?Set SEAWEEDFS_IMAGE in .env}
     container_name: ${AURA_INSTANCE_ID:-aura-001}-volume
     restart: unless-stopped
     command:
       - volume
-      - -mserver=seaweed-master:9333
+      - -master=seaweed-master:9333
       - -ip=seaweed-volume
       - -ip.bind=0.0.0.0
       - -dir=/data
@@ -94,6 +93,10 @@ services:
       - -s3
       - -s3.port=8333
       - -s3.config=/etc/seaweedfs/s3.json
+    environment:
+      TZ: ${TZ:-Africa/Porto-Novo}
+      # SeaweedFS SSE-S3 envelope-encryption key. Keep identical across all S3 gateways.
+      WEED_S3_SSE_KEK: ${WEED_S3_SSE_KEK:?Set a 64-character hex WEED_S3_SSE_KEK in .env}
     volumes:
       - ${AURA_DATA_DIR:-./data}/filer:/data
       - ./config/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
