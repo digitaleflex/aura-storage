@@ -10,6 +10,9 @@
 - [Mermaid source](docs/ARCHITECTURE.mmd)
 - [Architecture decisions and boundaries](docs/ARCHITECTURE.md)
 - [Detailed deployment runbook](docs/DEPLOYMENT.md)
+- [Reproducible VPS setup and recovery guide](docs/REPRODUCIBLE-SETUP.md)
+- [Read-only host preflight diagnostic](scripts/host-preflight.sh)
+- [Deployment verification log template](docs/verification-log-template.md)
 - [VPS server profile](docs/SERVER-PROFILE.md)
 - [Host bootstrap and hardening checklist](docs/HOST-BOOTSTRAP-CHECKLIST.md)
 - [Environment configuration and domain migration](docs/ENVIRONMENT-CONFIGURATION.md)
@@ -39,7 +42,7 @@ Environment-specific settings are centralized in the local `.env`; see [Environm
 Typical setup:
 
 ```bash
-git clone https://github.com/digitaleflex/aura-storage.git
+git clone --branch feat/secure-storage-pilot https://github.com/digitaleflex/aura-storage.git
 cd aura-storage
 cp .env.example .env
 chmod 600 .env
@@ -47,6 +50,8 @@ chmod 600 .env
 bash ./scripts/generate-config.sh
 docker compose config --quiet
 ```
+
+After the feature branch has been reviewed and merged, clone `main` instead. See [Reproducible Setup](docs/REPRODUCIBLE-SETUP.md) for the phased host preparation, SSH key verification, optional VPN, Docker, deployment, tests, backup/restore and rollback procedures.
 
 Changing `S3_DOMAIN` changes the hostname Traefik routes; it does not automatically update DNS or endpoint settings in external clients. Changing `AURA_DATA_DIR` does not move existing data. Review the runbook before deployment.
 
@@ -62,9 +67,8 @@ Changing `S3_DOMAIN` changes the hostname Traefik routes; it does not automatica
 
 No repository license has been selected. Do not assume reuse rights until a license is deliberately chosen.
 
-
 ## Encryption gate for the pilot
 
-The sample passes a 256-bit key through WEED_S3_SSE_KEK for SeaweedFS SSE-S3 object encryption. Generate it locally with openssl rand -hex 32 and keep a protected offline copy outside the VPS and Git repository. Losing this key may make encrypted objects unrecoverable.
+The sample passes a 256-bit key through WEED_S3_SSE_KEK for SeaweedFS SSE-S3 object encryption. Generate it locally with `openssl rand -hex 32` and keep a protected offline copy outside the VPS and Git repository. Losing this key may make encrypted objects unrecoverable.
 
-Before transferring actual PDF/audio files, deploy the reviewed image and run bash tests/sse-s3-smoke-test.sh. Confirm the S3 response reports ServerSideEncryption=AES256 and the downloaded bytes match. The repository has not been tested against a real VPS yet; this smoke test, HTTPS, access control, persistence, and backup/restore remain acceptance gates. Keep the local originals until an independent backup has been restored successfully.
+Before transferring actual PDF/audio files, deploy the reviewed image and run `bash tests/sse-s3-smoke-test.sh`. Confirm the S3 response reports `ServerSideEncryption=AES256` and the downloaded bytes match. The repository has not been tested against a real VPS yet; this smoke test, HTTPS, access control, persistence, and backup/restore remain acceptance gates. Keep the local originals until an independent backup has been restored successfully.
