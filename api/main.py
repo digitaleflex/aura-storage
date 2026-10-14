@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import authz
+from . import authz, netinfo
 from .audit import audit_event
 from .auth import hash_password, new_token, verify_password
 from .authz import (
@@ -47,7 +47,9 @@ _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 
 
 def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    # Trusted-proxy aware: browsers arrive through Traefik and nginx, so the
+    # socket peer is a proxy; see api/netinfo.py (#35/#38).
+    return netinfo.client_ip(request)
 
 
 def _login_allowed(client_ip: str, now: float | None = None) -> bool:

@@ -37,6 +37,7 @@ The API container reads its own settings from Compose/environment (see `docker-c
 - `AURA_API_ADMIN_USER` / `AURA_API_ADMIN_PASSWORD`: bootstrap administrator, created on first boot with an argon2-hashed password.
 - `AURA_API_BACKEND` / `AURA_API_DSN`: catalogue backend; the Compose stack uses PostgreSQL.
 - Optional guard rails (sensible defaults in `api/config.py`; uncomment in `.env` to override): `AURA_SESSION_TTL`, `AURA_INTENT_TTL`, `AURA_INTENT_GRACE_SECONDS`, `AURA_MAX_OBJECT_BYTES`, `AURA_COMMIT_CHUNK_BYTES`, `AURA_MAX_PENDING_INTENTS`, `AURA_M2M_RATE_LIMIT`, `AURA_M2M_RATE_WINDOW`, `AURA_LOGIN_RATE_LIMIT`, `AURA_LOGIN_RATE_WINDOW`.
+- `AURA_TRUSTED_PROXIES`: comma-separated IPs/CIDRs whose `X-Forwarded-For` is trusted when resolving the client IP for the rate limiters. Defaults to loopback + RFC1918 (the internal Docker network). The API is only reachable through Traefik and nginx; a client-supplied `X-Forwarded-For` is ignored unless the immediate peer is trusted. The API container runs uvicorn with `--no-proxy-headers` so this in-app resolution owns the client IP; do not enable `--forwarded-allow-ips=*`.
 
 These are technical safety limits, not billing or subscription policy. API authorization, provisioning, rotation and revocation are documented in `docs/AUTHORIZATION-MATRIX.md`.
 

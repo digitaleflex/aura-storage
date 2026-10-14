@@ -17,7 +17,7 @@ import time
 
 from fastapi import Header, HTTPException, Request
 
-from . import identity
+from . import identity, netinfo
 from .config import settings
 from .store import repo
 
@@ -52,7 +52,9 @@ def reset_m2m_attempts() -> None:
 
 
 def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    # Trusted-proxy aware: a browser reaches the API through Traefik and nginx,
+    # so the socket peer is a proxy, not the client (#35/#38).
+    return netinfo.client_ip(request)
 
 
 def _m2m_blocked(client_ip: str, now: float | None = None) -> bool:

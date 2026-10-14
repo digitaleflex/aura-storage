@@ -100,3 +100,6 @@ Never place a token in logs, tickets, chat, the frontend bundle, or this reposit
 - Comparison is constant-time; unknown, revoked and expired tokens all yield 401.
 - Failed machine authentication is rate-limited per client IP (default 60/60s).
 - Login for humans is rate-limited per client IP (default 10/60s).
+- The client IP is resolved from `X-Forwarded-For` only when the immediate peer
+  is a trusted proxy (`AURA_TRUSTED_PROXIES`, default loopback + RFC1918); the
+  right-most untrusted entry wins, so a client cannot spoof its own address.

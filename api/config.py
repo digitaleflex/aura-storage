@@ -54,6 +54,18 @@ class Settings:
     # Machine-to-machine authentication failure rate limit (per client IP; #38).
     m2m_rate_limit: int = _int("AURA_M2M_RATE_LIMIT", 60)
     m2m_rate_window: int = _int("AURA_M2M_RATE_WINDOW", 60)
+    # Reverse proxies trusted to set X-Forwarded-For when resolving the client
+    # IP for the rate limiters (#35/#38). Comma-separated IPs or CIDRs; defaults
+    # to the loopback/RFC1918 ranges Docker uses, since the API is only reachable
+    # on the internal network. See api/netinfo.py.
+    trusted_proxies: tuple[str, ...] = tuple(
+        part.strip()
+        for part in os.environ.get(
+            "AURA_TRUSTED_PROXIES",
+            "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+        ).split(",")
+        if part.strip()
+    )
     # Upload/commit technical limits (#37, #40). Defaults are guard rails, not billing.
     max_object_bytes: int = _int("AURA_MAX_OBJECT_BYTES", 5 * 1024 * 1024 * 1024)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)

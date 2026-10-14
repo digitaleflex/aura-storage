@@ -53,7 +53,9 @@
 - Provision, rotate and revoke through the admin API (see
   `docs/AUTHORIZATION-MATRIX.md`). Revocation is immediate and isolated to one identity.
 - Failed machine authentication is rate-limited per client IP; secrets never appear in
-  logs, errors, subsequent responses or the frontend bundle.
+  logs, errors, subsequent responses or the frontend bundle. The client IP comes from
+  `X-Forwarded-For` only behind a trusted proxy, and the right-most untrusted entry is
+  used, so a spoofed header cannot bypass the limiter (`api/netinfo.py`).
 
 ## Transfer integrity and resource limits (#37, #40)
 - Commit streams the object to compute SHA-256 without loading it fully into memory,
