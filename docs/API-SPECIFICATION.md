@@ -9,6 +9,8 @@ resources below (folders CRUD, import jobs, search filters) are still proposals.
 
 The management API provides a stable control interface for AURA's catalogue and administrative workflows. It does not replace the S3 data plane. Binary uploads/downloads should use the S3 API or short-lived signed URLs; the management API handles metadata, access decisions, inventory, and import jobs.
 
+**Transfer decision:** normal file transfer uses the API as a control plane and short-lived S3-compatible presigned URLs as the data plane. The API must not proxy large file bodies by default. FTPS is an optional future migration/legacy adapter only when a concrete integration requires it. See [File Transfer Contract](FILE-TRANSFER.md) for the full sequence and acceptance criteria.
+
 ## Proposed base path
 
 `/api/v1`
@@ -28,6 +30,9 @@ The API should be exposed under a distinct hostname (for example `api-storage.ex
 ### Folders
 Folders are logical catalogue entities, not necessarily real directories on the host. They support parent/child relationships, names, ownership and permissions. Define cycle prevention and rename/move semantics in the implementation.
 
+### Upload intents
+An upload intent is a server-side record that authorizes one upload to a server-generated object key for a bounded time. It must bind the authenticated application/tenant, expected size and checksum constraints where provided, allowed method, expiry, and lifecycle status. The client must not choose arbitrary buckets or object keys.
+
 ### Import jobs
 Track asynchronous bulk uploads/imports with a stable job ID, status (`queued`, `running`, `completed`, `failed`, `cancelled`), counts, timestamps, and a sanitized error summary. Do not store secret values or raw credentials in job logs.
 
@@ -36,25 +41,38 @@ Track asynchronous bulk uploads/imports with a stable job ID, status (`queued`, 
 - `GET /health/live` — process liveness; no secrets.
 - `GET /health/ready` — readiness including required dependencies.
 - `GET /api/v1/objects` — paginated object search; filters must be allow-listed.
-- `POST /api/v1/objects/upload-intents` — authorise and issue a short-lived upload URL/intent.
+- `POST /api/v1/objects/upload-intents` — authorize and issue a short-lived upload URL/intent.
+- `POST /api/v1/objects/{id}/commit` or an equivalent intent-scoped completion endpoint — verify the stored object and transition it to available idempotently.
 - `GET /api/v1/objects/{id}` — metadata only.
-- `POST /api/v1/objects/{id}/download-intent` — authorise and return short-lived download URL.
+- `POST /api/v1/objects/{id}/download-intent` — authorize and return short-lived download URL.
 - `DELETE /api/v1/objects/{id}` — soft-delete first; permanent purge is a separate privileged operation.
 - `GET /api/v1/folders`, `POST /api/v1/folders`, `PATCH /api/v1/folders/{id}`, `DELETE /api/v1/folders/{id}`.
 - `POST /api/v1/import-jobs`, `GET /api/v1/import-jobs/{id}`, `POST /api/v1/import-jobs/{id}/cancel`.
 
-These endpoints are proposals, not currently available routes.
+These endpoints are proposals, not currently available routes. The exact request/response schemas and OpenAPI contract must be reviewed before implementation.
+
+## Transfer contract
+
+- Authenticate every request using a dedicated application identity; do not place long-lived service credentials in browser/mobile bundles.
+- Check tenant/application scope and object-level permission for each intent and metadata operation.
+- Generate object keys server-side; never trust a client-supplied bucket/key.
+- Return only a short-lived presigned URL scoped to the intended object and method, plus required signed headers and expiry.
+- Keep file bytes on the S3 data path. Use a bounded multipart protocol for large files; never buffer a full large object in API memory.
+- Require a commit step that verifies the stored object, actual size and checksum where required before making it available.
+- Make commit idempotent. Reconcile abandoned intents and orphaned objects after a safe grace period.
+- Redact signed URL query strings, credentials and authorization headers from logs and audit events.
+- FTPS is not a default API requirement. If added for a specific legacy partner, it must be an isolated adapter that feeds the same validation/catalogue lifecycle.
 
 ## Security requirements
 
 - Authenticate every non-public route. Use separate service identities for applications.
-- Authorise by tenant/owner/resource on every read, write, move and delete.
+- Authorize by tenant/owner/resource on every read, write, move and delete.
 - Validate signed URL expiry and allowed method/object scope.
 - Use request IDs, structured audit events and idempotency keys for retried mutations.
 - Apply pagination, rate limits, upload-size limits and timeouts.
 - Never return local filesystem paths, internal service addresses, S3 secrets, or unredacted upstream errors.
 - Require stronger permission and audit for bulk deletion, credential changes and permanent purge.
-- Keep the management API off the public route until authentication and authorisation are implemented.
+- Keep the management API off the public route until authentication and authorization are implemented.
 
 ## Metadata persistence
 
@@ -65,6 +83,10 @@ Use PostgreSQL for catalogue metadata, not file bytes. The schema should include
 - Listing/search is paginated and access-scoped.
 - Folder operations cannot cross tenant/owner boundaries.
 - Upload and download intents expire and are scoped to one object and method.
+- A file cannot become available before server-side completion verification.
+- Mismatched size/checksum, expired intent and cross-tenant requests fail safely.
+- Repeated commit requests are idempotent and abandoned uploads are reconciled.
+- Large-file tests demonstrate bounded API memory use.
 - Deletion is auditable and recoverable during the retention window.
 - Bulk imports can resume/retry without duplicating catalogue records.
 - Health endpoints reveal no secrets.
