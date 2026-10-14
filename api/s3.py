@@ -1,4 +1,6 @@
 """S3 data-plane access. Keys stay server-side; browsers only get presigned URLs."""
+import hashlib
+
 import boto3
 from botocore.client import Config
 
@@ -35,3 +37,23 @@ def presigned_get(client, bucket: str, key: str, expires: int) -> str:
     return client.generate_presigned_url(
         "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires
     )
+
+
+class ObjectTooLarge(Exception):
+    """Raised by stream_sha256 when the object exceeds the configured limit."""
+
+
+def stream_sha256(body, max_bytes: int, chunk_bytes: int = 1024 * 1024):
+    """Hash a streaming S3 body without ever holding the whole object in memory.
+
+    Returns ``(total_bytes, hex_digest)``. Raises :class:`ObjectTooLarge` as soon
+    as the accumulated size exceeds ``max_bytes`` so the API aborts early (#37).
+    """
+    digest = hashlib.sha256()
+    total = 0
+    for chunk in body.iter_chunks(chunk_size=chunk_bytes):
+        total += len(chunk)
+        if total > max_bytes:
+            raise ObjectTooLarge()
+        digest.update(chunk)
+    return total, digest.hexdigest()
