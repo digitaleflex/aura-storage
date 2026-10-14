@@ -80,6 +80,33 @@ def test_login_rate_limit_429_after_window_exhausted():
     assert r.status_code == 429
 
 
+def test_successful_logins_do_not_consume_the_rate_limit():
+    # Only failures count, so a burst of legitimate logins must not lock out the
+    # client (regression for the review finding).
+    c = make_client()
+    password = os.environ["AURA_API_ADMIN_PASSWORD"]
+    for _ in range(15):  # well above the limit (default 10)
+        r = c.post("/api/v1/login", json={"username": "admin", "password": password})
+        assert r.status_code == 200, r.text
+    # The failure budget is still intact.
+    assert c.post("/api/v1/login",
+                  json={"username": "admin", "password": "wrong"}).status_code == 401
+
+
+def test_successful_login_resets_failure_budget():
+    c = make_client()
+    password = os.environ["AURA_API_ADMIN_PASSWORD"]
+    for _ in range(9):
+        assert c.post("/api/v1/login",
+                      json={"username": "admin", "password": "wrong"}).status_code == 401
+    assert c.post("/api/v1/login",
+                  json={"username": "admin", "password": password}).status_code == 200
+    # 9 fresh failures are still allowed (the counter was cleared on success).
+    for _ in range(9):
+        assert c.post("/api/v1/login",
+                      json={"username": "admin", "password": "wrong"}).status_code == 401
+
+
 def test_audit_log_records_ids_and_no_secrets(tmp_path, monkeypatch):
     log = tmp_path / "audit.jsonl"
     monkeypatch.setenv("AURA_AUDIT_LOG", str(log))
@@ -116,6 +143,27 @@ def test_live_and_open_health():
 def test_login_rejects_bad_password():
     r = client.post("/api/v1/login", json={"username": "admin", "password": "wrong"})
     assert r.status_code == 401
+
+
+def test_verify_password_treats_corrupt_hash_as_no_match():
+    # A malformed stored hash must yield False, never a 500.
+    from api.auth import hash_password, verify_password
+
+    good = hash_password("correct horse battery staple")
+    assert verify_password(good, "correct horse battery staple") is True
+    assert verify_password(good, "wrong password") is False
+    for broken in ("", "not-a-hash", "$argon2id$broken", "$argon2id$v=19$m=65536,t=3,p=4$YWJj$YWJj"):
+        assert verify_password(broken, "whatever") is False
+
+
+def test_login_with_corrupt_stored_hash_is_401_not_500():
+    import uuid as _uuid
+
+    c = make_client()
+    name = f"corrupt-{_uuid.uuid4().hex[:8]}"
+    main.repo.create_user(name, "not-a-valid-hash")
+    r = c.post("/api/v1/login", json={"username": name, "password": "anything-long"})
+    assert r.status_code == 401, r.text
 
 
 def test_objects_require_auth():

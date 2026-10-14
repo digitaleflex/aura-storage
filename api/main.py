@@ -43,7 +43,9 @@ async def security_headers(request: Request, call_next):
     return response
 
 
-# In-memory login rate limiter: {client_ip: [attempt_epoch, ...]}.
+# In-memory login rate limiter: {client_ip: [failure_epoch, ...]}.
+# Only *failed* attempts are counted, so a burst of legitimate logins cannot
+# lock out everyone sharing a proxy/NAT address.
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 
 
@@ -53,17 +55,24 @@ def _client_ip(request: Request) -> str:
     return netinfo.client_ip(request)
 
 
-def _login_allowed(client_ip: str, now: float | None = None) -> bool:
+def _login_blocked(client_ip: str, now: float | None = None) -> bool:
     now = time.time() if now is None else now
     window = settings.login_rate_window
-    limit = settings.login_rate_limit
     attempts = [t for t in _LOGIN_ATTEMPTS.get(client_ip, []) if now - t < window]
-    if len(attempts) >= limit:
+    if attempts:
         _LOGIN_ATTEMPTS[client_ip] = attempts
-        return False
-    attempts.append(now)
-    _LOGIN_ATTEMPTS[client_ip] = attempts
-    return True
+    else:
+        _LOGIN_ATTEMPTS.pop(client_ip, None)
+    return len(attempts) >= settings.login_rate_limit
+
+
+def _login_record_failure(client_ip: str) -> None:
+    _LOGIN_ATTEMPTS.setdefault(client_ip, []).append(time.time())
+
+
+def _login_clear(client_ip: str) -> None:
+    # A successful login resets the failure budget for that client.
+    _LOGIN_ATTEMPTS.pop(client_ip, None)
 
 
 def reset_login_attempts() -> None:
@@ -155,13 +164,15 @@ def ready():
 @app.post("/api/v1/login")
 def login(body: LoginIn, request: Request, response: Response):
     client_ip = _client_ip(request)
-    if not _login_allowed(client_ip):
+    if _login_blocked(client_ip):
         audit_event("login", body.username, "rate_limited")
         raise HTTPException(status_code=429, detail="too many login attempts")
     row = repo.get_user_by_name(body.username)
     if row is None or not verify_password(row["pass_hash"], body.password):
+        _login_record_failure(client_ip)
         audit_event("login", body.username, "failure")
         raise HTTPException(status_code=401, detail="invalid credentials")
+    _login_clear(client_ip)
     csrf = new_token(16)
     sid = repo.create_session(
         row["id"], csrf, int(time.time()) + settings.session_ttl
