@@ -12,19 +12,32 @@ credentials/
 certs/
 private/
 
+# TLS material: acme.json stores private keys; never commit it.
+acme.json
+letsencrypt/
+
+# SSH keys (defence in depth; keys normally live in ~/.ssh).
+id_rsa*
+id_ed25519*
+
 # Storage data and backups
 data/
 volumes/
 backups/
 *.backup
 *.dump
+# User-uploaded files must never be committed.
+userfiles/
 
 # Editors / OS
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+node_modules/
 .venv/
 __pycache__/
+.pytest_cache/
+.envrc
 aura-audit.jsonl
 *.db
