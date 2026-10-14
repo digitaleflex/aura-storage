@@ -169,8 +169,11 @@ services:
       AURA_S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
-      AURA_TRUSTED_ORIGINS: https://${S3_DOMAIN:?Set S3_DOMAIN in .env},https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
       AURA_COOKIE_SECURE: "1"
+      # No origin/CORS allow-list here on purpose: the api has no Traefik route
+      # and is reached same-origin through the app proxy (app/nginx.conf proxies
+      # /api/ to this service). Browser uploads go straight to SeaweedFS via
+      # presigned URLs, so any CORS belongs to the SeaweedFS S3 gateway.
     networks:
       - storage
     depends_on:

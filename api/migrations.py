@@ -44,6 +44,48 @@ ADDED_COLUMNS = {
 }
 
 
+def _translate_placeholders(sql: str) -> str:
+    """Translate ``?`` placeholders to PostgreSQL ``%s`` (finding #10).
+
+    A plain ``str.replace('?', '%s')`` would also rewrite a ``?`` that sits inside
+    a string literal or a quoted identifier, corrupting the statement. This
+    scanner only rewrites ``?`` characters that are actual placeholders, leaving
+    quoted regions and the jsonb existence operators (``?|``, ``?&``) intact. A
+    bare jsonb ``?`` operator is not supported in migration SQL — use
+    ``jsonb_exists()`` if it is ever needed.
+    """
+    out: list[str] = []
+    i, n = 0, len(sql)
+    quote = ""  # active quote character ("" when outside a quoted region)
+    while i < n:
+        ch = sql[i]
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                if i + 1 < n and sql[i + 1] == quote:  # escaped '' or ""
+                    out.append(quote)
+                    i += 2
+                    continue
+                quote = ""
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "?":
+            if i + 1 < n and sql[i + 1] in "|&":
+                out.append(ch)  # jsonb operator (?| or ?&), not a placeholder
+            else:
+                out.append("%s")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 class _Runner:
     """Thin dialect adapter: ``?`` placeholders are translated for PostgreSQL."""
 
@@ -54,7 +96,7 @@ class _Runner:
     def exec(self, sql: str, params: tuple = ()):
         if self.dialect == "postgres":
             with self.conn.cursor() as cur:
-                cur.execute(sql.replace("?", "%s"), params)
+                cur.execute(_translate_placeholders(sql), params)
                 return cur
         return self.conn.execute(sql, params)
 
