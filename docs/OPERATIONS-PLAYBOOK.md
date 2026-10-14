@@ -1,5 +1,11 @@
 # AURA Operations Playbook
 
+> Référence d'exploitation détaillée : [RUNBOOK.md](RUNBOOK.md) (démarrage/arrêt,
+> mise à jour/retour arrière, rotation des secrets, seuils de capacité, findings du
+> pilote, risques résiduels — dossier préparé pour l'issue #11). Ce playbook reste
+> l'aide-mémoire synthétique ; en cas de divergence, le RUNBOOK prévaut et l'écart doit
+> être signalé puis corrigé.
+
 ## Before first start
 
 - Confirm disk is mounted at the expected path and has sufficient free space.

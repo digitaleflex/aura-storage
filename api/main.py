@@ -3,10 +3,11 @@ import hashlib
 import time
 import uuid
 
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from .audit import audit_event
 from .auth import hash_password, new_token, verify_password
 from .config import settings
 from .lifecycle import purge_object, reconcile_pending
@@ -24,6 +25,39 @@ else:
     repo = Repository(settings.db_path)
 
 app = FastAPI(title="AURA Management API", version="0.1.0")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    return response
+
+
+# In-memory login rate limiter: {client_ip: [attempt_epoch, ...]}.
+_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _login_allowed(client_ip: str, now: float | None = None) -> bool:
+    now = time.time() if now is None else now
+    window = settings.login_rate_window
+    limit = settings.login_rate_limit
+    attempts = [t for t in _LOGIN_ATTEMPTS.get(client_ip, []) if now - t < window]
+    if len(attempts) >= limit:
+        _LOGIN_ATTEMPTS[client_ip] = attempts
+        return False
+    attempts.append(now)
+    _LOGIN_ATTEMPTS[client_ip] = attempts
+    return True
+
+
+def reset_login_attempts() -> None:
+    _LOGIN_ATTEMPTS.clear()
 
 s3 = make_client(
     settings.s3_endpoint, settings.s3_access_key, settings.s3_secret_key,
@@ -80,9 +114,14 @@ def ready():
 
 
 @app.post("/api/v1/login")
-def login(body: LoginIn, response: Response):
+def login(body: LoginIn, request: Request, response: Response):
+    client_ip = _client_ip(request)
+    if not _login_allowed(client_ip):
+        audit_event("login", body.username, "rate_limited")
+        raise HTTPException(status_code=429, detail="too many login attempts")
     row = repo.get_user_by_name(body.username)
     if row is None or not verify_password(row["pass_hash"], body.password):
+        audit_event("login", body.username, "failure")
         raise HTTPException(status_code=401, detail="invalid credentials")
     csrf = new_token(16)
     sid = repo.create_session(
@@ -92,12 +131,14 @@ def login(body: LoginIn, response: Response):
         "aura_session", sid, httponly=True, secure=settings.cookie_secure,
         samesite="strict", max_age=settings.session_ttl, path="/",
     )
+    audit_event("login", body.username, "success", {"user_id": row["id"]})
     return {"csrf_token": csrf}
 
 
 @app.post("/api/v1/logout")
 def logout(user: dict = Depends(current_user), response: Response = None):
     repo.delete_session(user["session_id"])
+    audit_event("logout", user["id"], "success")
     out = JSONResponse(content={"status": "logged out"})
     out.delete_cookie("aura_session", path="/")
     return out
@@ -111,6 +152,10 @@ def upload_intent(body: UploadIntentIn, user: dict = Depends(require_csrf)):
         body.folder_id,
     )
     url = presigned_put(s3, body.bucket, key, body.content_type, settings.intent_ttl)
+    audit_event("upload-intent", user["id"], "success", {
+        "object_id": oid, "bucket": body.bucket,
+        "expires_in": settings.intent_ttl,
+    })
     return {"id": oid, "upload_url": url, "expires_in": settings.intent_ttl}
 
 
@@ -129,6 +174,7 @@ def commit_object(oid: str, user: dict = Depends(require_csrf)):
     digest = hashlib.sha256(body).hexdigest()
     size = head.get("ContentLength", len(body))
     repo.mark_available(oid, size, digest)
+    audit_event("commit", user["id"], "success", {"object_id": oid})
     return {"id": oid, "status": "available", "size_bytes": size, "checksum_sha256": digest}
 
 
@@ -194,4 +240,5 @@ def download_intent(oid: str, user: dict = Depends(require_csrf)):
     if row["status"] != "available":
         raise HTTPException(status_code=409, detail="object not available")
     url = presigned_get(s3, row["bucket"], row["object_key"], settings.intent_ttl)
+    audit_event("download-intent", user["id"], "success", {"object_id": oid})
     return {"download_url": url, "expires_in": settings.intent_ttl}
