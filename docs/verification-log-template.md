@@ -61,3 +61,24 @@
 Outstanding blockers:
 Next actions and owner:
 Approval to migrate originals (must be explicit):
+
+## Network and throughput validation (not yet executed)
+
+- Safety gate passed before any host modification:
+- SSH key login verified in a second independent session:
+- Provider recovery console available:
+- Baseline access network/device and timestamp:
+- Baseline download/upload/idle latency (three trials):
+- Controlled VPS path test authorized and scoped:
+- AURA synthetic upload median / range:
+- AURA synthetic download median / range:
+- WireGuard off/on Internet download median / range:
+- Device-to-device local / remote median / range:
+- DNS and IPv6 leak checks:
+- SHA-256 integrity checks:
+- VPS CPU/memory/provider transfer usage before and after:
+- AURA impact observed:
+- Test files removed and temporary listeners/rules removed:
+- Decision and blockers:
+
+> Do not run tests or change the VPS merely to fill this template. Use synthetic, non-sensitive files; record sanitized results only.
