@@ -75,11 +75,12 @@ def _admin_headers():
     return c, {"X-CSRF-Token": r.json()["csrf_token"]}
 
 
-def _intent(c, headers, name="stream.bin"):
+def _intent(c, headers, name="stream.bin", size_bytes=1):
     r = c.post(
         "/api/v1/objects/upload-intents",
         json={"bucket": "aura", "display_name": name,
-              "content_type": "application/octet-stream"},
+              "content_type": "application/octet-stream",
+              "size_bytes": size_bytes},
         headers=headers,
     )
     assert r.status_code == 200, r.text
@@ -105,7 +106,7 @@ def test_commit_streams_large_object_with_bounded_chunks(monkeypatch):
     monkeypatch.setattr(main, "s3ops", s3)
 
     c, headers = _admin_headers()
-    oid = _intent(c, headers, "large.bin")
+    oid = _intent(c, headers, "large.bin", size_bytes=len(data))
     r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -141,6 +142,10 @@ def test_truncated_upload_is_rejected_and_not_available(monkeypatch):
 
 
 def test_oversized_upload_is_rejected(monkeypatch):
+    # The intent declares a small size (1 byte) that is within the cap, so the
+    # presigned URL is issued; the object that actually lands is bigger, and the
+    # commit-time chokepoint must still reject it (defence in depth behind the
+    # signed Content-Length, which a real backend enforces).
     monkeypatch.setattr(main.settings, "max_object_bytes", 1024)
     data = os.urandom(4096)
     monkeypatch.setattr(main, "s3ops", DummyS3(data))

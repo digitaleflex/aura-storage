@@ -89,14 +89,15 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [display_name]
+              required: [display_name, size_bytes]
               properties:
                 bucket: { type: string, maxLength: 63, description: Must be registered to the caller's space; omitted = space default }
                 display_name: { type: string, minLength: 1, maxLength: 255 }
                 content_type: { type: string, maxLength: 127, default: application/octet-stream }
+                size_bytes: { type: integer, minimum: 1, description: Declared upload size; bound into the presigned URL as a signed Content-Length and capped at the configured maximum object size }
                 folder_id: { type: string, nullable: true }
       responses:
-        "200": { description: Upload intent with a presigned PUT URL }
+        "200": { description: "Upload intent with a presigned PUT URL bound to the declared Content-Length" }
         "403": { description: Bucket not allowed / not authorised }
         "422": { description: Invalid request }
         "429": { description: Too many pending uploads }
@@ -193,10 +194,12 @@ paths:
                 application_id: { type: string }
                 name: { type: string, minLength: 1, maxLength: 63 }
                 environment: { type: string, minLength: 1, maxLength: 32 }
-                default_bucket: { type: string, maxLength: 63, nullable: true }
+                default_bucket: { type: string, maxLength: 63, nullable: true, description: Must be a valid S3 bucket name; omitted = derived from name and environment (also validated) }
       responses:
         "200": { description: Space created }
         "404": { description: Application not found }
+        "409": { description: Bucket name already in use }
+        "422": { description: Invalid bucket name }
     get:
       summary: List spaces (admin:read)
       responses:

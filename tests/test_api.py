@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -116,7 +117,7 @@ def test_audit_log_records_ids_and_no_secrets(tmp_path, monkeypatch):
     csrf = login(c)
     c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "aura", "display_name": "audit.txt"},
+        json={"bucket": "aura", "display_name": "audit.txt", "size_bytes": 1},
         headers={"X-CSRF-Token": csrf},
     )
     lines = log.read_text(encoding="utf-8").strip().splitlines()
@@ -183,13 +184,13 @@ def test_mutation_requires_csrf():
     c, _ = authed_client()
     r = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "aura", "display_name": "x.txt"},
+        json={"bucket": "aura", "display_name": "x.txt", "size_bytes": 1},
         headers={"X-CSRF-Token": ""},
     )
     assert r.status_code == 403
     r = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "aura", "display_name": "x.txt"},
+        json={"bucket": "aura", "display_name": "x.txt", "size_bytes": 1},
         headers={"X-CSRF-Token": "bogus"},
     )
     assert r.status_code == 403
@@ -200,7 +201,7 @@ def test_upload_intent_returns_scoped_url_and_leaks_nothing():
     r = c.post(
         "/api/v1/objects/upload-intents",
         json={"bucket": "aura", "display_name": "hello.txt",
-              "content_type": "text/plain"},
+              "content_type": "text/plain", "size_bytes": 4096},
         headers=headers,
     )
     assert r.status_code == 200, r.text
@@ -217,11 +218,48 @@ def test_upload_intent_returns_scoped_url_and_leaks_nothing():
     assert got["status"] == "pending"
 
 
+def test_upload_intent_binds_declared_size_as_signed_content_length():
+    c, headers = authed_client()
+    r = c.post(
+        "/api/v1/objects/upload-intents",
+        json={"bucket": "aura", "display_name": "sized.txt", "size_bytes": 1234},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["size_bytes"] == 1234
+    # The declared size is part of the signed request, so the uploader cannot
+    # send a different (larger) Content-Length than the API authorised (#40).
+    signed = parse_qs(urlparse(body["upload_url"]).query)["X-Amz-SignedHeaders"][0]
+    assert "content-length" in signed
+
+
+def test_upload_intent_requires_a_declared_size():
+    c, headers = authed_client()
+    r = c.post(
+        "/api/v1/objects/upload-intents",
+        json={"bucket": "aura", "display_name": "nosize.txt"},
+        headers=headers,
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_upload_intent_rejects_size_above_the_cap(monkeypatch):
+    monkeypatch.setattr(main.settings, "max_object_bytes", 1024)
+    c, headers = authed_client()
+    r = c.post(
+        "/api/v1/objects/upload-intents",
+        json={"bucket": "aura", "display_name": "too-big.bin", "size_bytes": 4096},
+        headers=headers,
+    )
+    assert r.status_code == 422, r.text
+
+
 def test_soft_delete_and_purge():
     c, headers = authed_client()
     oid = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "aura", "display_name": "todelete.txt"},
+        json={"bucket": "aura", "display_name": "todelete.txt", "size_bytes": 1},
         headers=headers,
     ).json()["id"]
     r = c.delete(f"/api/v1/objects/{oid}", headers=headers)
@@ -244,7 +282,7 @@ def test_reconcile_expires_stale_pending():
     c, headers = authed_client()
     oid = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "aura", "display_name": "stale.txt"},
+        json={"bucket": "aura", "display_name": "stale.txt", "size_bytes": 1},
         headers=headers,
     ).json()["id"]
     # backdate the pending row past the grace period
@@ -264,7 +302,7 @@ def test_reconcile_expires_stale_pending():
     # fresh pending objects are untouched; only the stale one expires
     fresh = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "aura", "display_name": "fresh.txt"},
+        json={"bucket": "aura", "display_name": "fresh.txt", "size_bytes": 1},
         headers=headers,
     ).json()["id"]
     # stub storage (offline): reconcile must not require real S3
@@ -285,7 +323,7 @@ def test_cross_owner_isolation():
     c, headers = authed_client()
     oid = c.post(
         "/api/v1/objects/upload-intents",
-        json={"bucket": "aura", "display_name": "private.txt"},
+        json={"bucket": "aura", "display_name": "private.txt", "size_bytes": 1},
         headers=headers,
     ).json()["id"]
     # second user, created directly (unique per run: PG persists across runs)
@@ -317,7 +355,7 @@ def test_live_round_trip_with_integrity():
     intent = c.post(
         "/api/v1/objects/upload-intents",
         json={"bucket": bucket, "display_name": "live.bin",
-              "content_type": "application/octet-stream"},
+              "content_type": "application/octet-stream", "size_bytes": len(payload)},
         headers=headers,
     ).json()
     put = httpx.put(
@@ -348,7 +386,7 @@ def test_live_round_trip_with_integrity():
     import time as _time
 
     from api.s3 import presigned_put as _presign
-    short_url = _presign(main.s3, bucket, "expiry-probe", "text/plain", 2)
+    short_url = _presign(main.s3, bucket, "expiry-probe", "text/plain", 2, 1)
     _time.sleep(4)
     expired = httpx.put(short_url, content=b"x", headers={"Content-Type": "text/plain"}, timeout=30)
     assert expired.status_code == 403, expired.text

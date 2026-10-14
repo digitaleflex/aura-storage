@@ -1,5 +1,6 @@
 """S3 data-plane access. Keys stay server-side; browsers only get presigned URLs."""
 import hashlib
+import re
 
 import boto3
 from botocore.client import Config
@@ -25,12 +26,53 @@ def make_clients(public_endpoint: str, internal_endpoint: str,
     return presign, ops
 
 
-def presigned_put(client, bucket: str, key: str, content_type: str, expires: int) -> str:
+def presigned_put(client, bucket: str, key: str, content_type: str, expires: int,
+                  content_length: int) -> str:
+    """Presign a PUT bound to an exact ``Content-Length``.
+
+    ``content_length`` becomes a *signed* header, so the storage backend rejects
+    any upload whose length differs from the value the API authorised. This
+    closes the "declare nothing, push a huge object before commit rejects it"
+    window (#40): an uploader can no longer fill the volume beyond the size the
+    API approved. The caller (upload-intent handler) enforces the upper bound
+    (``settings.max_object_bytes``) before presigning.
+
+    Note: enforcement relies on the gateway validating signed headers; this is
+    exercised live on the pilot, not in the offline suite.
+    """
+    params = {"Bucket": bucket, "Key": key, "ContentType": content_type}
+    if content_length is not None:
+        params["ContentLength"] = content_length
     return client.generate_presigned_url(
-        "put_object",
-        Params={"Bucket": bucket, "Key": key, "ContentType": content_type},
-        ExpiresIn=expires,
+        "put_object", Params=params, ExpiresIn=expires
     )
+
+
+_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+_IP_LIKE_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+_RESERVED_PREFIXES = ("xn--", "sthree-", "amzn-s3-demo-")
+_RESERVED_SUFFIXES = ("-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3")
+
+
+def is_valid_bucket_name(name: str) -> bool:
+    """Validate a general-purpose, DNS-compliant S3 bucket name (#41).
+
+    Mirrors the AWS rules that matter for a default bucket derived from a
+    space name/environment: 3-63 characters of lowercase letters, digits, dots
+    and hyphens; starts and ends alphanumeric; no consecutive dots and no
+    dot-adjacent hyphen; not shaped like an IPv4 address; not a reserved
+    prefix/suffix. Rejecting invalid names up front avoids creating buckets that
+    S3 would refuse later.
+    """
+    if not isinstance(name, str) or not _BUCKET_RE.match(name):
+        return False
+    if ".." in name or ".-" in name or "-." in name:
+        return False
+    if _IP_LIKE_RE.match(name):
+        return False
+    if name.startswith(_RESERVED_PREFIXES) or name.endswith(_RESERVED_SUFFIXES):
+        return False
+    return True
 
 
 def presigned_get(client, bucket: str, key: str, expires: int) -> str:
