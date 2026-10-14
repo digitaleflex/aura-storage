@@ -169,7 +169,7 @@ services:
       AURA_S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
-      AURA_TRUSTED_ORIGINS: https://${S3_DOMAIN:?Set S3_DOMAIN in .env}
+      AURA_TRUSTED_ORIGINS: https://${S3_DOMAIN:?Set S3_DOMAIN in .env},https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
       AURA_COOKIE_SECURE: "1"
     networks:
       - storage
@@ -203,13 +203,13 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=aura-edge
-      - traefik.http.routers.aura-app.rule=Host(`${S3_DOMAIN:?Set S3_DOMAIN in .env}`) && PathPrefix(`/app`)
+      - traefik.http.routers.aura-app.rule=Host(`${APP_DOMAIN:?Set APP_DOMAIN in .env}`)
       - traefik.http.routers.aura-app.entrypoints=websecure
       - traefik.http.routers.aura-app.tls=true
       - traefik.http.routers.aura-app.tls.certresolver=le
-      - traefik.http.routers.aura-app.middlewares=app-strip
-      - traefik.http.middlewares.app-strip.stripprefix.prefixes=/app
       - traefik.http.services.aura-app.loadbalancer.server.port=80
+      # No path prefix, no strip: the app is served from the domain root.
+      # The S3 API keeps exclusive use of aura-storage.eurinhash.com.
     security_opt:
       - no-new-privileges:true
     # Only 80/443 via Traefik (shared entrypoints); no direct ports published.
