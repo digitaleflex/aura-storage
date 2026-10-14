@@ -14,6 +14,15 @@ def make_client(endpoint: str, access_key: str, secret_key: str, region: str):
     )
 
 
+def make_clients(public_endpoint: str, internal_endpoint: str,
+                 access_key: str, secret_key: str, region: str):
+    """(presign_client, ops_client): presigning is local crypto (no network),
+    so it uses the public base; all real calls use the internal endpoint."""
+    presign = make_client(public_endpoint, access_key, secret_key, region)
+    ops = make_client(internal_endpoint, access_key, secret_key, region)
+    return presign, ops
+
+
 def presigned_put(client, bucket: str, key: str, content_type: str, expires: int) -> str:
     return client.generate_presigned_url(
         "put_object",

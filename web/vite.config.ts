@@ -5,7 +5,12 @@ import react from "@vitejs/plugin-react";
 // static build in production, so the app itself only uses relative paths).
 const API_TARGET = process.env.AURA_API_PROXY ?? "http://127.0.0.1:8081";
 
+// Subpath deployment: VITE_SUBPATH=/app builds for https://host/app/.
+// Dev default serves at /.
+const SUBPATH = (process.env.VITE_SUBPATH ?? "").replace(/\/$/, "");
+
 export default defineConfig({
+  base: SUBPATH ? `${SUBPATH}/` : "/",
   plugins: [react()],
   server: {
     host: "127.0.0.1",

@@ -37,7 +37,12 @@ const loginRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([indexRoute, loginRoute]);
 
-export const router = createRouter({ routeTree });
+// Same subpath as Vite base (dev "/app", prod "/app", unset = root).
+const basepath = import.meta.env.VITE_SUBPATH
+  ? `/${import.meta.env.VITE_SUBPATH.replace(/^\//, "").replace(/\/$/, "")}`
+  : undefined;
+
+export const router = createRouter({ routeTree, basepath });
 
 declare module "@tanstack/react-router" {
   interface Register {

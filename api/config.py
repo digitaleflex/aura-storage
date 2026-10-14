@@ -14,7 +14,12 @@ class Settings:
     admin_user: str = os.environ.get("AURA_API_ADMIN_USER", "admin")
     admin_password: str = _req("AURA_API_ADMIN_PASSWORD")
     # S3 data plane (server-side only; never sent to browsers).
+    # Public base embedded in presigned URLs (browser-reachable, no call made).
     s3_endpoint: str = os.environ.get("AURA_S3_ENDPOINT", "https://aura-storage.eurinhash.com")
+    # Internal endpoint for server-side S3 calls (no egress needed).
+    s3_internal_endpoint: str = os.environ.get(
+        "AURA_S3_INTERNAL_ENDPOINT", "http://seaweed-filer:8333"
+    )
     s3_access_key: str = _req("AURA_S3_ACCESS_KEY")
     s3_secret_key: str = _req("AURA_S3_SECRET_KEY")
     s3_region: str = os.environ.get("AURA_S3_REGION", "us-east-1")
