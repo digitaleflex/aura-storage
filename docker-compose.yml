@@ -40,6 +40,18 @@ services:
       timeout: 5s
       retries: 3
     # The Traefik dashboard is enabled internally but is NOT routed publicly by this baseline.
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aura-edge
+      - traefik.http.routers.traefik-dashboard.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}`)
+      - traefik.http.routers.traefik-dashboard.entrypoints=websecure
+      - traefik.http.routers.traefik-dashboard.tls=true
+      - traefik.http.routers.traefik-dashboard.tls.certresolver=le
+      - traefik.http.routers.traefik-dashboard.service=api@internal
+      - traefik.http.routers.traefik-dashboard.middlewares=dash-auth
+      - traefik.http.middlewares.dash-auth.basicauth.users=${DASHBOARD_AUTH:?Set DASHBOARD_AUTH in .env}
+      # Port 8080 is never published to the host; the dashboard is reachable only
+      # through this HTTPS router with BasicAuth (bcrypt).
 
   seaweed-master:
     image: ${SEAWEEDFS_IMAGE:?Set SEAWEEDFS_IMAGE in .env}
