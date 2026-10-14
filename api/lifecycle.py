@@ -5,8 +5,9 @@ import time
 def reconcile_pending(repo, s3ops, expire_after_s: int = 3600) -> dict:
     """Expire pending objects older than the grace period.
 
-    Best effort: delete any partial bytes at storage, then mark expired.
-    Returns counts for observability.
+    Administrative sweep across every space; the route that calls it requires
+    the ``admin:write`` capability (#36). Best effort: delete any partial bytes
+    at storage, then mark expired. Returns counts for observability.
     """
     cutoff = int(time.time()) - expire_after_s
     expired = 0
@@ -23,9 +24,14 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600) -> dict:
     return {"expired": expired, "storage_deletes_attempted": storage_deletes}
 
 
-def purge_object(repo, s3ops, oid: str, owner_id: str) -> bool:
-    """Permanently delete bytes then the catalogue row. Returns True if done."""
-    row = repo.get_object(oid, owner_id)
+def purge_object(repo, s3ops, oid: str, *, space_id: str,
+                 owner_id: str | None = None) -> bool:
+    """Permanently delete bytes then the catalogue row. Returns True if done.
+
+    Scoped to the caller's space (#35); ``owner_id`` further restricts to a
+    single human owner. The route requires the ``objects:purge`` capability.
+    """
+    row = repo.get_object(oid, space_id=space_id, owner_id=owner_id)
     if row is None:
         return False
     row = dict(row) if not isinstance(row, dict) else row

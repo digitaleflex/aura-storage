@@ -29,7 +29,7 @@ jobs:
       - name: Run API unit tests (offline)
         run: |
           python3 -m pip install -r api/requirements.txt
-          AURA_API_ADMIN_PASSWORD=ci-dummy-password AURA_S3_ACCESS_KEY=ci-dummy-access-key-1234 AURA_S3_SECRET_KEY=ci-dummy-secret-12345678901234567890 AURA_S3_ENDPOINT=https://127.0.0.1:9 AURA_API_DB=:memory: AURA_COOKIE_SECURE=0 python3 -m pytest tests/test_api.py -q
+          AURA_API_ADMIN_PASSWORD=ci-dummy-password AURA_S3_ACCESS_KEY=ci-dummy-access-key-1234 AURA_S3_SECRET_KEY=ci-dummy-secret-12345678901234567890 AURA_S3_ENDPOINT=https://127.0.0.1:9 AURA_API_DB=:memory: AURA_COOKIE_SECURE=0 python3 -m pytest tests/ -q
       - name: Check sample S3 JSON
         run: python3 -m json.tool config/seaweedfs/s3.json.example >/dev/null
       - name: Prepare disposable validation environment

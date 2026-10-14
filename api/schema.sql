@@ -1,5 +1,10 @@
 -- AURA catalogue schema, shared by SQLite (#18) and PostgreSQL (#19).
--- Column types use TEXT/INTEGER portable across both engines.
+-- Column types use TEXT/INTEGER/portable across both engines.
+--
+-- Base tables (users, sessions, folders, objects) plus the multi-platform model
+-- (#35: applications, spaces, buckets) and machine-to-machine identities (#38).
+-- Additive columns on `users` and `objects` are applied by api/migrations.py, so
+-- an existing catalogue keeps its data (see docs/AUTHORIZATION-MATRIX.md).
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT UNIQUE NOT NULL,
@@ -19,6 +24,8 @@ CREATE TABLE IF NOT EXISTS folders (
   name TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+-- owner_id is nullable: objects created by a service identity (#38) have no
+-- human owner, but always carry a space_id (#35) and an actor_id/actor_kind.
 CREATE TABLE IF NOT EXISTS objects (
   id TEXT PRIMARY KEY,
   bucket TEXT NOT NULL,
@@ -28,11 +35,53 @@ CREATE TABLE IF NOT EXISTS objects (
   size_bytes INTEGER NOT NULL DEFAULT -1,
   checksum_sha256 TEXT NOT NULL DEFAULT '',
   folder_id TEXT REFERENCES folders(id),
-  owner_id TEXT NOT NULL REFERENCES users(id),
+  owner_id TEXT REFERENCES users(id),
   visibility TEXT NOT NULL DEFAULT 'private',
   status TEXT NOT NULL DEFAULT 'pending',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE (bucket, object_key)
 );
+CREATE TABLE IF NOT EXISTS applications (
+  id TEXT PRIMARY KEY,
+  name TEXT UNIQUE NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS spaces (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES applications(id),
+  name TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE (application_id, name, environment)
+);
+CREATE TABLE IF NOT EXISTS buckets (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL REFERENCES spaces(id),
+  name TEXT UNIQUE NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS service_identities (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES applications(id),
+  space_id TEXT NOT NULL REFERENCES spaces(id),
+  name TEXT NOT NULL,
+  secret_hash TEXT NOT NULL,
+  scopes TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT 'service',
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  last_used_at INTEGER,
+  revoked_at INTEGER,
+  rotated_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id TEXT PRIMARY KEY,
+  applied_at INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_objects_owner ON objects(owner_id, status);
+CREATE INDEX IF NOT EXISTS idx_identities_space ON service_identities(space_id);
+-- idx_objects_space is created by api/migrations.py, after the additive
+-- `space_id` column exists on upgraded catalogues.

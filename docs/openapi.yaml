@@ -1,130 +1,274 @@
 openapi: 3.1.0
 info:
   title: AURA Management API
-  version: 0.1.0
-  description: Proposed contract only. This API is not implemented yet.
+  version: 0.2.0
+  description: |
+    Implemented contract for the AURA Management API (`api/main.py`). Bytes never
+    pass through the API: clients upload/download directly to S3 through short-lived
+    presigned URLs. Object keys and buckets are chosen server-side.
+
+    Human callers authenticate with the `aura_session` cookie; mutating calls must
+    also send the session CSRF token in `X-CSRF-Token`. Machine callers authenticate
+    with a Bearer service-identity token. Authorization is server-side and default-deny;
+    see `docs/AUTHORIZATION-MATRIX.md`.
+
+    Validated locally (offline tests) and by CI; not yet validated on the pilot VPS.
 servers:
-  - url: https://api-storage.example.com
+  - url: https://app.aura-storage.eurinhash.com
+security:
+  - cookieAuth: []
+  - bearerAuth: []
 paths:
   /health/live:
     get:
       summary: Liveness probe
       security: []
       responses:
-        "200":
-          description: Process is alive
+        "200": { description: Process is alive }
   /health/ready:
     get:
       summary: Readiness probe
       security: []
       responses:
+        "200": { description: Dependencies ready }
+        "503": { description: Not ready }
+  /api/v1/login:
+    post:
+      summary: Create a human session (public, rate-limited)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200": { description: Returns the CSRF token; sets the session cookie }
+        "401": { description: Invalid credentials }
+        "429": { description: Too many attempts }
+  /api/v1/logout:
+    post:
+      summary: Delete the current session (human only)
+      responses:
+        "200": { description: Logged out }
+        "401": { description: Authentication required }
+        "403": { description: CSRF validation failed }
+  /api/v1/me:
+    get:
+      summary: Introspect the current principal
+      responses:
         "200":
-          description: Service and required dependencies are ready
-        "503":
-          description: Service is not ready
+          description: Principal metadata (kind, role, scopes, space, application)
+        "401": { description: Authentication required }
   /api/v1/objects:
     get:
-      summary: List/search authorised object metadata
-      security:
-        - bearerAuth: []
+      summary: List objects visible to the caller
       parameters:
-        - in: query
-          name: cursor
-          schema:
-            type: string
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 25
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
         - in: query
-          name: folderId
-          schema:
-            type: string
-            format: uuid
-        - in: query
-          name: q
-          schema:
-            type: string
-            maxLength: 200
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
       responses:
-        "200":
-          description: Page of authorised object metadata
-        "401":
-          description: Authentication required
-        "403":
-          description: Access denied
+        "200": { description: Page of object metadata }
+        "401": { description: Authentication required }
+        "403": { description: Access denied }
   /api/v1/objects/upload-intents:
     post:
-      summary: Create a short-lived upload intent
-      security:
-        - bearerAuth: []
+      summary: Create a short-lived upload intent (capability objects:write)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [display_name]
+              properties:
+                bucket: { type: string, maxLength: 63, description: Must be registered to the caller's space; omitted = space default }
+                display_name: { type: string, minLength: 1, maxLength: 255 }
+                content_type: { type: string, maxLength: 127, default: application/octet-stream }
+                folder_id: { type: string, nullable: true }
       responses:
-        "201":
-          description: Upload intent created
-        "400":
-          description: Invalid request
-        "401":
-          description: Authentication required
-        "403":
-          description: Not authorised
-  /api/v1/objects/{id}:
+        "200": { description: Upload intent with a presigned PUT URL }
+        "403": { description: Bucket not allowed / not authorised }
+        "422": { description: Invalid request }
+        "429": { description: Too many pending uploads }
+  /api/v1/objects/{oid}/commit:
+    post:
+      summary: Validate an upload, stream SHA-256, mark available (objects:write)
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Object available (idempotent on repeat) }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not committable }
+        "410": { description: Upload intent expired }
+        "413": { description: Object exceeds the maximum allowed size }
+        "422": { description: Upload missing or size mismatch }
+  /api/v1/objects/{oid}:
     get:
       summary: Get object metadata
-      security:
-        - bearerAuth: []
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200":
-          description: Object metadata
-        "404":
-          description: Object not found or not visible
+        "200": { description: Object metadata }
+        "404": { description: Object not found or not visible }
     delete:
-      summary: Soft-delete an object
-      security:
-        - bearerAuth: []
+      summary: Soft-delete an object (objects:delete)
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/ObjectId"
       responses:
-        "202":
-          description: Deletion accepted
-        "404":
-          description: Object not found or not visible
-  /api/v1/objects/{id}/download-intent:
+        "200": { description: Object marked deleted }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not deletable }
+  /api/v1/objects/{oid}/download-intent:
     post:
-      summary: Create a short-lived download intent
-      security:
-        - bearerAuth: []
+      summary: Create a short-lived download intent (objects:read)
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/ObjectId"
       responses:
-        "201":
-          description: Download intent created
-        "403":
-          description: Not authorised
-        "404":
-          description: Object not found or not visible
+        "200": { description: Presigned GET URL }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not available }
+  /api/v1/objects/{oid}/purge:
+    post:
+      summary: Permanently delete an object (objects:purge, operator/admin)
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Object purged }
+        "403": { description: Not authorised }
+        "404": { description: Object not found or not visible }
+  /api/v1/admin/reconcile:
+    post:
+      summary: Expire stale pending uploads (admin:write)
+      responses:
+        "200": { description: Reconcile counts }
+        "403": { description: Not authorised }
+  /api/v1/admin/stats:
+    get:
+      summary: Aggregate counts (admin:read)
+      responses:
+        "200": { description: Counts by status/application/space/identity }
+        "403": { description: Not authorised }
+  /api/v1/admin/applications:
+    post:
+      summary: Register an application (admin:write)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 63 }
+      responses:
+        "200": { description: Application created }
+        "409": { description: Application already exists }
+    get:
+      summary: List applications (admin:read)
+      responses:
+        "200": { description: Applications }
+  /api/v1/admin/spaces:
+    post:
+      summary: Create a space and its default bucket (admin:write)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [application_id, name, environment]
+              properties:
+                application_id: { type: string }
+                name: { type: string, minLength: 1, maxLength: 63 }
+                environment: { type: string, minLength: 1, maxLength: 32 }
+                default_bucket: { type: string, maxLength: 63, nullable: true }
+      responses:
+        "200": { description: Space created }
+        "404": { description: Application not found }
+    get:
+      summary: List spaces (admin:read)
+      responses:
+        "200": { description: Spaces }
+  /api/v1/admin/identities:
+    post:
+      summary: Create a machine-to-machine identity (admin:write)
+      description: The token is returned exactly once; only its fingerprint is stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [space_id, name]
+              properties:
+                space_id: { type: string }
+                name: { type: string, minLength: 1, maxLength: 63 }
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                    enum: [objects:read, objects:write, objects:delete, objects:purge, admin:read, admin:write]
+                ttl_seconds: { type: integer, minimum: 1, nullable: true }
+      responses:
+        "200": { description: Identity created; response contains the one-time token }
+        "404": { description: Space not found }
+        "422": { description: Unknown scope requested }
+    get:
+      summary: List identities without secrets (admin:read)
+      parameters:
+        - in: query
+          name: space_id
+          schema: { type: string }
+      responses:
+        "200": { description: Identity metadata (never secret material) }
+  /api/v1/admin/identities/{iid}/rotate:
+    post:
+      summary: Rotate an identity secret (admin:write)
+      parameters:
+        - $ref: "#/components/parameters/IdentityId"
+      responses:
+        "200": { description: New one-time token; old secret invalid immediately }
+        "404": { description: Identity not found or revoked }
+  /api/v1/admin/identities/{iid}/revoke:
+    post:
+      summary: Revoke an identity (admin:write)
+      parameters:
+        - $ref: "#/components/parameters/IdentityId"
+      responses:
+        "200": { description: Identity revoked }
+        "404": { description: Identity not found }
 components:
+  parameters:
+    ObjectId:
+      in: path
+      name: oid
+      required: true
+      schema: { type: string }
+    IdentityId:
+      in: path
+      name: iid
+      required: true
+      schema: { type: string }
   securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: aura_session
+      description: HttpOnly human session cookie; mutations also require the X-CSRF-Token header.
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: "AURA service token (aura_<id>_<secret>)"
