@@ -1,8 +1,8 @@
 # SSH access and device key management
 
 **Project:** AURA Storage  
-**Status:** inventory and instructions only; SSH key authentication from each device is not yet verified  
-**Last reviewed:** 2026-10-14  
+**Status:** Main PC key installed 2026-10-14 (fingerprint verified); second-session key login NOT yet tested
+**Last reviewed:** 2026-10-14
 **Rule:** this document is safe to commit because it contains no private keys, passwords, recovery codes or secret tokens.
 
 ## 1. Known VPS connection inventory
@@ -16,7 +16,7 @@
 | Operating system | Ubuntu 26.04 LTS (`resolute`) | Last recorded; verify after connecting |
 | SSH user | `aura-admin` | Account exists and sudo was previously verified |
 | SSH port | `22` | Default/last observed; re-check actual listener and provider firewall |
-| Authentication | SSH key intended | Key-based login from a second session has NOT been confirmed |
+| Authentication | SSH key intended | Main PC key installed 2026-10-14; second-session login NOT yet confirmed |
 | Recovery route | InterServer console/rescue | Must confirm access before changing SSH/firewall/routing |
 
 Example command, only after confirming the hostname/IP and local key path:
@@ -126,7 +126,7 @@ Record only the public-key fingerprint, device label, creation date and revocati
 
 | Device label | Key type | SHA-256 public-key fingerprint | Added to VPS | Last login tested | Revoked? |
 |---|---|---|---|---|---|
-| Main PC | Ed25519 | Pending | No / unverified | No / unverified | No |
+| Main PC | Ed25519 | `SHA256:7AGLMEN+ZwUHcj9pxQnC1OnrNsdt2QFSinv8EtcmAEk` | Yes 2026-10-14 (`authorized_keys` 0600, single entry) | No / pending user test | No |
 | Linux client (if separate) | Ed25519 | Pending | No / unverified | No / unverified | No |
 | iPhone | Ed25519 if supported | Pending | No / unverified | No / unverified | No |
 | Android | Ed25519 if supported | Pending | No / unverified | No / unverified | No |
@@ -153,7 +153,7 @@ Use the equivalent fingerprint display feature in a mobile SSH client.
 ## 8. What remains unknown
 
 - Whether the main PC already has an appropriate SSH key and its fingerprint.
-- Whether the key has been installed for `aura-admin` and whether a second-session key login works.
+- Whether the main PC key second-session login works (installed 2026-10-14, test pending).
 - Whether the hostname still resolves to the recorded IPv4.
 - Whether port 22 is still the active SSH port and how provider firewall rules are configured.
 - Whether the InterServer recovery console is accessible.
