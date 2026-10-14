@@ -220,12 +220,12 @@ paths:
                   type: array
                   items:
                     type: string
-                    enum: [objects:read, objects:write, objects:delete, objects:purge, admin:read, admin:write]
+                    enum: [objects:read, objects:write, objects:delete, objects:purge]
                 ttl_seconds: { type: integer, minimum: 1, nullable: true }
       responses:
         "200": { description: Identity created; response contains the one-time token }
         "404": { description: Space not found }
-        "422": { description: Unknown scope requested }
+        "422": { description: Unknown scope, or an admin scope requested for a service identity }
     get:
       summary: List identities without secrets (admin:read)
       parameters:

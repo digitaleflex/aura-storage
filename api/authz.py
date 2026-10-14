@@ -32,6 +32,17 @@ ALL_SCOPES = frozenset({
     OBJECTS_READ, OBJECTS_WRITE, OBJECTS_DELETE, OBJECTS_PURGE, ADMIN_READ, ADMIN_WRITE,
 })
 
+# Platform administration. These capabilities create spaces, applications and
+# further identities, i.e. they can escalate a principal's reach.
+ADMIN_SCOPES = frozenset({ADMIN_READ, ADMIN_WRITE})
+
+# Machine-to-machine identities are data-plane principals: they may only ever
+# hold object capabilities, never platform administration. A leaked machine
+# token must not be able to mint spaces/identities. Enforced twice: on creation
+# (``api/main.py`` refuses admin scopes) and here, so a row that somehow carries
+# an admin scope (legacy data) is never *effective*.
+SERVICE_SCOPES = frozenset({OBJECTS_READ, OBJECTS_WRITE, OBJECTS_DELETE, OBJECTS_PURGE})
+
 # Default-deny role -> capability map (documented in docs/AUTHORIZATION-MATRIX.md).
 ROLE_SCOPES = {
     "user": frozenset({OBJECTS_READ, OBJECTS_WRITE, OBJECTS_DELETE}),
@@ -128,7 +139,9 @@ def authenticate(request: Request) -> dict:
 def effective_scopes(principal: dict) -> frozenset:
     if principal["kind"] == "user":
         return ROLE_SCOPES.get(principal["role"], frozenset())
-    return frozenset(principal["scopes"])
+    # Service identities can never exercise an admin capability, even if one is
+    # stored on the row (defence in depth; creation already refuses them).
+    return frozenset(principal["scopes"]) & SERVICE_SCOPES
 
 
 def has_scope(principal: dict, scope: str) -> bool:

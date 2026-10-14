@@ -50,6 +50,8 @@
 - AURA stores only the SHA-256 fingerprint of the secret; the token is shown once at
   creation or rotation. Unknown, revoked and expired tokens all return 401.
 - Grant the minimum scopes per identity and one identity per application/environment.
+  Machine identities are data-plane only: they may hold object capabilities
+  (`objects:*`), never `admin:*`, which stays with human operator/admin sessions.
 - Provision, rotate and revoke through the admin API (see
   `docs/AUTHORIZATION-MATRIX.md`). Revocation is immediate and isolated to one identity.
 - Failed machine authentication is rate-limited per client IP; secrets never appear in
