@@ -4,6 +4,13 @@
 > Méthode : inventaire lecture seule, corrections locales autorisées uniquement, aucun
 > changement hôte. Ce document ne contient aucun secret (ni clé privée, ni jeton,
 > ni mot de passe, ni valeur `.env`, ni clé SSE-S3).
+>
+> **Addendum post-publication (2026-10-14)** : la branche `docs/mission-globale-rapport`
+> portant ce rapport a été poussée avec succès vers `origin`. Les droits d'écriture
+> de la clé dédiée sont donc **confirmés pour `digitaleflex/aura-storage`** et le
+> risque R8 est marqué RÉSOLU ci-dessous. Portée strictement limitée : cela ne prouve
+> ni les droits sur d'autres dépôts, ni la protection des branches, ni la capacité à
+> fusionner une PR.
 
 ## 1. Résumé exécutif
 
@@ -50,7 +57,9 @@ interdit.
 - Clé `~/.ssh/id_ed25519_github_aura` existe (0600) ; `ssh -T` répond
   `Hi digitaleflex/aura-storage!` — identité de type **deploy key au niveau du dépôt**.
 - Lecture rétablie par correctif local : `core.sshCommand` du dépôt pointe vers la clé
-  dédiée (`git fetch origin` OK). Écriture = **INCONNUE** (aucun push testé, par règle).
+  dédiée (`git fetch origin` OK). Écriture : **CONFIRMÉE le 2026-10-14** par le push
+  réussi de `docs/mission-globale-rapport` (voir addendum). Portée : ce dépôt
+  uniquement, pas les autres dépôts.
 - Branches : `feat/secure-storage-pilot` = `origin/feat` @79ef615 ; `origin/main`
   @ab228ef — **feat non fusionnée, 26 commits d'écart**. PR #1 détectée
   (`head`=79ef615) mais détails inaccessibles (pas de `gh`, pas de token).
@@ -80,7 +89,7 @@ interdit.
 | R5 | P1 | Docker non installé, support Ubuntu 26.04 à confirmer | Pilote bloqué ; Certain | Installation doc officielle / reboot+SSH OK d'abord | Non | `docker --version`, persistance reboot | **Oui** |
 | R6 | P1 | DNS S3 sans résolution, pas de TLS | Pilote bloqué ; Certain | Enregistrement A + HTTP-01 / ports 80-443 vers Traefik | Non | Certificat valide externe | **Oui** |
 | R7 | P1 | Identité bootstrap S3 unique `Admin` | Privilèges excessifs en routine ; Moyenne | Identités least-privilege par app après smoke test | Oui (après déploiement) | Refus d'accès non autorisé | Non (config locale) |
-| R8 | P1 | Droits push GitHub inconnus ; commits non publiés | Dérive local/distant ; Moyenne | Tester push ou confirmer droits deploy key / accord humain | Non | Branche visible sur origin | **Oui** |
+| R8 | P1 — **RÉSOLU 2026-10-14** | Droits push GitHub inconnus ; commits non publiés | Dérive local/distant ; Moyenne | Tester push ou confirmer droits deploy key / accord humain | Non | ~~Branche visible sur origin~~ → push `docs/mission-globale-rapport` réussi, écriture confirmée sur ce dépôt uniquement | **Oui** |
 | R9 | P2 | Healthchecks SeaweedFS non prouvés (`wget` supposé) | Faux négatifs ; Moyenne | Inspection image 4.48 / Docker dispo | Partiel | `compose ps` healthy | **Oui** (modif Compose) |
 | R10 | P2 | Pas de limites ressources/logs dans Compose | Épuisement hôte ; Faible | `cpus/mem_limit`, rotation logs / calibration 2CPU-5Go | Partiel | `docker stats`, logs bornés | **Oui** |
 | R11 | P2 | Socket Docker monté sur Traefik ; groupe docker = root effectif | Élévation ; Faible | Moindre privilège, `sudo docker` / décision d'accès | Non | Revue accès daemon | **Oui** |
