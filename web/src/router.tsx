@@ -1,0 +1,46 @@
+import {
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+} from "@tanstack/react-router";
+import { Layout } from "./components/Layout";
+import { AuthProvider, RequireAuth } from "./lib/auth";
+import { LoginPage } from "./pages/LoginPage";
+import { ObjectsPage } from "./pages/ObjectsPage";
+
+const rootRoute = createRootRoute({
+  component: () => (
+    <AuthProvider>
+      <Layout>
+        <Outlet />
+      </Layout>
+    </AuthProvider>
+  ),
+});
+
+const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/",
+  component: () => (
+    <RequireAuth>
+      <ObjectsPage />
+    </RequireAuth>
+  ),
+});
+
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  component: LoginPage,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, loginRoute]);
+
+export const router = createRouter({ routeTree });
+
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: typeof router;
+  }
+}
