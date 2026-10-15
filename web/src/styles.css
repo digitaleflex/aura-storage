@@ -595,6 +595,13 @@ p .chip {
   margin-top: 4px;
 }
 
+/* "Charger plus": pagination control under the object table. */
+.load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
 .row-actions {
   display: flex;
   flex-wrap: wrap;

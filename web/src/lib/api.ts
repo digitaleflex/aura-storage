@@ -244,15 +244,25 @@ export const api = {
   /**
    * List objects. `folderId` narrows the list against the catalogue:
    * `undefined` = every object, `null` = only unfiled objects, a string = that
-   * folder. The folder id is validated by the server.
+   * folder. The folder id is validated by the server. `limit`/`offset` page the
+   * result (the server caps `limit` at 100).
    */
-  listObjects(folderId?: string | null): Promise<ObjectsListResponse> {
-    let path = "/api/v1/objects";
+  listObjects(
+    folderId?: string | null,
+    page?: { limit?: number; offset?: number },
+  ): Promise<ObjectsListResponse> {
+    const params = new URLSearchParams();
     if (folderId !== undefined) {
-      const value = folderId ?? "root";
-      path += `?folder_id=${encodeURIComponent(value)}`;
+      params.set("folder_id", folderId ?? "root");
     }
-    return request<ObjectsListResponse>(path);
+    if (page?.limit !== undefined) {
+      params.set("limit", String(page.limit));
+    }
+    if (page?.offset !== undefined) {
+      params.set("offset", String(page.offset));
+    }
+    const query = params.toString();
+    return request<ObjectsListResponse>(`/api/v1/objects${query ? `?${query}` : ""}`);
   },
 
   me(): Promise<SessionInfo> {
@@ -286,6 +296,19 @@ export const api = {
   },
 
   // --- Object lifecycle ---
+  /** File an object into a folder, or unfile it (`folderId` null = root). */
+  moveObject(
+    id: string,
+    folderId: string | null,
+    csrf: string,
+  ): Promise<ObjectItem> {
+    return request<ObjectItem>(`/api/v1/objects/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: { folder_id: folderId },
+      csrf,
+    });
+  },
+
   /** Soft-delete an object (objects:delete). */
   deleteObject(id: string, csrf: string): Promise<{ id: string; status: string }> {
     return request<{ id: string; status: string }>(
@@ -303,11 +326,17 @@ export const api = {
   },
 
   // --- Logical folders (human session only) ---
+  /** One level of the caller's tree (root when `parentId` is omitted). */
   listFolders(parentId?: string): Promise<ListResponse<FolderItem>> {
     const path = parentId
       ? `/api/v1/folders?parent_id=${encodeURIComponent(parentId)}`
       : "/api/v1/folders";
     return request<ListResponse<FolderItem>>(path);
+  },
+
+  /** The caller's whole folder tree as a flat list, in a single request. */
+  listAllFolders(): Promise<ListResponse<FolderItem>> {
+    return request<ListResponse<FolderItem>>("/api/v1/folders?all=true");
   },
 
   getFolder(id: string): Promise<FolderItem> {
@@ -337,7 +366,7 @@ export const api = {
     );
   },
 
-  // --- Administration console (read-only, `admin:read`) ---
+  // --- Administration console (reads, `admin:read`) ---
   adminStats(): Promise<AdminStats> {
     return request<AdminStats>("/api/v1/admin/stats");
   },

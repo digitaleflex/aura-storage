@@ -1,11 +1,19 @@
 import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { ApiError, api, hasScope, putToPresignedUrl } from "../lib/api";
 import type { FolderItem, ObjectItem } from "../lib/api";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { FolderMark } from "../components/FolderMark";
+
+/** Objects fetched per page ("Charger plus" increments the offset). */
+const OBJECTS_PAGE_SIZE = 50;
 
 function formatBytes(size: number): string {
   if (!Number.isFinite(size) || size < 0) {
@@ -30,26 +38,8 @@ function statusChip(status: string) {
   return <span className="chip chip-muted">{status}</span>;
 }
 
-/** Breadth-first load of the whole folder tree (bounded), for breadcrumbs and
- * the move target picker. The list endpoint returns one level at a time. */
-async function loadFolderTree(): Promise<FolderItem[]> {
-  const items: FolderItem[] = [];
-  const queue: (string | undefined)[] = [undefined];
-  const seen = new Set<string>();
-  while (queue.length > 0) {
-    const parent = queue.shift();
-    const res = await api.listFolders(parent);
-    for (const folder of res.items) {
-      if (seen.has(folder.id)) continue;
-      seen.add(folder.id);
-      items.push(folder);
-      queue.push(folder.id);
-      if (items.length > 500) return items;
-    }
-  }
-  return items;
-}
-
+/** The whole folder tree is fetched in one request (`?all=true`); the hierarchy
+ * is rebuilt client-side from parent_id for breadcrumbs and the move pickers. */
 export function ObjectsPage() {
   const { csrf } = useAuth();
   const session = useSession();
@@ -66,19 +56,29 @@ export function ObjectsPage() {
   const [renameTarget, setRenameTarget] = useState<FolderItem | null>(null);
   const [renameName, setRenameName] = useState("");
   const [moveTarget, setMoveTarget] = useState<FolderItem | null>(null);
+  const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
 
   const treeQuery = useQuery({
-    queryKey: ["folders", "tree"],
-    queryFn: loadFolderTree,
+    queryKey: ["folders", "all"],
+    queryFn: () => api.listAllFolders(),
   });
-  const objectsQuery = useQuery({
+  const objectsQuery = useInfiniteQuery({
     queryKey: ["objects", currentFolderId],
-    queryFn: () => api.listObjects(currentFolderId),
+    queryFn: ({ pageParam }) =>
+      api.listObjects(currentFolderId, {
+        limit: OBJECTS_PAGE_SIZE,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, _pages, lastOffset) =>
+      lastPage.items.length === OBJECTS_PAGE_SIZE
+        ? lastOffset + lastPage.items.length
+        : undefined,
   });
 
-  const tree = treeQuery.data ?? [];
+  const tree = treeQuery.data?.items ?? [];
   const byId = useMemo(() => new Map(tree.map((f) => [f.id, f])), [tree]);
   const childrenOf = useMemo(() => {
     const map = new Map<string | null, FolderItem[]>();
@@ -184,6 +184,18 @@ export function ObjectsPage() {
     onError: (err) => reportError(err, "Déplacement impossible."),
   });
 
+  const moveObjectMutation = useMutation({
+    mutationFn: (input: { id: string; folderId: string | null }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.moveObject(input.id, input.folderId, csrf);
+    },
+    onSuccess: () => {
+      setMoveObjectTarget(null);
+      invalidateLibrary();
+    },
+    onError: (err) => reportError(err, "Déplacement de l'objet impossible."),
+  });
+
   const deleteFolderMutation = useMutation({
     mutationFn: (id: string) => {
       if (!csrf) throw new Error("Session expirée.");
@@ -259,7 +271,7 @@ export function ObjectsPage() {
     return out;
   }
 
-  const items = objectsQuery.data?.items ?? [];
+  const items = objectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
   const needle = filter.trim().toLowerCase();
   const visible = needle
     ? items.filter((item) => item.display_name.toLowerCase().includes(needle))
@@ -405,6 +417,9 @@ export function ObjectsPage() {
             />
           </label>
         </div>
+        {needle && objectsQuery.hasNextPage ? (
+          <p className="muted">Recherche limitée aux objets déjà chargés.</p>
+        ) : null}
 
         {objectsQuery.isError ? (
           <p role="alert" className="alert alert-error">
@@ -449,6 +464,13 @@ export function ObjectsPage() {
                       >
                         Télécharger
                       </button>
+                      <button
+                        type="button"
+                        className="btn btn-small"
+                        onClick={() => setMoveObjectTarget(item)}
+                      >
+                        Déplacer
+                      </button>
                       <ConfirmAction
                         label="Supprimer"
                         title="Supprimer l'objet"
@@ -489,6 +511,18 @@ export function ObjectsPage() {
             </table>
           </div>
         )}
+        {objectsQuery.hasNextPage ? (
+          <div className="load-more">
+            <button
+              type="button"
+              className="btn"
+              disabled={objectsQuery.isFetchingNextPage}
+              onClick={() => void objectsQuery.fetchNextPage()}
+            >
+              {objectsQuery.isFetchingNextPage ? "Chargement…" : "Charger plus"}
+            </button>
+          </div>
+        ) : null}
         {downloadError ? (
           <p role="alert" className="alert alert-error">
             {downloadError}
@@ -657,6 +691,63 @@ export function ObjectsPage() {
               </li>
             ))}
         </ul>
+      </Dialog>
+
+      {/* Move an object into a folder */}
+      <Dialog
+        open={moveObjectTarget !== null}
+        title="Déplacer l'objet"
+        onClose={() => setMoveObjectTarget(null)}
+      >
+        <p className="muted">
+          Choisissez le dossier de destination de «{" "}
+          {moveObjectTarget?.display_name} ».
+        </p>
+        {tree.length === 0 ? (
+          <p className="empty">
+            Aucun dossier pour l'instant. Créez-en un depuis la barre d'actions.
+          </p>
+        ) : (
+          <ul className="move-list">
+            <li>
+              <button
+                type="button"
+                className="btn btn-small"
+                disabled={moveObjectMutation.isPending}
+                onClick={() =>
+                  moveObjectTarget &&
+                  moveObjectMutation.mutate({
+                    id: moveObjectTarget.id,
+                    folderId: null,
+                  })
+                }
+              >
+                Racine (sans dossier)
+              </button>
+            </li>
+            {tree.map((folder) => (
+              <li key={folder.id}>
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  disabled={
+                    moveObjectMutation.isPending ||
+                    moveObjectTarget?.folder_id === folder.id
+                  }
+                  onClick={() =>
+                    moveObjectTarget &&
+                    moveObjectMutation.mutate({
+                      id: moveObjectTarget.id,
+                      folderId: folder.id,
+                    })
+                  }
+                >
+                  {folder.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </Dialog>
     </div>
   );
