@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { ApiError, PresignedUploadError } from "../src/lib/api";
 import type { CommitResponse, UploadIntentResponse } from "../src/lib/api";
-import { backoffDelay, classifyError, runTransfer } from "../src/lib/transfer";
-import type { TransferDeps, TransferState } from "../src/lib/transfer";
+import { backoffDelay, classifyError, runTransfer, startUploadQueue } from "../src/lib/transfer";
+import type { QueueState, TransferDeps, TransferState } from "../src/lib/transfer";
 
 /**
  * M03 transfer-engine unit tests.
@@ -309,4 +309,157 @@ test("the transfer state is always shaped for the UI", async () => {
     expect(state.progress).toBeGreaterThanOrEqual(0);
     expect(state.progress).toBeLessThanOrEqual(1);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Multi-file queue (#63): bounded concurrency, failure isolation, retry
+// ---------------------------------------------------------------------------
+function fakeFile(name: string, size = 10): File {
+  return { name, size, type: "application/octet-stream" } as unknown as File;
+}
+
+async function waitFor(predicate: () => boolean, tries = 300): Promise<void> {
+  for (let i = 0; i < tries; i += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error("condition not met in time");
+}
+
+test("queue transfers every file with bounded concurrency", async () => {
+  const files = ["a.bin", "b.bin", "c.bin", "d.bin", "e.bin"].map((n) => fakeFile(n));
+  const gates: Array<() => void> = [];
+  const deps: TransferDeps = {
+    requestIntent: async (input) => ({
+      id: input.fileName,
+      status: "pending",
+      method: "PUT",
+      upload_url: "https://s3.example/put",
+      headers: { "Content-Type": "application/octet-stream" },
+      content_type: "application/octet-stream",
+      size_bytes: input.sizeBytes,
+      expires_in: 900,
+      expires_at: null,
+      idempotent_replay: false,
+    }),
+    // Hold each upload open until the test releases it.
+    upload: () => new Promise<void>((resolve) => gates.push(resolve)),
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const states: QueueState[] = [];
+  const queue = startUploadQueue(files, deps, {
+    folderId: null,
+    concurrency: 2,
+    onUpdate: (state) => states.push(state),
+  });
+
+  let peak = 0;
+  for (let i = 0; i < files.length; i += 1) {
+    await waitFor(() => gates.length > 0);
+    peak = Math.max(peak, gates.length);
+    gates.shift()?.();
+  }
+  const final = await queue.done;
+
+  expect(final.done).toBe(files.length);
+  expect(final.failed).toBe(0);
+  expect(final.finished).toBe(true);
+  expect(peak).toBeLessThanOrEqual(2);
+  // It never started more than the configured concurrency at once.
+  expect(Math.max(...states.map((s) => s.active))).toBeLessThanOrEqual(2);
+});
+
+test("one failing file does not stop the others, and retry re-runs only it", async () => {
+  const files = [fakeFile("ok.bin"), fakeFile("bad.bin"), fakeFile("ok2.bin")];
+  let badCommitAttempts = 0;
+  let badCommitCalls = 0;
+  let okCommitCalls = 0;
+  const deps: TransferDeps = {
+    requestIntent: async (input) => ({
+      id: input.fileName,
+      status: "pending",
+      method: "PUT",
+      upload_url: "https://s3.example/put",
+      headers: { "Content-Type": "application/octet-stream" },
+      content_type: "application/octet-stream",
+      size_bytes: input.sizeBytes,
+      expires_in: 900,
+      expires_at: null,
+      idempotent_replay: false,
+    }),
+    upload: async () => undefined,
+    commit: async (id) => {
+      if (id === "bad.bin") {
+        badCommitCalls += 1;
+        badCommitAttempts += 1;
+        if (badCommitAttempts === 1) throw new ApiError(422, "size mismatch");
+      } else {
+        okCommitCalls += 1;
+      }
+      return { id, status: "available", size_bytes: 1, checksum_sha256: "x" };
+    },
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const states: QueueState[] = [];
+  const queue = startUploadQueue(files, deps, {
+    folderId: null,
+    concurrency: 2,
+    onUpdate: (state) => states.push(state),
+  });
+
+  const firstPass = await queue.done;
+  expect(firstPass.done).toBe(2);
+  expect(firstPass.failed).toBe(1);
+  expect(okCommitCalls).toBe(2); // the two good files committed once each
+
+  // Retry: only the failed file is re-run; the two successes are untouched.
+  queue.retryFailed();
+  await waitFor(() => states[states.length - 1]?.done === 3);
+  expect(badCommitCalls).toBe(2);
+  expect(okCommitCalls).toBe(2);
+  expect(states[states.length - 1]?.failed).toBe(0);
+});
+
+test("cancelAll stops the queue and marks the unsettled files cancelled", async () => {
+  const files = [fakeFile("a.bin"), fakeFile("b.bin")];
+  const deps: TransferDeps = {
+    requestIntent: async (input) => ({
+      id: input.fileName,
+      status: "pending",
+      method: "PUT",
+      upload_url: "https://s3.example/put",
+      headers: { "Content-Type": "application/octet-stream" },
+      content_type: "application/octet-stream",
+      size_bytes: input.sizeBytes,
+      expires_in: 900,
+      expires_at: null,
+      idempotent_replay: false,
+    }),
+    // Uploads honour the abort signal so cancellation can settle them.
+    upload: (_url, _file, opts) =>
+      new Promise<void>((_resolve, reject) => {
+        const fail = () => reject(new PresignedUploadError("aborted", 0, "annulé"));
+        if (opts.signal?.aborted) fail();
+        else opts.signal?.addEventListener("abort", fail, { once: true });
+      }),
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const queue = startUploadQueue(files, deps, { folderId: null, concurrency: 1 });
+  await waitFor(() => true);
+  queue.cancelAll();
+  const final = await queue.done;
+  expect(final.cancelled).toBe(files.length);
+  expect(final.done).toBe(0);
+  expect(final.finished).toBe(true);
 });

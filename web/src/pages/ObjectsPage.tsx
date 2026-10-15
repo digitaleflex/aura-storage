@@ -466,7 +466,7 @@ export function ObjectsPage() {
   });
 
   // -- handlers ------------------------------------------------------------
-  async function handleUpload(event: FormEvent) {
+  function handleUpload(event: FormEvent) {
     event.preventDefault();
     setUploadError(null);
     setNotice(null);
@@ -482,21 +482,26 @@ export function ObjectsPage() {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
     }
+    // The queue owns the per-file state; the page reacts to its updates so a
+    // retry (which settles the queue a second time) is handled the same way.
     const uploadQueue = startUploadQueue(pendingFiles, transferDeps(csrf), {
       folderId: currentFolderId,
-      onUpdate: setQueue,
+      onUpdate: (next) => {
+        setQueue(next);
+        if (!next.finished) return;
+        if (next.done > 0) invalidateLibrary();
+        if (next.failed > 0) {
+          const firstFailed = next.items.find(
+            (item) => item.state.phase === "failed",
+          );
+          setUploadError(firstFailed?.state.error ?? "Envoi impossible.");
+        } else {
+          setUploadError(null);
+        }
+        setPendingFiles([]);
+      },
     });
     queueRef.current = uploadQueue;
-    const final = await uploadQueue.done;
-    queueRef.current = null;
-    setPendingFiles([]);
-    if (final.done > 0) invalidateLibrary();
-    if (final.failed > 0) {
-      const firstFailed = final.items.find((item) => item.state.phase === "failed");
-      setUploadError(firstFailed?.state.error ?? "Envoi impossible.");
-    } else {
-      setUploadError(null);
-    }
   }
 
   function handleCancelUpload() {
@@ -1082,7 +1087,7 @@ export function ObjectsPage() {
                 {pendingFiles.length === 0
                   ? "Aucun fichier sélectionné"
                   : pendingFiles.length === 1
-                    ? pendingFiles[0].name
+                    ? (pendingFiles[0]?.name ?? "")
                     : `${pendingFiles.length} fichiers sélectionnés`}
               </span>
             </label>
