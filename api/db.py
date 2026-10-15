@@ -371,6 +371,15 @@ class Repository:
             ).fetchall()
         return [_as_dict(r) for r in rows]
 
+    def list_all_folders(self, *, owner_id: str) -> list:
+        # Flat listing of the owner's whole tree in one query (#62 follow-up).
+        # Ordered by name for a deterministic payload; the client rebuilds the
+        # hierarchy from parent_id. Owner-scoped, so no cross-user leak.
+        rows = self.conn.execute(
+            "SELECT * FROM folders WHERE owner_id = ? ORDER BY name, id", (owner_id,)
+        ).fetchall()
+        return [_as_dict(r) for r in rows]
+
     def folder_name_exists(
         self, *, owner_id: str, parent_id: Optional[str], name: str,
         exclude_id: Optional[str] = None,
@@ -398,6 +407,16 @@ class Repository:
         self.conn.execute(
             "UPDATE folders SET parent_id = ? WHERE id = ? AND owner_id = ?",
             (parent_id, fid, owner_id),
+        )
+        self.conn.commit()
+
+    def set_object_folder(self, oid: str, *, folder_id: Optional[str]) -> None:
+        # File an object into a folder, or unfiled (folder_id IS NULL). Scope is
+        # enforced by the caller first (#61/#62): the route reads the object with
+        # the caller's space/owner filter before issuing this update.
+        self.conn.execute(
+            "UPDATE objects SET folder_id = ?, updated_at = ? WHERE id = ?",
+            (folder_id, self.now(), oid),
         )
         self.conn.commit()
 

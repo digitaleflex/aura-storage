@@ -167,6 +167,16 @@ def _folder_public(row) -> dict:
     }
 
 
+def _object_public(row) -> dict:
+    row = _as_dict(row)
+    return {
+        "id": row["id"], "display_name": row["display_name"],
+        "content_type": row["content_type"], "size_bytes": row["size_bytes"],
+        "checksum_sha256": row["checksum_sha256"], "status": row["status"],
+        "folder_id": row["folder_id"],
+    }
+
+
 class LoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str
@@ -192,6 +202,14 @@ class UploadIntentIn(BaseModel):
         if value > settings.max_object_bytes:
             raise ValueError("size_bytes exceeds the maximum allowed object size")
         return value
+
+
+class ObjectPatchIn(BaseModel):
+    # Object reassignment into a logical folder (#62). `model_fields_set`
+    # distinguishes "not sent" from an explicit null (which unfiles the object
+    # back to the root level).
+    model_config = ConfigDict(extra="forbid")
+    folder_id: Uuid4 | None = None
 
 
 class ApplicationIn(BaseModel):
@@ -423,17 +441,7 @@ def list_objects(
     rows = repo.list_objects(
         **_object_scope(principal), folder_id=folder_filter, limit=limit, offset=offset
     )
-    return {
-        "items": [
-            {
-                "id": r["id"], "display_name": r["display_name"],
-                "content_type": r["content_type"], "size_bytes": r["size_bytes"],
-                "checksum_sha256": r["checksum_sha256"], "status": r["status"],
-                "folder_id": r["folder_id"],
-            }
-            for r in rows
-        ]
-    }
+    return {"items": [_object_public(r) for r in rows]}
 
 
 @app.get("/api/v1/objects/{oid}")
@@ -442,12 +450,7 @@ def get_object(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")
-    return {
-        "id": row["id"], "display_name": row["display_name"],
-        "content_type": row["content_type"], "size_bytes": row["size_bytes"],
-        "checksum_sha256": row["checksum_sha256"], "status": row["status"],
-        "folder_id": row["folder_id"],
-    }
+    return _object_public(row)
 
 
 @app.delete("/api/v1/objects/{oid}")
@@ -462,6 +465,32 @@ def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DEL
     repo.set_status(oid, "deleted")
     audit_event("delete", principal["id"], "success", {"object_id": oid})
     return {"id": oid, "status": "deleted"}
+
+
+@app.patch("/api/v1/objects/{oid}")
+def update_object(
+    oid: str, body: ObjectPatchIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
+):
+    # File an object into a logical folder (or unfile it). Folders are owned by a
+    # human user (#61), so this metadata move is a human-only capability; a
+    # service identity has no folder to target and is refused by `human=True`.
+    oid = _canonical_id(oid, "object id")
+    if "folder_id" not in body.model_fields_set:
+        raise HTTPException(status_code=422, detail="no fields to update")
+    if repo.get_object(oid, **_object_scope(principal)) is None:
+        # 404 (not 403) so the caller cannot probe for objects outside its scope.
+        raise HTTPException(status_code=404, detail="object not found")
+    if body.folder_id is not None and repo.get_folder(
+        body.folder_id, owner_id=principal["id"]
+    ) is None:
+        # The target folder is owner-scoped: a foreign/unknown id is a 404.
+        raise HTTPException(status_code=404, detail="folder not found")
+    repo.set_object_folder(oid, folder_id=body.folder_id)
+    audit_event("object.move", principal["id"], "success", {
+        "object_id": oid, "folder_id": body.folder_id,
+    })
+    return _object_public(repo.get_object(oid, **_object_scope(principal)))
 
 
 @app.post("/api/v1/objects/{oid}/purge")
@@ -532,9 +561,19 @@ def _folder_subtree_height(fid: str, owner_id: str) -> int:
 @app.get("/api/v1/folders")
 def list_folders(
     parent_id: str | None = None,
+    all: bool = False,
     principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
 ):
     owner_id = _folder_owner(principal)
+    if all and parent_id is not None:
+        raise HTTPException(
+            status_code=422, detail="all cannot be combined with parent_id"
+        )
+    if all:
+        # Flat tree in a single request: the client rebuilds the hierarchy from
+        # parent_id instead of walking the per-level endpoint (#62 follow-up).
+        rows = repo.list_all_folders(owner_id=owner_id)
+        return {"items": [_folder_public(r) for r in rows]}
     if parent_id is not None:
         parent_id = _canonical_id(parent_id, "parent id")
         if repo.get_folder(parent_id, owner_id=owner_id) is None:
