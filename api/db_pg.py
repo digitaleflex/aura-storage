@@ -13,6 +13,7 @@ from .migrations import (
     DEFAULT_SPACE_NAME,
     apply_migrations,
 )
+from .object_query import build_object_where, order_clause
 
 SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
 
@@ -265,23 +266,25 @@ class Repository:
 
     def list_objects(
         self, *, space_id: str, owner_id: Optional[str] = None,
-        folder_id: Optional[str] = None, limit: int = 50, offset: int = 0,
+        folder_id: Optional[str] = None, q: Optional[str] = None,
+        status: Optional[str] = None, content_type: Optional[str] = None,
+        min_size: Optional[int] = None, max_size: Optional[int] = None,
+        created_after: Optional[int] = None, created_before: Optional[int] = None,
+        sort: str = "created_at", order: str = "desc",
+        limit: int = 50, offset: int = 0,
     ):
-        # ``folder_id`` narrows the list when supplied: an empty string means
-        # "not filed in any folder" (folder_id IS NULL), a uuid means that
-        # folder. Omitting it keeps the previous behaviour (every object).
-        sql = "SELECT * FROM objects WHERE space_id = %s"
-        params = [space_id]
-        if owner_id is not None:
-            sql += " AND owner_id = %s"
-            params.append(owner_id)
-        if folder_id is not None:
-            if folder_id == "":
-                sql += " AND folder_id IS NULL"
-            else:
-                sql += " AND folder_id = %s"
-                params.append(folder_id)
-        sql += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+        # Filters and sort are built by api/object_query.py so this stays in
+        # lockstep with the SQLite repository (M02).
+        where, params = build_object_where(
+            ph="%s", space_id=space_id, owner_id=owner_id, folder_id=folder_id,
+            q=q, status=status, content_type=content_type, min_size=min_size,
+            max_size=max_size, created_after=created_after,
+            created_before=created_before,
+        )
+        sql = (
+            f"SELECT * FROM objects WHERE {where} "
+            f"{order_clause(sort=sort, order=order)} LIMIT %s OFFSET %s"
+        )
         params += [limit, offset]
         return self._all(sql, tuple(params))
 
