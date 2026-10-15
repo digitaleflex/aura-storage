@@ -11,6 +11,7 @@
 - [Architecture decisions and boundaries](docs/ARCHITECTURE.md)
 - [File transfer contract: API + presigned S3 URLs, FTPS boundaries](docs/FILE-TRANSFER.md)
 - [Vault transfer engine: upload state machine, progress, retries, cancellation, integrity](docs/TRANSFER-ENGINE.md)
+- [Follow-up proposal: S3 multipart upload for large objects (not implemented)](docs/MULTIPART-UPLOAD-PLAN.md)
 - [Secure and efficient bulk transfers: security, resumability, multipart, compression and benchmarks](docs/SECURE-BULK-TRANSFERS.md)
 - [Storage platform problem landscape: common failures, proven solutions, trade-offs and AURA priorities](docs/STORAGE-PLATFORM-PROBLEM-LANDSCAPE.md)
 - [Detailed deployment runbook](docs/DEPLOYMENT.md)

@@ -132,7 +132,9 @@ pinned backend before implementing it, and forbids faking resume.
 
 ### Proposed, testable implementation (not built here)
 
-Follows `SECURE-BULK-TRANSFERS.md` and the P1 sequence there:
+Follows `SECURE-BULK-TRANSFERS.md` and the P1 sequence there. The concrete,
+checklist-style follow-up is in
+[Multipart upload plan](MULTIPART-UPLOAD-PLAN.md).
 
 1. Add a server-side multipart session bound to the upload intent (upload id,
    part size, expected size, intent expiry) — never trust a client-supplied
