@@ -666,3 +666,124 @@ test("startStaggerMs 0 disables pacing", async () => {
   expect(final.done).toBe(2);
   expect(sleeps).toEqual([]);
 });
+
+// ---------------------------------------------------------------------------
+// Per-file retry
+// ---------------------------------------------------------------------------
+test("retryItem re-runs only the chosen failed file with a fresh key", async () => {
+  const files = [fakeFile("ok.bin"), fakeFile("bad.bin")];
+  let badUploads = 0;
+  const keys: string[] = [];
+  const deps: TransferDeps = {
+    requestIntent: async (input) => {
+      keys.push(input.idempotencyKey);
+      return queueIntent(input);
+    },
+    upload: async (_url, file) => {
+      if (file.name === "bad.bin") {
+        badUploads += 1;
+        // Fail every internal attempt of the first submission only.
+        if (badUploads <= 3) throw new PresignedUploadError("network", 0, "Réseau interrompu.");
+      }
+    },
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const states: QueueState[] = [];
+  const queue = startUploadQueue(files, deps, {
+    folderId: null,
+    concurrency: 2,
+    startStaggerMs: 0,
+    onUpdate: (state) => states.push(state),
+  });
+  const firstPass = await queue.done;
+  expect(firstPass.done).toBe(1);
+  expect(firstPass.failed).toBe(1);
+
+  const badItem = states[states.length - 1]?.items.find((i) => i.fileName === "bad.bin");
+  expect(badItem?.state.phase).toBe("failed");
+  queue.retryItem(badItem!.id);
+  // `done` already resolved on the first pass: follow the live snapshots.
+  await waitFor(() => states[states.length - 1]?.done === 2);
+  const final = states[states.length - 1]!;
+
+  expect(final.done).toBe(2);
+  expect(final.failed).toBe(0);
+  // The retried file minted a fresh idempotency key; the success was untouched.
+  expect(new Set(keys).size).toBe(keys.length);
+  expect(keys.length).toBe(3); // ok.bin x1, bad.bin x2
+});
+
+test("retryItem ignores unknown, active and successful files", async () => {
+  const files = [fakeFile("ok.bin"), fakeFile("bad.bin")];
+  let badUploads = 0;
+  const deps: TransferDeps = {
+    requestIntent: async (input) => queueIntent(input),
+    upload: async (_url, file) => {
+      if (file.name === "bad.bin") {
+        badUploads += 1;
+        throw new PresignedUploadError("network", 0, "Réseau interrompu.");
+      }
+    },
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const states: QueueState[] = [];
+  const queue = startUploadQueue(files, deps, {
+    folderId: null,
+    concurrency: 1,
+    startStaggerMs: 0,
+    onUpdate: (state) => states.push(state),
+  });
+
+  // Unknown id: no-op, the queue keeps running.
+  queue.retryItem("no-such-id");
+  const firstPass = await queue.done;
+  expect(firstPass.done).toBe(1);
+  expect(firstPass.failed).toBe(1);
+  expect(badUploads).toBe(3);
+
+  const last = states[states.length - 1]!;
+  const okId = last.items.find((i) => i.fileName === "ok.bin")!.id;
+  const badId = last.items.find((i) => i.fileName === "bad.bin")!.id;
+  // A successful file can never restart.
+  queue.retryItem(okId);
+  expect(states[states.length - 1]?.done).toBe(1);
+  // Retrying the failed file re-runs it (and fails again here); the
+  // success is untouched.
+  queue.retryItem(badId);
+  await waitFor(() => badUploads === 6);
+  await waitFor(() => states[states.length - 1]?.failed === 1);
+  expect(states[states.length - 1]?.done).toBe(1);
+});
+
+test("snapshots expose the configured ceiling next to the effective value", async () => {
+  const files = [fakeFile("a.bin")];
+  const deps: TransferDeps = {
+    requestIntent: async (input) => queueIntent(input),
+    upload: async () => undefined,
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const states: QueueState[] = [];
+  const queue = startUploadQueue(files, deps, {
+    folderId: null,
+    concurrency: 3,
+    startStaggerMs: 0,
+    onUpdate: (state) => states.push(state),
+  });
+  const final = await queue.done;
+
+  expect(final.concurrency).toBe(3);
+  expect(final.maxConcurrency).toBe(3);
+  expect(states.every((s) => s.maxConcurrency === 3)).toBe(true);
+});

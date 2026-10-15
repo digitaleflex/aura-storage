@@ -300,7 +300,10 @@ export interface QueueItem {
 
 export interface QueueState {
   items: QueueItem[];
+  /** Effective parallelism right now (shrinks while the link is degraded). */
   concurrency: number;
+  /** Configured ceiling; concurrency never exceeds it. */
+  maxConcurrency: number;
   /** Files currently transferring. */
   active: number;
   /** Files whose backend commit succeeded. */
@@ -317,6 +320,8 @@ export interface UploadQueue {
   cancelAll(): void;
   /** Re-queue the failed and cancelled files, keeping the success ones. */
   retryFailed(): void;
+  /** Re-queue one failed or cancelled file as a fresh submission. */
+  retryItem(id: string): void;
   /** Resolves with the final queue state once every file has settled. */
   done: Promise<QueueState>;
 }
@@ -357,6 +362,7 @@ export function emptyQueue(concurrency = DEFAULT_QUEUE_CONCURRENCY): QueueState 
   return {
     items: [],
     concurrency,
+    maxConcurrency: concurrency,
     active: 0,
     done: 0,
     failed: 0,
@@ -437,6 +443,7 @@ export function startUploadQueue(
       state: item.state,
     })),
     concurrency: effectiveConcurrency,
+    maxConcurrency,
     active,
     done: items.filter((item) => item.state.phase === "available").length,
     failed: items.filter((item) => item.state.phase === "failed").length,
@@ -631,6 +638,20 @@ export function startUploadQueue(
         }
       }
       if (!requeued) return;
+      finished = false;
+      emit();
+      pump();
+    },
+    retryItem(id: string) {
+      const item = items.find((candidate) => candidate.id === id);
+      // Only a failed or cancelled file can restart: active items keep
+      // their controller (cancel first), queued items run in turn, and
+      // successes stay untouched.
+      if (!item || item.controller !== null) return;
+      if (item.state.phase !== "failed" && item.state.phase !== "cancelled") return;
+      item.state = idleTransfer(item.file);
+      item.settled = false;
+      item.reserved = false;
       finished = false;
       emit();
       pump();
