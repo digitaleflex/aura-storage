@@ -463,3 +463,43 @@ test("cancelAll stops the queue and marks the unsettled files cancelled", async 
   expect(final.done).toBe(0);
   expect(final.finished).toBe(true);
 });
+
+test("queue honours each entry's target folder (default when omitted)", async () => {
+  const folders: Array<string | null> = [];
+  const deps: TransferDeps = {
+    requestIntent: async (input) => {
+      folders.push(input.folderId);
+      return {
+        id: input.fileName,
+        status: "pending",
+        method: "PUT",
+        upload_url: "https://s3.example/put",
+        headers: { "Content-Type": "application/octet-stream" },
+        content_type: "application/octet-stream",
+        size_bytes: input.sizeBytes,
+        expires_in: 900,
+        expires_at: null,
+        idempotent_replay: false,
+      };
+    },
+    upload: async () => undefined,
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const queue = startUploadQueue(
+    [
+      { file: fakeFile("a.txt"), folderId: "F1" },
+      { file: fakeFile("b.txt"), folderId: null },
+      { file: fakeFile("c.txt") },
+    ],
+    deps,
+    { folderId: "DEFAULT", concurrency: 1 },
+  );
+  const final = await queue.done;
+
+  expect(final.done).toBe(3);
+  expect(new Set(folders)).toEqual(new Set(["F1", null, "DEFAULT"]));
+});

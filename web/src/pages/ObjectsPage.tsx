@@ -9,7 +9,19 @@ import {
 import { ApiError, api, hasScope, putToPresignedUrl } from "../lib/api";
 import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
-import type { QueueState, TransferDeps, TransferPhase, UploadQueue } from "../lib/transfer";
+import type {
+  QueueInput,
+  QueueState,
+  TransferDeps,
+  TransferPhase,
+  UploadQueue,
+} from "../lib/transfer";
+import {
+  MAX_UPLOAD_DEPTH,
+  normalizeRelativePath,
+  parentDirOf,
+  planFolders,
+} from "../lib/folderTree";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { FolderMark } from "../components/FolderMark";
@@ -168,6 +180,7 @@ export function ObjectsPage() {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [queue, setQueue] = useState<QueueState>(() => emptyQueue());
   const queueRef = useRef<UploadQueue | null>(null);
+  const dirInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -466,6 +479,20 @@ export function ObjectsPage() {
   });
 
   // -- handlers ------------------------------------------------------------
+  /** Shared queue subscriber: mirrors state and reacts when it settles. */
+  function handleQueueUpdate(next: QueueState) {
+    setQueue(next);
+    if (!next.finished) return;
+    if (next.done > 0) invalidateLibrary();
+    if (next.failed > 0) {
+      const firstFailed = next.items.find((item) => item.state.phase === "failed");
+      setUploadError(firstFailed?.state.error ?? "Envoi impossible.");
+    } else {
+      setUploadError(null);
+    }
+    setPendingFiles([]);
+  }
+
   function handleUpload(event: FormEvent) {
     event.preventDefault();
     setUploadError(null);
@@ -482,24 +509,102 @@ export function ObjectsPage() {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
     }
-    // The queue owns the per-file state; the page reacts to its updates so a
-    // retry (which settles the queue a second time) is handled the same way.
     const uploadQueue = startUploadQueue(pendingFiles, transferDeps(csrf), {
       folderId: currentFolderId,
-      onUpdate: (next) => {
-        setQueue(next);
-        if (!next.finished) return;
-        if (next.done > 0) invalidateLibrary();
-        if (next.failed > 0) {
-          const firstFailed = next.items.find(
-            (item) => item.state.phase === "failed",
+      onUpdate: handleQueueUpdate,
+    });
+    queueRef.current = uploadQueue;
+  }
+
+  /** Directory import (#64): recreate the missing folders, then upload in place. */
+  async function handleFolderUpload(selected: FileList | null) {
+    if (!selected || selected.length === 0) return;
+    if (!csrf) {
+      setUploadError("Session expirée. Reconnectez-vous.");
+      return;
+    }
+    if (transferActive) return;
+    setUploadError(null);
+    setNotice(null);
+
+    const list = Array.from(selected);
+    const relPaths = list.map((file) =>
+      normalizeRelativePath(
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+      ),
+    );
+    const plan = planFolders(relPaths);
+    const tooDeep = new Set(plan.tooDeep);
+    const kept = list
+      .map((file, index) => ({ file, rel: relPaths[index] ?? file.name }))
+      .filter((item) => !tooDeep.has(item.rel));
+    if (kept.length === 0) {
+      setUploadError("Aucun fichier importable dans cette sélection.");
+      return;
+    }
+
+    const keyOf = (parentId: string | null, name: string) =>
+      `${parentId ?? "root"}/${name}`;
+    const folderIds = new Map<string, string>(); // relative path -> id
+    const existing = new Map<string, string>(); // parentId/name -> id
+    for (const folder of tree) {
+      existing.set(keyOf(folder.parent_id, folder.name), folder.id);
+    }
+
+    let createdAny = false;
+    for (const folder of plan.folders) {
+      const parentId = folder.parentPath
+        ? (folderIds.get(folder.parentPath) ?? currentFolderId)
+        : currentFolderId;
+      const key = keyOf(parentId, folder.name);
+      const known = existing.get(key);
+      if (known) {
+        folderIds.set(folder.path, known);
+        continue;
+      }
+      try {
+        const made = await api.createFolder(
+          { name: folder.name, parent_id: parentId },
+          csrf,
+        );
+        existing.set(key, made.id);
+        folderIds.set(folder.path, made.id);
+        createdAny = true;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          const all = await api.listAllFolders();
+          const found = all.items.find(
+            (candidate) =>
+              (candidate.parent_id ?? null) === (parentId ?? null) &&
+              candidate.name === folder.name,
           );
-          setUploadError(firstFailed?.state.error ?? "Envoi impossible.");
-        } else {
-          setUploadError(null);
+          if (found) {
+            existing.set(key, found.id);
+            folderIds.set(folder.path, found.id);
+            continue;
+          }
         }
-        setPendingFiles([]);
-      },
+        setUploadError("Création de l'arborescence impossible.");
+        return;
+      }
+    }
+    if (createdAny) invalidateLibrary();
+    if (plan.tooDeep.length > 0) {
+      setNotice(
+        `${plan.tooDeep.length} fichier(s) ignoré(s) : arborescence trop profonde (max ${MAX_UPLOAD_DEPTH}).`,
+      );
+    }
+
+    const entries: QueueInput[] = kept.map((item) => {
+      const dir = parentDirOf(item.rel);
+      return {
+        file: item.file,
+        folderId: dir ? (folderIds.get(dir) ?? currentFolderId) : currentFolderId,
+      };
+    });
+    const uploadQueue = startUploadQueue(entries, transferDeps(csrf), {
+      folderId: currentFolderId,
+      onUpdate: handleQueueUpdate,
     });
     queueRef.current = uploadQueue;
   }
@@ -1075,6 +1180,7 @@ export function ObjectsPage() {
                 type="file"
                 name="files"
                 multiple
+                data-testid="files-input"
                 className="visually-hidden"
                 disabled={transferActive}
                 onChange={(e) => {
@@ -1092,6 +1198,27 @@ export function ObjectsPage() {
               </span>
             </label>
           </div>
+          <input
+            ref={dirInputRef}
+            type="file"
+            multiple
+            data-testid="folder-input"
+            className="visually-hidden"
+            disabled={transferActive}
+            onChange={(e) => {
+              void handleFolderUpload(e.target.files);
+              e.target.value = "";
+            }}
+            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+          />
+          <button
+            type="button"
+            className="btn"
+            disabled={transferActive}
+            onClick={() => dirInputRef.current?.click()}
+          >
+            Importer un dossier…
+          </button>
           <button
             type="submit"
             className="btn btn-primary"
