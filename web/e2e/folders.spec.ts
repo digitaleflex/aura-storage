@@ -28,11 +28,12 @@ test("create, rename, open and delete a folder", async ({ page }) => {
   await page.getByRole("dialog").getByRole("button", { name: "Créer" }).click();
   await expect(page.locator(".folder-card", { hasText: name })).toBeVisible();
 
-  // Rename it, from the root listing.
+  // Rename it, from the root listing (folder actions live in the row menu).
   await page
     .locator(".folder-card", { hasText: name })
-    .getByRole("button", { name: "Renommer" })
+    .getByRole("button", { name: /^Actions pour le dossier / })
     .click();
+  await page.getByRole("menuitem", { name: "Renommer" }).click();
   await page.getByRole("dialog").getByLabel("Nom").fill(renamed);
   await page.getByRole("dialog").getByRole("button", { name: "Renommer" }).click();
   await expect(page.locator(".folder-card", { hasText: renamed })).toBeVisible();
@@ -52,7 +53,8 @@ test("create, rename, open and delete a folder", async ({ page }) => {
   await expect(card).toBeVisible();
 
   // Delete it (empty -> allowed), confirming in the dialog.
-  await card.getByRole("button", { name: "Supprimer" }).click();
+  await card.getByRole("button", { name: /^Actions pour le dossier / }).click();
+  await page.getByRole("menuitem", { name: "Supprimer" }).click();
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "Supprimer" })

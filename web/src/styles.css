@@ -1,7 +1,8 @@
-/* AURA Vault — direction A « Coffre Linear ».
- * One hero per screen, fixed type roles, colors with fixed jobs.
- * Midnight + electric blue carry the interface; lime #C5F441 is reserved
- * for the primary action and verified states only.
+/* AURA Vault — direction A « Registre ».
+ * Un registre d'archives moderne : papier chaud, encre, serif d'affichage pour
+ * les titres, listes de documents plutôt que tableaux à boutons. Un seul accent
+ * (encre bleu profond) ; le vert n'est réservé qu'à l'état vérifié (« Disponible »).
+ * Les états ne reposent jamais sur la seule couleur : pastille + libellé.
  */
 
 /* Plus Jakarta Sans, self-hosted (OFL). */
@@ -36,31 +37,40 @@
   font-display: swap;
 }
 
+/* Instrument Serif, self-hosted (OFL) — display face only. */
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("/fonts/InstrumentSerif-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --night-950: #060d1a;
-  --night-900: #0a1628;
-  --night-800: #10203a;
-  --night-700: #1a2f52;
-  --paper: #f4f6fa;
+  /* Warm paper canvas, hairline rules — printed matter, not a dashboard. */
+  --paper: #f5f2ec;
+  --paper-2: #eeE9df;
   --surface: #ffffff;
-  --ink: #0e1a2e;
-  --muted: #55647e;
-  --faint: #8b96ac;
-  --line: #dfe5ef;
-  --electric: #2e7cf6;
-  --electric-deep: #1c5fd0;
-  --lime: #c5f441;
-  --lime-ink: #3d5203;
-  --danger: #b3261e;
-  --danger-bg: #fdecea;
-  --ok: #1c7a3d;
-  --ok-bg: #e7f4ec;
-  --warn-bg: #fdf3e3;
-  --warn-ink: #8a5a00;
-  --radius: 10px;
-  --radius-small: 7px;
-  --sidebar-width: 248px;
-  --font: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ink: #16191f;
+  --ink-2: #3c434e;
+  --muted: #6e6a63;
+  --faint: #9c968b;
+  --line: #e3ded3;
+  --line-2: #d2cabb;
+  --field-line: #b7afa0;
+  --accent: #1e3a5f;
+  --accent-2: #16304f;
+  --accent-soft: #e9eef5;
+  --ok: #2e6b4a;
+  --warn: #8a6410;
+  --warn-bg: #f6efdc;
+  --danger: #a23a2c;
+  --danger-bg: #f8e8e4;
+  --radius: 6px;
+  --radius-small: 4px;
+  --font-ui: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --content-width: 1160px;
 }
 
 * {
@@ -71,24 +81,33 @@ body {
   margin: 0;
   background: var(--paper);
   color: var(--ink);
-  font-family: var(--font);
+  font-family: var(--font-ui);
   font-size: 15px;
   line-height: 1.6;
 }
 
-/* Type roles: title 20/700, body 15, secondary 13.5 muted, captions 12.5 faint. */
+/* Type roles: display (serif) for titles, ui sans for text and data. */
 h1 {
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1.3;
-  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 400;
+  line-height: 1.05;
   letter-spacing: -0.01em;
+  margin: 0;
 }
 
 h2 {
-  font-size: 16px;
+  font-family: var(--font-display);
+  font-size: 23px;
+  font-weight: 400;
+  line-height: 1.2;
+  margin: 0 0 4px;
+}
+
+h3 {
+  font-size: 15px;
   font-weight: 700;
-  margin: 0 0 8px;
+  margin: 0 0 6px;
 }
 
 .muted {
@@ -96,110 +115,141 @@ h2 {
   font-size: 13.5px;
 }
 
-/* App frame: sidebar owns the columns, content owns its own spacing. */
-.shell {
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: var(--sidebar-width) 1fr;
+.mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 12.5px;
 }
 
-.sidebar {
-  background: var(--night-900);
-  color: #dbe4f3;
-  padding: 20px 16px;
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ */
+/* Shell: a slim paper masthead instead of a dark sidebar.            */
+/* ------------------------------------------------------------------ */
+.shell {
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  background: var(--paper);
+}
+
+.topbar {
   position: sticky;
   top: 0;
-  height: 100vh;
+  z-index: 40;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line-2);
+}
+
+.topbar-inner {
+  max-width: var(--content-width);
+  margin: 0 auto;
+  padding: 0 32px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 28px;
 }
 
 .brand {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 10px;
-  color: #ffffff;
+  font-family: var(--font-display);
+  font-size: 24px;
+  color: var(--ink);
   text-decoration: none;
-  font-weight: 800;
-  font-size: 16px;
-  letter-spacing: -0.01em;
+  letter-spacing: 0.01em;
 }
 
 .brand svg {
   flex: none;
+  color: var(--accent);
 }
 
 .nav {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 2px;
 }
 
 .nav a,
-.nav button,
-.nav .nav-user {
-  color: #aeb9cf;
+.nav button {
+  color: var(--muted);
   background: none;
   border: none;
   font: inherit;
-  text-align: left;
-  cursor: pointer;
-  text-decoration: none;
   font-size: 14px;
-  font-weight: 500;
-  padding: 8px 10px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  padding: 7px 11px;
   border-radius: var(--radius-small);
 }
 
+.nav a:hover,
+.nav button:hover {
+  color: var(--ink);
+  background: var(--paper-2);
+}
+
 .nav a[aria-current="page"] {
-  background: var(--night-700);
-  color: #ffffff;
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
-.sidebar .spacer {
-  flex: 1;
+.session {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 
-.sidebar .whoami {
+.session .whoami {
   font-size: 12.5px;
-  color: var(--faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 0 10px;
+  color: var(--muted);
+}
+
+.session a {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.session a:hover {
+  color: var(--ink);
 }
 
 .content {
-  padding: 28px 32px 64px;
-  max-width: 1024px;
+  width: 100%;
+  max-width: var(--content-width);
+  margin: 0 auto;
+  padding: 40px 32px 96px;
 }
 
-/* Cards only where grouping is needed; lists live on the canvas. */
-.card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 20px 22px;
-  margin-bottom: 20px;
-}
-
-/* Controls share one grammar: 7px radius, 1px line, 6px focus ring. */
+/* ------------------------------------------------------------------ */
+/* Controls: one grammar — small radius, hairline, deliberate press.  */
+/* ------------------------------------------------------------------ */
 .btn {
   appearance: none;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
   font-size: 14px;
   font-weight: 600;
   border-radius: var(--radius-small);
-  padding: 9px 16px;
+  padding: 9px 15px;
   cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease,
+    transform 80ms ease;
 }
 
 .btn:hover {
-  border-color: var(--faint);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .btn:active {
@@ -208,53 +258,90 @@ h2 {
 
 .btn:focus-visible,
 a:focus-visible,
-input:focus-visible {
-  outline: 2px solid var(--electric);
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 .btn:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
   transform: none;
 }
 
 .btn-primary {
-  background: var(--lime);
-  border-color: var(--lime);
-  color: var(--lime-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
 }
 
 .btn-primary:hover {
-  border-color: var(--lime-ink);
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+  color: #ffffff;
 }
 
 .btn-ghost {
   border-color: transparent;
   color: var(--muted);
+  background: none;
+}
+
+.btn-ghost:hover {
+  border-color: transparent;
+  color: var(--ink);
+  background: var(--paper-2);
 }
 
 .btn-small {
   font-size: 13px;
-  padding: 6px 12px;
+  padding: 6px 11px;
+}
+
+.btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+.btn-danger:hover {
+  border-color: #7f2c21;
+  background: #8f3327;
+  color: #ffffff;
+}
+
+/* Inline destructive affordance that must not shout as loud as the action. */
+.btn-danger-text {
+  color: var(--danger);
+}
+
+.btn-danger-text:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 14px;
+  gap: 5px;
+  font-size: 13px;
   font-weight: 600;
+  color: var(--ink-2);
 }
 
 .field input[type="text"],
 .field input[type="password"],
-.field input[type="file"] {
+.field input[type="file"],
+.field input[type="search"],
+.field input[type="number"],
+.field input[type="date"],
+.field select {
   font: inherit;
   font-weight: 400;
-  border: 1px solid var(--line);
+  border: 1px solid var(--field-line);
   border-radius: var(--radius-small);
-  padding: 9px 12px;
+  padding: 9px 11px;
   background: var(--surface);
   color: var(--ink);
   max-width: 420px;
@@ -274,289 +361,93 @@ input:focus-visible {
   flex-wrap: wrap;
 }
 
-.search {
-  margin: 14px 0 4px;
-  max-width: 420px;
+/* File picker: a styled control with French copy instead of the native widget. */
+.file-field {
+  gap: 7px;
 }
 
-/* Table: scanning-first, single hairlines, tabular numerals for sizes. */
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-  margin-top: 12px;
-}
-
-.table th {
-  text-align: left;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--muted);
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
-}
-
-.table td {
-  padding: 9px 10px;
-  border-bottom: 1px solid var(--line);
-  vertical-align: middle;
-}
-
-.table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.table .num {
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.table .name {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-/* Status chips: lime reserved for verified states; text always present. */
-.chip {
-  display: inline-block;
-  font-size: 12.5px;
-  font-weight: 600;
-  border-radius: 999px;
-  padding: 2px 10px;
-  white-space: nowrap;
-}
-
-.chip-ok {
-  background: var(--lime);
-  color: var(--lime-ink);
-}
-
-.chip-warn {
-  background: var(--warn-bg);
-  color: var(--warn-ink);
-}
-
-.chip-muted {
-  background: var(--paper);
-  color: var(--muted);
-  border: 1px solid var(--line);
-}
-
-.chip-error {
-  background: var(--danger-bg);
-  color: var(--danger);
-}
-
-/* Transfer panel: name, size, phase and real upload progress. */
-.transfer {
-  margin-top: 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-small);
-  background: var(--paper);
-}
-
-.transfer-head {
+.file-picker {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.transfer-name {
-  font-weight: 600;
+.file-picker-name {
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 400;
   overflow-wrap: anywhere;
 }
 
-.progress {
-  position: relative;
-  height: 8px;
-  margin-top: 10px;
-  border-radius: 999px;
-  background: var(--line);
-  overflow: hidden;
-}
-
-.progress-bar {
-  display: block;
-  height: 100%;
-  background: var(--electric);
-  transition: width 120ms linear;
-}
-
-.alert {
-  border-radius: var(--radius-small);
-  padding: 10px 14px;
-  font-size: 14px;
-  margin: 12px 0 0;
-}
-
-.alert-error {
-  background: var(--danger-bg);
-  color: var(--danger);
-}
-
-.alert-ok {
-  background: var(--ok-bg);
-  color: var(--ok);
-}
-
-.empty {
-  padding: 28px 8px;
-  color: var(--muted);
-  font-size: 14px;
-}
-
-/* Admin console: registries on a grid of stat cards, then registry tables. */
-.section {
-  margin-top: 28px;
-}
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-  margin: 12px 0 4px;
-}
-
-.stat {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-}
-
-.stat .value {
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 1.2;
-  font-variant-numeric: tabular-nums;
-}
-
-.stat .label {
-  color: var(--muted);
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-/* Chips used inline (e.g. object statuses) need breathing room. */
-p .chip {
-  margin-right: 6px;
-}
-
-/* Login: centered narrow card on paper; vault mark above the title. */
-.login-wrap {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--night-900);
-}
-
-.login-card {
-  background: var(--surface);
-  border-radius: 14px;
-  padding: 32px 34px;
-  width: 100%;
-  max-width: 400px;
-}
-
-.login-mark {
-  margin-bottom: 14px;
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-}
-
-/* Narrow screens: sidebar becomes a top bar; table scrolls horizontally. */
-@media (max-width: 760px) {
-  .shell {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    position: static;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    padding: 12px 16px;
-  }
-
-  .sidebar .nav {
-    flex-direction: row;
-    margin-left: auto;
-  }
-
-  .sidebar .spacer,
-  .sidebar .whoami {
-    display: none;
-  }
-
-  .content {
-    padding: 20px 16px 48px;
-  }
-
-  .table-wrap {
-    overflow-x: auto;
-  }
+.search {
+  margin: 14px 0 4px;
+  max-width: 420px;
 }
 
 /* ------------------------------------------------------------------ */
-/* Fichiers workspace (#62): breadcrumb, folders, object actions.      */
+/* Page header, breadcrumb, folders.                                  */
 /* ------------------------------------------------------------------ */
-
-/* Page column: one vertical rhythm instead of ad-hoc margins. */
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .page-head {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
+  gap: 20px;
   flex-wrap: wrap;
+  padding-bottom: 14px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.page-head h1 {
+  line-height: 1;
+}
+
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.section {
+  margin-top: 30px;
 }
 
 .section-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
-/* Breadcrumb: every ancestor is a target, the last one is the current page. */
 .breadcrumb {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  font-size: 14px;
-  margin: 6px 0 10px;
+  font-size: 13.5px;
+  margin: 4px 0 0;
 }
 
 .crumb {
   border: none;
   background: none;
   font: inherit;
-  color: var(--electric-deep);
+  color: var(--accent);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: var(--radius-small);
 }
 
 .crumb:hover {
-  background: var(--paper);
+  background: var(--accent-soft);
 }
 
 .crumb-current {
@@ -579,69 +470,436 @@ p .chip {
   color: var(--faint);
 }
 
+/* Folders: compact chips in a wrapping strip, not a card grid. */
 .folder-grid {
   list-style: none;
-  margin: 12px 0 0;
+  margin: 10px 0 0;
   padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .folder-card {
-  background: var(--surface);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px 5px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  background: var(--surface);
+  flex: none;
 }
 
 .folder-card:hover {
-  border-color: var(--faint);
+  border-color: var(--line-2);
 }
 
 .folder-open {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  padding: 3px 2px;
+  border-radius: var(--radius-small);
+}
+
+.folder-icon {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.folder-name {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 400;
+  overflow-wrap: break-word;
+}
+
+.folder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  border-left: 1px solid var(--line);
+  padding-left: 5px;
+  margin-left: 2px;
+}
+
+.folder-actions .btn {
+  font-size: 12.5px;
+  padding: 4px 8px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Filters: the few that matter stay visible; the rest is opt-in.      */
+/* ------------------------------------------------------------------ */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 14px 0 4px;
+}
+
+.filters .field input,
+.filters .field select {
+  max-width: 190px;
+}
+
+.filters-advanced {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-2);
+}
+
+.filters-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filters-toggle[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.filters-count {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #ffffff;
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 1.6;
+}
+
+/* ------------------------------------------------------------------ */
+/* Object ledger: the document is the hero.                           */
+/* ------------------------------------------------------------------ */
+.ledger {
+  margin-top: 6px;
+  border-top: 1px solid var(--line-2);
+}
+
+.ledger-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px 100px 120px 150px 44px;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-2);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px 100px 120px 150px 44px;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ledger-row:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.ledger-meta {
+  display: contents;
+}
+
+.ledger-name {
+  min-width: 0;
+}
+
+.ledger-name .link-button {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1.25;
+}
+
+.ledger-type {
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-size {
+  color: var(--ink-2);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+
+.ledger-date {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.ledger-menu {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.link-button {
   border: none;
   background: none;
   font: inherit;
   font-weight: 600;
   color: var(--ink);
   cursor: pointer;
+  padding: 0;
   text-align: left;
-  padding: 2px;
   border-radius: var(--radius-small);
 }
 
-.folder-icon {
-  display: inline-flex;
-  color: var(--electric);
+.link-button:hover {
+  color: var(--accent);
 }
 
-.folder-name {
+/* Status: a dot plus a word — never colour alone. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+  flex: none;
+}
+
+.status-ok::before {
+  background: var(--ok);
+}
+
+.status-warn::before {
+  background: var(--warn);
+}
+
+.status-error::before {
+  background: var(--danger);
+}
+
+/* ------------------------------------------------------------------ */
+/* Row menu: one quiet control instead of six buttons.                */
+/* ------------------------------------------------------------------ */
+.menu {
+  position: relative;
+}
+
+.menu-trigger {
+  border: 1px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 9px;
+  border-radius: var(--radius-small);
+  cursor: pointer;
+}
+
+.menu-trigger:hover,
+.menu-trigger[aria-expanded="true"] {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 210px;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(22, 25, 31, 0.14);
+  padding: 4px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  animation: menu-in 140ms ease-out;
+  transform-origin: top right;
+}
+
+.menu-item {
+  text-align: left;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  padding: 8px 10px;
+  border-radius: var(--radius-small);
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: var(--paper-2);
+}
+
+.menu-item:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.menu-item-danger {
+  color: var(--danger);
+}
+
+.menu-item-danger:hover {
+  background: var(--danger-bg);
+}
+
+/* ------------------------------------------------------------------ */
+/* Transfer (import) and progress.                                    */
+/* ------------------------------------------------------------------ */
+.intake {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 16px 18px;
+  margin-top: 26px;
+}
+
+.transfer {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--paper-2);
+}
+
+.transfer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.transfer-name {
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-.folder-actions {
+.progress {
+  position: relative;
+  height: 4px;
+  margin-top: 10px;
+  border-radius: 2px;
+  background: var(--line-2);
+  overflow: hidden;
+}
+
+.progress-bar {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+/* Chips remain for the transfer panel (compact inline status). */
+.chip {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.chip-ok {
+  background: #e6efe8;
+  color: var(--ok);
+}
+
+.chip-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.chip-muted {
+  background: var(--paper-2);
+  color: var(--muted);
+}
+
+.chip-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+p .chip {
+  margin-right: 6px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Messages, empty states, pagination.                                */
+/* ------------------------------------------------------------------ */
+.alert {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  align-items: center;
+  gap: 10px;
+  border-radius: var(--radius-small);
+  padding: 10px 14px;
+  font-size: 14px;
+  margin: 12px 0 0;
+  border: 1px solid transparent;
 }
 
-.table-wrap {
-  overflow-x: auto;
-  margin-top: 4px;
+.alert-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-color: #eccfc8;
 }
 
-/* "Charger plus": pagination control under the object table. */
+.alert-ok {
+  background: #e8f0ea;
+  color: var(--ok);
+  border-color: #cfe0d4;
+}
+
+.alert .btn {
+  margin-left: auto;
+}
+
+.empty {
+  padding: 26px 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 .load-more {
   display: flex;
   justify-content: center;
-  margin-top: 12px;
+  margin-top: 16px;
 }
 
 .row-actions {
@@ -651,28 +909,20 @@ p .chip {
   justify-content: flex-end;
 }
 
-.btn-danger {
-  background: var(--danger);
-  border-color: var(--danger);
-  color: #ffffff;
-}
-
-.btn-danger:hover {
-  border-color: #8f1e17;
-}
-
-/* Dialog (native <dialog>): a focused surface over a dimmed backdrop. */
+/* ------------------------------------------------------------------ */
+/* Dialog and details drawer.                                         */
+/* ------------------------------------------------------------------ */
 .dialog {
   border: none;
   border-radius: var(--radius);
   padding: 0;
   width: min(520px, 92vw);
-  box-shadow: 0 18px 50px rgba(6, 13, 26, 0.35);
+  box-shadow: 0 24px 60px rgba(22, 25, 31, 0.28);
   color: var(--ink);
 }
 
 .dialog::backdrop {
-  background: rgba(6, 13, 26, 0.45);
+  background: rgba(22, 25, 31, 0.4);
 }
 
 .dialog-head {
@@ -714,10 +964,178 @@ p .chip {
   overflow-y: auto;
 }
 
-/* One-time secret panel: lime accent for a verified, high-stakes state. */
+.drawer-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(22, 25, 31, 0.28);
+  z-index: 55;
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: min(440px, 92vw);
+  background: var(--surface);
+  border-left: 1px solid var(--line-2);
+  box-shadow: -18px 0 50px rgba(22, 25, 31, 0.16);
+  padding: 22px 24px 40px;
+  overflow-y: auto;
+  z-index: 60;
+  animation: drawer-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.drawer-head h2 {
+  margin: 0;
+}
+
+.detail-list {
+  margin: 8px 0 0;
+}
+
+.detail-list dt {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 16px;
+}
+
+.detail-list dd {
+  margin: 3px 0 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.drawer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Login: a quiet card on paper, serif wordmark, one accent button.   */
+/* ------------------------------------------------------------------ */
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--paper);
+}
+
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 34px 36px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 20px 50px rgba(22, 25, 31, 0.08);
+}
+
+.login-mark {
+  margin-bottom: 14px;
+  color: var(--accent);
+}
+
+.login-card h1 {
+  font-size: 34px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Admin console: registries on hairline surfaces.                    */
+/* ------------------------------------------------------------------ */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  margin-bottom: 20px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 12px 0 4px;
+}
+
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.stat .value {
+  font-family: var(--font-display);
+  font-size: 30px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat .label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  margin-top: 12px;
+}
+
+.table th {
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table .name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin-top: 4px;
+}
+
 .token-panel {
-  border: 1px solid var(--lime);
-  background: #f7fde6;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
   border-radius: var(--radius);
   padding: 16px 18px;
   margin: 14px 0 4px;
@@ -732,8 +1150,8 @@ p .chip {
   display: block;
   margin: 10px 0;
   padding: 10px 12px;
-  background: var(--night-900);
-  color: #dbe4f3;
+  background: var(--ink);
+  color: #e8eef6;
   border-radius: var(--radius-small);
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: 13px;
@@ -746,26 +1164,14 @@ p .chip {
   gap: 8px;
 }
 
-/* Form extras used by the admin console. */
-.field select,
-.field input[type="number"] {
-  font: inherit;
-  font-weight: 400;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-small);
-  padding: 9px 12px;
-  background: var(--surface);
-  color: var(--ink);
-}
-
 .scopes-field {
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--radius-small);
   padding: 8px 12px 10px;
 }
 
 .scopes-field legend {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
   padding: 0 4px;
 }
@@ -778,14 +1184,183 @@ p .chip {
   font-size: 13.5px;
 }
 
-/* Narrow screens: folder cards stack, actions stay reachable. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* Motion: press feedback, menu/drawer entry, one staggered first-in.  */
+/* ------------------------------------------------------------------ */
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ledger-row {
+    /* `backwards` (not `both`): once the entrance ends the row keeps no
+       transform, so later rows are not lifted above an open row menu. */
+    animation: row-in 260ms ease-out backwards;
+  }
+  .ledger-row:nth-child(1) { animation-delay: 0ms; }
+  .ledger-row:nth-child(2) { animation-delay: 30ms; }
+  .ledger-row:nth-child(3) { animation-delay: 60ms; }
+  .ledger-row:nth-child(4) { animation-delay: 90ms; }
+  .ledger-row:nth-child(5) { animation-delay: 120ms; }
+  .ledger-row:nth-child(6) { animation-delay: 150ms; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Narrow screens: stack the masthead and the ledger rows.            */
+/* ------------------------------------------------------------------ */
 @media (max-width: 760px) {
-  .folder-grid {
-    grid-template-columns: 1fr;
+  .topbar-inner {
+    padding: 0 16px;
+    gap: 10px;
+    height: 56px;
   }
 
-  .row-actions {
-    justify-content: flex-start;
+  .nav {
+    gap: 0;
+  }
+
+  .nav a,
+  .nav button {
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+
+  .session {
+    gap: 8px;
+  }
+
+  .brand {
+    font-size: 20px;
+  }
+
+  .session .whoami {
+    display: none;
+  }
+
+  .content {
+    padding: 24px 16px 72px;
+  }
+
+  .page-head {
+    align-items: stretch;
+  }
+
+  .page-head h1 {
+    font-size: 32px;
+  }
+
+  .ledger-head {
+    display: none;
+  }
+
+  .ledger-row {
+    grid-template-columns: minmax(0, 1fr) 40px;
+    grid-template-areas:
+      "name menu"
+      "meta menu";
+    row-gap: 6px;
+    align-items: start;
+    padding: 14px 4px;
+  }
+
+  .ledger-name {
+    grid-area: name;
+  }
+
+  .ledger-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    grid-area: meta;
+  }
+
+  .ledger-menu {
+    grid-area: menu;
+  }
+
+  .filters .field,
+  .filters-advanced .field {
+    flex: 1 1 45%;
+  }
+
+  .filters .field input,
+  .filters .field select,
+  .filters-advanced .field input,
+  .filters-advanced .field select {
+    max-width: none;
+    width: 100%;
+  }
+
+  .folder-grid {
+    gap: 6px;
+  }
+
+  .folder-card {
+    flex-wrap: nowrap;
+    max-width: 100%;
+  }
+
+  .folder-name {
+    white-space: normal;
+  }
+
+  .ledger-date {
+    flex-basis: 100%;
+  }
+
+  .menu-trigger {
+    padding: 10px 12px;
+    font-size: 20px;
+  }
+
+  .drawer {
+    width: 100vw;
   }
 
   .dialog-head,
@@ -793,135 +1368,14 @@ p .chip {
     padding-left: 16px;
     padding-right: 16px;
   }
-}
 
-/* ------------------------------------------------------------------ */
-/* Fichiers workspace — search, filters and the object details panel.  */
-/* ------------------------------------------------------------------ */
-
-.head-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-/* Filter bar: a compact wrapping row of labelled controls. */
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
-  margin: 16px 0 6px;
-}
-
-.filters .field {
-  font-size: 12.5px;
-}
-
-.filters .field input,
-.filters .field select {
-  max-width: 180px;
-}
-
-/* The shell only styled text/password/file inputs; the filter bar adds more. */
-.field input[type="search"],
-.field input[type="number"],
-.field input[type="date"],
-.filters .field select {
-  font: inherit;
-  font-weight: 400;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-small);
-  padding: 9px 12px;
-  background: var(--surface);
-  color: var(--ink);
-}
-
-/* The object name doubles as the "open details" control. */
-.link-button {
-  border: none;
-  background: none;
-  font: inherit;
-  font-weight: 600;
-  color: var(--electric-deep);
-  cursor: pointer;
-  padding: 0;
-  text-align: left;
-  border-radius: var(--radius-small);
-}
-
-.link-button:hover {
-  text-decoration: underline;
-}
-
-/* Object details side panel: only fields the API actually exposes. */
-.drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  height: 100vh;
-  width: min(430px, 92vw);
-  background: var(--surface);
-  border-left: 1px solid var(--line);
-  box-shadow: -14px 0 40px rgba(6, 13, 26, 0.18);
-  padding: 20px 22px 32px;
-  overflow-y: auto;
-  z-index: 60;
-}
-
-.drawer-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-
-.drawer-head h2 {
-  margin: 0;
-}
-
-.detail-list {
-  margin: 8px 0 0;
-}
-
-.detail-list dt {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--muted);
-  margin-top: 14px;
-}
-
-.detail-list dd {
-  margin: 2px 0 0;
-  font-size: 14px;
-  overflow-wrap: anywhere;
-}
-
-.mono {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 12.5px;
-}
-
-.drawer-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 22px;
-}
-
-@media (max-width: 760px) {
-  .drawer {
-    width: 100vw;
+  .row-actions {
+    justify-content: flex-start;
   }
+}
 
-  .filters .field input,
-  .filters .field select {
-    max-width: none;
-    width: 100%;
-  }
-
-  .filters .field {
-    flex: 1 1 45%;
+@media (max-width: 480px) {
+  .brand-name {
+    display: none;
   }
 }

@@ -17,37 +17,36 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <Link to="/" className="brand">
-          <VaultMark />
-          AURA Vault
-        </Link>
-        <nav className="nav" aria-label="Navigation principale">
-          <Link to="/" activeOptions={{ exact: true }}>
-            Fichiers
+      <header className="topbar">
+        <div className="topbar-inner">
+          <Link to="/" className="brand">
+            <VaultMark />
+            <span className="brand-name">AURA Vault</span>
           </Link>
-          {canAdmin ? <Link to="/admin">Administration</Link> : null}
-        </nav>
-        <span className="spacer" />
-        {csrf ? (
-          <>
-            <span className="whoami">Coffre déverrouillé</span>
-            <nav className="nav" aria-label="Session">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => void handleLogout()}
-              >
-                Déconnexion
-              </button>
-            </nav>
-          </>
-        ) : (
-          <nav className="nav" aria-label="Session">
-            <Link to="/login">Connexion</Link>
+          <nav className="nav" aria-label="Navigation principale">
+            <Link to="/" activeOptions={{ exact: true }}>
+              Fichiers
+            </Link>
+            {canAdmin ? <Link to="/admin">Administration</Link> : null}
           </nav>
-        )}
-      </aside>
+          <div className="session">
+            {csrf ? (
+              <>
+                <span className="whoami">Coffre déverrouillé</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  onClick={() => void handleLogout()}
+                >
+                  Déconnexion
+                </button>
+              </>
+            ) : (
+              <Link to="/login">Connexion</Link>
+            )}
+          </div>
+        </div>
+      </header>
       <main className="content">{children}</main>
     </div>
   );

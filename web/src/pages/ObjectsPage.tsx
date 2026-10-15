@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import {
   useInfiniteQuery,
   useMutation,
@@ -13,6 +13,7 @@ import type { TransferDeps, TransferPhase, TransferState } from "../lib/transfer
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { FolderMark } from "../components/FolderMark";
+import { RowMenu } from "../components/RowMenu";
 
 /** Objects fetched per page ("Charger plus" increments the offset). */
 const OBJECTS_PAGE_SIZE = 50;
@@ -118,14 +119,38 @@ const STATUS_LABELS: Record<string, string> = {
   failed: "Échec",
 };
 
-function statusChip(status: string) {
-  if (status === "available") {
-    return <span className="chip chip-ok">Disponible</span>;
+/** Friendly type label for scanning; the raw MIME stays in the details panel. */
+function typeLabel(contentType: string): string {
+  const value = contentType.toLowerCase();
+  if (value === "application/pdf") return "PDF";
+  if (value.startsWith("image/")) return "Image";
+  if (value.startsWith("audio/")) return "Audio";
+  if (value.startsWith("video/")) return "Vidéo";
+  if (
+    value === "application/zip" ||
+    value === "application/gzip" ||
+    value === "application/x-tar"
+  ) {
+    return "Archive";
   }
-  if (status === "pending") {
-    return <span className="chip chip-warn">En cours</span>;
-  }
-  return <span className="chip chip-muted">{STATUS_LABELS[status] ?? status}</span>;
+  if (value === "application/json") return "JSON";
+  if (value === "text/csv") return "CSV";
+  if (value.startsWith("text/")) return "Texte";
+  if (value === "application/octet-stream") return "Binaire";
+  return contentType.split("/")[1] ?? contentType;
+}
+
+/** Status shown as a dot plus a word, so it never relies on colour alone. */
+function StatusLabel({ status }: { status: string }) {
+  const variant =
+    status === "available"
+      ? "status status-ok"
+      : status === "pending"
+        ? "status status-warn"
+        : status === "failed"
+          ? "status status-error"
+          : "status";
+  return <span className={variant}>{STATUS_LABELS[status] ?? status}</span>;
 }
 
 /** The whole folder tree is fetched in one request (`?all=true`); the hierarchy
@@ -152,6 +177,14 @@ export function ObjectsPage() {
   const [details, setDetails] = useState<ObjectItem | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    title: string;
+    message: ReactNode;
+    confirmLabel: string;
+    danger?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
 
   // -- search / filter / sort (server-side; M02) ---------------------------
   const [search, setSearch] = useState("");
@@ -210,6 +243,11 @@ export function ObjectsPage() {
     maxSize.trim() !== "" ||
     fromDate !== "" ||
     toDate !== "";
+
+  /** Advanced filters moved off the default screen; the count badges the toggle. */
+  const advancedCount = [typeFilter, minSize, maxSize, fromDate, toDate].filter(
+    (value) => value.trim() !== "",
+  ).length;
 
   function resetFilters() {
     setSearch("");
@@ -577,7 +615,8 @@ export function ObjectsPage() {
         </div>
       </div>
 
-      <nav className="breadcrumb" aria-label="Fil d'Ariane">
+      {currentFolderId !== null ? (
+        <nav className="breadcrumb" aria-label="Fil d'Ariane">
         <button
           type="button"
           className={currentFolderId === null ? "crumb crumb-current" : "crumb"}
@@ -603,7 +642,8 @@ export function ObjectsPage() {
             </button>
           </span>
         ))}
-      </nav>
+        </nav>
+      ) : null}
 
       {actionError ? (
         <p role="alert" className="alert alert-error">
@@ -662,40 +702,36 @@ export function ObjectsPage() {
                   </span>
                   <span className="folder-name">{folder.name}</span>
                 </button>
-                <div className="folder-actions">
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-small"
-                    onClick={() => {
-                      setRenameName(folder.name);
-                      setRenameTarget(folder);
-                    }}
-                  >
-                    Renommer
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-small"
-                    onClick={() => setMoveTarget(folder)}
-                  >
-                    Déplacer
-                  </button>
-                  <ConfirmAction
-                    label="Supprimer"
-                    title="Supprimer le dossier"
-                    message={
-                      <>
-                        Supprimer <strong>{folder.name}</strong> ? Un dossier non
-                        vide est refusé.
-                      </>
-                    }
-                    confirmLabel="Supprimer"
-                    danger
-                    className="btn btn-ghost btn-small"
-                    pending={deleteFolderMutation.isPending}
-                    onConfirm={() => deleteFolderMutation.mutate(folder.id)}
-                  />
-                </div>
+                <RowMenu
+                  label={`Actions pour le dossier ${folder.name}`}
+                  items={[
+                    {
+                      label: "Renommer",
+                      onSelect: () => {
+                        setRenameName(folder.name);
+                        setRenameTarget(folder);
+                      },
+                    },
+                    { label: "Déplacer", onSelect: () => setMoveTarget(folder) },
+                    {
+                      label: "Supprimer",
+                      danger: true,
+                      onSelect: () =>
+                        setPendingConfirm({
+                          title: "Supprimer le dossier",
+                          message: (
+                            <>
+                              Supprimer <strong>{folder.name}</strong> ? Un dossier
+                              non vide est refusé.
+                            </>
+                          ),
+                          confirmLabel: "Supprimer",
+                          danger: true,
+                          onConfirm: () => deleteFolderMutation.mutate(folder.id),
+                        }),
+                    },
+                  ]}
+                />
               </li>
             ))}
           </ul>
@@ -745,60 +781,6 @@ export function ObjectsPage() {
             </select>
           </label>
           <label className="field">
-            <span>Type MIME</span>
-            <input
-              type="text"
-              name="contentType"
-              list="content-type-options"
-              placeholder="application/pdf…"
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
-            />
-            <datalist id="content-type-options">
-              {CONTENT_TYPE_SUGGESTIONS.map((type) => (
-                <option key={type} value={type} />
-              ))}
-            </datalist>
-          </label>
-          <label className="field">
-            <span>Taille min (o)</span>
-            <input
-              type="number"
-              name="minSize"
-              min={0}
-              value={minSize}
-              onChange={(e) => setMinSize(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Taille max (o)</span>
-            <input
-              type="number"
-              name="maxSize"
-              min={0}
-              value={maxSize}
-              onChange={(e) => setMaxSize(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Créé après le</span>
-            <input
-              type="date"
-              name="from"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Créé avant le</span>
-            <input
-              type="date"
-              name="to"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-            />
-          </label>
-          <label className="field">
             <span>Trier par</span>
             <select
               name="sort"
@@ -829,6 +811,18 @@ export function ObjectsPage() {
           </label>
           <button
             type="button"
+            className="btn filters-toggle"
+            aria-expanded={advancedOpen}
+            aria-controls="advanced-filters"
+            onClick={() => setAdvancedOpen((value) => !value)}
+          >
+            Filtres
+            {advancedCount > 0 ? (
+              <span className="filters-count">{advancedCount}</span>
+            ) : null}
+          </button>
+          <button
+            type="button"
             className="btn btn-small"
             onClick={resetFilters}
             disabled={!hasActiveFilters}
@@ -836,10 +830,65 @@ export function ObjectsPage() {
             Réinitialiser
           </button>
         </form>
-        <p className="muted">
-          La recherche et les filtres sont appliqués par le serveur sur tout le
-          catalogue, pas seulement sur les objets déjà chargés.
-        </p>
+
+        {advancedOpen ? (
+          <div className="filters-advanced" id="advanced-filters">
+            <label className="field">
+              <span>Type MIME</span>
+              <input
+                type="text"
+                name="contentType"
+                list="content-type-options"
+                placeholder="application/pdf…"
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+              />
+              <datalist id="content-type-options">
+                {CONTENT_TYPE_SUGGESTIONS.map((type) => (
+                  <option key={type} value={type} />
+                ))}
+              </datalist>
+            </label>
+            <label className="field">
+              <span>Taille min (o)</span>
+              <input
+                type="number"
+                name="minSize"
+                min={0}
+                value={minSize}
+                onChange={(e) => setMinSize(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Taille max (o)</span>
+              <input
+                type="number"
+                name="maxSize"
+                min={0}
+                value={maxSize}
+                onChange={(e) => setMaxSize(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Créé après le</span>
+              <input
+                type="date"
+                name="from"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Créé avant le</span>
+              <input
+                type="date"
+                name="to"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
 
         {objectsQuery.isError ? (
           <p role="alert" className="alert alert-error">
@@ -862,120 +911,117 @@ export function ObjectsPage() {
               : "Aucun fichier dans ce dossier."}
           </p>
         ) : (
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th scope="col">Nom</th>
-                  <th scope="col">Type</th>
-                  <th scope="col">Taille</th>
-                  <th scope="col">État</th>
-                  <th scope="col">Modifié</th>
-                  <th scope="col">
-                    <span className="visually-hidden">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => {
-                  const rowBusy =
-                    deletePendingId === item.id ||
-                    purgePendingId === item.id ||
-                    downloadingId === item.id;
-                  return (
-                    <tr key={item.id}>
-                      <td className="name">
-                        <button
-                          type="button"
-                          className="link-button"
-                          onClick={() => setDetails(item)}
-                          aria-label={`Détails de ${item.display_name}`}
-                        >
-                          {item.display_name}
-                        </button>
-                      </td>
-                      <td className="muted">{item.content_type}</td>
-                      <td className="num">
-                        {formatBytes(
-                          item.status === "pending" && item.expected_size_bytes != null
-                            ? item.expected_size_bytes
-                            : item.size_bytes,
-                        )}
-                      </td>
-                      <td>{statusChip(item.status)}</td>
-                      <td className="num muted">{formatDateTime(item.updated_at)}</td>
-                      <td className="row-actions">
-                        <button
-                          type="button"
-                          className="btn btn-small"
-                          onClick={() => setDetails(item)}
-                        >
-                          Détails
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-small"
-                          disabled={item.status !== "available" || downloadingId !== null}
-                          onClick={() => void handleDownload(item)}
-                        >
-                          {downloadingId === item.id ? "…" : "Télécharger"}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-small"
-                          onClick={() => void handleCopyReference(item)}
-                        >
-                          Copier la référence
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-small"
-                          disabled={rowBusy}
-                          onClick={() => setMoveObjectTarget(item)}
-                        >
-                          Déplacer
-                        </button>
-                        <ConfirmAction
-                          label="Supprimer"
-                          title="Supprimer l'objet"
-                          message={
-                            <>
-                              Marquer <strong>{item.display_name}</strong> comme
-                              supprimé ? Les octets restent jusqu'à une purge.
-                            </>
-                          }
-                          confirmLabel="Supprimer"
-                          danger
-                          className="btn btn-small"
-                          disabled={objectBusy}
-                          pending={deletePendingId === item.id}
-                          onConfirm={() => deleteObjectMutation.mutate(item.id)}
-                        />
-                        {canPurge ? (
-                          <ConfirmAction
-                            label="Purger"
-                            title="Purger définitivement"
-                            message={
-                              <>
-                                Supprimer définitivement{" "}
-                                <strong>{item.display_name}</strong> et ses octets ?
-                                Action irréversible.
-                              </>
-                            }
-                            confirmLabel="Purger"
-                            danger
-                            className="btn btn-small"
-                            disabled={objectBusy}
-                            pending={purgePendingId === item.id}
-                            onConfirm={() => purgeMutation.mutate(item.id)}
-                          />
-                        ) : null}
-                      </td>
-                    </tr>
+          <div className="ledger" role="list">
+            <div className="ledger-head" aria-hidden="true">
+              <span>Nom</span>
+              <span>Type</span>
+              <span>Taille</span>
+              <span>État</span>
+              <span>Modifié</span>
+              <span />
+            </div>
+            {items.map((item) => {
+              const rowBusy =
+                deletePendingId === item.id ||
+                purgePendingId === item.id ||
+                downloadingId === item.id;
+              return (
+                <div className="ledger-row" role="listitem" key={item.id}>
+                  <div className="ledger-name">
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => setDetails(item)}
+                      aria-label={`Détails de ${item.display_name}`}
+                    >
+                      {item.display_name}
+                    </button>
+                  </div>
+                  <div className="ledger-meta">
+                    <span className="ledger-type" title={item.content_type}>
+                      {typeLabel(item.content_type)}
+                    </span>
+                    <span className="ledger-size num">
+                      {formatBytes(
+                        item.status === "pending" && item.expected_size_bytes != null
+                          ? item.expected_size_bytes
+                          : item.size_bytes,
+                      )}
+                    </span>
+                    <span className="ledger-status">
+                      <StatusLabel status={item.status} />
+                    </span>
+                    <span className="ledger-date num">
+                      {formatDateTime(item.updated_at)}
+                    </span>
+                  </div>
+                  <div className="ledger-menu">
+                    <RowMenu
+                      label={`Actions pour ${item.display_name}`}
+                      items={[
+                        { label: "Détails", onSelect: () => setDetails(item) },
+                        {
+                          label: "Télécharger",
+                          disabled:
+                            item.status !== "available" || downloadingId !== null,
+                          onSelect: () => void handleDownload(item),
+                        },
+                        {
+                          label: "Copier la référence",
+                          onSelect: () => void handleCopyReference(item),
+                        },
+                        {
+                          label: "Déplacer",
+                          disabled: rowBusy,
+                          onSelect: () => setMoveObjectTarget(item),
+                        },
+                        {
+                          label: "Supprimer",
+                          danger: true,
+                          disabled: objectBusy,
+                          onSelect: () =>
+                            setPendingConfirm({
+                              title: "Supprimer l'objet",
+                              message: (
+                                <>
+                                  Marquer <strong>{item.display_name}</strong> comme
+                                  supprimé ? Les octets restent jusqu'à une purge.
+                                </>
+                              ),
+                              confirmLabel: "Supprimer",
+                              danger: true,
+                              onConfirm: () => deleteObjectMutation.mutate(item.id),
+                            }),
+                        },
+                        ...(canPurge
+                          ? [
+                              {
+                                label: "Purger définitivement",
+                                danger: true,
+                                disabled: objectBusy,
+                                onSelect: () =>
+                                  setPendingConfirm({
+                                    title: "Purger définitivement",
+                                    message: (
+                                      <>
+                                        Supprimer définitivement{" "}
+                                        <strong>{item.display_name}</strong> et ses
+                                        octets ? Action irréversible.
+                                      </>
+                                    ),
+                                    confirmLabel: "Purger",
+                                    danger: true,
+                                    onConfirm: () => purgeMutation.mutate(item.id),
+                                  }),
+                              },
+                            ]
+                          : []),
+                      ]}
+                    />
+                  </div>
+                </div>
                   );
-                })}
-              </tbody>
-            </table>
+            })}
           </div>
         )}
         {objectsQuery.hasNextPage ? (
@@ -997,22 +1043,29 @@ export function ObjectsPage() {
         ) : null}
       </section>
 
-      <section className="card" aria-labelledby="upload-title">
+      <section className="card intake" aria-labelledby="upload-title">
         <h2 id="upload-title">Importer{currentName ? ` dans « ${currentName} »` : ""}</h2>
         <p className="muted">
           Intention d'envoi → dépôt direct vers l'URL à courte durée → validation
           avec contrôle d'intégrité (SHA-256 côté serveur).
         </p>
         <form onSubmit={handleUpload} className="form form-inline">
-          <label className="field">
+          <div className="field file-field">
             <span>Fichier</span>
-            <input
-              type="file"
-              name="file"
-              disabled={transferActive}
-              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
-            />
-          </label>
+            <label className="file-picker">
+              <input
+                type="file"
+                name="file"
+                className="visually-hidden"
+                disabled={transferActive}
+                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+              />
+              <span className="btn">Choisir un fichier…</span>
+              <span className="file-picker-name">
+                {file ? file.name : "Aucun fichier sélectionné"}
+              </span>
+            </label>
+          </div>
           <button
             type="submit"
             className="btn btn-primary"
@@ -1088,17 +1141,23 @@ export function ObjectsPage() {
 
       {/* Object details side panel (only fields the API actually exposes). */}
       {details ? (
-        <aside
-          className="drawer"
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby="details-title"
+        <>
+          <div
+            className="drawer-scrim"
+            aria-hidden="true"
+            onClick={() => setDetails(null)}
+          />
+          <aside
+            className="drawer"
+            role="dialog"
+            aria-modal="false"
+            aria-labelledby="details-title"
           onKeyDown={(e) => {
             if (e.key === "Escape") setDetails(null);
           }}
         >
           <div className="drawer-head">
-            <h2 id="details-title">Détails de l'objet</h2>
+            <h2 id="details-title">{details.display_name}</h2>
             <button
               type="button"
               className="btn btn-ghost btn-small"
@@ -1113,10 +1172,6 @@ export function ObjectsPage() {
             <dd>{details.display_name}</dd>
             <dt>Identifiant</dt>
             <dd className="mono">{details.id}</dd>
-            <dt>Clé logique</dt>
-            <dd className="muted">
-              Les clés de stockage internes ne sont pas exposées par l'API.
-            </dd>
             <dt>Type MIME</dt>
             <dd>{details.content_type}</dd>
             <dt>Taille</dt>
@@ -1125,7 +1180,9 @@ export function ObjectsPage() {
               <span className="muted"> ({details.size_bytes} octets)</span>
             </dd>
             <dt>État</dt>
-            <dd>{statusChip(details.status)}</dd>
+            <dd>
+              <StatusLabel status={details.status} />
+            </dd>
             <dt>Dossier</dt>
             <dd>{folderPath(details.folder_id)}</dd>
             <dt>Créé le</dt>
@@ -1135,10 +1192,6 @@ export function ObjectsPage() {
             <dt>Empreinte SHA-256</dt>
             <dd className="mono">
               {details.checksum_sha256 ? details.checksum_sha256 : "non disponible"}
-            </dd>
-            <dt>Espace et application</dt>
-            <dd className="muted">
-              Non exposés par l'API de catalogue (route backend à ajouter).
             </dd>
           </dl>
           <div className="drawer-actions">
@@ -1176,14 +1229,14 @@ export function ObjectsPage() {
               }
               confirmLabel="Supprimer"
               danger
-              className="btn btn-danger"
+              className="btn"
               disabled={objectBusy}
               pending={deletePendingId === details.id}
               onConfirm={() => deleteObjectMutation.mutate(details.id)}
             />
             {canPurge ? (
               <ConfirmAction
-                label="Purger"
+                label="Purger définitivement"
                 title="Purger définitivement"
                 message={
                   <>
@@ -1200,7 +1253,8 @@ export function ObjectsPage() {
               />
             ) : null}
           </div>
-        </aside>
+          </aside>
+        </>
       ) : null}
 
       {/* New folder */}
@@ -1386,6 +1440,38 @@ export function ObjectsPage() {
             ))}
           </ul>
         )}
+      </Dialog>
+
+      {/* Destructive confirmation opened from a row menu (owned by the page so
+          the menu panel can unmount safely). */}
+      <Dialog
+        open={pendingConfirm !== null}
+        title={pendingConfirm?.title ?? ""}
+        onClose={() => setPendingConfirm(null)}
+      >
+        <div className="dialog-text">{pendingConfirm?.message}</div>
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setPendingConfirm(null)}
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            className={
+              pendingConfirm?.danger ? "btn btn-danger" : "btn btn-primary"
+            }
+            onClick={() => {
+              const action = pendingConfirm?.onConfirm;
+              setPendingConfirm(null);
+              action?.();
+            }}
+          >
+            {pendingConfirm?.confirmLabel ?? "Confirmer"}
+          </button>
+        </div>
       </Dialog>
     </div>
   );

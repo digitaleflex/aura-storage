@@ -41,6 +41,15 @@ function lifecycleState(status: string): { label: string; className: string } {
     : { label: "Désactivé", className: "chip chip-muted" };
 }
 
+/** French labels for object lifecycle states (same words as the files screen). */
+const OBJECT_STATUS_LABELS: Record<string, string> = {
+  available: "Disponible",
+  pending: "En cours",
+  deleted: "Supprimé",
+  expired: "Expiré",
+  failed: "Échec",
+};
+
 /** Rename an application. The stable id is never editable. */
 function EditApplicationDialog({
   application,
@@ -439,7 +448,9 @@ export function AdminPage() {
 
   return (
     <div className="stack">
-      <h1>Administration</h1>
+      <div className="page-head">
+        <h1>Administration</h1>
+      </div>
       <p className="muted">
         Applications, espaces, buckets et identités machine-à-machine.
         {canWrite
@@ -526,7 +537,7 @@ export function AdminPage() {
                 Objets par état :{" "}
                 {Object.entries(objectsByStatus).map(([status, count]) => (
                   <span key={status} className="chip chip-muted">
-                    {status} : {count}
+                    {OBJECT_STATUS_LABELS[status] ?? status} : {count}
                   </span>
                 ))}
               </p>
