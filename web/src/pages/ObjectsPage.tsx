@@ -586,7 +586,7 @@ export function ObjectsPage() {
     downloadingId !== null;
 
   return (
-    <div className="stack">
+    <div className="stack vault-workspace">
       <div className="page-head">
         <h1>Fichiers</h1>
         <div className="head-actions">
@@ -671,7 +671,7 @@ export function ObjectsPage() {
         </p>
       ) : null}
 
-      <section className="section" aria-labelledby="folders-title">
+      <aside className="casiers" aria-labelledby="folders-title">
         <h2 id="folders-title">Dossiers</h2>
         {treeQuery.isError ? (
           <p role="alert" className="alert alert-error">
@@ -689,9 +689,9 @@ export function ObjectsPage() {
         ) : subfolders.length === 0 ? (
           <p className="empty">Aucun sous-dossier ici.</p>
         ) : (
-          <ul className="folder-grid">
+          <ul className="casier-list">
             {subfolders.map((folder) => (
-              <li key={folder.id} className="folder-card">
+              <li key={folder.id} className="casier">
                 <button
                   type="button"
                   className="folder-open"
@@ -736,7 +736,7 @@ export function ObjectsPage() {
             ))}
           </ul>
         )}
-      </section>
+      </aside>
 
       <section className="section" aria-labelledby="objects-title">
         <div className="section-head">
@@ -1046,8 +1046,8 @@ export function ObjectsPage() {
       <section className="card intake" aria-labelledby="upload-title">
         <h2 id="upload-title">Importer{currentName ? ` dans « ${currentName} »` : ""}</h2>
         <p className="muted">
-          Intention d'envoi → dépôt direct vers l'URL à courte durée → validation
-          avec contrôle d'intégrité (SHA-256 côté serveur).
+          Le fichier est déposé, puis vérifié par empreinte SHA-256 avant d'être
+          déclaré disponible.
         </p>
         <form onSubmit={handleUpload} className="form form-inline">
           <div className="field file-field">
