@@ -26,6 +26,8 @@ import hashlib
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse
 
 import boto3
@@ -64,6 +66,22 @@ def build_client(endpoint: str, region: str):
 def safe_path(url: str) -> str:
     parsed = urlparse(url)
     return parsed.path
+
+
+def http_request(method: str, url: str, data: bytes | None = None,
+                 headers: dict | None = None, timeout: int = 60):
+    """Perform an HTTP request and never raise on an HTTP error status.
+
+    Returns ``(status, headers, body)``. Used to exercise *presigned* URLs the way
+    a browser would (the API does not proxy the bytes), while still printing no
+    query string.
+    """
+    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.headers, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers, exc.read()
 
 
 def probe_single_put_get(r: Report, client, bucket: str) -> None:
@@ -139,15 +157,40 @@ def probe_multipart(r: Report, client, bucket: str) -> None:
         )
         upload_id = created["UploadId"]
         r.ok("CreateMultipartUpload", f"upload id present={bool(upload_id)}")
-        p1 = client.upload_part(Bucket=bucket, Key=key, UploadId=upload_id,
-                                PartNumber=1, Body=part1)
+
+        # Part 1 goes through a PRESIGNED upload_part URL over HTTP: this is the
+        # exact capability a browser would use, and the most backend-specific
+        # point of the whole multipart flow. The URL query is never printed.
+        etag1 = None
+        part1_url = client.generate_presigned_url(
+            "upload_part",
+            Params={"Bucket": bucket, "Key": key, "UploadId": upload_id, "PartNumber": 1},
+            ExpiresIn=300,
+        )
+        status, headers, _ = http_request(
+            "PUT", part1_url, data=part1,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        if status in (200, 201):
+            etag1 = headers.get("ETag")
+            r.ok("presigned UploadPart URL accepted", f"HTTP {status}")
+        else:
+            r.fail("presigned UploadPart URL", f"HTTP {status}")
+        if not etag1:
+            # Fall back to a direct call so the remaining checks still run; the
+            # presigned-part failure above is already recorded.
+            etag1 = client.upload_part(
+                Bucket=bucket, Key=key, UploadId=upload_id, PartNumber=1, Body=part1
+            )["ETag"]
+
         p2 = client.upload_part(Bucket=bucket, Key=key, UploadId=upload_id,
                                 PartNumber=2, Body=part2)
         r.ok("UploadPart ×2")
+
         client.complete_multipart_upload(
             Bucket=bucket, Key=key, UploadId=upload_id,
             MultipartUpload={"Parts": [
-                {"PartNumber": 1, "ETag": p1["ETag"]},
+                {"PartNumber": 1, "ETag": etag1},
                 {"PartNumber": 2, "ETag": p2["ETag"]},
             ]},
         )
@@ -160,11 +203,20 @@ def probe_multipart(r: Report, client, bucket: str) -> None:
             r.info("multipart ETag has no '-' suffix (backend-specific)")
         if etag.replace("-", "") != want:
             r.info("multipart ETag differs from full-object SHA-256 (as expected)")
+
         body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
         if hashlib.sha256(body).hexdigest() == want:
             r.ok("multipart GET round-trip SHA-256 matches")
         else:
             r.fail("multipart GET round-trip SHA-256 mismatch")
+
+        prefix = client.get_object(
+            Bucket=bucket, Key=key, Range="bytes=0-9"
+        )["Body"].read()
+        if prefix == whole[:10]:
+            r.ok("Range GET on a multipart object returns the requested prefix")
+        else:
+            r.fail("Range GET on a multipart object", repr(prefix[:16]))
     except Exception as exc:  # noqa: BLE001
         r.fail("multipart round trip", f"{type(exc).__name__}: {exc}")
     finally:
@@ -174,6 +226,47 @@ def probe_multipart(r: Report, client, bucket: str) -> None:
                 r.ok("AbortMultipartUpload (idempotent)")
             except Exception as exc:  # noqa: BLE001
                 r.info("AbortMultipartUpload after complete", type(exc).__name__)
+        try:
+            client.delete_object(Bucket=bucket, Key=key)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def probe_small_part_policy(r: Report, client, bucket: str) -> None:
+    """Discover the backend's minimum non-last part size (informational).
+
+    AWS rejects a non-last part below 5 MiB at completion; some S3-compatible
+    backends accept it. This is recorded, not asserted, so the AURA part size is
+    chosen from the actual pinned release rather than an AWS assumption.
+    """
+    key = "probe/small-parts.bin"
+    upload_id = None
+    body = b"\x00" * (1024 * 1024)  # 1 MiB
+    try:
+        upload_id = client.create_multipart_upload(Bucket=bucket, Key=key)["UploadId"]
+        p1 = client.upload_part(Bucket=bucket, Key=key, UploadId=upload_id,
+                                PartNumber=1, Body=body)
+        p2 = client.upload_part(Bucket=bucket, Key=key, UploadId=upload_id,
+                                PartNumber=2, Body=body)
+        try:
+            client.complete_multipart_upload(
+                Bucket=bucket, Key=key, UploadId=upload_id,
+                MultipartUpload={"Parts": [
+                    {"PartNumber": 1, "ETag": p1["ETag"]},
+                    {"PartNumber": 2, "ETag": p2["ETag"]},
+                ]},
+            )
+            r.info("small non-last part (<5 MiB)", "accepted by this backend")
+        except Exception as exc:  # noqa: BLE001
+            r.info("small non-last part (<5 MiB)", f"rejected: {type(exc).__name__}")
+    except Exception as exc:  # noqa: BLE001
+        r.info("small-part policy probe", f"skipped: {type(exc).__name__}")
+    finally:
+        if upload_id is not None:
+            try:
+                client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+            except Exception:  # noqa: BLE001
+                pass
         try:
             client.delete_object(Bucket=bucket, Key=key)
         except Exception:  # noqa: BLE001
@@ -206,6 +299,7 @@ def main(argv: list[str]) -> int:
     probe_single_put_get(r, client, args.bucket)
     probe_presigned_expiry(r, client, args.bucket)
     probe_multipart(r, client, args.bucket)
+    probe_small_part_policy(r, client, args.bucket)
 
     print()
     if r.failures:
