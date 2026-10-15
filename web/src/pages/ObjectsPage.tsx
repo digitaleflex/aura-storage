@@ -467,6 +467,45 @@ export function ObjectsPage() {
     onError: (err) => reportError(err, "Suppression impossible."),
   });
 
+  // Bulk delete reuses the audited single-object endpoint once per selected
+  // file (no bulk API surface): sequential, per-file outcome, server truth.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const deleteManyMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      if (!csrf) throw new Error("Session expirée.");
+      const failed: string[] = [];
+      let deleted = 0;
+      for (const id of ids) {
+        try {
+          await api.deleteObject(id, csrf);
+          deleted += 1;
+        } catch {
+          const target = items.find((item) => item.id === id);
+          failed.push(target?.display_name ?? id);
+        }
+      }
+      return { deleted, failed };
+    },
+    onSuccess: ({ deleted, failed }) => {
+      setSelectedIds(new Set());
+      setDetails(null);
+      if (failed.length === 0) {
+        setNotice(
+          `${deleted} objet(s) marqué(s) comme supprimé(s). Les octets restent jusqu'à une purge.`,
+        );
+      } else {
+        // Per-file outcome matters here: ApiError carries only one detail,
+        // so the summary is set explicitly instead of via reportError.
+        setNotice(null);
+        setActionError(
+          `${deleted} supprimé(s), ${failed.length} échec(s) : ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`,
+        );
+      }
+      invalidateLibrary();
+    },
+    onError: (err) => reportError(err, "Suppression en masse impossible."),
+  });
+
   const purgeMutation = useMutation({
     mutationFn: (id: string) => {
       if (!csrf) throw new Error("Session expirée.");
@@ -702,6 +741,13 @@ export function ObjectsPage() {
   }
 
   const items = objectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+
+  // Only deletable rows are selectable: the server refuses anything else
+  // with 409, so offering them would manufacture failures.
+  const selectableItems = items.filter(
+    (item) => item.status === "available" || item.status === "pending",
+  );
+  const selectableIds = new Set(selectableItems.map((item) => item.id));
 
   // Real weight of what is currently loaded — shown as a rail readout, so the
   // casiers column carries information instead of empty graphite.
@@ -1297,9 +1343,67 @@ export function ObjectsPage() {
               : "Aucun fichier dans ce dossier."}
           </p>
         ) : (
-          <div className="ledger" role="list">
+          <>
+            {selectedIds.size > 0 ? (
+              <p role="status" className="alert">
+                {selectedIds.size} objet(s) sélectionné(s).{" "}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  disabled={deleteManyMutation.isPending}
+                  onClick={() => setSelectedIds(new Set())}
+                >
+                  Tout désélectionner
+                </button>{" "}
+                <ConfirmAction
+                  label={
+                    deleteManyMutation.isPending
+                      ? "Suppression…"
+                      : "Supprimer la sélection"
+                  }
+                  title="Supprimer la sélection"
+                  message={
+                    <>
+                      Marquer <strong>{selectedIds.size} objet(s)</strong>{" "}
+                      comme supprimé(s) ? Chaque fichier est supprimé
+                      individuellement et le résultat est rapporté par
+                      fichier. Les octets restent jusqu'à une purge.
+                    </>
+                  }
+                  confirmLabel="Supprimer"
+                  danger
+                  pending={deleteManyMutation.isPending}
+                  onConfirm={() =>
+                    deleteManyMutation.mutate([...selectedIds])
+                  }
+                />
+              </p>
+            ) : null}
+            <div className="ledger" role="list">
             <div className="ledger-head" aria-hidden="true">
-              <span>Nom</span>
+              <span>
+                <input
+                  type="checkbox"
+                  aria-label="Tout sélectionner"
+                  checked={
+                    selectableItems.length > 0 &&
+                    selectableItems.every((item) => selectedIds.has(item.id))
+                  }
+                  disabled={
+                    selectableItems.length === 0 || deleteManyMutation.isPending
+                  }
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedIds(
+                        new Set(selectableItems.map((item) => item.id)),
+                      );
+                    } else {
+                      setSelectedIds(new Set());
+                    }
+                  }}
+                />{" "}
+                Nom
+              </span>
               <span>Type</span>
               <span>Taille</span>
               <span>État</span>
@@ -1315,6 +1419,26 @@ export function ObjectsPage() {
               return (
                 <div className="ledger-row" role="listitem" key={item.id}>
                   <div className="ledger-name">
+                    <input
+                      type="checkbox"
+                      aria-label={`Sélectionner ${item.display_name}`}
+                      checked={selectedIds.has(item.id)}
+                      disabled={
+                        !selectableIds.has(item.id) ||
+                        deleteManyMutation.isPending
+                      }
+                      onChange={(e) => {
+                        setSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) {
+                            next.add(item.id);
+                          } else {
+                            next.delete(item.id);
+                          }
+                          return next;
+                        });
+                      }}
+                    />{" "}
                     <button
                       type="button"
                       className="link-button"
@@ -1436,6 +1560,7 @@ export function ObjectsPage() {
                   );
             })}
           </div>
+          </>
         )}
         {objectsQuery.hasNextPage ? (
           <div className="load-more">
