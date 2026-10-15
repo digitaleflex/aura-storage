@@ -1,0 +1,79 @@
+"""PostgreSQL parity — opt-in, runs only against a real PostgreSQL.
+
+The default test suite is offline and SQLite-only (`AURA_API_DB=:memory:`); the
+PostgreSQL repository (`api/db_pg.py`) is therefore *not* exercised by default. This
+module closes that gap: point ``AURA_TEST_PG_DSN`` at a **disposable** database and
+it creates its own rows, checks schema bootstrap + folder listing + the folder filter
++ the object->folder move, then removes exactly the rows it created.
+
+    AURA_TEST_PG_DSN=postgresql://aura:secret@127.0.0.1:5432/aura_ci \\
+        python -m pytest tests/test_pg_parity.py
+
+Without the variable the module is skipped, so CI and local runs stay green and
+hermetic. It is a parity check of the catalogue layer, not a deployment test.
+"""
+import os
+import uuid
+
+import pytest
+
+DSN = os.environ.get("AURA_TEST_PG_DSN")
+
+pytestmark = pytest.mark.skipif(
+    not DSN,
+    reason="set AURA_TEST_PG_DSN to a disposable PostgreSQL to run the parity suite",
+)
+
+
+def test_postgres_repository_parity():
+    pytest.importorskip("psycopg")
+    from api.db_pg import Repository  # imported lazily: needs psycopg
+
+    repo = Repository(DSN)
+    application_id, space_id = repo.default_scope()
+    assert space_id, "migrations must seed the default space"
+
+    username = f"pg-{uuid.uuid4().hex[:12]}"
+    uid = repo.create_user(username, "not-a-real-hash", role="user", space_id=space_id)
+    try:
+        tag = uuid.uuid4().hex[:8]
+        root = repo.create_folder(uid, f"root-{tag}")
+        child = repo.create_folder(uid, f"child-{tag}", parent_id=root)
+
+        # Flat listing returns the whole tree; per-level listing is unchanged.
+        by_id = {f["id"]: f for f in repo.list_all_folders(owner_id=uid)}
+        assert by_id[root]["parent_id"] is None
+        assert by_id[child]["parent_id"] == root
+        assert {f["id"] for f in repo.list_folders(owner_id=uid)} == {root}
+        assert {f["id"] for f in repo.list_folders(owner_id=uid, parent_id=root)} == {child}
+
+        # A pending object filed into the folder is returned by that folder's filter
+        # and excluded from the "unfiled" (empty-string) filter.
+        bucket = repo.get_default_bucket(space_id)["name"]
+        oid = repo.create_pending_object(
+            space_id=space_id, application_id=application_id, environment="prod",
+            bucket=bucket, object_key=f"aura/{space_id}/{uid}/{uuid.uuid4().hex}",
+            display_name="pg.txt", content_type="text/plain",
+            owner_id=uid, actor_id=uid, actor_kind="user",
+            intent_expires_at=None, folder_id=root,
+        )
+        filed = {o["id"] for o in repo.list_objects(
+            space_id=space_id, owner_id=uid, folder_id=root)}
+        unfiled = {o["id"] for o in repo.list_objects(
+            space_id=space_id, owner_id=uid, folder_id="")}
+        assert oid in filed and oid not in unfiled
+
+        # The object->folder move (#62 follow-up) round-trips on PostgreSQL.
+        repo.set_object_folder(oid, folder_id=None)
+        row = repo.get_object(oid, space_id=space_id, owner_id=uid)
+        assert row is not None and row["folder_id"] is None
+
+        # Counts the folder-delete guard relies on.
+        assert repo.folder_child_count(root, owner_id=uid) == 1
+        assert repo.folder_object_count(root, owner_id=uid) == 0
+    finally:
+        # Remove only what this test created; the database is disposable.
+        with repo.conn.cursor() as cur:
+            cur.execute("DELETE FROM objects WHERE owner_id = %s", (uid,))
+            cur.execute("DELETE FROM folders WHERE owner_id = %s", (uid,))
+            cur.execute("DELETE FROM users WHERE id = %s", (uid,))
