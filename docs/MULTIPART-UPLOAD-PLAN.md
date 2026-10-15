@@ -21,6 +21,31 @@ The pinned image is `chrislusf/seaweedfs:4.48`. Its S3 gateway is *documented* t
 expose multipart and Range, but that has not been verified on our deployment.
 AWS limits and SeaweedFS limits must not be assumed interchangeable.
 
+### Measured constraint: the edge proxy deadline (2026-10-15)
+
+The pilot runs behind Traefik, whose default `respondingTimeouts.readTimeout`
+is **60s** — the maximum time it spends reading a request, body included. A
+presigned PUT carries the whole object as one request, so on the pilot any
+upload whose body takes more than 60s is cut mid-transfer: the proxy answers
+HTTP 502 and the browser XHR reports a network error (`xhr.onerror`, status 0,
+"Réseau interrompu." in the UI). This was reproduced against the live pilot with
+throttled PUTs of a single 37.5 MB object:
+
+| Client rate | Result | Wall time |
+|---|---|---|
+| 300 KB/s | HTTP 502, 18.4 MB of 37.5 MB sent | 60.05 s |
+| 500 KB/s | HTTP 502, 30.9 MB sent | 60.53 s |
+| 1024 KB/s | HTTP 200, completed | 35.5 s |
+| slow download (>60s) | HTTP 200 | — |
+
+The cutoff is **request-direction only** (a download over 60s completes), which
+matches `readTimeout` semantics rather than a total connection lifetime. The
+current mitigation is a bounded `readTimeout` (1200s) in `docker-compose.yml`;
+that buys time but a single request per object remains the wrong shape. It also
+sizes multipart parts: each part PUT is itself a request through the same proxy,
+so `part_size_bytes / worst_case_bandwidth` must stay comfortably below
+`readTimeout`, independently of the backend's own part limits.
+
 ## Goals
 
 - Upload large objects as independently retransmittable parts, resuming without
@@ -52,8 +77,11 @@ Record the image tag and results. Confirm specifically:
    including any known upstream fixes; decide whether to rely on it at all.
 4. Multipart ETag ≠ full-object MD5/SHA-256 (the probe prints this).
 5. Minimum part size, maximum part count, and Range GET on a completed object.
+6. Part-URL PUTs **through the edge proxy** (Traefik), not only directly against
+   the S3 gateway, plus the largest part size that completes within the
+   configured `readTimeout` at the slowest client rate to support.
 
-Do not start implementation before 1–5 are recorded; do not reuse AWS numbers as
+Do not start implementation before 1–6 are recorded; do not reuse AWS numbers as
 if they were SeaweedFS numbers.
 
 ## Contract additions (draft)
@@ -123,7 +151,7 @@ Extend the existing state machine rather than adding a second one:
 
 ## Acceptance criteria
 
-- [ ] Compatibility gate (1–5 above) passed and recorded with the image tag.
+- [ ] Compatibility gate (1–6 above) passed and recorded with the image tag.
 - [ ] API memory stays bounded as object size grows (part URLs only in memory).
 - [ ] Interrupted transfer resumes at part granularity; completed parts are not
   retransmitted.
@@ -166,7 +194,8 @@ path as the default until the gate and the live tests pass.
 
 ## Task breakdown (issue checklist)
 
-1. [ ] Run and record the compatibility gate on 4.48.
+1. [ ] Run and record the compatibility gate on 4.48, including the edge-proxy
+   part-size/`readTimeout` measurement.
 2. [ ] Add `multipart_uploads` / `multipart_parts` migrations (both backends) + parity tests.
 3. [ ] Add the multipart session/part endpoints with server-side validation.
 4. [ ] Presign part URLs after re-authorization; keep keys server-side.
