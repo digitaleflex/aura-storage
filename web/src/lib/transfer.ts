@@ -282,3 +282,221 @@ export async function runTransfer(
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Multi-file upload queue (M03 follow-up, issue #63).
+//
+// A bounded queue of independent single-file transfers. Each file keeps its own
+// state, idempotency key and AbortController, so one failure never stops the
+// others, a single file can be cancelled, and only the failed files are retried.
+// ---------------------------------------------------------------------------
+
+export interface QueueItem {
+  id: string;
+  fileName: string;
+  sizeBytes: number;
+  state: TransferState;
+}
+
+export interface QueueState {
+  items: QueueItem[];
+  concurrency: number;
+  /** Files currently transferring. */
+  active: number;
+  /** Files whose backend commit succeeded. */
+  done: number;
+  failed: number;
+  cancelled: number;
+  /** True once every file reached a terminal state. */
+  finished: boolean;
+}
+
+export interface UploadQueue {
+  /** Cancel a single file (aborts its transfer and its backend intent). */
+  cancelItem(id: string): void;
+  cancelAll(): void;
+  /** Re-queue the failed and cancelled files, keeping the success ones. */
+  retryFailed(): void;
+  /** Resolves with the final queue state once every file has settled. */
+  done: Promise<QueueState>;
+}
+
+export interface QueueOptions {
+  folderId: string | null;
+  /** How many files transfer at once (default 3). */
+  concurrency?: number;
+  signal?: AbortSignal;
+  onUpdate?: (queue: QueueState) => void;
+  config?: Partial<TransferConfig>;
+}
+
+export const DEFAULT_QUEUE_CONCURRENCY = 3;
+
+export function emptyQueue(concurrency = DEFAULT_QUEUE_CONCURRENCY): QueueState {
+  return {
+    items: [],
+    concurrency,
+    active: 0,
+    done: 0,
+    failed: 0,
+    cancelled: 0,
+    finished: false,
+  };
+}
+
+function queueItemId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `q-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export function startUploadQueue(
+  files: File[],
+  deps: TransferDeps,
+  options: QueueOptions,
+): UploadQueue {
+  const concurrency = Math.max(1, options.concurrency ?? DEFAULT_QUEUE_CONCURRENCY);
+
+  interface Internal {
+    id: string;
+    file: File;
+    state: TransferState;
+    controller: AbortController | null;
+    settled: boolean;
+  }
+
+  const items: Internal[] = files.map((file) => ({
+    id: queueItemId(),
+    file,
+    state: idleTransfer(file),
+    controller: null,
+    settled: false,
+  }));
+
+  let active = 0;
+  let finished = false;
+  let resolveDone: (state: QueueState) => void = () => undefined;
+  const done = new Promise<QueueState>((resolve) => {
+    resolveDone = resolve;
+  });
+
+  const snapshot = (): QueueState => ({
+    items: items.map((item) => ({
+      id: item.id,
+      fileName: item.file.name,
+      sizeBytes: item.file.size,
+      state: item.state,
+    })),
+    concurrency,
+    active,
+    done: items.filter((item) => item.state.phase === "available").length,
+    failed: items.filter((item) => item.state.phase === "failed").length,
+    cancelled: items.filter((item) => item.state.phase === "cancelled").length,
+    finished: finished || (active === 0 && items.every((item) => item.settled)),
+  });
+
+  const emit = () => options.onUpdate?.(snapshot());
+
+  const maybeFinish = () => {
+    if (!finished && active === 0 && items.every((item) => item.settled)) {
+      finished = true;
+      emit();
+      resolveDone(snapshot());
+    }
+  };
+
+  const runItem = (item: Internal) => {
+    if (item.settled) return;
+    const controller = new AbortController();
+    item.controller = controller;
+    if (options.signal) {
+      if (options.signal.aborted) controller.abort();
+      else options.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+    active += 1;
+    item.state = { ...idleTransfer(item.file), phase: "requesting-intent" };
+    emit();
+    runTransfer(item.file, deps, {
+      folderId: options.folderId,
+      idempotencyKey: queueItemId(),
+      signal: controller.signal,
+      config: options.config,
+      onUpdate: (state) => {
+        item.state = state;
+        emit();
+      },
+    })
+      .catch(() => undefined)
+      .finally(() => {
+        item.controller = null;
+        item.settled = true;
+        active -= 1;
+        emit();
+        pump();
+        maybeFinish();
+      });
+  };
+
+  const nextQueued = (): Internal | undefined =>
+    items.find(
+      (item) => !item.settled && item.controller === null && item.state.phase === "idle",
+    );
+
+  const pump = () => {
+    let slot = concurrency - active;
+    while (slot > 0) {
+      const item = nextQueued();
+      if (!item) break;
+      runItem(item);
+      slot -= 1;
+    }
+    maybeFinish();
+  };
+
+  // Start as soon as the queue is created (unless there is nothing to do).
+  pump();
+
+  return {
+    cancelItem(id: string) {
+      const item = items.find((candidate) => candidate.id === id);
+      if (!item || item.settled) return;
+      if (item.controller) {
+        item.controller.abort();
+      } else {
+        item.state = { ...item.state, phase: "cancelled" };
+        item.settled = true;
+        emit();
+      }
+      maybeFinish();
+    },
+    cancelAll() {
+      for (const item of items) {
+        if (item.settled) continue;
+        if (item.controller) {
+          item.controller.abort();
+        } else {
+          item.state = { ...item.state, phase: "cancelled" };
+          item.settled = true;
+        }
+      }
+      emit();
+      maybeFinish();
+    },
+    retryFailed() {
+      let requeued = false;
+      for (const item of items) {
+        if (item.state.phase === "failed" || item.state.phase === "cancelled") {
+          item.state = idleTransfer(item.file);
+          item.settled = false;
+          requeued = true;
+        }
+      }
+      if (!requeued) return;
+      finished = false;
+      emit();
+      pump();
+    },
+    done,
+  };
+}
