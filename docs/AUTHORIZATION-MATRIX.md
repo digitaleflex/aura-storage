@@ -67,8 +67,15 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/admin/reconcile` | `admin:write` | global sweep of stale intents |
 | GET | `/api/v1/admin/stats` | `admin:read` | aggregate counts, no content |
 | POST/GET | `/api/v1/admin/applications` | `admin:write` / `admin:read` | platform registry |
-| POST/GET | `/api/v1/admin/spaces` | `admin:write` / `admin:read` | space + default bucket |
-| POST/GET | `/api/v1/admin/identities` | `admin:write` / `admin:read` | M2M identities |
+| GET | `/api/v1/admin/applications/{aid}` | `admin:read` | detail + stable id + space count |
+| PATCH | `/api/v1/admin/applications/{aid}` | `admin:write` | rename and/or soft activate/disable |
+| POST/GET | `/api/v1/admin/spaces` | `admin:write` / `admin:read` | space + default bucket; the application must exist and be active |
+| GET | `/api/v1/admin/spaces/{sid}` | `admin:read` | detail + buckets + counts |
+| PATCH | `/api/v1/admin/spaces/{sid}` | `admin:write` | rename / re-environment / soft activate-disable; `application_id` immutable |
+| POST | `/api/v1/admin/spaces/{sid}/buckets` | `admin:write` | register an extra (non-default) bucket for a space |
+| GET | `/api/v1/admin/buckets` | `admin:read` | every bucket with its space/application attachment |
+| PATCH | `/api/v1/admin/buckets/{bid}` | `admin:write` | set/clear the default flag (one default per space) |
+| POST/GET | `/api/v1/admin/identities` | `admin:write` / `admin:read` | M2M identities (refused for a disabled space) |
 | POST | `/api/v1/admin/identities/{iid}/rotate` | `admin:write` | returns a new token once |
 | POST | `/api/v1/admin/identities/{iid}/revoke` | `admin:write` | immediate revocation |
 
@@ -90,6 +97,15 @@ never counts as closed — it would let an auth-less route pass if its body were
 - A space's default bucket name (derived or supplied) is validated against the S3
   naming rules on creation; an invalid name is refused (422) so no space can point at
   a bucket S3 would reject.
+- **Applications and spaces** have a soft lifecycle only (M04): a rename/disable is a
+  `PATCH`, never a delete. A space may only be attached to an **active** application
+  (409 otherwise) and `application_id` is immutable (reassignment is 422), so a space
+  can never be moved to a different tenant. Disabling a space refuses new upload
+  intents (403) and new machine identities (409) while every existing object stays
+  readable and downloadable. A bucket is registered additively (validated S3 name,
+  globally unique); making one the default clears the flag on the space's other
+  buckets. Buckets are never deleted through the API, and no bucket payload ever
+  carries an S3 credential.
 - Tenant/application/space identifiers received in a request never grant access.
 - **Folders** (`#61`) are logical catalogue rows, not host directories. They are
   **owned by a human user** (`folders.owner_id → users.id`, NOT NULL) and every folder

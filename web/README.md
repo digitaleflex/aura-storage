@@ -14,13 +14,16 @@ minimal house CSS (no Tailwind), Playwright for e2e.
   file-in-folder / soft-delete / purge, and an object details panel), public
   `/login` route.
 - Administration console at `/admin` (roles `operator`/`admin`): dashboard
-  counters (`/api/v1/admin/stats`) and registries for applications, spaces and
-  machine-to-machine identities. The nav entry and the route are hidden/refused
-  for a plain `user`; the API stays authoritative. With `admin:write` (the
-  `admin` role) the console also creates applications/spaces/identities, rotates
-  and revokes identity tokens, and runs the expired-upload reconciliation. An
-  identity token is displayed exactly once (creation or rotation) and never
-  re-read.
+  counters (`/api/v1/admin/stats`) and registries for applications, spaces,
+  buckets and machine-to-machine identities. The nav entry and the route are
+  hidden/refused for a plain `user`; the API stays authoritative. With
+  `admin:write` (the `admin` role) the console also creates applications and
+  spaces, renames or activates/deactivates them, registers buckets and sets their
+  default, creates identities, rotates and revokes identity tokens, and runs the
+  expired-upload reconciliation. A space cannot be moved to another application,
+  nothing is deleted through the API, and no bucket payload ever carries an S3
+  credential. An identity token is displayed exactly once (creation or rotation)
+  and never re-read.
 - Typed API client (`src/lib/api.ts`): list objects with server-side search,
   filters, sort and paging (name substring, status, MIME type, size range,
   creation period), logical folder CRUD, upload intent → PUT to the short-lived
@@ -66,6 +69,8 @@ S3 credentials; a rejected login never contacts S3.
 login reaches the console with its write controls.
 `e2e/admin-mutations.spec.ts` creates an application, space and identity,
 asserts the token is shown once, then revokes it.
+`e2e/admin-management.spec.ts` renames, deactivates/reactivates an application,
+re-environments a space, registers a bucket and makes it the default.
 `e2e/folders.spec.ts` creates, renames, opens and deletes a folder.
 `e2e/transfer-engine.spec.ts` unit-tests the upload state machine (retry,
 expiry, cancellation, never-fake-success); it needs no browser or servers.

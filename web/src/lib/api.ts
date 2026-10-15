@@ -213,6 +213,13 @@ export interface ApplicationItem {
   id: string;
   name: string;
   status: string;
+  created_at?: number;
+}
+
+export interface ApplicationDetail extends ApplicationItem {
+  created_at: number;
+  /** Number of spaces currently attached to this application. */
+  space_count: number;
 }
 
 export interface SpaceItem {
@@ -220,6 +227,48 @@ export interface SpaceItem {
   application_id: string;
   name: string;
   environment: string;
+  status: string;
+  created_at?: number;
+}
+
+/** A bucket registered to a space; carries no S3 credential of any kind. */
+export interface BucketItem {
+  id: string;
+  space_id: string;
+  name: string;
+  is_default: boolean;
+  created_at: number;
+}
+
+/** A bucket row in the global registry, joined with its space/application. */
+export interface BucketListedItem extends BucketItem {
+  space_name: string | null;
+  environment: string | null;
+  application_id: string | null;
+  application_name: string | null;
+}
+
+export interface SpaceDetail extends SpaceItem {
+  created_at: number;
+  application_name: string | null;
+  buckets: BucketItem[];
+  counts: { buckets: number; identities: number; objects: number };
+}
+
+/** Editable application fields; `status` drives activation/deactivation. */
+export interface ApplicationPatchInput {
+  name?: string;
+  status?: string;
+}
+
+/**
+ * Editable space fields. `application_id` is deliberately absent: moving a space
+ * to another application is refused by the server.
+ */
+export interface SpacePatchInput {
+  name?: string;
+  environment?: string;
+  status?: string;
 }
 
 export interface IdentityItem {
@@ -455,8 +504,22 @@ export const api = {
     return request<ListResponse<ApplicationItem>>("/api/v1/admin/applications");
   },
 
+  getApplication(id: string): Promise<ApplicationDetail> {
+    return request<ApplicationDetail>(
+      `/api/v1/admin/applications/${encodeURIComponent(id)}`,
+    );
+  },
+
   listSpaces(): Promise<ListResponse<SpaceItem>> {
     return request<ListResponse<SpaceItem>>("/api/v1/admin/spaces");
+  },
+
+  getSpace(id: string): Promise<SpaceDetail> {
+    return request<SpaceDetail>(`/api/v1/admin/spaces/${encodeURIComponent(id)}`);
+  },
+
+  listBuckets(): Promise<ListResponse<BucketListedItem>> {
+    return request<ListResponse<BucketListedItem>>("/api/v1/admin/buckets");
   },
 
   listIdentities(): Promise<ListResponse<IdentityItem>> {
@@ -471,15 +534,23 @@ export const api = {
     });
   },
 
-  createApplication(
-    name: string,
-    csrf: string,
-  ): Promise<{ id: string; name: string }> {
-    return request<{ id: string; name: string }>("/api/v1/admin/applications", {
+  createApplication(name: string, csrf: string): Promise<ApplicationDetail> {
+    return request<ApplicationDetail>("/api/v1/admin/applications", {
       method: "POST",
       body: { name },
       csrf,
     });
+  },
+
+  updateApplication(
+    id: string,
+    patch: ApplicationPatchInput,
+    csrf: string,
+  ): Promise<ApplicationDetail> {
+    return request<ApplicationDetail>(
+      `/api/v1/admin/applications/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: patch, csrf },
+    );
   },
 
   createSpace(
@@ -490,10 +561,47 @@ export const api = {
       default_bucket?: string;
     },
     csrf: string,
-  ): Promise<{ id: string; bucket: string }> {
-    return request<{ id: string; bucket: string }>("/api/v1/admin/spaces", {
+  ): Promise<SpaceDetail & { bucket: string }> {
+    return request<SpaceDetail & { bucket: string }>("/api/v1/admin/spaces", {
       method: "POST",
       body: input,
+      csrf,
+    });
+  },
+
+  updateSpace(
+    id: string,
+    patch: SpacePatchInput,
+    csrf: string,
+  ): Promise<SpaceDetail> {
+    return request<SpaceDetail>(`/api/v1/admin/spaces/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: patch,
+      csrf,
+    });
+  },
+
+  /** Register an additional (non-default) bucket for a space. */
+  createSpaceBucket(
+    spaceId: string,
+    name: string,
+    csrf: string,
+  ): Promise<BucketItem> {
+    return request<BucketItem>(
+      `/api/v1/admin/spaces/${encodeURIComponent(spaceId)}/buckets`,
+      { method: "POST", body: { name }, csrf },
+    );
+  },
+
+  /** Set (or clear) a bucket's default flag. */
+  updateBucket(
+    id: string,
+    isDefault: boolean,
+    csrf: string,
+  ): Promise<BucketItem> {
+    return request<BucketItem>(`/api/v1/admin/buckets/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: { is_default: isDefault },
       csrf,
     });
   },

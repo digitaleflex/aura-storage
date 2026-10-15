@@ -1,9 +1,14 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, hasAdminAccess, hasScope, SERVICE_SCOPES } from "../lib/api";
-import type { IdentityItem } from "../lib/api";
+import type {
+  ApplicationItem,
+  BucketListedItem,
+  IdentityItem,
+  SpaceItem,
+} from "../lib/api";
 import { useAuth, useSession } from "../lib/auth";
-import { ConfirmAction } from "../components/Dialog";
+import { ConfirmAction, Dialog } from "../components/Dialog";
 import { OneTimeToken } from "../components/OneTimeToken";
 
 const DATE_FMT = new Intl.DateTimeFormat("fr-FR", {
@@ -29,7 +34,144 @@ function identityState(item: IdentityItem): { label: string; className: string }
   return { label: "Active", className: "chip chip-ok" };
 }
 
-/** Administration console: read-only registries plus `admin:write` mutations. */
+/** Active/disabled chip shared by applications and spaces. */
+function lifecycleState(status: string): { label: string; className: string } {
+  return status === "active"
+    ? { label: "Actif", className: "chip chip-ok" }
+    : { label: "Désactivé", className: "chip chip-muted" };
+}
+
+/** Rename an application. The stable id is never editable. */
+function EditApplicationDialog({
+  application,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  application: ApplicationItem;
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (name: string) => void;
+}) {
+  const [name, setName] = useState(application.name);
+  const trimmed = name.trim();
+  const invalid = trimmed.length === 0 || trimmed.length > 63;
+  return (
+    <Dialog open title="Modifier l'application" onClose={onClose}>
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!invalid) onSubmit(trimmed);
+        }}
+      >
+        <label className="field">
+          <span>Nom</span>
+          <input
+            type="text"
+            value={name}
+            maxLength={63}
+            required
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+          />
+        </label>
+        <p className="muted">
+          Identifiant stable : <code>{application.id}</code>
+        </p>
+        <div className="dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>
+            Annuler
+          </button>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={invalid || pending}
+          >
+            {pending ? "Enregistrement…" : "Enregistrer"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+/** Rename / re-environment a space. The owning application is read-only. */
+function EditSpaceDialog({
+  space,
+  applicationName,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  space: SpaceItem;
+  applicationName: string;
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (patch: { name: string; environment: string }) => void;
+}) {
+  const [name, setName] = useState(space.name);
+  const [environment, setEnvironment] = useState(space.environment);
+  const trimmedName = name.trim();
+  const trimmedEnv = environment.trim();
+  const invalid =
+    trimmedName.length === 0 ||
+    trimmedName.length > 63 ||
+    trimmedEnv.length === 0 ||
+    trimmedEnv.length > 32;
+  return (
+    <Dialog open title="Modifier l'espace" onClose={onClose}>
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!invalid) onSubmit({ name: trimmedName, environment: trimmedEnv });
+        }}
+      >
+        <label className="field">
+          <span>Nom</span>
+          <input
+            type="text"
+            value={name}
+            maxLength={63}
+            required
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Environnement</span>
+          <input
+            type="text"
+            value={environment}
+            maxLength={32}
+            required
+            onChange={(e) => setEnvironment(e.target.value)}
+          />
+        </label>
+        <p className="muted">
+          Application : <strong>{applicationName}</strong> — l'association à une
+          application n'est pas modifiable. Identifiant stable :{" "}
+          <code>{space.id}</code>
+        </p>
+        <div className="dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>
+            Annuler
+          </button>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={invalid || pending}
+          >
+            {pending ? "Enregistrement…" : "Enregistrer"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+/** Administration console: registries plus `admin:write` mutations. */
 export function AdminPage() {
   const { csrf } = useAuth();
   const session = useSession();
@@ -39,6 +181,8 @@ export function AdminPage() {
 
   const [error, setError] = useState<string | null>(null);
   const [oneTimeToken, setOneTimeToken] = useState<string | null>(null);
+  const [editingApp, setEditingApp] = useState<ApplicationItem | null>(null);
+  const [editingSpace, setEditingSpace] = useState<SpaceItem | null>(null);
 
   // Create-application form
   const [appName, setAppName] = useState("");
@@ -52,6 +196,9 @@ export function AdminPage() {
   const [idSpace, setIdSpace] = useState("");
   const [idScopes, setIdScopes] = useState<string[]>(["objects:read"]);
   const [idTtlDays, setIdTtlDays] = useState("");
+  // Register-bucket form
+  const [bucketSpace, setBucketSpace] = useState("");
+  const [bucketName, setBucketName] = useState("");
 
   const stats = useQuery({
     queryKey: ["admin", "stats"],
@@ -74,6 +221,12 @@ export function AdminPage() {
   const identities = useQuery({
     queryKey: ["admin", "identities"],
     queryFn: () => api.listIdentities(),
+    enabled: canAdmin,
+    retry: false,
+  });
+  const buckets = useQuery({
+    queryKey: ["admin", "buckets"],
+    queryFn: () => api.listBuckets(),
     enabled: canAdmin,
     retry: false,
   });
@@ -111,6 +264,31 @@ export function AdminPage() {
     onError: (err) => fail(err, "Création d'application impossible."),
   });
 
+  const updateApp = useMutation({
+    mutationFn: (input: { id: string; name: string }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.updateApplication(input.id, { name: input.name }, csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      setEditingApp(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Modification de l'application impossible."),
+  });
+
+  const setAppStatus = useMutation({
+    mutationFn: (input: { id: string; status: string }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.updateApplication(input.id, { status: input.status }, csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Changement d'état impossible."),
+  });
+
   const createSpace = useMutation({
     mutationFn: () => {
       if (!csrf) throw new Error("Session expirée.");
@@ -130,6 +308,60 @@ export function AdminPage() {
       refreshAdmin();
     },
     onError: (err) => fail(err, "Création d'espace impossible."),
+  });
+
+  const updateSpace = useMutation({
+    mutationFn: (input: { id: string; name: string; environment: string }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.updateSpace(
+        input.id,
+        { name: input.name, environment: input.environment },
+        csrf,
+      );
+    },
+    onSuccess: () => {
+      setError(null);
+      setEditingSpace(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Modification de l'espace impossible."),
+  });
+
+  const setSpaceStatus = useMutation({
+    mutationFn: (input: { id: string; status: string }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.updateSpace(input.id, { status: input.status }, csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Changement d'état impossible."),
+  });
+
+  const createBucket = useMutation({
+    mutationFn: () => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.createSpaceBucket(bucketSpace, bucketName.trim(), csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      setBucketName("");
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Enregistrement du bucket impossible."),
+  });
+
+  const setBucketDefault = useMutation({
+    mutationFn: (input: { id: string; isDefault: boolean }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.updateBucket(input.id, input.isDefault, csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Mise à jour du bucket impossible."),
   });
 
   const createIdentity = useMutation({
@@ -200,6 +432,7 @@ export function AdminPage() {
   );
   const appItems = applications.data?.items ?? [];
   const spaceItems = spaces.data?.items ?? [];
+  const bucketItems: BucketListedItem[] = buckets.data?.items ?? [];
 
   const objectsByStatus = stats.data?.objects_by_status ?? {};
   const objectsTotal = Object.values(objectsByStatus).reduce((a, b) => a + b, 0);
@@ -208,10 +441,10 @@ export function AdminPage() {
     <div className="stack">
       <h1>Administration</h1>
       <p className="muted">
-        Espaces, applications et identités machine-à-machine.
+        Applications, espaces, buckets et identités machine-à-machine.
         {canWrite
-          ? " Votre rôle peut créer, faire tourner et révoquer."
-          : " Lecture seule (la création, la rotation et la révocation exigent le rôle administrateur)."}
+          ? " Votre rôle peut créer, modifier, activer/désactiver, faire tourner et révoquer."
+          : " Lecture seule (les mutations exigent le rôle administrateur)."}
       </p>
 
       {error ? (
@@ -309,7 +542,7 @@ export function AdminPage() {
             className="form form-inline"
             onSubmit={(e) => {
               e.preventDefault();
-              createApp.mutate(appName);
+              createApp.mutate(appName.trim());
             }}
           >
             <label className="field">
@@ -317,6 +550,7 @@ export function AdminPage() {
               <input
                 type="text"
                 value={appName}
+                maxLength={63}
                 onChange={(e) => setAppName(e.target.value)}
                 required
               />
@@ -324,7 +558,7 @@ export function AdminPage() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={createApp.isPending}
+              disabled={createApp.isPending || appName.trim().length === 0}
             >
               Créer
             </button>
@@ -334,6 +568,8 @@ export function AdminPage() {
           <p role="alert" className="alert alert-error">
             Applications indisponibles.
           </p>
+        ) : applications.isPending ? (
+          <p className="muted">Chargement…</p>
         ) : (applications.data?.items.length ?? 0) === 0 ? (
           <p className="empty">Aucune application.</p>
         ) : (
@@ -343,25 +579,66 @@ export function AdminPage() {
                 <tr>
                   <th scope="col">Nom</th>
                   <th scope="col">Statut</th>
-                  <th scope="col">ID</th>
+                  <th scope="col">Identifiant stable</th>
+                  {canWrite ? (
+                    <th scope="col">
+                      <span className="visually-hidden">Actions</span>
+                    </th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
-                {applications.data?.items.map((a) => (
-                  <tr key={a.id}>
-                    <td className="name">{a.name}</td>
-                    <td>
-                      <span
-                        className={
-                          a.status === "active" ? "chip chip-ok" : "chip chip-muted"
-                        }
-                      >
-                        {a.status}
-                      </span>
-                    </td>
-                    <td className="num muted">{a.id}</td>
-                  </tr>
-                ))}
+                {applications.data?.items.map((a) => {
+                  const state = lifecycleState(a.status);
+                  const disabled = a.status !== "active";
+                  return (
+                    <tr key={a.id}>
+                      <td className="name">{a.name}</td>
+                      <td>
+                        <span className={state.className}>{state.label}</span>
+                      </td>
+                      <td className="num muted">{a.id}</td>
+                      {canWrite ? (
+                        <td className="row-actions">
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            onClick={() => setEditingApp(a)}
+                          >
+                            Modifier
+                          </button>
+                          <ConfirmAction
+                            label={disabled ? "Activer" : "Désactiver"}
+                            title={disabled ? "Activer" : "Désactiver"}
+                            message={
+                              disabled ? (
+                                <>
+                                  Réactiver <strong>{a.name}</strong> ? De
+                                  nouveaux espaces pourront lui être rattachés.
+                                </>
+                              ) : (
+                                <>
+                                  Désactiver <strong>{a.name}</strong> ? Aucun
+                                  nouvel espace ne pourra lui être rattaché. Les
+                                  espaces et données existants restent lisibles.
+                                </>
+                              )
+                            }
+                            confirmLabel={disabled ? "Activer" : "Désactiver"}
+                            className="btn btn-small"
+                            pending={setAppStatus.isPending}
+                            onConfirm={() =>
+                              setAppStatus.mutate({
+                                id: a.id,
+                                status: disabled ? "active" : "disabled",
+                              })
+                            }
+                          />
+                        </td>
+                      ) : null}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -386,11 +663,13 @@ export function AdminPage() {
                 required
               >
                 <option value="">— choisir —</option>
-                {appItems.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
+                {appItems
+                  .filter((a) => a.status === "active")
+                  .map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
               </select>
             </label>
             <label className="field">
@@ -398,6 +677,7 @@ export function AdminPage() {
               <input
                 type="text"
                 value={spaceName}
+                maxLength={63}
                 onChange={(e) => setSpaceName(e.target.value)}
                 required
               />
@@ -407,6 +687,7 @@ export function AdminPage() {
               <input
                 type="text"
                 value={spaceEnv}
+                maxLength={32}
                 onChange={(e) => setSpaceEnv(e.target.value)}
                 required
               />
@@ -416,13 +697,19 @@ export function AdminPage() {
               <input
                 type="text"
                 value={spaceBucket}
+                maxLength={63}
                 onChange={(e) => setSpaceBucket(e.target.value)}
               />
             </label>
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={createSpace.isPending || appItems.length === 0}
+              disabled={
+                createSpace.isPending ||
+                appItems.filter((a) => a.status === "active").length === 0 ||
+                spaceName.trim().length === 0 ||
+                spaceEnv.trim().length === 0
+              }
             >
               Créer l'espace
             </button>
@@ -432,6 +719,8 @@ export function AdminPage() {
           <p role="alert" className="alert alert-error">
             Espaces indisponibles.
           </p>
+        ) : spaces.isPending ? (
+          <p className="muted">Chargement…</p>
         ) : (spaces.data?.items.length ?? 0) === 0 ? (
           <p className="empty">Aucun espace.</p>
         ) : (
@@ -442,16 +731,201 @@ export function AdminPage() {
                   <th scope="col">Nom</th>
                   <th scope="col">Environnement</th>
                   <th scope="col">Application</th>
+                  <th scope="col">Statut</th>
+                  <th scope="col">Identifiant stable</th>
+                  {canWrite ? (
+                    <th scope="col">
+                      <span className="visually-hidden">Actions</span>
+                    </th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
-                {spaces.data?.items.map((s) => (
-                  <tr key={s.id}>
-                    <td className="name">{s.name}</td>
-                    <td className="muted">{s.environment}</td>
+                {spaces.data?.items.map((s) => {
+                  const state = lifecycleState(s.status);
+                  const disabled = s.status !== "active";
+                  return (
+                    <tr key={s.id}>
+                      <td className="name">{s.name}</td>
+                      <td className="muted">{s.environment}</td>
+                      <td className="muted">
+                        {appNames.get(s.application_id) ?? s.application_id}
+                      </td>
+                      <td>
+                        <span className={state.className}>{state.label}</span>
+                      </td>
+                      <td className="num muted">{s.id}</td>
+                      {canWrite ? (
+                        <td className="row-actions">
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            onClick={() => setEditingSpace(s)}
+                          >
+                            Modifier
+                          </button>
+                          <ConfirmAction
+                            label={disabled ? "Activer" : "Désactiver"}
+                            title={disabled ? "Activer" : "Désactiver"}
+                            message={
+                              disabled ? (
+                                <>
+                                  Réactiver l'espace <strong>{s.name}</strong> ?
+                                  Les envois et la création d'identités seront de
+                                  nouveau autorisés.
+                                </>
+                              ) : (
+                                <>
+                                  Désactiver l'espace <strong>{s.name}</strong> ?
+                                  Les nouveaux envois et la création d'identités
+                                  seront refusés. Les objets existants restent
+                                  lisibles et téléchargeables.
+                                </>
+                              )
+                            }
+                            confirmLabel={disabled ? "Activer" : "Désactiver"}
+                            className="btn btn-small"
+                            pending={setSpaceStatus.isPending}
+                            onConfirm={() =>
+                              setSpaceStatus.mutate({
+                                id: s.id,
+                                status: disabled ? "active" : "disabled",
+                              })
+                            }
+                          />
+                        </td>
+                      ) : null}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="section" aria-labelledby="admin-buckets-title">
+        <h2 id="admin-buckets-title">Buckets</h2>
+        <p className="muted">
+          Un bucket est rattaché à un espace. AURA ne conserve et n'affiche
+          aucun identifiant ni secret d'accès S3 ; ceux-ci restent hors de la
+          base. Les buckets ne sont jamais supprimés par l'interface.
+        </p>
+        {canWrite ? (
+          <form
+            className="form form-inline"
+            onSubmit={(e) => {
+              e.preventDefault();
+              createBucket.mutate();
+            }}
+          >
+            <label className="field">
+              <span>Espace</span>
+              <select
+                value={bucketSpace}
+                onChange={(e) => setBucketSpace(e.target.value)}
+                required
+              >
+                <option value="">— choisir —</option>
+                {spaceItems.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.environment})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Nom du bucket</span>
+              <input
+                type="text"
+                value={bucketName}
+                maxLength={63}
+                onChange={(e) => setBucketName(e.target.value)}
+                placeholder="minuscules, chiffres, . et -"
+                required
+              />
+            </label>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={
+                createBucket.isPending ||
+                spaceItems.length === 0 ||
+                bucketSpace === "" ||
+                bucketName.trim().length === 0
+              }
+            >
+              Enregistrer le bucket
+            </button>
+          </form>
+        ) : null}
+        {buckets.isError ? (
+          <p role="alert" className="alert alert-error">
+            Buckets indisponibles.
+          </p>
+        ) : buckets.isPending ? (
+          <p className="muted">Chargement…</p>
+        ) : bucketItems.length === 0 ? (
+          <p className="empty">Aucun bucket.</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Bucket</th>
+                  <th scope="col">Espace</th>
+                  <th scope="col">Application</th>
+                  <th scope="col">Environnement</th>
+                  <th scope="col">Par défaut</th>
+                  {canWrite ? (
+                    <th scope="col">
+                      <span className="visually-hidden">Actions</span>
+                    </th>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody>
+                {bucketItems.map((b) => (
+                  <tr key={b.id}>
+                    <td className="name">{b.name}</td>
+                    <td className="muted">{b.space_name ?? b.space_id}</td>
                     <td className="muted">
-                      {appNames.get(s.application_id) ?? s.application_id}
+                      {b.application_name ?? b.application_id ?? "—"}
                     </td>
+                    <td className="muted">{b.environment ?? "—"}</td>
+                    <td>
+                      <span
+                        className={
+                          b.is_default ? "chip chip-ok" : "chip chip-muted"
+                        }
+                      >
+                        {b.is_default ? "Oui" : "Non"}
+                      </span>
+                    </td>
+                    {canWrite ? (
+                      <td className="row-actions">
+                        <ConfirmAction
+                          label="Définir par défaut"
+                          title="Définir le bucket par défaut"
+                          message={
+                            <>
+                              Faire de <strong>{b.name}</strong> le bucket par
+                              défaut de l'espace{" "}
+                              <strong>{b.space_name ?? b.space_id}</strong> ? Les
+                              nouveaux envois sans bucket explicite y seront
+                              déposés. Les objets existants ne changent pas.
+                            </>
+                          }
+                          confirmLabel="Définir par défaut"
+                          className="btn btn-small"
+                          pending={setBucketDefault.isPending}
+                          disabled={b.is_default}
+                          onConfirm={() =>
+                            setBucketDefault.mutate({ id: b.id, isDefault: true })
+                          }
+                        />
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
@@ -542,6 +1016,8 @@ export function AdminPage() {
           <p role="alert" className="alert alert-error">
             Identités indisponibles.
           </p>
+        ) : identities.isPending ? (
+          <p className="muted">Chargement…</p>
         ) : (identities.data?.items.length ?? 0) === 0 ? (
           <p className="empty">Aucune identité de service.</p>
         ) : (
@@ -620,6 +1096,30 @@ export function AdminPage() {
           </div>
         )}
       </section>
+
+      {editingApp ? (
+        <EditApplicationDialog
+          application={editingApp}
+          pending={updateApp.isPending}
+          onClose={() => setEditingApp(null)}
+          onSubmit={(name) => updateApp.mutate({ id: editingApp.id, name })}
+        />
+      ) : null}
+
+      {editingSpace ? (
+        <EditSpaceDialog
+          space={editingSpace}
+          applicationName={
+            appNames.get(editingSpace.application_id) ??
+            editingSpace.application_id
+          }
+          pending={updateSpace.isPending}
+          onClose={() => setEditingSpace(null)}
+          onSubmit={(patch) =>
+            updateSpace.mutate({ id: editingSpace.id, ...patch })
+          }
+        />
+      ) : null}
     </div>
   );
 }

@@ -40,14 +40,26 @@ so the format is enforced in code, not in DDL.
 
 ### Space
 - `id`, `application_id`, `name`, `environment` (`dev`/`staging`/`prod`/…),
-  `created_at`; unique on `(application_id, name, environment)`.
+  `status` (`active`/`disabled`), `created_at`; unique on
+  `(application_id, name, environment)`.
 - The tenant/data boundary. Objects, buckets and service identities belong to a
   space; every catalogue query is filtered by the caller's space.
+- `status` is a **soft** lifecycle flag (M04): a space is never deleted through
+  the API. Disabling it refuses new uploads and new identities while the existing
+  rows stay readable. `application_id` is immutable — a space is never moved to
+  another application — and a space can only be attached to an **active**
+  application. Added additively on upgrade (`0003_space_status`), backfilled to
+  `active`.
 
 ### Bucket
 - `id`, `space_id`, `name` (unique), `is_default`, `created_at`.
 - Object-store bucket registered to a space. A caller can only use a bucket
   registered to its own space; the bucket is never chosen arbitrarily by a client.
+- M04: a bucket is registered additively (validated S3 name, globally unique) and
+  its `is_default` flag is toggled with `PATCH`; setting one default clears the
+  flag on the space's other buckets. Buckets are never deleted through the API,
+  and the catalogue stores **no** S3 credential (the access key/secret live only
+  in the deployment environment).
 
 ### ServiceIdentity (implemented, #38)
 - `id`, `application_id`, `space_id`, `name`, `secret_hash` (SHA-256 of the secret),
