@@ -12,6 +12,9 @@ info:
     with a Bearer service-identity token. Authorization is server-side and default-deny;
     see `docs/AUTHORIZATION-MATRIX.md`.
 
+    Identifiers are canonical UUID v4 values (`docs/DATA-MODEL.md`); a malformed
+    identifier in a path, query parameter or request body is refused with 422.
+
     Validated locally (offline tests) and by CI; not yet validated on the pilot VPS.
 servers:
   - url: https://app.aura-storage.eurinhash.com
@@ -95,7 +98,7 @@ paths:
                 display_name: { type: string, minLength: 1, maxLength: 255 }
                 content_type: { type: string, maxLength: 127, default: application/octet-stream }
                 size_bytes: { type: integer, minimum: 1, description: Declared upload size; bound into the presigned URL as a signed Content-Length and capped at the configured maximum object size }
-                folder_id: { type: string, nullable: true }
+                folder_id: { $ref: "#/components/schemas/Uuid4", nullable: true }
       responses:
         "200": { description: "Upload intent with a presigned PUT URL bound to the declared Content-Length" }
         "403": { description: Bucket not allowed / not authorised }
@@ -147,6 +150,75 @@ paths:
         "200": { description: Object purged }
         "403": { description: Not authorised }
         "404": { description: Object not found or not visible }
+  /api/v1/folders:
+    get:
+      summary: List folders owned by the caller (objects:read, human only)
+      parameters:
+        - in: query
+          name: parent_id
+          schema: { $ref: "#/components/schemas/Uuid4" }
+          description: Return the children of this folder; omitted = root level
+      responses:
+        "200": { description: Folders directly under the requested parent }
+        "401": { description: Authentication required }
+        "403": { description: Access denied }
+        "404": { description: Parent folder not found or not visible }
+    post:
+      summary: Create a logical folder (objects:write, human only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 255, description: Flat label; no path separators or control characters }
+                parent_id: { $ref: "#/components/schemas/Uuid4", nullable: true, description: Existing folder owned by the caller; omitted/null = root }
+      responses:
+        "200": { description: Folder created }
+        "401": { description: Authentication required }
+        "403": { description: Access denied }
+        "404": { description: Parent folder not found or not visible }
+        "409": { description: Duplicate name at this level, or depth limit reached }
+        "422": { description: Invalid folder name }
+  /api/v1/folders/{fid}:
+    get:
+      summary: Get folder metadata (objects:read, human only)
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      responses:
+        "200": { description: Folder metadata }
+        "404": { description: Folder not found or not visible }
+    patch:
+      summary: Rename or move a folder (objects:write, human only)
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              description: At least one of name/parent_id; parent_id null moves the folder to the root
+              properties:
+                name: { type: string, minLength: 1, maxLength: 255, nullable: true }
+                parent_id: { $ref: "#/components/schemas/Uuid4", nullable: true }
+      responses:
+        "200": { description: Folder updated }
+        "404": { description: Folder or target parent not found or not visible }
+        "409": { description: Duplicate name, cycle, or depth limit reached }
+        "422": { description: No fields supplied, or invalid name }
+    delete:
+      summary: Delete an empty folder (objects:delete, human only)
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      responses:
+        "200": { description: Folder deleted }
+        "404": { description: Folder not found or not visible }
+        "409": { description: Folder is not empty }
   /api/v1/admin/reconcile:
     post:
       summary: Expire stale pending uploads (admin:write)
@@ -191,7 +263,7 @@ paths:
               additionalProperties: false
               required: [application_id, name, environment]
               properties:
-                application_id: { type: string }
+                application_id: { $ref: "#/components/schemas/Uuid4" }
                 name: { type: string, minLength: 1, maxLength: 63 }
                 environment: { type: string, minLength: 1, maxLength: 32 }
                 default_bucket: { type: string, maxLength: 63, nullable: true, description: Must be a valid S3 bucket name; omitted = derived from name and environment (also validated) }
@@ -217,7 +289,7 @@ paths:
               additionalProperties: false
               required: [space_id, name]
               properties:
-                space_id: { type: string }
+                space_id: { $ref: "#/components/schemas/Uuid4" }
                 name: { type: string, minLength: 1, maxLength: 63 }
                 scopes:
                   type: array
@@ -234,7 +306,7 @@ paths:
       parameters:
         - in: query
           name: space_id
-          schema: { type: string }
+          schema: { $ref: "#/components/schemas/Uuid4" }
       responses:
         "200": { description: Identity metadata (never secret material) }
   /api/v1/admin/identities/{iid}/rotate:
@@ -254,17 +326,31 @@ paths:
         "200": { description: Identity revoked }
         "404": { description: Identity not found }
 components:
+  schemas:
+    Uuid4:
+      type: string
+      format: uuid
+      pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      description: >-
+        Canonical identifier: a canonical UUID v4 (lowercase, 8-4-4-4-12).
+        Alternate spellings are normalized; anything else is refused with 422.
+        See docs/DATA-MODEL.md.
   parameters:
     ObjectId:
       in: path
       name: oid
       required: true
-      schema: { type: string }
+      schema: { $ref: "#/components/schemas/Uuid4" }
     IdentityId:
       in: path
       name: iid
       required: true
-      schema: { type: string }
+      schema: { $ref: "#/components/schemas/Uuid4" }
+    FolderId:
+      in: path
+      name: fid
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid4" }
   securitySchemes:
     cookieAuth:
       type: apiKey

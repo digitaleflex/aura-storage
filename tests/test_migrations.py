@@ -4,7 +4,7 @@ Runs entirely on a disposable SQLite file; no PostgreSQL or S3 endpoint needed.
 """
 import sqlite3
 
-from api import migrations
+from api import ids, migrations
 from api.db import SCHEMA
 
 OLD_SCHEMA = """
@@ -78,18 +78,24 @@ def test_migration_adds_columns_and_preserves_rows(tmp_path):
     } <= _columns(conn, "objects")
 
     # ...and old data is untouched, then backfilled into the default space.
+    default_application_id, default_space_id = migrations.resolve_default_ids(conn)
+    assert ids.is_canonical(default_application_id)
+    assert ids.is_canonical(default_space_id)
     row = conn.execute("SELECT username, role, space_id FROM users WHERE id = 'u1'").fetchone()
-    assert row[0] == "admin" and row[1] == "user" and row[2] == migrations.DEFAULT_SPACE_ID
+    assert row[0] == "admin" and row[1] == "user" and row[2] == default_space_id
     obj = conn.execute("SELECT bucket, space_id, environment, status FROM objects WHERE id = 'o1'").fetchone()
     assert obj[0] == "aura"
-    assert obj[1] == migrations.DEFAULT_SPACE_ID
+    assert obj[1] == default_space_id
     assert obj[2] == migrations.DEFAULT_ENVIRONMENT
     assert obj[3] == "pending"
 
-    # Default tenant model seeded exactly once.
+    # Default tenant model seeded exactly once, with generated UUID v4 ids.
     assert conn.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM spaces").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM buckets").fetchone()[0] == 1
+    app_id = conn.execute("SELECT id FROM applications").fetchone()[0]
+    bucket_id = conn.execute("SELECT id FROM buckets").fetchone()[0]
+    assert ids.is_canonical(app_id) and ids.is_canonical(bucket_id)
     conn.close()
 
 
@@ -100,6 +106,95 @@ def test_migrations_are_idempotent(tmp_path):
     migrations.apply_migrations(conn, "sqlite")  # second run must be a no-op
     assert conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+    conn.close()
+
+
+def _make_sentinel_db(path):
+    """A catalogue seeded by an earlier release with the fixed ``0000…`` ids."""
+    conn = sqlite3.connect(path)
+    conn.executescript(SCHEMA)
+    conn.execute(
+        "INSERT INTO applications (id, name, status, created_at) "
+        "VALUES (?, 'aura', 'active', 1)",
+        (migrations.LEGACY_APPLICATION_ID,),
+    )
+    conn.execute(
+        "INSERT INTO spaces (id, application_id, name, environment, created_at) "
+        "VALUES (?, ?, 'default', 'prod', 1)",
+        (migrations.LEGACY_SPACE_ID, migrations.LEGACY_APPLICATION_ID),
+    )
+    conn.execute(
+        "INSERT INTO buckets (id, space_id, name, is_default, created_at) "
+        "VALUES (?, ?, 'aura', 1, 1)",
+        (migrations.LEGACY_BUCKET_ID, migrations.LEGACY_SPACE_ID),
+    )
+    conn.execute(
+        "INSERT INTO service_identities (id, application_id, space_id, name, "
+        "secret_hash, scopes, created_at) VALUES ('svc-1', ?, ?, 'svc', 'h', '', 1)",
+        (migrations.LEGACY_APPLICATION_ID, migrations.LEGACY_SPACE_ID),
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, pass_hash, created_at) "
+        "VALUES ('u1', 'admin', 'hash', 1)"
+    )
+    conn.execute(
+        "INSERT INTO objects (id, bucket, object_key, display_name, content_type, "
+        "owner_id, status, created_at, updated_at) "
+        "VALUES ('o1', 'aura', 'k', 'a.txt', 'text/plain', 'u1', 'pending', 1, 1)"
+    )
+    conn.commit()
+    return conn
+
+
+def test_legacy_sentinel_ids_are_canonicalized(tmp_path):
+    """The one-time rewrite replaces the fixed seed ids with UUID v4 everywhere."""
+    conn = _make_sentinel_db(tmp_path / "sentinel.db")
+    migrations.apply_migrations(conn, "sqlite")
+
+    app_id, space_id = migrations.resolve_default_ids(conn)
+    assert ids.is_canonical(app_id) and ids.is_canonical(space_id)
+    assert app_id != migrations.LEGACY_APPLICATION_ID
+    assert space_id != migrations.LEGACY_SPACE_ID
+
+    # The sentinel rows are gone; the unique names and counts survive.
+    for table, legacy in (
+        ("applications", migrations.LEGACY_APPLICATION_ID),
+        ("spaces", migrations.LEGACY_SPACE_ID),
+        ("buckets", migrations.LEGACY_BUCKET_ID),
+    ):
+        assert conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE id = ?", (legacy,)
+        ).fetchone()[0] == 0
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
+    assert conn.execute("SELECT name FROM applications").fetchone()[0] == "aura"
+    assert conn.execute("SELECT name FROM spaces").fetchone()[0] == "default"
+    assert conn.execute("SELECT name FROM buckets").fetchone()[0] == "aura"
+
+    # Every foreign key was repointed to the new ids.
+    assert conn.execute("SELECT application_id FROM spaces").fetchone()[0] == app_id
+    assert conn.execute("SELECT space_id FROM buckets").fetchone()[0] == space_id
+    assert conn.execute(
+        "SELECT application_id, space_id FROM service_identities WHERE id = 'svc-1'"
+    ).fetchone() == (app_id, space_id)
+    assert conn.execute(
+        "SELECT application_id, space_id FROM users WHERE id = 'u1'"
+    ).fetchone() == (app_id, space_id)
+    assert conn.execute(
+        "SELECT application_id, space_id FROM objects WHERE id = 'o1'"
+    ).fetchone() == (app_id, space_id)
+    assert ids.is_canonical(conn.execute("SELECT id FROM buckets").fetchone()[0])
+    conn.close()
+
+
+def test_canonicalization_is_idempotent(tmp_path):
+    conn = _make_sentinel_db(tmp_path / "sentinel.db")
+    migrations.apply_migrations(conn, "sqlite")
+    first = migrations.resolve_default_ids(conn)
+    migrations.apply_migrations(conn, "sqlite")  # second run must not re-mint ids
+    assert migrations.resolve_default_ids(conn) == first
+    assert conn.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM spaces").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM buckets").fetchone()[0] == 1
     conn.close()
 
 

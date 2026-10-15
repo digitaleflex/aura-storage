@@ -12,6 +12,8 @@ import hmac
 import secrets
 import time
 
+from . import ids
+
 PREFIX = "aura_"
 SECRET_BYTES = 32  # 256 bits -> 64 hex characters
 
@@ -36,6 +38,8 @@ def parse_token(token: str):
         return None
     identity_id, secret = rest.split("_", 1)
     if not identity_id or not secret:
+        return None
+    if not ids.is_canonical(identity_id):
         return None
     return identity_id, secret
 

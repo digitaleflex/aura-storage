@@ -1,15 +1,16 @@
 """PostgreSQL catalogue implementing the same Repository interface as db.py (#19)."""
 import time
-import uuid
 from pathlib import Path
 from typing import Optional
 
 import psycopg
 from psycopg.rows import dict_row
 
+from . import ids
 from .migrations import (
-    DEFAULT_APPLICATION_ID,
-    DEFAULT_SPACE_ID,
+    DEFAULT_APPLICATION_NAME,
+    DEFAULT_ENVIRONMENT,
+    DEFAULT_SPACE_NAME,
     apply_migrations,
 )
 
@@ -29,7 +30,7 @@ class Repository:
         return int(time.time())
 
     def new_id(self) -> str:
-        return str(uuid.uuid4())
+        return ids.new_id()
 
     def _one(self, sql: str, params: tuple = ()) -> Optional[dict]:
         with self.conn.cursor() as cur:
@@ -57,24 +58,53 @@ class Repository:
         space_id: Optional[str] = None, application_id: Optional[str] = None,
     ) -> str:
         uid = self.new_id()
+        application_id, space_id = self.default_scope(application_id, space_id)
         self._run(
             "INSERT INTO users (id, username, pass_hash, created_at, role, "
             "application_id, space_id) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (uid, username, pass_hash, self.now(), role,
-             application_id or DEFAULT_APPLICATION_ID, space_id or DEFAULT_SPACE_ID),
+            (uid, username, pass_hash, self.now(), role, application_id, space_id),
         )
         return uid
 
     def ensure_admin(self, uid: str) -> None:
+        application_id, space_id = self.default_scope()
         self._run("UPDATE users SET role = 'admin' WHERE id = %s", (uid,))
         self._run(
             "UPDATE users SET application_id = %s WHERE id = %s AND application_id IS NULL",
-            (DEFAULT_APPLICATION_ID, uid),
+            (application_id, uid),
         )
         self._run(
             "UPDATE users SET space_id = %s WHERE id = %s AND space_id IS NULL",
-            (DEFAULT_SPACE_ID, uid),
+            (space_id, uid),
         )
+
+    # -- default tenant ---------------------------------------------------
+    def get_default_space(self, application_id: str) -> Optional[dict]:
+        """The seeded default space of ``application_id`` (name + environment)."""
+        return self._one(
+            "SELECT * FROM spaces WHERE application_id = %s AND name = %s "
+            "AND environment = %s ORDER BY created_at LIMIT 1",
+            (application_id, DEFAULT_SPACE_NAME, DEFAULT_ENVIRONMENT),
+        )
+
+    def default_scope(
+        self,
+        application_id: Optional[str] = None,
+        space_id: Optional[str] = None,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Resolve the seeded default application/space ids for a new row.
+
+        Ids are generated UUID v4 values, not constants, so they are looked up by
+        the seed names (``aura`` / ``default`` / ``prod``) and only used to fill a
+        missing argument. Either element stays ``None`` if the seed row is absent.
+        """
+        if not application_id:
+            application = self.get_application_by_name(DEFAULT_APPLICATION_NAME)
+            application_id = application["id"] if application else None
+        if not space_id and application_id:
+            space = self.get_default_space(application_id)
+            space_id = space["id"] if space else None
+        return application_id, space_id
 
     # -- sessions ---------------------------------------------------------
     def create_session(self, user_id: str, csrf: str, expires_at: int) -> str:
@@ -273,6 +303,79 @@ class Repository:
 
     def delete_object_row(self, oid: str) -> None:
         self._run("DELETE FROM objects WHERE id = %s", (oid,))
+
+    # -- folders (#61) ----------------------------------------------------
+    # Folders are logical catalogue entities owned by a human user. They are
+    # never real host directories; parent/child links live in `parent_id`.
+    def create_folder(self, owner_id: str, name: str, parent_id: Optional[str] = None) -> str:
+        fid = self.new_id()
+        self._run(
+            "INSERT INTO folders (id, owner_id, parent_id, name, created_at) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (fid, owner_id, parent_id, name, self.now()),
+        )
+        return fid
+
+    def get_folder(self, fid: str, *, owner_id: str) -> Optional[dict]:
+        return self._one(
+            "SELECT * FROM folders WHERE id = %s AND owner_id = %s", (fid, owner_id)
+        )
+
+    def list_folders(self, *, owner_id: str, parent_id: Optional[str] = None) -> list:
+        # parent_id=None lists the root level (parent_id IS NULL).
+        if parent_id is None:
+            return self._all(
+                "SELECT * FROM folders WHERE owner_id = %s AND parent_id IS NULL "
+                "ORDER BY name",
+                (owner_id,),
+            )
+        return self._all(
+            "SELECT * FROM folders WHERE owner_id = %s AND parent_id = %s ORDER BY name",
+            (owner_id, parent_id),
+        )
+
+    def folder_name_exists(
+        self, *, owner_id: str, parent_id: Optional[str], name: str,
+        exclude_id: Optional[str] = None,
+    ) -> bool:
+        if parent_id is None:
+            sql = "SELECT 1 AS x FROM folders WHERE owner_id = %s AND parent_id IS NULL AND name = %s"
+            params: list = [owner_id, name]
+        else:
+            sql = "SELECT 1 AS x FROM folders WHERE owner_id = %s AND parent_id = %s AND name = %s"
+            params = [owner_id, parent_id, name]
+        if exclude_id is not None:
+            sql += " AND id != %s"
+            params.append(exclude_id)
+        return self._one(sql, tuple(params)) is not None
+
+    def rename_folder(self, fid: str, *, owner_id: str, name: str) -> None:
+        self._run(
+            "UPDATE folders SET name = %s WHERE id = %s AND owner_id = %s", (name, fid, owner_id)
+        )
+
+    def set_folder_parent(
+        self, fid: str, *, owner_id: str, parent_id: Optional[str]
+    ) -> None:
+        self._run(
+            "UPDATE folders SET parent_id = %s WHERE id = %s AND owner_id = %s",
+            (parent_id, fid, owner_id),
+        )
+
+    def folder_child_count(self, fid: str, *, owner_id: str) -> int:
+        return int(self._one(
+            "SELECT COUNT(*) AS n FROM folders WHERE parent_id = %s AND owner_id = %s",
+            (fid, owner_id),
+        )["n"])
+
+    def folder_object_count(self, fid: str, *, owner_id: str) -> int:
+        return int(self._one(
+            "SELECT COUNT(*) AS n FROM objects WHERE folder_id = %s AND owner_id = %s",
+            (fid, owner_id),
+        )["n"])
+
+    def delete_folder(self, fid: str, *, owner_id: str) -> None:
+        self._run("DELETE FROM folders WHERE id = %s AND owner_id = %s", (fid, owner_id))
 
     # -- observability (#40) ----------------------------------------------
     def stats(self) -> dict:
