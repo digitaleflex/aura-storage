@@ -263,13 +263,22 @@ class Repository:
 
     def list_objects(
         self, *, space_id: str, owner_id: Optional[str] = None,
-        limit: int = 50, offset: int = 0,
+        folder_id: Optional[str] = None, limit: int = 50, offset: int = 0,
     ):
+        # ``folder_id`` narrows the list when supplied: an empty string means
+        # "not filed in any folder" (folder_id IS NULL), a uuid means that
+        # folder. Omitting it keeps the previous behaviour (every object).
         sql = "SELECT * FROM objects WHERE space_id = %s"
         params = [space_id]
         if owner_id is not None:
             sql += " AND owner_id = %s"
             params.append(owner_id)
+        if folder_id is not None:
+            if folder_id == "":
+                sql += " AND folder_id IS NULL"
+            else:
+                sql += " AND folder_id = %s"
+                params.append(folder_id)
         sql += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
         params += [limit, offset]
         return self._all(sql, tuple(params))
@@ -334,6 +343,14 @@ class Repository:
             (owner_id, parent_id),
         )
 
+    def list_all_folders(self, *, owner_id: str) -> list:
+        # Flat listing of the owner's whole tree in one query (#62 follow-up).
+        # Ordered by name for a deterministic payload; the client rebuilds the
+        # hierarchy from parent_id. Owner-scoped, so no cross-user leak.
+        return self._all(
+            "SELECT * FROM folders WHERE owner_id = %s ORDER BY name, id", (owner_id,)
+        )
+
     def folder_name_exists(
         self, *, owner_id: str, parent_id: Optional[str], name: str,
         exclude_id: Optional[str] = None,
@@ -360,6 +377,15 @@ class Repository:
         self._run(
             "UPDATE folders SET parent_id = %s WHERE id = %s AND owner_id = %s",
             (parent_id, fid, owner_id),
+        )
+
+    def set_object_folder(self, oid: str, *, folder_id: Optional[str]) -> None:
+        # File an object into a folder, or unfiled (folder_id IS NULL). Scope is
+        # enforced by the caller first (#61/#62): the route reads the object with
+        # the caller's space/owner filter before issuing this update.
+        self._run(
+            "UPDATE objects SET folder_id = %s, updated_at = %s WHERE id = %s",
+            (folder_id, self.now(), oid),
         )
 
     def folder_child_count(self, fid: str, *, owner_id: str) -> int:

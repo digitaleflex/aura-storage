@@ -33,14 +33,70 @@ export interface ObjectItem {
   size_bytes: number;
   checksum_sha256: string;
   status: string;
+  /** Folder the object is filed in, or null when unfiled. */
+  folder_id: string | null;
 }
 
 export interface ObjectsListResponse {
   items: ObjectItem[];
 }
 
+/** A logical folder owned by the signed-in human user (#61). */
+export interface FolderItem {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  created_at: number;
+}
+
+export interface FolderCreateInput {
+  name: string;
+  parent_id?: string | null;
+}
+
+export interface FolderPatchInput {
+  name?: string;
+  parent_id?: string | null;
+}
+
+/** Response of creating a machine identity: the token is shown exactly once. */
+export interface IdentityCreateResponse {
+  id: string;
+  name: string;
+  space_id: string;
+  application_id: string;
+  scopes: string[];
+  expires_at: number | null;
+  token: string;
+}
+
+export interface IdentityRotateResponse {
+  id: string;
+  token: string;
+}
+
+export interface ReconcileResponse {
+  expired: number;
+  storage_deletes_attempted: number;
+}
+
+/**
+ * Mirrors `SERVICE_SCOPES` in api/authz.py: machine identities are data-plane
+ * principals and may never hold platform administration capabilities.
+ */
+export const SERVICE_SCOPES = [
+  "objects:read",
+  "objects:write",
+  "objects:delete",
+  "objects:purge",
+] as const;
+
 export interface UploadIntentRequest {
-  bucket: string;
+  /**
+   * Optional: when omitted the server files the object in the caller's default
+   * space bucket. Only sent when a caller must target a specific bucket.
+   */
+  bucket?: string;
   display_name: string;
   content_type: string;
   /** Exact object size in bytes; the API signs it into the presigned URL. */
@@ -81,6 +137,14 @@ export interface SessionInfo {
 /** True when a role may read the administration console (`admin:read`). */
 export function hasAdminAccess(role: string | null | undefined): boolean {
   return role === "operator" || role === "admin";
+}
+
+/** True when a machine identity scope list contains `scope`. */
+export function hasScope(
+  scopes: readonly string[] | null | undefined,
+  scope: string,
+): boolean {
+  return scopes?.includes(scope) ?? false;
 }
 
 export interface AdminStats {
@@ -177,8 +241,28 @@ export const api = {
     });
   },
 
-  listObjects(): Promise<ObjectsListResponse> {
-    return request<ObjectsListResponse>("/api/v1/objects");
+  /**
+   * List objects. `folderId` narrows the list against the catalogue:
+   * `undefined` = every object, `null` = only unfiled objects, a string = that
+   * folder. The folder id is validated by the server. `limit`/`offset` page the
+   * result (the server caps `limit` at 100).
+   */
+  listObjects(
+    folderId?: string | null,
+    page?: { limit?: number; offset?: number },
+  ): Promise<ObjectsListResponse> {
+    const params = new URLSearchParams();
+    if (folderId !== undefined) {
+      params.set("folder_id", folderId ?? "root");
+    }
+    if (page?.limit !== undefined) {
+      params.set("limit", String(page.limit));
+    }
+    if (page?.offset !== undefined) {
+      params.set("offset", String(page.offset));
+    }
+    const query = params.toString();
+    return request<ObjectsListResponse>(`/api/v1/objects${query ? `?${query}` : ""}`);
   },
 
   me(): Promise<SessionInfo> {
@@ -211,7 +295,78 @@ export const api = {
     );
   },
 
-  // --- Administration console (read-only, `admin:read`) ---
+  // --- Object lifecycle ---
+  /** File an object into a folder, or unfile it (`folderId` null = root). */
+  moveObject(
+    id: string,
+    folderId: string | null,
+    csrf: string,
+  ): Promise<ObjectItem> {
+    return request<ObjectItem>(`/api/v1/objects/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: { folder_id: folderId },
+      csrf,
+    });
+  },
+
+  /** Soft-delete an object (objects:delete). */
+  deleteObject(id: string, csrf: string): Promise<{ id: string; status: string }> {
+    return request<{ id: string; status: string }>(
+      `/api/v1/objects/${encodeURIComponent(id)}`,
+      { method: "DELETE", csrf },
+    );
+  },
+
+  /** Permanently delete an object (objects:purge; operator/admin only). */
+  purgeObject(id: string, csrf: string): Promise<{ id: string; status: string }> {
+    return request<{ id: string; status: string }>(
+      `/api/v1/objects/${encodeURIComponent(id)}/purge`,
+      { method: "POST", csrf },
+    );
+  },
+
+  // --- Logical folders (human session only) ---
+  /** One level of the caller's tree (root when `parentId` is omitted). */
+  listFolders(parentId?: string): Promise<ListResponse<FolderItem>> {
+    const path = parentId
+      ? `/api/v1/folders?parent_id=${encodeURIComponent(parentId)}`
+      : "/api/v1/folders";
+    return request<ListResponse<FolderItem>>(path);
+  },
+
+  /** The caller's whole folder tree as a flat list, in a single request. */
+  listAllFolders(): Promise<ListResponse<FolderItem>> {
+    return request<ListResponse<FolderItem>>("/api/v1/folders?all=true");
+  },
+
+  getFolder(id: string): Promise<FolderItem> {
+    return request<FolderItem>(`/api/v1/folders/${encodeURIComponent(id)}`);
+  },
+
+  createFolder(input: FolderCreateInput, csrf: string): Promise<FolderItem> {
+    return request<FolderItem>("/api/v1/folders", {
+      method: "POST",
+      body: input,
+      csrf,
+    });
+  },
+
+  updateFolder(id: string, patch: FolderPatchInput, csrf: string): Promise<FolderItem> {
+    return request<FolderItem>(`/api/v1/folders/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: patch,
+      csrf,
+    });
+  },
+
+  deleteFolder(id: string, csrf: string): Promise<{ id: string; status: string }> {
+    return request<{ id: string; status: string }>(
+      `/api/v1/folders/${encodeURIComponent(id)}`,
+      { method: "DELETE", csrf },
+    );
+  },
+
+  // --- Administration console (reads, `admin:read`) ---
   adminStats(): Promise<AdminStats> {
     return request<AdminStats>("/api/v1/admin/stats");
   },
@@ -226,6 +381,71 @@ export const api = {
 
   listIdentities(): Promise<ListResponse<IdentityItem>> {
     return request<ListResponse<IdentityItem>>("/api/v1/admin/identities");
+  },
+
+  // --- Administration mutations (`admin:write`) ---
+  reconcile(csrf: string): Promise<ReconcileResponse> {
+    return request<ReconcileResponse>("/api/v1/admin/reconcile", {
+      method: "POST",
+      csrf,
+    });
+  },
+
+  createApplication(
+    name: string,
+    csrf: string,
+  ): Promise<{ id: string; name: string }> {
+    return request<{ id: string; name: string }>("/api/v1/admin/applications", {
+      method: "POST",
+      body: { name },
+      csrf,
+    });
+  },
+
+  createSpace(
+    input: {
+      application_id: string;
+      name: string;
+      environment: string;
+      default_bucket?: string;
+    },
+    csrf: string,
+  ): Promise<{ id: string; bucket: string }> {
+    return request<{ id: string; bucket: string }>("/api/v1/admin/spaces", {
+      method: "POST",
+      body: input,
+      csrf,
+    });
+  },
+
+  createIdentity(
+    input: {
+      space_id: string;
+      name: string;
+      scopes: string[];
+      ttl_seconds?: number;
+    },
+    csrf: string,
+  ): Promise<IdentityCreateResponse> {
+    return request<IdentityCreateResponse>("/api/v1/admin/identities", {
+      method: "POST",
+      body: input,
+      csrf,
+    });
+  },
+
+  rotateIdentity(id: string, csrf: string): Promise<IdentityRotateResponse> {
+    return request<IdentityRotateResponse>(
+      `/api/v1/admin/identities/${encodeURIComponent(id)}/rotate`,
+      { method: "POST", csrf },
+    );
+  },
+
+  revokeIdentity(id: string, csrf: string): Promise<{ id: string; revoked: boolean }> {
+    return request<{ id: string; revoked: boolean }>(
+      `/api/v1/admin/identities/${encodeURIComponent(id)}/revoke`,
+      { method: "POST", csrf },
+    );
   },
 };
 

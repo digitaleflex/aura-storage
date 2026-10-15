@@ -50,14 +50,15 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/login` | public | failed attempts rate-limited per client IP |
 | POST | `/api/v1/logout` | authenticated **human** + CSRF | deletes the session |
 | GET | `/api/v1/me` | authenticated | principal metadata |
-| GET | `/api/v1/objects` | `objects:read` | scoped to space (+ owner for humans) |
+| GET | `/api/v1/objects` | `objects:read` | scoped to space (+ owner for humans); optional `folder_id` filter (`root` = unfiled) |
 | GET | `/api/v1/objects/{oid}` | `objects:read` | 404 if outside the caller's scope |
+| PATCH | `/api/v1/objects/{oid}` | `objects:write` | **human only**; file/unfile an object into an owned folder |
 | POST | `/api/v1/objects/upload-intents` | `objects:write` | server picks the object key |
 | POST | `/api/v1/objects/{oid}/commit` | `objects:write` | streaming SHA-256, idempotent |
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |
 | POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin |
-| GET | `/api/v1/folders` | `objects:read` | **human only**; owner-scoped, root or `?parent_id=` |
+| GET | `/api/v1/folders` | `objects:read` | **human only**; owner-scoped, root, `?parent_id=`, or `?all=true` (flat tree) |
 | POST | `/api/v1/folders` | `objects:write` | **human only**; logical folder, no host directory |
 | GET | `/api/v1/folders/{fid}` | `objects:read` | **human only**; 404 outside the owner's tree |
 | PATCH | `/api/v1/folders/{fid}` | `objects:write` | **human only**; rename/move, cycle-refused |
@@ -95,8 +96,11 @@ never counts as closed — it would let an auth-less route pass if its body were
   them. Listing, reading, moving or deleting a folder filters by the caller's
   `owner_id`; a folder owned by someone else is a 404, never a 403 (no existence leak).
   A move that would place a folder inside its own subtree is refused (409), and a
-  folder that still has children or objects cannot be deleted (409). Space-scoped
-  folders for service identities are a follow-up tied to `#35`.
+  folder that still has children or objects cannot be deleted (409). Filing an
+  **object** into a folder (`PATCH /api/v1/objects/{oid}`) is likewise human-only and
+  owner-scoped: the object is read with the caller's space/owner filter, and the target
+  folder must be owned by the caller, otherwise 404. Space-scoped folders for service
+  identities are a follow-up tied to `#35`.
 - 401 (not authenticated) and 403 (not permitted) never reveal whether an object
   exists; cross-scope reads return 404.
 

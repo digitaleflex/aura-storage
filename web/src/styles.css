@@ -365,7 +365,7 @@ input:focus-visible {
   font-size: 14px;
 }
 
-/* Admin console: read-only. Stat cards on a grid, then registry tables. */
+/* Admin console: registries on a grid of stat cards, then registry tables. */
 .section {
   margin-top: 28px;
 }
@@ -462,5 +462,293 @@ p .chip {
 
   .table-wrap {
     overflow-x: auto;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Fichiers workspace (#62): breadcrumb, folders, object actions.      */
+/* ------------------------------------------------------------------ */
+
+/* Page column: one vertical rhythm instead of ad-hoc margins. */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+/* Breadcrumb: every ancestor is a target, the last one is the current page. */
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  margin: 6px 0 10px;
+}
+
+.crumb {
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--electric-deep);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-small);
+}
+
+.crumb:hover {
+  background: var(--paper);
+}
+
+.crumb-current {
+  color: var(--ink);
+  font-weight: 700;
+  cursor: default;
+}
+
+.crumb-current:hover {
+  background: none;
+}
+
+.crumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.crumb-sep {
+  color: var(--faint);
+}
+
+.folder-grid {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.folder-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.folder-card:hover {
+  border-color: var(--faint);
+}
+
+.folder-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  padding: 2px;
+  border-radius: var(--radius-small);
+}
+
+.folder-icon {
+  display: inline-flex;
+  color: var(--electric);
+}
+
+.folder-name {
+  overflow-wrap: anywhere;
+}
+
+.folder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin-top: 4px;
+}
+
+/* "Charger plus": pagination control under the object table. */
+.load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+.btn-danger:hover {
+  border-color: #8f1e17;
+}
+
+/* Dialog (native <dialog>): a focused surface over a dimmed backdrop. */
+.dialog {
+  border: none;
+  border-radius: var(--radius);
+  padding: 0;
+  width: min(520px, 92vw);
+  box-shadow: 0 18px 50px rgba(6, 13, 26, 0.35);
+  color: var(--ink);
+}
+
+.dialog::backdrop {
+  background: rgba(6, 13, 26, 0.45);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dialog-head h2 {
+  margin: 0;
+}
+
+.dialog-body {
+  padding: 18px 20px 20px;
+}
+
+.dialog-text {
+  font-size: 14px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.move-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* One-time secret panel: lime accent for a verified, high-stakes state. */
+.token-panel {
+  border: 1px solid var(--lime);
+  background: #f7fde6;
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin: 14px 0 4px;
+}
+
+.token-panel h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.token-value {
+  display: block;
+  margin: 10px 0;
+  padding: 10px 12px;
+  background: var(--night-900);
+  color: #dbe4f3;
+  border-radius: var(--radius-small);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.token-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Form extras used by the admin console. */
+.field select,
+.field input[type="number"] {
+  font: inherit;
+  font-weight: 400;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  padding: 9px 12px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.scopes-field {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  padding: 8px 12px 10px;
+}
+
+.scopes-field legend {
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+  font-size: 13.5px;
+}
+
+/* Narrow screens: folder cards stack, actions stay reachable. */
+@media (max-width: 760px) {
+  .folder-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .row-actions {
+    justify-content: flex-start;
+  }
+
+  .dialog-head,
+  .dialog-body {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 }

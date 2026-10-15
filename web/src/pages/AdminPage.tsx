@@ -1,7 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
-import { api, hasAdminAccess } from "../lib/api";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, hasAdminAccess, hasScope, SERVICE_SCOPES } from "../lib/api";
 import type { IdentityItem } from "../lib/api";
-import { useSession } from "../lib/auth";
+import { useAuth, useSession } from "../lib/auth";
+import { ConfirmAction } from "../components/Dialog";
+import { OneTimeToken } from "../components/OneTimeToken";
 
 const DATE_FMT = new Intl.DateTimeFormat("fr-FR", {
   dateStyle: "medium",
@@ -26,10 +29,29 @@ function identityState(item: IdentityItem): { label: string; className: string }
   return { label: "Active", className: "chip chip-ok" };
 }
 
-/** Read-only administration console (`admin:read`). No mutations here. */
+/** Administration console: read-only registries plus `admin:write` mutations. */
 export function AdminPage() {
+  const { csrf } = useAuth();
   const session = useSession();
+  const queryClient = useQueryClient();
   const canAdmin = hasAdminAccess(session.data?.role);
+  const canWrite = hasScope(session.data?.scopes, "admin:write");
+
+  const [error, setError] = useState<string | null>(null);
+  const [oneTimeToken, setOneTimeToken] = useState<string | null>(null);
+
+  // Create-application form
+  const [appName, setAppName] = useState("");
+  // Create-space form
+  const [spaceApp, setSpaceApp] = useState("");
+  const [spaceName, setSpaceName] = useState("");
+  const [spaceEnv, setSpaceEnv] = useState("prod");
+  const [spaceBucket, setSpaceBucket] = useState("");
+  // Create-identity form
+  const [idName, setIdName] = useState("");
+  const [idSpace, setIdSpace] = useState("");
+  const [idScopes, setIdScopes] = useState<string[]>(["objects:read"]);
+  const [idTtlDays, setIdTtlDays] = useState("");
 
   const stats = useQuery({
     queryKey: ["admin", "stats"],
@@ -56,6 +78,107 @@ export function AdminPage() {
     retry: false,
   });
 
+  function refreshAdmin() {
+    void queryClient.invalidateQueries({ queryKey: ["admin"] });
+  }
+
+  function fail(err: unknown, fallback: string) {
+    setError(err instanceof Error ? err.message : fallback);
+  }
+
+  const reconcile = useMutation({
+    mutationFn: () => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.reconcile(csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Réconciliation impossible."),
+  });
+
+  const createApp = useMutation({
+    mutationFn: (name: string) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.createApplication(name, csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      setAppName("");
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Création d'application impossible."),
+  });
+
+  const createSpace = useMutation({
+    mutationFn: () => {
+      if (!csrf) throw new Error("Session expirée.");
+      const body: {
+        application_id: string;
+        name: string;
+        environment: string;
+        default_bucket?: string;
+      } = { application_id: spaceApp, name: spaceName, environment: spaceEnv };
+      if (spaceBucket.trim()) body.default_bucket = spaceBucket.trim();
+      return api.createSpace(body, csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      setSpaceName("");
+      setSpaceBucket("");
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Création d'espace impossible."),
+  });
+
+  const createIdentity = useMutation({
+    mutationFn: () => {
+      if (!csrf) throw new Error("Session expirée.");
+      const body: {
+        space_id: string;
+        name: string;
+        scopes: string[];
+        ttl_seconds?: number;
+      } = { space_id: idSpace, name: idName, scopes: idScopes };
+      const days = Number.parseInt(idTtlDays, 10);
+      if (Number.isFinite(days) && days > 0) body.ttl_seconds = days * 86400;
+      return api.createIdentity(body, csrf);
+    },
+    onSuccess: (data) => {
+      setError(null);
+      setIdName("");
+      setOneTimeToken(data.token);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Création d'identité impossible."),
+  });
+
+  const rotate = useMutation({
+    mutationFn: (id: string) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.rotateIdentity(id, csrf);
+    },
+    onSuccess: (data) => {
+      setError(null);
+      setOneTimeToken(data.token);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Rotation impossible."),
+  });
+
+  const revoke = useMutation({
+    mutationFn: (id: string) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.revokeIdentity(id, csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Révocation impossible."),
+  });
+
   // The backend is the authority; this only keeps the UI honest.
   if (!canAdmin) {
     return (
@@ -75,6 +198,8 @@ export function AdminPage() {
   const spaceNames = new Map(
     (spaces.data?.items ?? []).map((s) => [s.id, s.name]),
   );
+  const appItems = applications.data?.items ?? [];
+  const spaceItems = spaces.data?.items ?? [];
 
   const objectsByStatus = stats.data?.objects_by_status ?? {};
   const objectsTotal = Object.values(objectsByStatus).reduce((a, b) => a + b, 0);
@@ -83,12 +208,50 @@ export function AdminPage() {
     <div className="stack">
       <h1>Administration</h1>
       <p className="muted">
-        Espaces, applications et identités machine-à-machine. Lecture seule :
-        les opérations de création, rotation et révocation arrivent ensuite.
+        Espaces, applications et identités machine-à-machine.
+        {canWrite
+          ? " Votre rôle peut créer, faire tourner et révoquer."
+          : " Lecture seule (la création, la rotation et la révocation exigent le rôle administrateur)."}
       </p>
 
+      {error ? (
+        <p role="alert" className="alert alert-error">
+          {error}
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => setError(null)}
+          >
+            Fermer
+          </button>
+        </p>
+      ) : null}
+
+      {oneTimeToken ? (
+        <OneTimeToken token={oneTimeToken} onDismiss={() => setOneTimeToken(null)} />
+      ) : null}
+
       <section className="section" aria-labelledby="admin-stats-title">
-        <h2 id="admin-stats-title">Tableau de bord</h2>
+        <div className="section-head">
+          <h2 id="admin-stats-title">Tableau de bord</h2>
+          {canWrite ? (
+            <ConfirmAction
+              label="Réconcilier les envois expirés"
+              title="Réconcilier"
+              message="Les intentions d'envoi en attente trop anciennes seront expirées et leurs octets partiels supprimés."
+              confirmLabel="Réconcilier"
+              pending={reconcile.isPending}
+              onConfirm={() => reconcile.mutate()}
+            />
+          ) : null}
+        </div>
+        {reconcile.isSuccess ? (
+          <p role="status" className="alert alert-ok">
+            Réconciliation : {reconcile.data.expired} expiré(s),{" "}
+            {reconcile.data.storage_deletes_attempted} suppression(s) stockage
+            tentée(s).
+          </p>
+        ) : null}
         {stats.isError ? (
           <p role="alert" className="alert alert-error">
             Statistiques indisponibles.
@@ -141,6 +304,32 @@ export function AdminPage() {
 
       <section className="section" aria-labelledby="admin-apps-title">
         <h2 id="admin-apps-title">Applications</h2>
+        {canWrite ? (
+          <form
+            className="form form-inline"
+            onSubmit={(e) => {
+              e.preventDefault();
+              createApp.mutate(appName);
+            }}
+          >
+            <label className="field">
+              <span>Nouvelle application</span>
+              <input
+                type="text"
+                value={appName}
+                onChange={(e) => setAppName(e.target.value)}
+                required
+              />
+            </label>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={createApp.isPending}
+            >
+              Créer
+            </button>
+          </form>
+        ) : null}
         {applications.isError ? (
           <p role="alert" className="alert alert-error">
             Applications indisponibles.
@@ -181,6 +370,64 @@ export function AdminPage() {
 
       <section className="section" aria-labelledby="admin-spaces-title">
         <h2 id="admin-spaces-title">Espaces</h2>
+        {canWrite ? (
+          <form
+            className="form form-inline"
+            onSubmit={(e) => {
+              e.preventDefault();
+              createSpace.mutate();
+            }}
+          >
+            <label className="field">
+              <span>Application</span>
+              <select
+                value={spaceApp}
+                onChange={(e) => setSpaceApp(e.target.value)}
+                required
+              >
+                <option value="">— choisir —</option>
+                {appItems.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Nom</span>
+              <input
+                type="text"
+                value={spaceName}
+                onChange={(e) => setSpaceName(e.target.value)}
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Environnement</span>
+              <input
+                type="text"
+                value={spaceEnv}
+                onChange={(e) => setSpaceEnv(e.target.value)}
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Bucket (optionnel)</span>
+              <input
+                type="text"
+                value={spaceBucket}
+                onChange={(e) => setSpaceBucket(e.target.value)}
+              />
+            </label>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={createSpace.isPending || appItems.length === 0}
+            >
+              Créer l'espace
+            </button>
+          </form>
+        ) : null}
         {spaces.isError ? (
           <p role="alert" className="alert alert-error">
             Espaces indisponibles.
@@ -216,10 +463,81 @@ export function AdminPage() {
       <section className="section" aria-labelledby="admin-identities-title">
         <h2 id="admin-identities-title">Identités machine-à-machine</h2>
         <p className="muted">
-          Les jetons ne sont jamais affichés ici : AURA n'en conserve que
+          Les jetons ne sont jamais réaffichés : AURA n'en conserve que
           l'empreinte SHA-256. Un jeton n'est visible qu'une seule fois, à sa
           création ou à sa rotation.
         </p>
+        {canWrite ? (
+          <form
+            className="form form-inline"
+            onSubmit={(e) => {
+              e.preventDefault();
+              createIdentity.mutate();
+            }}
+          >
+            <label className="field">
+              <span>Nom</span>
+              <input
+                type="text"
+                value={idName}
+                onChange={(e) => setIdName(e.target.value)}
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Espace</span>
+              <select
+                value={idSpace}
+                onChange={(e) => setIdSpace(e.target.value)}
+                required
+              >
+                <option value="">— choisir —</option>
+                {spaceItems.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.environment})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <fieldset className="field scopes-field">
+              <legend>Portées</legend>
+              {SERVICE_SCOPES.map((scope) => (
+                <label key={scope} className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={idScopes.includes(scope)}
+                    onChange={(e) =>
+                      setIdScopes((current) =>
+                        e.target.checked
+                          ? [...current, scope]
+                          : current.filter((s) => s !== scope),
+                      )
+                    }
+                  />
+                  {scope}
+                </label>
+              ))}
+            </fieldset>
+            <label className="field">
+              <span>Expiration (jours, optionnel)</span>
+              <input
+                type="number"
+                min="1"
+                value={idTtlDays}
+                onChange={(e) => setIdTtlDays(e.target.value)}
+              />
+            </label>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={
+                createIdentity.isPending || spaceItems.length === 0 || idScopes.length === 0
+              }
+            >
+              Créer l'identité
+            </button>
+          </form>
+        ) : null}
         {identities.isError ? (
           <p role="alert" className="alert alert-error">
             Identités indisponibles.
@@ -236,11 +554,17 @@ export function AdminPage() {
                   <th scope="col">Portées</th>
                   <th scope="col">État</th>
                   <th scope="col">Expire</th>
+                  {canWrite ? (
+                    <th scope="col">
+                      <span className="visually-hidden">Actions</span>
+                    </th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
                 {identities.data?.items.map((i) => {
                   const state = identityState(i);
+                  const revoked = Boolean(i.revoked_at);
                   return (
                     <tr key={i.id}>
                       <td className="name">{i.name}</td>
@@ -252,6 +576,42 @@ export function AdminPage() {
                         <span className={state.className}>{state.label}</span>
                       </td>
                       <td className="num muted">{formatTs(i.expires_at)}</td>
+                      {canWrite ? (
+                        <td className="row-actions">
+                          <ConfirmAction
+                            label="Rotation"
+                            title="Faire tourner le jeton"
+                            message={
+                              <>
+                                Générer un nouveau jeton pour{" "}
+                                <strong>{i.name}</strong> ? L'ancien cesse
+                                immédiatement de fonctionner.
+                              </>
+                            }
+                            confirmLabel="Rotation"
+                            className="btn btn-small"
+                            pending={rotate.isPending}
+                            disabled={revoked}
+                            onConfirm={() => rotate.mutate(i.id)}
+                          />
+                          <ConfirmAction
+                            label="Révoquer"
+                            title="Révoquer l'identité"
+                            message={
+                              <>
+                                Révoquer <strong>{i.name}</strong> ? Toute
+                                authentification avec ce jeton échouera.
+                              </>
+                            }
+                            confirmLabel="Révoquer"
+                            danger
+                            className="btn btn-small"
+                            pending={revoke.isPending}
+                            disabled={revoked}
+                            onConfirm={() => revoke.mutate(i.id)}
+                          />
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })}
