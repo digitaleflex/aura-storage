@@ -286,13 +286,22 @@ class Repository:
 
     def list_objects(
         self, *, space_id: str, owner_id: Optional[str] = None,
-        limit: int = 50, offset: int = 0,
+        folder_id: Optional[str] = None, limit: int = 50, offset: int = 0,
     ):
+        # ``folder_id`` narrows the list when supplied: an empty string means
+        # "not filed in any folder" (folder_id IS NULL), a uuid means that
+        # folder. Omitting it keeps the previous behaviour (every object).
         sql = "SELECT * FROM objects WHERE space_id = ?"
         params = [space_id]
         if owner_id is not None:
             sql += " AND owner_id = ?"
             params.append(owner_id)
+        if folder_id is not None:
+            if folder_id == "":
+                sql += " AND folder_id IS NULL"
+            else:
+                sql += " AND folder_id = ?"
+                params.append(folder_id)
         sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params += [limit, offset]
         return self.conn.execute(sql, params).fetchall()

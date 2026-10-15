@@ -78,10 +78,18 @@ paths:
         - in: query
           name: offset
           schema: { type: integer, minimum: 0, default: 0 }
+        - in: query
+          name: folder_id
+          schema: { type: string }
+          description: >-
+            Optional catalogue filter (#62): the literal "root" returns objects
+            not filed in any folder; a canonical uuid returns that folder's
+            objects. A malformed value is refused with 422.
       responses:
-        "200": { description: Page of object metadata }
+        "200": { description: Page of object metadata (each item carries folder_id) }
         "401": { description: Authentication required }
         "403": { description: Access denied }
+        "422": { description: Malformed folder_id }
   /api/v1/objects/upload-intents:
     post:
       summary: Create a short-lived upload intent (capability objects:write)

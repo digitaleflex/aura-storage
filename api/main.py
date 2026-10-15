@@ -409,17 +409,27 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
 
 @app.get("/api/v1/objects")
 def list_objects(
-    principal: dict = Depends(authorize(OBJECTS_READ)), limit: int = 50, offset: int = 0
+    principal: dict = Depends(authorize(OBJECTS_READ)), limit: int = 50, offset: int = 0,
+    folder_id: str | None = None,
 ):
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
-    rows = repo.list_objects(**_object_scope(principal), limit=limit, offset=offset)
+    # ``folder_id`` is an optional catalogue filter (#62): the literal "root"
+    # selects objects not filed in any folder; a canonical uuid selects that
+    # folder. Unknown or foreign folder ids simply match nothing (no leak).
+    folder_filter: str | None = None
+    if folder_id is not None:
+        folder_filter = "" if folder_id == "root" else _canonical_id(folder_id, "folder id")
+    rows = repo.list_objects(
+        **_object_scope(principal), folder_id=folder_filter, limit=limit, offset=offset
+    )
     return {
         "items": [
             {
                 "id": r["id"], "display_name": r["display_name"],
                 "content_type": r["content_type"], "size_bytes": r["size_bytes"],
                 "checksum_sha256": r["checksum_sha256"], "status": r["status"],
+                "folder_id": r["folder_id"],
             }
             for r in rows
         ]
@@ -436,6 +446,7 @@ def get_object(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
         "id": row["id"], "display_name": row["display_name"],
         "content_type": row["content_type"], "size_bytes": row["size_bytes"],
         "checksum_sha256": row["checksum_sha256"], "status": row["status"],
+        "folder_id": row["folder_id"],
     }
 
 
