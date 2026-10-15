@@ -1029,6 +1029,66 @@ select:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* Multi-file queue: one line per file, bounded concurrency. */
+.queue-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.queue {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.queue-item {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.queue-item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.queue-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.queue-line .transfer-name {
+  min-width: 0;
+}
+
+/* Files chosen but not yet submitted. */
+.pending {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pending-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pending-item .transfer-name {
+  flex: 1;
+  min-width: 0;
+}
+
 .progress {
   position: relative;
   height: 3px;

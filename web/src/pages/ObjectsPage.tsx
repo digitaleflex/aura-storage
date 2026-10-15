@@ -8,8 +8,20 @@ import {
 } from "@tanstack/react-query";
 import { ApiError, api, hasScope, putToPresignedUrl } from "../lib/api";
 import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
-import { idleTransfer, runTransfer } from "../lib/transfer";
-import type { TransferDeps, TransferPhase, TransferState } from "../lib/transfer";
+import { emptyQueue, startUploadQueue } from "../lib/transfer";
+import type {
+  QueueInput,
+  QueueState,
+  TransferDeps,
+  TransferPhase,
+  UploadQueue,
+} from "../lib/transfer";
+import {
+  MAX_UPLOAD_DEPTH,
+  normalizeRelativePath,
+  parentDirOf,
+  planFolders,
+} from "../lib/folderTree";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { FolderMark } from "../components/FolderMark";
@@ -20,7 +32,7 @@ const OBJECTS_PAGE_SIZE = 50;
 
 /** Human label for each transfer phase (import → validation → availability). */
 const PHASE_LABEL: Record<TransferPhase, string> = {
-  idle: "Prêt",
+  idle: "En attente",
   "requesting-intent": "Autorisation…",
   uploading: "Envoi…",
   validating: "Validation…",
@@ -29,12 +41,15 @@ const PHASE_LABEL: Record<TransferPhase, string> = {
   cancelled: "Annulé",
 };
 
-/** One idempotency key per user submission; automatic retries reuse it. */
-function newIdempotencyKey(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `k-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+/** Phases that are still moving (offer a per-file interrupt). */
+const ACTIVE_PHASES: TransferPhase[] = ["requesting-intent", "uploading", "validating"];
+
+/** Chip style for a queue item's phase. */
+function queuePhaseClass(phase: TransferPhase): string {
+  if (phase === "available") return "chip chip-ok";
+  if (phase === "failed") return "chip chip-error";
+  if (phase === "cancelled" || phase === "idle") return "chip chip-muted";
+  return "chip chip-warn";
 }
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
@@ -161,10 +176,11 @@ export function ObjectsPage() {
   const queryClient = useQueryClient();
 
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-  // Upload runs through the M03 transfer engine (progress, retries, cancel).
-  const [transfer, setTransfer] = useState<TransferState>(() => idleTransfer(null));
-  const uploadController = useRef<AbortController | null>(null);
+  // Uploads run through the M03 transfer engine as a bounded multi-file queue.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [queue, setQueue] = useState<QueueState>(() => emptyQueue());
+  const queueRef = useRef<UploadQueue | null>(null);
+  const dirInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -261,11 +277,8 @@ export function ObjectsPage() {
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
 
-  /** True while a submission is in flight (blocks accidental double submit). */
-  const transferActive =
-    transfer.phase === "requesting-intent" ||
-    transfer.phase === "uploading" ||
-    transfer.phase === "validating";
+  /** True while any file of the queue is transferring (blocks double submit). */
+  const transferActive = queue.active > 0;
 
   /** Wire the injected engine to the real API for one authenticated session. */
   function transferDeps(activeCsrf: string): TransferDeps {
@@ -466,55 +479,154 @@ export function ObjectsPage() {
   });
 
   // -- handlers ------------------------------------------------------------
-  async function handleUpload(event: FormEvent) {
+  /** Shared queue subscriber: mirrors state and reacts when it settles. */
+  function handleQueueUpdate(next: QueueState) {
+    setQueue(next);
+    if (!next.finished) return;
+    if (next.done > 0) invalidateLibrary();
+    if (next.failed > 0) {
+      const firstFailed = next.items.find((item) => item.state.phase === "failed");
+      setUploadError(firstFailed?.state.error ?? "Envoi impossible.");
+    } else {
+      setUploadError(null);
+    }
+    setPendingFiles([]);
+  }
+
+  function handleUpload(event: FormEvent) {
     event.preventDefault();
     setUploadError(null);
-    if (!file) {
-      setUploadError("Choisissez d'abord un fichier.");
+    setNotice(null);
+    if (pendingFiles.length === 0) {
+      setUploadError("Choisissez au moins un fichier.");
       return;
     }
     if (transferActive) {
-      // Block an accidental second submission while one is in flight.
+      // Block an accidental second submission while files are in flight.
       return;
     }
     if (!csrf) {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
     }
-    const controller = new AbortController();
-    uploadController.current = controller;
-    setTransfer({ ...idleTransfer(file), phase: "requesting-intent" });
-    try {
-      const result = await runTransfer(file, transferDeps(csrf), {
-        folderId: currentFolderId,
-        idempotencyKey: newIdempotencyKey(),
-        signal: controller.signal,
-        onUpdate: setTransfer,
-      });
-      if (result.state.phase === "available") {
-        // Only the backend commit sets this phase, so success is never faked.
-        // The engine's inline status shows the confirmation; no second banner.
-        setFile(null);
-        setUploadError(null);
-        invalidateLibrary();
-      } else if (result.state.phase === "failed") {
-        setNotice(null);
-        setUploadError(result.state.error ?? "Envoi impossible.");
-      }
-      // "cancelled": keep the chosen file, surface no error.
-    } finally {
-      uploadController.current = null;
+    const uploadQueue = startUploadQueue(pendingFiles, transferDeps(csrf), {
+      folderId: currentFolderId,
+      onUpdate: handleQueueUpdate,
+    });
+    queueRef.current = uploadQueue;
+  }
+
+  /** Directory import (#64): recreate the missing folders, then upload in place. */
+  async function handleFolderUpload(selected: FileList | null) {
+    if (!selected || selected.length === 0) return;
+    if (!csrf) {
+      setUploadError("Session expirée. Reconnectez-vous.");
+      return;
     }
+    if (transferActive) return;
+    setUploadError(null);
+    setNotice(null);
+
+    const list = Array.from(selected);
+    const relPaths = list.map((file) =>
+      normalizeRelativePath(
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+      ),
+    );
+    const plan = planFolders(relPaths);
+    const tooDeep = new Set(plan.tooDeep);
+    const kept = list
+      .map((file, index) => ({ file, rel: relPaths[index] ?? file.name }))
+      .filter((item) => !tooDeep.has(item.rel));
+    if (kept.length === 0) {
+      setUploadError("Aucun fichier importable dans cette sélection.");
+      return;
+    }
+
+    const keyOf = (parentId: string | null, name: string) =>
+      `${parentId ?? "root"}/${name}`;
+    const folderIds = new Map<string, string>(); // relative path -> id
+    const existing = new Map<string, string>(); // parentId/name -> id
+    for (const folder of tree) {
+      existing.set(keyOf(folder.parent_id, folder.name), folder.id);
+    }
+
+    let createdAny = false;
+    for (const folder of plan.folders) {
+      const parentId = folder.parentPath
+        ? (folderIds.get(folder.parentPath) ?? currentFolderId)
+        : currentFolderId;
+      const key = keyOf(parentId, folder.name);
+      const known = existing.get(key);
+      if (known) {
+        folderIds.set(folder.path, known);
+        continue;
+      }
+      try {
+        const made = await api.createFolder(
+          { name: folder.name, parent_id: parentId },
+          csrf,
+        );
+        existing.set(key, made.id);
+        folderIds.set(folder.path, made.id);
+        createdAny = true;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          const all = await api.listAllFolders();
+          const found = all.items.find(
+            (candidate) =>
+              (candidate.parent_id ?? null) === (parentId ?? null) &&
+              candidate.name === folder.name,
+          );
+          if (found) {
+            existing.set(key, found.id);
+            folderIds.set(folder.path, found.id);
+            continue;
+          }
+        }
+        setUploadError("Création de l'arborescence impossible.");
+        return;
+      }
+    }
+    if (createdAny) invalidateLibrary();
+    if (plan.tooDeep.length > 0) {
+      setNotice(
+        `${plan.tooDeep.length} fichier(s) ignoré(s) : arborescence trop profonde (max ${MAX_UPLOAD_DEPTH}).`,
+      );
+    }
+
+    const entries: QueueInput[] = kept.map((item) => {
+      const dir = parentDirOf(item.rel);
+      return {
+        file: item.file,
+        folderId: dir ? (folderIds.get(dir) ?? currentFolderId) : currentFolderId,
+      };
+    });
+    const uploadQueue = startUploadQueue(entries, transferDeps(csrf), {
+      folderId: currentFolderId,
+      onUpdate: handleQueueUpdate,
+    });
+    queueRef.current = uploadQueue;
   }
 
   function handleCancelUpload() {
-    uploadController.current?.abort();
+    queueRef.current?.cancelAll();
   }
 
-  function handleFileChange(selected: File | null) {
-    setFile(selected);
+  function handleRetryFailed() {
     setUploadError(null);
-    setTransfer(idleTransfer(selected));
+    queueRef.current?.retryFailed();
+  }
+
+  function handleFilesChange(selected: FileList | File[] | null) {
+    const list = selected ? Array.from(selected) : [];
+    if (list.length === 0) return;
+    setUploadError(null);
+    setPendingFiles((current) => [...current, ...list]);
+  }
+
+  function removePendingFile(index: number) {
+    setPendingFiles((current) => current.filter((_, i) => i !== index));
   }
 
   async function handleDownload(item: ObjectItem) {
@@ -772,33 +884,73 @@ export function ObjectsPage() {
         </div>
       </aside>
 
-      <section className="card intake" aria-labelledby="upload-title">
-        <h2 id="upload-title">Importer{currentName ? ` dans « ${currentName} »` : ""}</h2>
+      <section
+        className="card intake"
+        aria-labelledby="upload-title"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (!transferActive) handleFilesChange(e.dataTransfer.files);
+        }}
+      >
+        <h2 id="upload-title">
+          Importer{currentName ? ` dans « ${currentName} »` : ""}
+        </h2>
         <p className="muted">
-          Le fichier est déposé, puis vérifié par empreinte SHA-256 avant d'être
-          déclaré disponible.
+          Déposez des fichiers ici ou choisissez-les. Chaque fichier est vérifié
+          par empreinte SHA-256 avant d'être déclaré disponible.
         </p>
         <form onSubmit={handleUpload} className="form form-inline">
           <div className="field file-field">
-            <span>Fichier</span>
+            <span>Fichiers</span>
             <label className="file-picker">
               <input
                 type="file"
-                name="file"
+                name="files"
+                multiple
+                data-testid="files-input"
                 className="visually-hidden"
                 disabled={transferActive}
-                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+                onChange={(e) => {
+                  handleFilesChange(e.target.files);
+                  e.target.value = "";
+                }}
               />
-              <span className="btn">Choisir un fichier…</span>
+              <span className="btn">Choisir des fichiers…</span>
               <span className="file-picker-name">
-                {file ? file.name : "Aucun fichier sélectionné"}
+                {pendingFiles.length === 0
+                  ? "Aucun fichier sélectionné"
+                  : pendingFiles.length === 1
+                    ? (pendingFiles[0]?.name ?? "")
+                    : `${pendingFiles.length} fichiers sélectionnés`}
               </span>
             </label>
           </div>
+          <input
+            ref={dirInputRef}
+            type="file"
+            multiple
+            data-testid="folder-input"
+            className="visually-hidden"
+            disabled={transferActive}
+            onChange={(e) => {
+              void handleFolderUpload(e.target.files);
+              e.target.value = "";
+            }}
+            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+          />
+          <button
+            type="button"
+            className="btn"
+            disabled={transferActive}
+            onClick={() => dirInputRef.current?.click()}
+          >
+            Importer un dossier…
+          </button>
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={transferActive || !file}
+            disabled={transferActive || pendingFiles.length === 0}
           >
             {transferActive ? "Transfert…" : "Importer et valider"}
           </button>
@@ -807,47 +959,96 @@ export function ObjectsPage() {
               Annuler
             </button>
           ) : null}
+          {!transferActive && (queue.failed > 0 || queue.cancelled > 0) ? (
+            <button type="button" className="btn" onClick={handleRetryFailed}>
+              Réessayer les échecs
+            </button>
+          ) : null}
         </form>
 
-        {transfer.phase !== "idle" ? (
+        {pendingFiles.length > 0 && !transferActive ? (
+          <ul className="pending">
+            {pendingFiles.map((pending, index) => (
+              <li key={`${pending.name}-${index}`} className="pending-item">
+                <span className="transfer-name">{pending.name}</span>
+                <span className="muted">{formatBytes(pending.size)}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  aria-label={`Retirer ${pending.name}`}
+                  onClick={() => removePendingFile(index)}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {queue.items.length > 0 ? (
           <div className="transfer" data-testid="transfer-status" aria-live="polite">
-            <div className="transfer-head">
-              <span className="transfer-name">{transfer.fileName}</span>
-              <span className="muted">{formatBytes(transfer.sizeBytes)}</span>
-              <span
-                className={
-                  transfer.phase === "available"
-                    ? "chip chip-ok"
-                    : transfer.phase === "failed"
-                      ? "chip chip-error"
-                      : transfer.phase === "cancelled"
-                        ? "chip chip-muted"
-                        : "chip chip-warn"
-                }
-              >
-                {PHASE_LABEL[transfer.phase]}
+            <div className="queue-head">
+              <span className="muted">
+                {queue.done}/{queue.items.length} transféré
+                {queue.items.length > 1 ? "s" : ""}
+                {queue.failed > 0 ? ` · ${queue.failed} en échec` : ""}
+                {queue.cancelled > 0
+                  ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
+                  : ""}
               </span>
+              {transferActive ? (
+                <span className="muted">
+                  jusqu'à {queue.concurrency} en parallèle
+                </span>
+              ) : null}
             </div>
-            {transfer.phase === "uploading" ? (
-              <div
-                className="progress"
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.round(transfer.progress * 100)}
-                aria-label="Progression du transfert"
-              >
-                <span
-                  className="progress-bar"
-                  style={{ width: `${Math.round(transfer.progress * 100)}%` }}
-                />
-              </div>
-            ) : null}
-            {transfer.attempts > 0 ? (
-              <p className="muted">
-                Tentatives : {transfer.attempts} — temporisation avec jitter.
-              </p>
-            ) : null}
+            <ul className="queue">
+              {queue.items.map((item) => (
+                <li key={item.id} className="queue-item">
+                  <div className="queue-line">
+                    <span className="transfer-name">{item.fileName}</span>
+                    <span className="muted">{formatBytes(item.sizeBytes)}</span>
+                    <span className={queuePhaseClass(item.state.phase)}>
+                      {PHASE_LABEL[item.state.phase]}
+                    </span>
+                    {ACTIVE_PHASES.includes(item.state.phase) ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-small"
+                        aria-label={`Interrompre ${item.fileName}`}
+                        onClick={() => queueRef.current?.cancelItem(item.id)}
+                      >
+                        ×
+                      </button>
+                    ) : null}
+                  </div>
+                  {item.state.phase === "uploading" ? (
+                    <div
+                      className="progress"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(item.state.progress * 100)}
+                      aria-label={`Progression de ${item.fileName}`}
+                    >
+                      <span
+                        className="progress-bar"
+                        style={{ width: `${Math.round(item.state.progress * 100)}%` }}
+                      />
+                    </div>
+                  ) : null}
+                  {item.state.attempts > 0 &&
+                  ACTIVE_PHASES.includes(item.state.phase) ? (
+                    <p className="muted">
+                      Nouvelle tentative ({item.state.attempts})…
+                    </p>
+                  ) : null}
+                  {item.state.error && item.state.phase === "failed" ? (
+                    <p className="muted">{item.state.error}</p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
 
@@ -856,12 +1057,16 @@ export function ObjectsPage() {
             {uploadError}
           </p>
         ) : null}
-        {transfer.phase === "available" ? (
+        {queue.finished &&
+        queue.items.length > 0 &&
+        queue.done === queue.items.length ? (
           <p role="status" className="alert alert-ok">
             Import validé et vérifié par le backend.
           </p>
         ) : null}
-        {transfer.phase === "cancelled" ? (
+        {queue.finished &&
+        queue.items.length > 0 &&
+        queue.cancelled === queue.items.length ? (
           <p role="status" className="alert">
             Import annulé.
           </p>
