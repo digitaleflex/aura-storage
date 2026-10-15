@@ -503,3 +503,166 @@ test("queue honours each entry's target folder (default when omitted)", async ()
   expect(final.done).toBe(3);
   expect(new Set(folders)).toEqual(new Set(["F1", null, "DEFAULT"]));
 });
+
+// ---------------------------------------------------------------------------
+// Adaptive parallelism + paced starts (JDownLoader-inspired, M03 follow-up)
+// ---------------------------------------------------------------------------
+function queueIntent(input: {
+  fileName: string;
+  sizeBytes: number;
+}): UploadIntentResponse {
+  return {
+    id: input.fileName,
+    status: "pending",
+    method: "PUT",
+    upload_url: "https://s3.example/put",
+    headers: { "Content-Type": "application/octet-stream" },
+    content_type: "application/octet-stream",
+    size_bytes: input.sizeBytes,
+    expires_in: 900,
+    expires_at: null,
+    idempotent_replay: false,
+  };
+}
+
+test("queue shrinks parallelism after repeated congestion failures", async () => {
+  const files = ["a.bin", "b.bin", "c.bin", "d.bin", "e.bin"].map((n) => fakeFile(n));
+  let uploads = 0;
+  const deps: TransferDeps = {
+    requestIntent: async (input) => queueIntent(input),
+    upload: async () => {
+      uploads += 1;
+      throw new PresignedUploadError("network", 0, "Réseau interrompu.");
+    },
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const states: QueueState[] = [];
+  const queue = startUploadQueue(files, deps, {
+    folderId: null,
+    concurrency: 3,
+    onUpdate: (state) => states.push(state),
+  });
+  const final = await queue.done;
+
+  expect(final.failed).toBe(files.length);
+  expect(final.done).toBe(0);
+  // 3 files x 3 internal attempts each: every attempt really ran.
+  expect(uploads).toBe(files.length * 3);
+  // Two consecutive congestion failures cost one slot each: 3 -> 2 -> 1.
+  expect(final.concurrency).toBe(1);
+  expect(states.some((s) => s.concurrency === 2)).toBe(true);
+  // The initial burst never exceeded the configured maximum.
+  expect(Math.max(...states.map((s) => s.active))).toBeLessThanOrEqual(3);
+});
+
+test("queue restores parallelism after sustained success", async () => {
+  const files = ["bad1.bin", "bad2.bin", "ok1.bin", "ok2.bin", "ok3.bin"].map((n) => fakeFile(n));
+  let releaseOks: () => void = () => undefined;
+  const okGate = new Promise<void>((resolve) => {
+    releaseOks = resolve;
+  });
+  const deps: TransferDeps = {
+    requestIntent: async (input) => queueIntent(input),
+    upload: async (_url, file) => {
+      if (file.name.startsWith("bad")) {
+        throw new PresignedUploadError("network", 0, "Réseau interrompu.");
+      }
+      await okGate;
+    },
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const states: QueueState[] = [];
+  const queue = startUploadQueue(files, deps, {
+    folderId: null,
+    concurrency: 2,
+    onUpdate: (state) => states.push(state),
+  });
+
+  // Hold the good files back so both congestion failures settle first.
+  await waitFor(() => states[states.length - 1]?.failed === 2);
+  expect(states[states.length - 1]?.concurrency).toBe(1);
+  releaseOks();
+  const final = await queue.done;
+
+  expect(final.failed).toBe(2);
+  expect(final.done).toBe(3);
+  // Three consecutive successes restored the second slot.
+  expect(final.concurrency).toBe(2);
+});
+
+test("fatal errors do not shrink parallelism", async () => {
+  const files = ["a.bin", "b.bin", "c.bin"].map((n) => fakeFile(n));
+  const deps: TransferDeps = {
+    requestIntent: async (input) => queueIntent(input),
+    upload: async () => undefined,
+    commit: async () => {
+      throw new ApiError(422, "uploaded size does not match storage");
+    },
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const queue = startUploadQueue(files, deps, { folderId: null, concurrency: 2 });
+  const final = await queue.done;
+
+  expect(final.failed).toBe(files.length);
+  // A 422 is a rejected file, not a congested link: no adaptation.
+  expect(final.concurrency).toBe(2);
+});
+
+test("parallel starts are staggered by default", async () => {
+  const files = [fakeFile("a.bin"), fakeFile("b.bin")];
+  const sleeps: number[] = [];
+  const deps: TransferDeps = {
+    requestIntent: async (input) => queueIntent(input),
+    upload: async () => undefined,
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+    random: () => 0,
+  };
+
+  const queue = startUploadQueue(files, deps, { folderId: null, concurrency: 2 });
+  const final = await queue.done;
+
+  expect(final.done).toBe(2);
+  // The first file starts at once, the second after the stagger delay; a
+  // successful transfer never sleeps for backoff, so this is the stagger.
+  expect(sleeps).toEqual([250]);
+});
+
+test("startStaggerMs 0 disables pacing", async () => {
+  const files = [fakeFile("a.bin"), fakeFile("b.bin")];
+  const sleeps: number[] = [];
+  const deps: TransferDeps = {
+    requestIntent: async (input) => queueIntent(input),
+    upload: async () => undefined,
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+    random: () => 0,
+  };
+
+  const queue = startUploadQueue(files, deps, {
+    folderId: null,
+    concurrency: 2,
+    startStaggerMs: 0,
+  });
+  const final = await queue.done;
+
+  expect(final.done).toBe(2);
+  expect(sleeps).toEqual([]);
+});
