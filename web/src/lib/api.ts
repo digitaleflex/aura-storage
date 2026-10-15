@@ -66,6 +66,62 @@ export interface DownloadIntentResponse {
   expires_in: number;
 }
 
+/** Principal metadata returned by GET /api/v1/me. */
+export interface SessionInfo {
+  id: string;
+  /** "user" (human session) or "service" (machine identity). */
+  kind: string;
+  /** Role for humans: "user" | "operator" | "admin"; null for services. */
+  role: string | null;
+  space_id: string | null;
+  application_id: string | null;
+  scopes: string[];
+}
+
+/** True when a role may read the administration console (`admin:read`). */
+export function hasAdminAccess(role: string | null | undefined): boolean {
+  return role === "operator" || role === "admin";
+}
+
+export interface AdminStats {
+  objects_by_status: Record<string, number>;
+  applications: number;
+  spaces: number;
+  buckets: number;
+  service_identities: number;
+  active_service_identities: number;
+}
+
+export interface ApplicationItem {
+  id: string;
+  name: string;
+  status: string;
+}
+
+export interface SpaceItem {
+  id: string;
+  application_id: string;
+  name: string;
+  environment: string;
+}
+
+export interface IdentityItem {
+  id: string;
+  name: string;
+  space_id: string;
+  application_id: string;
+  scopes: string[];
+  created_at: number;
+  expires_at: number | null;
+  last_used_at: number | null;
+  revoked_at: number | null;
+  rotated_at: number | null;
+}
+
+export interface ListResponse<T> {
+  items: T[];
+}
+
 interface RequestOptions {
   method?: string;
   body?: unknown;
@@ -125,8 +181,8 @@ export const api = {
     return request<ObjectsListResponse>("/api/v1/objects");
   },
 
-  me(): Promise<{ id: string }> {
-    return request<{ id: string }>("/api/v1/me");
+  me(): Promise<SessionInfo> {
+    return request<SessionInfo>("/api/v1/me");
   },
 
   getObject(id: string): Promise<ObjectItem> {
@@ -153,6 +209,23 @@ export const api = {
       `/api/v1/objects/${encodeURIComponent(id)}/download-intent`,
       { method: "POST", csrf },
     );
+  },
+
+  // --- Administration console (read-only, `admin:read`) ---
+  adminStats(): Promise<AdminStats> {
+    return request<AdminStats>("/api/v1/admin/stats");
+  },
+
+  listApplications(): Promise<ListResponse<ApplicationItem>> {
+    return request<ListResponse<ApplicationItem>>("/api/v1/admin/applications");
+  },
+
+  listSpaces(): Promise<ListResponse<SpaceItem>> {
+    return request<ListResponse<SpaceItem>>("/api/v1/admin/spaces");
+  },
+
+  listIdentities(): Promise<ListResponse<IdentityItem>> {
+    return request<ListResponse<IdentityItem>>("/api/v1/admin/identities");
   },
 };
 

@@ -8,6 +8,7 @@ import { Layout } from "./components/Layout";
 import { AuthProvider, RequireAuth } from "./lib/auth";
 import { LoginPage } from "./pages/LoginPage";
 import { ObjectsPage } from "./pages/ObjectsPage";
+import { AdminPage } from "./pages/AdminPage";
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -35,7 +36,19 @@ const loginRoute = createRoute({
   component: LoginPage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, loginRoute]);
+const adminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin",
+  component: () => (
+    <Layout>
+      <RequireAuth>
+        <AdminPage />
+      </RequireAuth>
+    </Layout>
+  ),
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, loginRoute, adminRoute]);
 
 // Same subpath as Vite base (dev "/app", prod "/app", unset = root).
 const basepath = import.meta.env.VITE_SUBPATH
