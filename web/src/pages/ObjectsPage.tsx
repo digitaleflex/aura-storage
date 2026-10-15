@@ -59,6 +59,7 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "deleted", label: "Supprimé" },
   { value: "expired", label: "Expiré" },
   { value: "failed", label: "Échec" },
+  { value: "aborted", label: "Abandonné" },
 ];
 
 const SORT_OPTIONS: {
@@ -132,6 +133,7 @@ const STATUS_LABELS: Record<string, string> = {
   deleted: "Supprimé",
   expired: "Expiré",
   failed: "Échec",
+  aborted: "Abandonné",
 };
 
 /** Friendly type label for scanning; the raw MIME stays in the details panel. */
@@ -478,6 +480,22 @@ export function ObjectsPage() {
     onError: (err) => reportError(err, "Purge impossible."),
   });
 
+  // Abandon a stuck pending upload intent: the backend deletes the partial
+  // bytes and the row leaves the "En cours" state. Re-uploading the same
+  // file afterwards mints a fresh intent.
+  const abortUploadMutation = useMutation({
+    mutationFn: (id: string) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.abortObject(id, csrf);
+    },
+    onSuccess: () => {
+      setDetails(null);
+      setNotice("Envoi abandonné, octets partiels supprimés.");
+      invalidateLibrary();
+    },
+    onError: (err) => reportError(err, "Abandon impossible."),
+  });
+
   // -- handlers ------------------------------------------------------------
   /** Shared queue subscriber: mirrors state and reacts when it settles. */
   function handleQueueUpdate(next: QueueState) {
@@ -698,9 +716,13 @@ export function ObjectsPage() {
     ? deleteObjectMutation.variables
     : undefined;
   const purgePendingId = purgeMutation.isPending ? purgeMutation.variables : undefined;
+  const abortPendingId = abortUploadMutation.isPending
+    ? abortUploadMutation.variables
+    : undefined;
   const objectBusy =
     deleteObjectMutation.isPending ||
     purgeMutation.isPending ||
+    abortUploadMutation.isPending ||
     moveObjectMutation.isPending ||
     downloadingId !== null;
 
@@ -1002,6 +1024,14 @@ export function ObjectsPage() {
                 </span>
               ) : null}
             </div>
+            {transferActive &&
+            queue.maxConcurrency > 1 &&
+            queue.concurrency < queue.maxConcurrency ? (
+              <p className="muted" role="status">
+                Connexion difficile : envois limités à {queue.concurrency} à la
+                fois — retour à {queue.maxConcurrency} dès que ça passe.
+              </p>
+            ) : null}
             <ul className="queue">
               {queue.items.map((item) => (
                 <li key={item.id} className="queue-item">
@@ -1021,6 +1051,20 @@ export function ObjectsPage() {
                         ×
                       </button>
                     ) : null}
+                    {item.state.phase === "failed" ||
+                    item.state.phase === "cancelled" ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-small"
+                        aria-label={`Relancer ${item.fileName}`}
+                        onClick={() => {
+                          setUploadError(null);
+                          queueRef.current?.retryItem(item.id);
+                        }}
+                      >
+                        Relancer
+                      </button>
+                    ) : null}
                   </div>
                   {item.state.phase === "uploading" ? (
                     <div
@@ -1036,6 +1080,13 @@ export function ObjectsPage() {
                         style={{ width: `${Math.round(item.state.progress * 100)}%` }}
                       />
                     </div>
+                  ) : null}
+                  {item.state.phase === "uploading" ? (
+                    <p className="muted">
+                      {formatBytes(item.state.transferredBytes)} /{" "}
+                      {formatBytes(item.state.sizeBytes)} (
+                      {Math.round(item.state.progress * 100)} %)
+                    </p>
                   ) : null}
                   {item.state.attempts > 0 &&
                   ACTIVE_PHASES.includes(item.state.phase) ? (
@@ -1259,6 +1310,7 @@ export function ObjectsPage() {
               const rowBusy =
                 deletePendingId === item.id ||
                 purgePendingId === item.id ||
+                abortPendingId === item.id ||
                 downloadingId === item.id;
               return (
                 <div className="ledger-row" role="listitem" key={item.id}>
@@ -1310,6 +1362,32 @@ export function ObjectsPage() {
                           disabled: rowBusy,
                           onSelect: () => setMoveObjectTarget(item),
                         },
+                        ...(item.status === "pending"
+                          ? [
+                              {
+                                label: "Abandonner l'envoi",
+                                danger: true,
+                                disabled: rowBusy,
+                                onSelect: () =>
+                                  setPendingConfirm({
+                                    title: "Abandonner l'envoi",
+                                    message: (
+                                      <>
+                                        Abandonner l'envoi de{" "}
+                                        <strong>{item.display_name}</strong> ?
+                                        Les octets partiels seront supprimés.
+                                        Pour réessayer, importez à nouveau le
+                                        fichier.
+                                      </>
+                                    ),
+                                    confirmLabel: "Abandonner",
+                                    danger: true,
+                                    onConfirm: () =>
+                                      abortUploadMutation.mutate(item.id),
+                                  }),
+                              },
+                            ]
+                          : []),
                         {
                           label: "Supprimer",
                           danger: true,
