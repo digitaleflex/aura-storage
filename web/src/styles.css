@@ -547,9 +547,7 @@ select:focus-visible {
 
 .vault-workspace > .casiers {
   grid-column: 1;
-  /* Span the deposit and the register so the rail cannot inflate row 2
-     and leave a hole under the deposit panel. */
-  grid-row: 2 / span 2;
+  grid-row: 2;
 }
 
 /* The register is the light working surface. */
@@ -569,7 +567,8 @@ select:focus-visible {
   background: var(--graphite);
   border: 1px solid var(--graphite-3);
   padding: 14px 0 0;
-  align-self: stretch;
+  /* Hug the content: a stretched rail left ~54% of the column as flat void. */
+  align-self: start;
 }
 
 /* The rail carries a real readout, so it is not a black column with a tail. */
@@ -1005,6 +1004,9 @@ select:focus-visible {
 
 .intake .form-inline {
   margin-top: 11px;
+  /* Push the action to the far edge so the panel does not read as half empty. */
+  justify-content: space-between;
+  width: 100%;
 }
 
 .transfer {
@@ -1267,6 +1269,11 @@ p .chip {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 22px;
+}
+
+/* Keep the irreversible actions apart from the ordinary ones. */
+.drawer-actions-danger {
+  margin-left: auto;
 }
 
 /* ------------------------------------------------------------------ */

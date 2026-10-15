@@ -1254,7 +1254,7 @@ export function ObjectsPage() {
           <div className="drawer-actions">
             <button
               type="button"
-              className="btn"
+              className="btn btn-primary"
               disabled={details.status !== "available" || downloadingId !== null}
               onClick={() => void handleDownload(details)}
             >
@@ -1286,7 +1286,7 @@ export function ObjectsPage() {
               }
               confirmLabel="Supprimer"
               danger
-              className="btn"
+              className="btn drawer-actions-danger"
               disabled={objectBusy}
               pending={deletePendingId === details.id}
               onConfirm={() => deleteObjectMutation.mutate(details.id)}
@@ -1303,7 +1303,7 @@ export function ObjectsPage() {
                 }
                 confirmLabel="Purger"
                 danger
-                className="btn btn-danger"
+                className="btn btn-danger-text"
                 disabled={objectBusy}
                 pending={purgePendingId === details.id}
                 onConfirm={() => purgeMutation.mutate(details.id)}
