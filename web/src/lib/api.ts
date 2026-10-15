@@ -35,10 +35,39 @@ export interface ObjectItem {
   status: string;
   /** Folder the object is filed in, or null when unfiled. */
   folder_id: string | null;
+  /** Catalogue creation time, epoch seconds. */
+  created_at: number;
+  /** Catalogue last-update time, epoch seconds. */
+  updated_at: number;
 }
 
 export interface ObjectsListResponse {
   items: ObjectItem[];
+}
+
+/**
+ * Filters and paging for `GET /api/v1/objects` (M02). Every field is optional;
+ * omitted fields are left out of the query string so the default request stays
+ * the historical "first page of every visible object, newest first".
+ */
+export interface ObjectQuery {
+  /** undefined = all objects, null = unfiled only, string = that folder. */
+  folderId?: string | null;
+  /** Case-insensitive display-name substring. */
+  q?: string;
+  /** Exact catalogue status. */
+  status?: string;
+  /** Exact media type (compared case-insensitively by the API). */
+  contentType?: string;
+  minSize?: number;
+  maxSize?: number;
+  /** Inclusive epoch-second bounds on creation time. */
+  createdAfter?: number;
+  createdBefore?: number;
+  sort?: "created_at" | "display_name" | "size_bytes";
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
 }
 
 /** A logical folder owned by the signed-in human user (#61). */
@@ -242,27 +271,37 @@ export const api = {
   },
 
   /**
-   * List objects. `folderId` narrows the list against the catalogue:
-   * `undefined` = every object, `null` = only unfiled objects, a string = that
-   * folder. The folder id is validated by the server. `limit`/`offset` page the
-   * result (the server caps `limit` at 100).
+   * List objects with optional search, filters, sort and paging (M02). The
+   * server owns the filtering/sorting/paging so the UI never has to hold the
+   * whole catalogue; see `ObjectQuery` for each field. `folderId`: `undefined`
+   * = every object, `null` = only unfiled objects, a string = that folder. The
+   * server caps `limit` at 100.
    */
-  listObjects(
-    folderId?: string | null,
-    page?: { limit?: number; offset?: number },
-  ): Promise<ObjectsListResponse> {
+  listObjects(query: ObjectQuery = {}): Promise<ObjectsListResponse> {
     const params = new URLSearchParams();
-    if (folderId !== undefined) {
-      params.set("folder_id", folderId ?? "root");
+    if (query.folderId !== undefined) {
+      params.set("folder_id", query.folderId ?? "root");
     }
-    if (page?.limit !== undefined) {
-      params.set("limit", String(page.limit));
+    const q = query.q?.trim();
+    if (q) params.set("q", q);
+    if (query.status) params.set("status", query.status);
+    if (query.contentType) params.set("content_type", query.contentType);
+    if (query.minSize !== undefined) params.set("min_size", String(query.minSize));
+    if (query.maxSize !== undefined) params.set("max_size", String(query.maxSize));
+    if (query.createdAfter !== undefined) {
+      params.set("created_after", String(query.createdAfter));
     }
-    if (page?.offset !== undefined) {
-      params.set("offset", String(page.offset));
+    if (query.createdBefore !== undefined) {
+      params.set("created_before", String(query.createdBefore));
     }
-    const query = params.toString();
-    return request<ObjectsListResponse>(`/api/v1/objects${query ? `?${query}` : ""}`);
+    if (query.sort) params.set("sort", query.sort);
+    if (query.order) params.set("order", query.order);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
+    const query2 = params.toString();
+    return request<ObjectsListResponse>(
+      `/api/v1/objects${query2 ? `?${query2}` : ""}`,
+    );
   },
 
   me(): Promise<SessionInfo> {

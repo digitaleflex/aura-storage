@@ -4,7 +4,7 @@
 `docs/AUTHORIZATION-MATRIX.md` are implemented in `api/main.py` and covered by
 offline tests; `docs/openapi.yaml` is the current contract. Object and folder
 routes are implemented (#18, #61); the remaining resources below (import jobs,
-advanced search filters) are still proposals.
+full-text search) are still proposals.
 
 ## Purpose and boundaries
 
@@ -51,7 +51,13 @@ Track asynchronous bulk uploads/imports with a stable job ID, status (`queued`, 
 
 - `GET /health/live` — process liveness; no secrets.
 - `GET /health/ready` — readiness including required dependencies.
-- `GET /api/v1/objects` — paginated object search; filters must be allow-listed (implemented filter: `folder_id`, where `root` means "not filed", #62).
+- `GET /api/v1/objects` — paginated object search; filters are allow-listed and
+  parameterized. Implemented: `folder_id` (`root` = "not filed", #62); `q`
+  (case-insensitive display-name substring, never the internal key), `status`,
+  `content_type`, `min_size`/`max_size` and `created_after`/`created_before`
+  (M02); plus `sort`/`order` over `created_at`/`display_name`/`size_bytes`. The
+  item payload carries `folder_id`, `created_at` and `updated_at`; internal
+  storage coordinates (`bucket`, `object_key`) are never returned.
 - `POST /api/v1/objects/upload-intents` — authorize and issue a short-lived upload URL/intent.
 - `POST /api/v1/objects/{id}/commit` or an equivalent intent-scoped completion endpoint — verify the stored object and transition it to available idempotently.
 - `GET /api/v1/objects/{id}` — metadata only.

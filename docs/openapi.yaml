@@ -85,11 +85,61 @@ paths:
             Optional catalogue filter (#62): the literal "root" returns objects
             not filed in any folder; a canonical uuid returns that folder's
             objects. A malformed value is refused with 422.
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 200 }
+          description: >-
+            Case-insensitive display-name substring (M02). Never matches the
+            internal object key; a blank value is ignored.
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, available, deleted, expired, failed]
+          description: Exact catalogue status.
+        - in: query
+          name: content_type
+          schema: { type: string, maxLength: 127 }
+          description: Exact media type, compared case-insensitively.
+        - in: query
+          name: min_size
+          schema: { type: integer, minimum: 0 }
+          description: Minimum committed size in bytes (pending rows still carry size -1).
+        - in: query
+          name: max_size
+          schema: { type: integer, minimum: 0 }
+          description: Maximum committed size in bytes.
+        - in: query
+          name: created_after
+          schema: { type: integer, minimum: 0 }
+          description: Inclusive lower bound on creation time (epoch seconds).
+        - in: query
+          name: created_before
+          schema: { type: integer, minimum: 0 }
+          description: Inclusive upper bound on creation time (epoch seconds).
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [created_at, display_name, size_bytes]
+            default: created_at
+          description: Sort key; ties break on id so OFFSET paging stays stable.
+        - in: query
+          name: order
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+          description: Sort direction.
       responses:
-        "200": { description: Page of object metadata (each item carries folder_id) }
+        "200":
+          description: >-
+            Page of object metadata. Each item carries folder_id, created_at and
+            updated_at; internal storage coordinates (bucket, object_key) are
+            never returned.
         "401": { description: Authentication required }
         "403": { description: Access denied }
-        "422": { description: Malformed folder_id }
+        "422": { description: Malformed folder_id, or an unsupported status/sort/order value }
   /api/v1/objects/upload-intents:
     post:
       summary: Create a short-lived upload intent (capability objects:write)

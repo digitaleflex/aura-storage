@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import {
   useInfiniteQuery,
@@ -7,13 +7,44 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { ApiError, api, hasScope, putToPresignedUrl } from "../lib/api";
-import type { FolderItem, ObjectItem } from "../lib/api";
+import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { FolderMark } from "../components/FolderMark";
 
 /** Objects fetched per page ("Charger plus" increments the offset). */
 const OBJECTS_PAGE_SIZE = 50;
+
+const STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Tous les états" },
+  { value: "available", label: "Disponible" },
+  { value: "pending", label: "En cours" },
+  { value: "deleted", label: "Supprimé" },
+  { value: "expired", label: "Expiré" },
+  { value: "failed", label: "Échec" },
+];
+
+const SORT_OPTIONS: {
+  value: NonNullable<ObjectQuery["sort"]>;
+  label: string;
+}[] = [
+  { value: "created_at", label: "Date" },
+  { value: "display_name", label: "Nom" },
+  { value: "size_bytes", label: "Taille" },
+];
+
+/** Common media types offered as suggestions; the field stays free text. */
+const CONTENT_TYPE_SUGGESTIONS = [
+  "application/pdf",
+  "application/json",
+  "application/octet-stream",
+  "image/jpeg",
+  "image/png",
+  "text/csv",
+  "text/plain",
+  "audio/mpeg",
+  "video/mp4",
+];
 
 function formatBytes(size: number): string {
   if (!Number.isFinite(size) || size < 0) {
@@ -28,6 +59,44 @@ function formatBytes(size: number): string {
   return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
+const DATE_FORMAT = new Intl.DateTimeFormat("fr-FR", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+/** Epoch seconds -> localized label. Invalid/zero values render an em dash. */
+function formatDateTime(epoch: number | undefined): string {
+  if (epoch === undefined || !Number.isFinite(epoch) || epoch <= 0) {
+    return "—";
+  }
+  return DATE_FORMAT.format(new Date(epoch * 1000));
+}
+
+/** "<input type=date>" value -> inclusive epoch-second bound (local day). */
+function dateToEpoch(value: string, endOfDay = false): number | undefined {
+  if (!value) return undefined;
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return undefined;
+  if (endOfDay) date.setHours(23, 59, 59, 999);
+  return Math.floor(date.getTime() / 1000);
+}
+
+/** Free-text byte count -> a non-negative integer, or undefined when blank. */
+function parseSize(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  available: "Disponible",
+  pending: "En cours",
+  deleted: "Supprimé",
+  expired: "Expiré",
+  failed: "Échec",
+};
+
 function statusChip(status: string) {
   if (status === "available") {
     return <span className="chip chip-ok">Disponible</span>;
@@ -35,7 +104,7 @@ function statusChip(status: string) {
   if (status === "pending") {
     return <span className="chip chip-warn">En cours</span>;
   }
-  return <span className="chip chip-muted">{status}</span>;
+  return <span className="chip chip-muted">{STATUS_LABELS[status] ?? status}</span>;
 }
 
 /** The whole folder tree is fetched in one request (`?all=true`); the hierarchy
@@ -47,16 +116,85 @@ export function ObjectsPage() {
 
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [filter, setFilter] = useState("");
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [renameTarget, setRenameTarget] = useState<FolderItem | null>(null);
   const [renameName, setRenameName] = useState("");
   const [moveTarget, setMoveTarget] = useState<FolderItem | null>(null);
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
+  const [details, setDetails] = useState<ObjectItem | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  // -- search / filter / sort (server-side; M02) ---------------------------
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [minSize, setMinSize] = useState("");
+  const [maxSize, setMaxSize] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [sortField, setSortField] = useState<NonNullable<ObjectQuery["sort"]>>(
+    "created_at",
+  );
+  const [sortOrder, setSortOrder] = useState<NonNullable<ObjectQuery["order"]>>("desc");
+
+  // Debounce the name filter so typing does not fire one request per keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const filters = useMemo<ObjectQuery>(() => {
+    const query: ObjectQuery = { folderId: currentFolderId };
+    if (debouncedSearch) query.q = debouncedSearch;
+    if (statusFilter) query.status = statusFilter;
+    if (typeFilter.trim()) query.contentType = typeFilter.trim();
+    const min = parseSize(minSize);
+    const max = parseSize(maxSize);
+    if (min !== undefined) query.minSize = min;
+    if (max !== undefined) query.maxSize = max;
+    const after = dateToEpoch(fromDate);
+    const before = dateToEpoch(toDate, true);
+    if (after !== undefined) query.createdAfter = after;
+    if (before !== undefined) query.createdBefore = before;
+    query.sort = sortField;
+    query.order = sortOrder;
+    return query;
+  }, [
+    currentFolderId,
+    debouncedSearch,
+    statusFilter,
+    typeFilter,
+    minSize,
+    maxSize,
+    fromDate,
+    toDate,
+    sortField,
+    sortOrder,
+  ]);
+
+  const hasActiveFilters =
+    debouncedSearch !== "" ||
+    statusFilter !== "" ||
+    typeFilter.trim() !== "" ||
+    minSize.trim() !== "" ||
+    maxSize.trim() !== "" ||
+    fromDate !== "" ||
+    toDate !== "";
+
+  function resetFilters() {
+    setSearch("");
+    setStatusFilter("");
+    setTypeFilter("");
+    setMinSize("");
+    setMaxSize("");
+    setFromDate("");
+    setToDate("");
+  }
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
 
@@ -65,12 +203,9 @@ export function ObjectsPage() {
     queryFn: () => api.listAllFolders(),
   });
   const objectsQuery = useInfiniteQuery({
-    queryKey: ["objects", currentFolderId],
+    queryKey: ["objects", filters],
     queryFn: ({ pageParam }) =>
-      api.listObjects(currentFolderId, {
-        limit: OBJECTS_PAGE_SIZE,
-        offset: pageParam,
-      }),
+      api.listObjects({ ...filters, limit: OBJECTS_PAGE_SIZE, offset: pageParam }),
     initialPageParam: 0,
     getNextPageParam: (lastPage, _pages, lastOffset) =>
       lastPage.items.length === OBJECTS_PAGE_SIZE
@@ -110,12 +245,29 @@ export function ObjectsPage() {
     return path;
   }, [byId, currentFolderId]);
 
+  /** Human-readable folder path for an object ("Racine / Dossier / Sous-dossier"). */
+  function folderPath(folderId: string | null): string {
+    if (!folderId) return "Racine";
+    const names: string[] = [];
+    let cursor: string | null = folderId;
+    let guard = 0;
+    while (cursor && guard < 64) {
+      const folder: FolderItem | undefined = byId.get(cursor);
+      if (!folder) break;
+      names.unshift(folder.name);
+      cursor = folder.parent_id;
+      guard += 1;
+    }
+    return ["Racine", ...names].join(" / ");
+  }
+
   function invalidateLibrary() {
     void queryClient.invalidateQueries({ queryKey: ["objects"] });
     void queryClient.invalidateQueries({ queryKey: ["folders"] });
   }
 
   function reportError(err: unknown, fallback: string) {
+    setNotice(null);
     setActionError(err instanceof ApiError ? err.detail : fallback);
   }
 
@@ -140,9 +292,12 @@ export function ObjectsPage() {
     onSuccess: () => {
       setFile(null);
       setUploadError(null);
+      setActionError(null);
+      setNotice("Import validé et vérifié.");
       invalidateLibrary();
     },
     onError: (err: unknown) => {
+      setNotice(null);
       setUploadError(err instanceof Error ? err.message : "Envoi impossible.");
     },
   });
@@ -155,6 +310,7 @@ export function ObjectsPage() {
     onSuccess: () => {
       setNewFolderOpen(false);
       setNewFolderName("");
+      setNotice("Dossier créé.");
       invalidateLibrary();
     },
     onError: (err) => reportError(err, "Création du dossier impossible."),
@@ -167,6 +323,7 @@ export function ObjectsPage() {
     },
     onSuccess: () => {
       setRenameTarget(null);
+      setNotice("Dossier renommé.");
       invalidateLibrary();
     },
     onError: (err) => reportError(err, "Renommage impossible."),
@@ -179,6 +336,7 @@ export function ObjectsPage() {
     },
     onSuccess: () => {
       setMoveTarget(null);
+      setNotice("Dossier déplacé.");
       invalidateLibrary();
     },
     onError: (err) => reportError(err, "Déplacement impossible."),
@@ -191,6 +349,8 @@ export function ObjectsPage() {
     },
     onSuccess: () => {
       setMoveObjectTarget(null);
+      setDetails(null);
+      setNotice("Objet déplacé.");
       invalidateLibrary();
     },
     onError: (err) => reportError(err, "Déplacement de l'objet impossible."),
@@ -203,17 +363,24 @@ export function ObjectsPage() {
     },
     onSuccess: (_data, id) => {
       if (currentFolderId === id) setCurrentFolderId(null);
+      setNotice("Dossier supprimé.");
       invalidateLibrary();
     },
     onError: (err) => reportError(err, "Suppression du dossier impossible."),
   });
 
+  // Delete is confirmed against the server: the row is only refreshed (never
+  // removed locally) once the API reports success.
   const deleteObjectMutation = useMutation({
     mutationFn: (id: string) => {
       if (!csrf) throw new Error("Session expirée.");
       return api.deleteObject(id, csrf);
     },
-    onSuccess: invalidateLibrary,
+    onSuccess: () => {
+      setDetails(null);
+      setNotice("Objet marqué comme supprimé. Les octets restent jusqu'à une purge.");
+      invalidateLibrary();
+    },
     onError: (err) => reportError(err, "Suppression impossible."),
   });
 
@@ -222,7 +389,11 @@ export function ObjectsPage() {
       if (!csrf) throw new Error("Session expirée.");
       return api.purgeObject(id, csrf);
     },
-    onSuccess: invalidateLibrary,
+    onSuccess: () => {
+      setDetails(null);
+      setNotice("Objet purgé définitivement.");
+      invalidateLibrary();
+    },
     onError: (err) => reportError(err, "Purge impossible."),
   });
 
@@ -238,20 +409,33 @@ export function ObjectsPage() {
   }
 
   async function handleDownload(item: ObjectItem) {
-    setDownloadError(null);
+    setActionError(null);
     if (!csrf) {
-      setDownloadError("Session expirée. Reconnectez-vous.");
+      setActionError("Session expirée. Reconnectez-vous.");
       return;
     }
+    setDownloadingId(item.id);
     try {
       const intent = await api.createDownloadIntent(item.id, csrf);
       window.open(intent.download_url, "_blank", "noopener");
     } catch (err) {
-      setDownloadError(
+      setActionError(
         err instanceof ApiError
           ? `Téléchargement refusé : ${err.detail}`
           : "Téléchargement impossible.",
       );
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
+  async function handleCopyReference(item: ObjectItem) {
+    setActionError(null);
+    try {
+      await navigator.clipboard.writeText(item.id);
+      setNotice(`Référence copiée : ${item.id}`);
+    } catch {
+      setActionError("Copie impossible dans ce navigateur.");
     }
   }
 
@@ -272,28 +456,47 @@ export function ObjectsPage() {
   }
 
   const items = objectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
-  const needle = filter.trim().toLowerCase();
-  const visible = needle
-    ? items.filter((item) => item.display_name.toLowerCase().includes(needle))
-    : items;
   const currentName = currentFolderId ? byId.get(currentFolderId)?.name : null;
 
   const moveBlocked = moveTarget ? forbiddenTargets(moveTarget.id) : new Set<string>();
+  const deletePendingId = deleteObjectMutation.isPending
+    ? deleteObjectMutation.variables
+    : undefined;
+  const purgePendingId = purgeMutation.isPending ? purgeMutation.variables : undefined;
+  const objectBusy =
+    deleteObjectMutation.isPending ||
+    purgeMutation.isPending ||
+    moveObjectMutation.isPending ||
+    downloadingId !== null;
 
   return (
     <div className="stack">
       <div className="page-head">
         <h1>Fichiers</h1>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => {
-            setNewFolderName("");
-            setNewFolderOpen(true);
-          }}
-        >
-          Nouveau dossier
-        </button>
+        <div className="head-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={objectsQuery.isFetching || treeQuery.isFetching}
+            onClick={() => {
+              setActionError(null);
+              void queryClient.invalidateQueries({ queryKey: ["objects"] });
+              void queryClient.invalidateQueries({ queryKey: ["folders"] });
+            }}
+          >
+            {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              setNewFolderName("");
+              setNewFolderOpen(true);
+            }}
+          >
+            Nouveau dossier
+          </button>
+        </div>
       </div>
 
       <nav className="breadcrumb" aria-label="Fil d'Ariane">
@@ -337,11 +540,31 @@ export function ObjectsPage() {
         </p>
       ) : null}
 
+      {notice ? (
+        <p role="status" className="alert alert-ok">
+          {notice}
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => setNotice(null)}
+          >
+            Fermer
+          </button>
+        </p>
+      ) : null}
+
       <section className="section" aria-labelledby="folders-title">
         <h2 id="folders-title">Dossiers</h2>
         {treeQuery.isError ? (
           <p role="alert" className="alert alert-error">
             Dossiers indisponibles.
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => void treeQuery.refetch()}
+            >
+              Réessayer
+            </button>
           </p>
         ) : treeQuery.isPending ? (
           <p className="muted">Chargement…</p>
@@ -402,36 +625,162 @@ export function ObjectsPage() {
       </section>
 
       <section className="section" aria-labelledby="objects-title">
-        <h2 id="objects-title">
-          Objets{currentName ? ` — ${currentName}` : " — racine"}
-        </h2>
-        <div className="search">
+        <div className="section-head">
+          <h2 id="objects-title">
+            Objets{currentName ? ` — ${currentName}` : " — racine"}
+          </h2>
+          <span className="muted" aria-live="polite">
+            {items.length} objet{items.length > 1 ? "s" : ""} affiché
+            {items.length > 1 ? "s" : ""}
+            {objectsQuery.hasNextPage ? " (d'autres restent à charger)" : ""}
+          </span>
+        </div>
+
+        <form
+          className="filters"
+          role="search"
+          onSubmit={(e) => e.preventDefault()}
+          aria-label="Recherche et filtres"
+        >
           <label className="field">
-            <span className="visually-hidden">Rechercher un fichier</span>
+            <span>Rechercher</span>
             <input
-              type="text"
+              type="search"
               name="filter"
-              placeholder="Rechercher par nom…"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Nom du fichier…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
             />
           </label>
-        </div>
-        {needle && objectsQuery.hasNextPage ? (
-          <p className="muted">Recherche limitée aux objets déjà chargés.</p>
-        ) : null}
+          <label className="field">
+            <span>État</span>
+            <select
+              name="status"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              {STATUS_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Type MIME</span>
+            <input
+              type="text"
+              name="contentType"
+              list="content-type-options"
+              placeholder="application/pdf…"
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+            />
+            <datalist id="content-type-options">
+              {CONTENT_TYPE_SUGGESTIONS.map((type) => (
+                <option key={type} value={type} />
+              ))}
+            </datalist>
+          </label>
+          <label className="field">
+            <span>Taille min (o)</span>
+            <input
+              type="number"
+              name="minSize"
+              min={0}
+              value={minSize}
+              onChange={(e) => setMinSize(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Taille max (o)</span>
+            <input
+              type="number"
+              name="maxSize"
+              min={0}
+              value={maxSize}
+              onChange={(e) => setMaxSize(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Créé après le</span>
+            <input
+              type="date"
+              name="from"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Créé avant le</span>
+            <input
+              type="date"
+              name="to"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Trier par</span>
+            <select
+              name="sort"
+              value={sortField}
+              onChange={(e) =>
+                setSortField(e.target.value as NonNullable<ObjectQuery["sort"]>)
+              }
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Ordre</span>
+            <select
+              name="order"
+              value={sortOrder}
+              onChange={(e) =>
+                setSortOrder(e.target.value as NonNullable<ObjectQuery["order"]>)
+              }
+            >
+              <option value="desc">Décroissant</option>
+              <option value="asc">Croissant</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className="btn btn-small"
+            onClick={resetFilters}
+            disabled={!hasActiveFilters}
+          >
+            Réinitialiser
+          </button>
+        </form>
+        <p className="muted">
+          La recherche et les filtres sont appliqués par le serveur sur tout le
+          catalogue, pas seulement sur les objets déjà chargés.
+        </p>
 
         {objectsQuery.isError ? (
           <p role="alert" className="alert alert-error">
             Catalogue indisponible. Aucune donnée en cache n'est présentée comme
             actuelle.
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => void objectsQuery.refetch()}
+            >
+              Réessayer
+            </button>
           </p>
         ) : objectsQuery.isPending ? (
           <p className="muted">Chargement du catalogue…</p>
-        ) : visible.length === 0 ? (
+        ) : items.length === 0 ? (
           <p className="empty">
-            {needle
-              ? "Aucun fichier ne correspond à cette recherche."
+            {hasActiveFilters
+              ? "Aucun fichier ne correspond à ces critères."
               : "Aucun fichier dans ce dossier."}
           </p>
         ) : (
@@ -443,70 +792,104 @@ export function ObjectsPage() {
                   <th scope="col">Type</th>
                   <th scope="col">Taille</th>
                   <th scope="col">État</th>
+                  <th scope="col">Modifié</th>
                   <th scope="col">
                     <span className="visually-hidden">Actions</span>
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {visible.map((item) => (
-                  <tr key={item.id}>
-                    <td className="name">{item.display_name}</td>
-                    <td className="muted">{item.content_type}</td>
-                    <td className="num">{formatBytes(item.size_bytes)}</td>
-                    <td>{statusChip(item.status)}</td>
-                    <td className="row-actions">
-                      <button
-                        type="button"
-                        className="btn btn-small"
-                        disabled={item.status !== "available"}
-                        onClick={() => void handleDownload(item)}
-                      >
-                        Télécharger
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-small"
-                        onClick={() => setMoveObjectTarget(item)}
-                      >
-                        Déplacer
-                      </button>
-                      <ConfirmAction
-                        label="Supprimer"
-                        title="Supprimer l'objet"
-                        message={
-                          <>
-                            Marquer <strong>{item.display_name}</strong> comme
-                            supprimé ? Les octets restent jusqu'à une purge.
-                          </>
-                        }
-                        confirmLabel="Supprimer"
-                        danger
-                        className="btn btn-small"
-                        pending={deleteObjectMutation.isPending}
-                        onConfirm={() => deleteObjectMutation.mutate(item.id)}
-                      />
-                      {canPurge ? (
+                {items.map((item) => {
+                  const rowBusy =
+                    deletePendingId === item.id ||
+                    purgePendingId === item.id ||
+                    downloadingId === item.id;
+                  return (
+                    <tr key={item.id}>
+                      <td className="name">
+                        <button
+                          type="button"
+                          className="link-button"
+                          onClick={() => setDetails(item)}
+                          aria-label={`Détails de ${item.display_name}`}
+                        >
+                          {item.display_name}
+                        </button>
+                      </td>
+                      <td className="muted">{item.content_type}</td>
+                      <td className="num">{formatBytes(item.size_bytes)}</td>
+                      <td>{statusChip(item.status)}</td>
+                      <td className="num muted">{formatDateTime(item.updated_at)}</td>
+                      <td className="row-actions">
+                        <button
+                          type="button"
+                          className="btn btn-small"
+                          onClick={() => setDetails(item)}
+                        >
+                          Détails
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-small"
+                          disabled={item.status !== "available" || downloadingId !== null}
+                          onClick={() => void handleDownload(item)}
+                        >
+                          {downloadingId === item.id ? "…" : "Télécharger"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-small"
+                          onClick={() => void handleCopyReference(item)}
+                        >
+                          Copier la référence
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-small"
+                          disabled={rowBusy}
+                          onClick={() => setMoveObjectTarget(item)}
+                        >
+                          Déplacer
+                        </button>
                         <ConfirmAction
-                          label="Purger"
-                          title="Purger définitivement"
+                          label="Supprimer"
+                          title="Supprimer l'objet"
                           message={
                             <>
-                              Supprimer définitivement{" "}
-                              <strong>{item.display_name}</strong> et ses octets ?
-                              Action irréversible.
+                              Marquer <strong>{item.display_name}</strong> comme
+                              supprimé ? Les octets restent jusqu'à une purge.
                             </>
                           }
-                          confirmLabel="Purger"
+                          confirmLabel="Supprimer"
                           danger
                           className="btn btn-small"
-                          pending={purgeMutation.isPending}
-                          onConfirm={() => purgeMutation.mutate(item.id)}
+                          disabled={objectBusy}
+                          pending={deletePendingId === item.id}
+                          onConfirm={() => deleteObjectMutation.mutate(item.id)}
                         />
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
+                        {canPurge ? (
+                          <ConfirmAction
+                            label="Purger"
+                            title="Purger définitivement"
+                            message={
+                              <>
+                                Supprimer définitivement{" "}
+                                <strong>{item.display_name}</strong> et ses octets ?
+                                Action irréversible.
+                              </>
+                            }
+                            confirmLabel="Purger"
+                            danger
+                            className="btn btn-small"
+                            disabled={objectBusy}
+                            pending={purgePendingId === item.id}
+                            onConfirm={() => purgeMutation.mutate(item.id)}
+                          />
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -522,11 +905,6 @@ export function ObjectsPage() {
               {objectsQuery.isFetchingNextPage ? "Chargement…" : "Charger plus"}
             </button>
           </div>
-        ) : null}
-        {downloadError ? (
-          <p role="alert" className="alert alert-error">
-            {downloadError}
-          </p>
         ) : null}
       </section>
 
@@ -558,12 +936,124 @@ export function ObjectsPage() {
             {uploadError}
           </p>
         ) : null}
-        {uploadMutation.isSuccess ? (
-          <p role="status" className="alert alert-ok">
-            Import validé et vérifié.
-          </p>
-        ) : null}
       </section>
+
+      {/* Object details side panel (only fields the API actually exposes). */}
+      {details ? (
+        <aside
+          className="drawer"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="details-title"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setDetails(null);
+          }}
+        >
+          <div className="drawer-head">
+            <h2 id="details-title">Détails de l'objet</h2>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => setDetails(null)}
+              aria-label="Fermer les détails"
+            >
+              Fermer
+            </button>
+          </div>
+          <dl className="detail-list">
+            <dt>Nom</dt>
+            <dd>{details.display_name}</dd>
+            <dt>Identifiant</dt>
+            <dd className="mono">{details.id}</dd>
+            <dt>Clé logique</dt>
+            <dd className="muted">
+              Les clés de stockage internes ne sont pas exposées par l'API.
+            </dd>
+            <dt>Type MIME</dt>
+            <dd>{details.content_type}</dd>
+            <dt>Taille</dt>
+            <dd>
+              {formatBytes(details.size_bytes)}
+              <span className="muted"> ({details.size_bytes} octets)</span>
+            </dd>
+            <dt>État</dt>
+            <dd>{statusChip(details.status)}</dd>
+            <dt>Dossier</dt>
+            <dd>{folderPath(details.folder_id)}</dd>
+            <dt>Créé le</dt>
+            <dd>{formatDateTime(details.created_at)}</dd>
+            <dt>Modifié le</dt>
+            <dd>{formatDateTime(details.updated_at)}</dd>
+            <dt>Empreinte SHA-256</dt>
+            <dd className="mono">
+              {details.checksum_sha256 ? details.checksum_sha256 : "non disponible"}
+            </dd>
+            <dt>Espace et application</dt>
+            <dd className="muted">
+              Non exposés par l'API de catalogue (route backend à ajouter).
+            </dd>
+          </dl>
+          <div className="drawer-actions">
+            <button
+              type="button"
+              className="btn"
+              disabled={details.status !== "available" || downloadingId !== null}
+              onClick={() => void handleDownload(details)}
+            >
+              {downloadingId === details.id ? "…" : "Télécharger"}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void handleCopyReference(details)}
+            >
+              Copier la référence
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={objectBusy}
+              onClick={() => setMoveObjectTarget(details)}
+            >
+              Déplacer
+            </button>
+            <ConfirmAction
+              label="Supprimer"
+              title="Supprimer l'objet"
+              message={
+                <>
+                  Marquer <strong>{details.display_name}</strong> comme supprimé ?
+                  Les octets restent jusqu'à une purge.
+                </>
+              }
+              confirmLabel="Supprimer"
+              danger
+              className="btn btn-danger"
+              disabled={objectBusy}
+              pending={deletePendingId === details.id}
+              onConfirm={() => deleteObjectMutation.mutate(details.id)}
+            />
+            {canPurge ? (
+              <ConfirmAction
+                label="Purger"
+                title="Purger définitivement"
+                message={
+                  <>
+                    Supprimer définitivement <strong>{details.display_name}</strong>{" "}
+                    et ses octets ? Action irréversible.
+                  </>
+                }
+                confirmLabel="Purger"
+                danger
+                className="btn btn-danger"
+                disabled={objectBusy}
+                pending={purgePendingId === details.id}
+                onConfirm={() => purgeMutation.mutate(details.id)}
+              />
+            ) : null}
+          </div>
+        </aside>
+      ) : null}
 
       {/* New folder */}
       <Dialog
