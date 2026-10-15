@@ -89,6 +89,13 @@ class Settings:
         for part in os.environ.get("AURA_ALLOWED_CONTENT_TYPES", "").split(",")
         if part.strip()
     )
+    # Audit observability bounds (M07). Reads scan a bounded tail so a large
+    # history cannot exhaust the API; retention pruning drops only lines older
+    # than the window and never lines without a valid timestamp.
+    audit_retention_days: int = _int("AURA_AUDIT_RETENTION_DAYS", 90)
+    audit_max_scan_lines: int = _int("AURA_AUDIT_MAX_SCAN_LINES", 20000)
+    audit_error_scan_lines: int = _int("AURA_AUDIT_ERROR_SCAN_LINES", 5000)
+    audit_error_window_s: int = _int("AURA_AUDIT_ERROR_WINDOW_S", 3600)
     # Upper bound (characters) for a client-supplied ``Idempotency-Key`` header.
     idempotency_key_max: int = _int("AURA_IDEMPOTENCY_KEY_MAX", 200)
     # Cookie security.
@@ -96,3 +103,16 @@ class Settings:
 
 
 settings = Settings()
+
+# Fail fast on misconfigured audit observability bounds (M07). A zero/negative
+# scan window would silently disable reads and a negative retention would make
+# pruning unbounded, so refuse the process at import instead of degrading at
+# runtime. The readers in api/audit.py are also hardened defensively.
+if settings.audit_retention_days < 1:
+    raise RuntimeError("AURA_AUDIT_RETENTION_DAYS must be >= 1")
+if settings.audit_max_scan_lines < 1:
+    raise RuntimeError("AURA_AUDIT_MAX_SCAN_LINES must be >= 1")
+if settings.audit_error_scan_lines < 1:
+    raise RuntimeError("AURA_AUDIT_ERROR_SCAN_LINES must be >= 1")
+if settings.audit_error_window_s < 0:
+    raise RuntimeError("AURA_AUDIT_ERROR_WINDOW_S must be >= 0")

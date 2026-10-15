@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, hasAdminAccess, hasScope, SERVICE_SCOPES } from "../lib/api";
 import type {
   ApplicationItem,
+  AuditQuery,
   BucketListedItem,
   IdentityItem,
   SpaceItem,
@@ -49,6 +50,26 @@ const OBJECT_STATUS_LABELS: Record<string, string> = {
   expired: "Expiré",
   failed: "Échec",
 };
+
+/** Human byte counts for the consumption section (measured values only). */
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size < 0) {
+    return "—";
+  }
+  if (size === 0) {
+    return "0 o";
+  }
+  const units = ["o", "Kio", "Mio", "Gio", "Tio"];
+  let value = size;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+const AUDIT_PAGE_SIZE = 50;
 
 /** Rename an application. The stable id is never editable. */
 function EditApplicationDialog({
@@ -208,6 +229,14 @@ export function AdminPage() {
   // Register-bucket form
   const [bucketSpace, setBucketSpace] = useState("");
   const [bucketName, setBucketName] = useState("");
+  // Audit search form (M07): draft fields, applied query, paging offset.
+  const [auditActor, setAuditActor] = useState("");
+  const [auditAction, setAuditAction] = useState("");
+  const [auditResult, setAuditResult] = useState("");
+  const [auditSpace, setAuditSpace] = useState("");
+  const [auditRequest, setAuditRequest] = useState("");
+  const [auditApplied, setAuditApplied] = useState<AuditQuery>({});
+  const [auditOffset, setAuditOffset] = useState(0);
 
   const stats = useQuery({
     queryKey: ["admin", "stats"],
@@ -239,6 +268,25 @@ export function AdminPage() {
     enabled: canAdmin,
     retry: false,
   });
+  const usage = useQuery({
+    queryKey: ["admin", "usage"],
+    queryFn: () => api.adminUsage(),
+    enabled: canAdmin,
+    retry: false,
+  });
+  const health = useQuery({
+    queryKey: ["admin", "health"],
+    queryFn: () => api.adminHealth(),
+    enabled: canAdmin,
+    retry: false,
+  });
+  const auditSearch = useQuery({
+    queryKey: ["admin", "audit", auditApplied, auditOffset],
+    queryFn: () =>
+      api.searchAudit({ ...auditApplied, limit: AUDIT_PAGE_SIZE, offset: auditOffset }),
+    enabled: canAdmin,
+    retry: false,
+  });
 
   function refreshAdmin() {
     void queryClient.invalidateQueries({ queryKey: ["admin"] });
@@ -258,6 +306,18 @@ export function AdminPage() {
       refreshAdmin();
     },
     onError: (err) => fail(err, "Réconciliation impossible."),
+  });
+
+  const pruneAudit = useMutation({
+    mutationFn: () => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.pruneAudit(csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Purge du journal impossible."),
   });
 
   const createApp = useMutation({
@@ -493,7 +553,11 @@ export function AdminPage() {
           <p role="status" className="alert alert-ok">
             Réconciliation : {reconcile.data.expired} expiré(s),{" "}
             {reconcile.data.storage_deletes_attempted} suppression(s) stockage
-            tentée(s).
+            tentée(s)
+            {reconcile.data.storage_failures
+              ? `, ${reconcile.data.storage_failures} échec(s) stockage (réessayer plus tard)`
+              : ""}
+            .
           </p>
         ) : null}
         {stats.isError ? (
@@ -542,6 +606,362 @@ export function AdminPage() {
                 ))}
               </p>
             ) : null}
+          </>
+        )}
+      </section>
+
+      <section className="section" aria-labelledby="admin-usage-title">
+        <div className="section-head">
+          <h2 id="admin-usage-title">Consommation</h2>
+        </div>
+        <p className="muted">
+          Valeurs réelles du catalogue, mesurées à l'instant indiqué. Les
+          octets comptent les objets vérifiés uniquement ; aucune mesure de
+          bande passante ni de capacité totale n'existe hors ligne.
+        </p>
+        {usage.isError ? (
+          <p role="alert" className="alert alert-error">
+            Consommation indisponible.
+          </p>
+        ) : usage.isPending ? (
+          <p className="muted">Chargement…</p>
+        ) : (
+          <>
+            <div className="stat-grid">
+              <div className="stat">
+                <div className="value">{formatBytes(usage.data.totals.stored_bytes)}</div>
+                <div className="label">Octets vérifiés</div>
+              </div>
+              <div className="stat">
+                <div className="value">{usage.data.totals.available_count}</div>
+                <div className="label">Objets disponibles</div>
+              </div>
+              <div className="stat">
+                <div className="value">{formatBytes(usage.data.limits.max_object_bytes)}</div>
+                <div className="label">Plafond par objet</div>
+              </div>
+              <div className="stat">
+                <div className="value">{usage.data.limits.max_pending_intents}</div>
+                <div className="label">Envois en attente max</div>
+              </div>
+            </div>
+            <p className="muted">
+              Mesuré à {formatTs(usage.data.measured_at)} — les intentions en
+              attente ne portent aucun octet engagé.
+            </p>
+            {usage.data.spaces.length > 0 ? (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Espace</th>
+                    <th>Application</th>
+                    <th>Octets vérifiés</th>
+                    <th>Disponibles</th>
+                    <th>En attente</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usage.data.spaces.map((entry) => (
+                    <tr key={entry.space_id}>
+                      <td>
+                        {entry.space_name}{" "}
+                        <span className="muted">({entry.environment})</span>
+                      </td>
+                      <td>{entry.application_name ?? "—"}</td>
+                      <td className="num">{formatBytes(entry.stored_bytes)}</td>
+                      <td className="num">{entry.available_count}</td>
+                      <td className="num">{entry.pending_count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="muted">Aucun espace enregistré.</p>
+            )}
+          </>
+        )}
+      </section>
+
+      <section className="section" aria-labelledby="admin-health-title">
+        <div className="section-head">
+          <h2 id="admin-health-title">Supervision</h2>
+        </div>
+        {health.isError ? (
+          <p role="alert" className="alert alert-error">
+            Supervision indisponible.
+          </p>
+        ) : health.isPending ? (
+          <p className="muted">Chargement…</p>
+        ) : (
+          <>
+            <p role="status">
+              État global :{" "}
+              <span
+                className={
+                  health.data.status === "ok" ? "chip chip-ok" : "chip chip-warn"
+                }
+              >
+                {health.data.status === "ok" ? "Nominal" : "Dégradé"}
+              </span>
+            </p>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Composant</th>
+                  <th>État</th>
+                  <th>Détail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(health.data.components).map(([name, component]) => (
+                  <tr key={name}>
+                    <td>
+                      {name === "api"
+                        ? "API"
+                        : name === "database"
+                          ? "Base catalogue"
+                          : name === "storage"
+                            ? "Stockage S3"
+                            : name === "disk"
+                              ? "Disque local"
+                              : name}
+                    </td>
+                    <td>
+                      <span
+                        className={
+                          component.status === "ok" ? "chip chip-ok" : "chip chip-warn"
+                        }
+                      >
+                        {component.status === "ok" ? "OK" : "En panne"}
+                      </span>
+                    </td>
+                    <td className="muted">
+                      {component.latency_ms !== undefined
+                        ? `${component.latency_ms} ms`
+                        : null}
+                      {component.uptime_s !== undefined
+                        ? ` · démarrée depuis ${component.uptime_s} s`
+                        : null}
+                      {component.free_bytes !== undefined
+                        ? ` · libres : ${formatBytes(component.free_bytes)}`
+                        : null}
+                      {component.error ? ` · ${component.error}` : null}
+                      {component.note ? ` · ${component.note}` : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted">{health.data.note}</p>
+            {health.data.recent_errors.events.length > 0 ? (
+              <>
+                <h3>Erreurs récentes</h3>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Action</th>
+                      <th>Acteur</th>
+                      <th>Résultat</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {health.data.recent_errors.events.map((event, index) => (
+                      <tr key={`${event.ts}-${index}`}>
+                        <td className="muted">{formatTs(event.ts)}</td>
+                        <td>
+                          <code>{event.action}</code>
+                        </td>
+                        <td className="muted">{event.actor ?? "—"}</td>
+                        <td>
+                          <span className="chip chip-warn">{event.result}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : (
+              <p className="muted">
+                Aucune erreur sur les dernières{" "}
+                {Math.round(health.data.recent_errors.window_s / 60)} minutes.
+              </p>
+            )}
+          </>
+        )}
+      </section>
+
+      <section className="section" aria-labelledby="admin-audit-title">
+        <div className="section-head">
+          <h2 id="admin-audit-title">Journal d'audit</h2>
+          {canWrite ? (
+            <ConfirmAction
+              label="Purger le journal"
+              title="Purger le journal"
+              message="Les événements plus anciens que la fenêtre de rétention seront supprimés. Les lignes sans horodatage valide sont conservées."
+              confirmLabel="Purger"
+              pending={pruneAudit.isPending}
+              onConfirm={() => pruneAudit.mutate()}
+            />
+          ) : null}
+        </div>
+        <p className="muted">
+          Recherche du plus récent au plus ancien. Ni mots de passe, ni
+          secrets, ni URL présignées n'y figurent. Rétention :{" "}
+          {auditSearch.data?.retention_days ?? "—"} jours.
+        </p>
+        {pruneAudit.isSuccess ? (
+          <p role="status" className="alert alert-ok">
+            Purge : {pruneAudit.data.kept} conservé(s), {pruneAudit.data.dropped}{" "}
+            supprimé(s).
+          </p>
+        ) : null}
+        <form
+          className="form form-inline"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setAuditOffset(0);
+            setAuditApplied({
+              ...(auditActor.trim() ? { actor: auditActor.trim() } : {}),
+              ...(auditAction.trim() ? { action: auditAction.trim() } : {}),
+              ...(auditResult.trim() ? { result: auditResult.trim() } : {}),
+              ...(auditSpace.trim() ? { spaceId: auditSpace.trim() } : {}),
+              ...(auditRequest.trim() ? { requestId: auditRequest.trim() } : {}),
+            });
+          }}
+        >
+          <label className="field">
+            <span>Acteur</span>
+            <input
+              type="text"
+              value={auditActor}
+              maxLength={200}
+              placeholder="utilisateur ou identité"
+              onChange={(e) => setAuditActor(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Action</span>
+            <input
+              type="text"
+              value={auditAction}
+              maxLength={100}
+              placeholder="upload-intent, login…"
+              onChange={(e) => setAuditAction(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Résultat</span>
+            <input
+              type="text"
+              value={auditResult}
+              maxLength={50}
+              placeholder="success, failure…"
+              onChange={(e) => setAuditResult(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Espace (id)</span>
+            <input
+              type="text"
+              value={auditSpace}
+              maxLength={64}
+              placeholder="UUID de l'espace"
+              onChange={(e) => setAuditSpace(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Requête (X-Request-Id)</span>
+            <input
+              type="text"
+              value={auditRequest}
+              maxLength={128}
+              placeholder="identifiant de requête"
+              onChange={(e) => setAuditRequest(e.target.value)}
+            />
+          </label>
+          <div className="dialog-actions">
+            <button type="submit" className="btn btn-primary">
+              Rechercher
+            </button>
+          </div>
+        </form>
+        {auditSearch.isError ? (
+          <p role="alert" className="alert alert-error">
+            Journal indisponible.
+          </p>
+        ) : auditSearch.isPending ? (
+          <p className="muted">Chargement…</p>
+        ) : auditSearch.data.items.length === 0 ? (
+          <p className="muted">Aucun événement pour ces critères.</p>
+        ) : (
+          <>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Action</th>
+                  <th>Acteur</th>
+                  <th>Résultat</th>
+                  <th>Requête</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditSearch.data.items.map((event, index) => (
+                  <tr key={`${event.ts}-${index}`}>
+                    <td className="muted">{formatTs(event.ts)}</td>
+                    <td>
+                      <code>{event.action}</code>
+                    </td>
+                    <td className="muted">{event.actor ?? "—"}</td>
+                    <td>
+                      <span
+                        className={
+                          event.result === "success" ? "chip chip-ok" : "chip chip-warn"
+                        }
+                      >
+                        {event.result}
+                      </span>
+                    </td>
+                    <td className="muted">
+                      {event.request_id ? (
+                        <code>{String(event.request_id).slice(0, 8)}…</code>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted">
+              {auditSearch.data.total} événement(s) — page{" "}
+              {Math.floor(auditOffset / AUDIT_PAGE_SIZE) + 1}
+              {auditSearch.data.truncated
+                ? " · historique ancien au-delà de la fenêtre de lecture"
+                : ""}
+              .
+            </p>
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="btn"
+                disabled={auditOffset === 0}
+                onClick={() =>
+                  setAuditOffset(Math.max(0, auditOffset - AUDIT_PAGE_SIZE))
+                }
+              >
+                Page précédente
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={auditOffset + AUDIT_PAGE_SIZE >= auditSearch.data.total}
+                onClick={() => setAuditOffset(auditOffset + AUDIT_PAGE_SIZE)}
+              >
+                Page suivante
+              </button>
+            </div>
           </>
         )}
       </section>

@@ -72,7 +72,12 @@ def _m2m_blocked(client_ip: str, now: float | None = None) -> bool:
     now = time.time() if now is None else now
     window = settings.m2m_rate_window
     attempts = [t for t in _M2M_ATTEMPTS.get(client_ip, []) if now - t < window]
-    _M2M_ATTEMPTS[client_ip] = attempts
+    if attempts:
+        _M2M_ATTEMPTS[client_ip] = attempts
+    else:
+        # No permanent empty entry: every distinct probing IP must not leave
+        # residue (mirrors the login limiter).
+        _M2M_ATTEMPTS.pop(client_ip, None)
     return len(attempts) >= settings.m2m_rate_limit
 
 
@@ -81,12 +86,15 @@ def _m2m_record_failure(client_ip: str) -> None:
 
 
 def _bearer_token(request: Request) -> str | None:
+    # Machine identities authenticate with a Bearer token only (M06): the
+    # previously accepted ``X-AURA-Key`` alias was undocumented (absent from
+    # OpenAPI and the authorization matrix) and is refused, so there is exactly
+    # one machine credential channel with one scope check.
     header = request.headers.get("authorization", "")
     if header.lower().startswith("bearer "):
         token = header[7:].strip()
         return token or None
-    key = request.headers.get("x-aura-key")
-    return key.strip() if key and key.strip() else None
+    return None
 
 
 def authenticate(request: Request) -> dict:
@@ -161,7 +169,14 @@ def authorize(scope: str | None = None, human: bool = False):
         request: Request,
         x_csrf_token: str | None = Header(default=None),
     ) -> dict:
+        from . import audit as audit_log
         principal = authenticate(request)
+        # M07: attribute subsequent audit events of this request to the
+        # caller's tenant (mutates the shared request holder, so the
+        # endpoint thread sees it; the middleware resets it afterwards).
+        audit_log.set_request_principal(
+            principal.get("space_id"), principal.get("application_id")
+        )
         if human and principal["kind"] != "user":
             raise HTTPException(status_code=403, detail="forbidden")
         if principal["kind"] == "user":

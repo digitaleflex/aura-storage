@@ -259,9 +259,10 @@ class Repository:
         )
 
     def get_default_bucket(self, space_id: str) -> Optional[dict]:
+        # Strict default only (M06): see api/db.py.
         return self._one(
-            "SELECT * FROM buckets WHERE space_id = %s "
-            "ORDER BY is_default DESC, created_at ASC LIMIT 1",
+            "SELECT * FROM buckets WHERE space_id = %s AND is_default = 1 "
+            "ORDER BY created_at ASC LIMIT 1",
             (space_id,),
         )
 
@@ -522,7 +523,44 @@ class Repository:
     def delete_folder(self, fid: str, *, owner_id: str) -> None:
         self._run("DELETE FROM folders WHERE id = %s AND owner_id = %s", (fid, owner_id))
 
-    # -- observability (#40) ----------------------------------------------
+    # -- observability (#40, M07) ----------------------------------------
+    def ping(self) -> None:
+        """Liveness probe for supervision: raises on any backend failure."""
+        self._one("SELECT 1")
+
+    def stored_bytes(self) -> int:
+        """Verified bytes currently held: available objects only (M07)."""
+        row = self._one(
+            "SELECT COALESCE(SUM(size_bytes), 0) AS n FROM objects "
+            "WHERE status = 'available'"
+        )
+        return int(row["n"])
+
+    def space_usage(self, sid: str) -> dict:
+        """Real per-space consumption for the M07 usage endpoint."""
+        by_status = {
+            row["status"]: row["n"]
+            for row in self._all(
+                "SELECT status, COUNT(*) AS n FROM objects "
+                "WHERE space_id = %s GROUP BY status", (sid,)
+            )
+        }
+        row = self._one(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(size_bytes), 0) AS bytes "
+            "FROM objects WHERE space_id = %s AND status = 'available'",
+            (sid,),
+        )
+        pending = int(self._one(
+            "SELECT COUNT(*) AS n FROM objects "
+            "WHERE space_id = %s AND status = 'pending'", (sid,),
+        )["n"])
+        return {
+            "objects_by_status": by_status,
+            "available_count": int(row["n"]),
+            "stored_bytes": int(row["bytes"]),
+            "pending_count": pending,
+        }
+
     def stats(self) -> dict:
         objects = {
             row["status"]: row["n"]

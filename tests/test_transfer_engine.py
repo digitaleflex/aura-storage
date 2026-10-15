@@ -271,6 +271,43 @@ def test_repeated_commit_is_idempotent(monkeypatch):
     assert first.json()["status"] == "available"
 
 
+def test_concurrent_commits_converge_to_one_available_object(monkeypatch):
+    # #83: simultaneous commits of the same pending intent must converge to a
+    # single available object with one digest — no duplicate rows, no failure
+    # state, no divergent checksum. SQLite serializes via the repo lock; the
+    # PostgreSQL equivalent needs the live parity suite (AURA_TEST_PG_DSN).
+    import hashlib
+    import threading
+
+    data = b"concurrent-commit"
+    monkeypatch.setattr(main, "s3ops", DummyS3(data))
+    c, headers = _admin()
+    oid = _intent(c, headers, size_bytes=len(data)).json()["id"]
+    expected = hashlib.sha256(data).hexdigest()
+
+    results: list = []
+    barrier = threading.Barrier(8)
+
+    def commit_once():
+        worker = TestClient(main.app)
+        worker.cookies = c.cookies
+        barrier.wait()
+        results.append(worker.post(
+            f"/api/v1/objects/{oid}/commit", headers=headers))
+
+    threads = [threading.Thread(target=commit_once) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(results) == 8
+    assert all(r.status_code == 200 for r in results), [
+        (r.status_code, r.text) for r in results if r.status_code != 200
+    ]
+    assert {r.json()["checksum_sha256"] for r in results} == {expected}
+    assert {r.json()["status"] for r in results} == {"available"}
+
+
 # ---------------------------------------------------------------------------
 # Abort == the only cancellation the UI is allowed to use
 # ---------------------------------------------------------------------------
