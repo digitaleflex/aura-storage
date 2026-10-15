@@ -5,6 +5,7 @@ import { ApiError, api, hasScope, putToPresignedUrl } from "../lib/api";
 import type { FolderItem, ObjectItem } from "../lib/api";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
+import { FolderMark } from "../components/FolderMark";
 
 function formatBytes(size: number): string {
   if (!Number.isFinite(size) || size < 0) {
@@ -344,7 +345,7 @@ export function ObjectsPage() {
                   onClick={() => setCurrentFolderId(folder.id)}
                 >
                   <span className="folder-icon" aria-hidden="true">
-                    📁
+                    <FolderMark />
                   </span>
                   <span className="folder-name">{folder.name}</span>
                 </button>

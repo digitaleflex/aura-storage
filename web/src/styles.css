@@ -576,7 +576,8 @@ p .chip {
 }
 
 .folder-icon {
-  font-size: 18px;
+  display: inline-flex;
+  color: var(--electric);
 }
 
 .folder-name {
