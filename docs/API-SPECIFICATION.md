@@ -35,7 +35,10 @@ directories on the host. They support parent/child relationships, names and
 per-folder ownership. Implemented semantics: names are flat labels (no path
 separators), a name is unique per owner+parent, rename/move never creates a cycle,
 depth is capped, deletes refuse a non-empty folder, and every operation is scoped to
-the owner. Folder routes require a human session; space-scoped folders for service
+the owner. `GET /api/v1/folders?all=true` returns the whole tree as a flat list
+(each item carries `parent_id`) so a client rebuilds the hierarchy in one request.
+An object is filed or unfiled with `PATCH /api/v1/objects/{id}` (`folder_id`, null =
+root). Folder routes require a human session; space-scoped folders for service
 identities remain a follow-up (#35).
 
 ### Upload intents
@@ -52,6 +55,7 @@ Track asynchronous bulk uploads/imports with a stable job ID, status (`queued`, 
 - `POST /api/v1/objects/upload-intents` — authorize and issue a short-lived upload URL/intent.
 - `POST /api/v1/objects/{id}/commit` or an equivalent intent-scoped completion endpoint — verify the stored object and transition it to available idempotently.
 - `GET /api/v1/objects/{id}` — metadata only.
+- `PATCH /api/v1/objects/{id}` — file or unfile the object in a logical folder (`folder_id`, null = root); implemented (#62).
 - `POST /api/v1/objects/{id}/download-intent` — authorize and return short-lived download URL.
 - `DELETE /api/v1/objects/{id}` — soft-delete first; permanent purge is a separate privileged operation.
 - `GET /api/v1/folders`, `POST /api/v1/folders`, `GET|PATCH|DELETE /api/v1/folders/{id}` — implemented (#61); see `docs/openapi.yaml`.

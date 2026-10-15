@@ -10,8 +10,8 @@ minimal house CSS (no Tailwind), Playwright for e2e.
   HttpOnly `aura_session` cookie, CSRF token kept in memory only and sent as
   `x-csrf-token` on mutations.
 - Protected `/` route: a folder-aware file browser (breadcrumb, logical folder
-  CRUD, object list / upload / download / soft-delete / purge), public `/login`
-  route.
+  CRUD, object list with pagination, upload / download / file-in-folder /
+  soft-delete / purge), public `/login` route.
 - Administration console at `/admin` (roles `operator`/`admin`): dashboard
   counters (`/api/v1/admin/stats`) and registries for applications, spaces and
   machine-to-machine identities. The nav entry and the route are hidden/refused
@@ -21,9 +21,10 @@ minimal house CSS (no Tailwind), Playwright for e2e.
   identity token is displayed exactly once (creation or rotation) and never
   re-read.
 - Typed API client (`src/lib/api.ts`): list objects (optionally filtered by
-  folder), logical folder CRUD, upload intent → PUT to the short-lived URL →
-  commit, download intent → open short-lived GET URL, soft-delete, purge, and
-  the administration mutations.
+  folder and paged with `limit`/`offset`), logical folder CRUD, upload intent →
+  PUT to the short-lived URL → commit, download intent → open short-lived GET
+  URL, file/unfile an object into a folder, soft-delete, purge, and the
+  administration mutations.
 - The UI never shows fake data as real: empty catalogue renders an explicit
   empty state, errors render explicit alerts.
 - No S3 keys in the code or bundle. All calls use relative paths; in dev,
@@ -91,7 +92,11 @@ npx playwright test
   though the session cookie is still valid.
 - Uploads rely on the server's default space bucket (the client no longer
   hard-codes `aura`); a folder can be chosen as the upload target.
-- The folder tree is loaded breadth-first from the per-level list endpoint
-  (bounded to 500 nodes); there is no single "list all folders" route.
+- The folder tree is loaded in a single request (`GET /api/v1/folders?all=true`,
+  flat list rebuilt client-side from `parent_id`).
+- The object table is paged (50 per page, "Charger plus" increments `offset`);
+  the name filter applies to the objects already loaded, not the whole catalogue.
+- Filing an object into a folder uses `PATCH /api/v1/objects/{id}`; folders are
+  human-owned, so a machine identity cannot file objects.
 - Production serving (static `dist/` + same-origin `/api` proxy) is a
   deployment concern and is not configured here.

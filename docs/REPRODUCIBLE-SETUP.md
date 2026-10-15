@@ -225,6 +225,22 @@ sudo ss -lntup
 
 Run Compose-specific checks from the repository directory. Check service logs and the external HTTPS/S3 acceptance tests. Store evidence without secrets in `docs/verification-log.md` or a private operations record; never commit private addresses, credentials, keys or customer metadata unnecessarily.
 
+### Catalogue parity (SQLite and PostgreSQL)
+
+The offline suite runs against SQLite (`AURA_API_DB=:memory:`) only. The PostgreSQL
+repository (`api/db_pg.py`) is exercised by an opt-in parity test that runs when
+`AURA_TEST_PG_DSN` points at a **disposable** database (it creates and then removes
+its own rows):
+
+```bash
+AURA_TEST_PG_DSN='postgresql://aura:<password>@127.0.0.1:5432/aura_ci' \
+  python -m pytest tests/test_pg_parity.py
+```
+
+Without the variable the module is skipped, so the default run stays hermetic. This
+is a catalogue-layer parity check; it does not replace the end-to-end validation on
+the pilot.
+
 ## 12. Rollback and incident handling
 
 - If SSH fails, use the provider's console/rescue path. Do not repeatedly alter firewall/SSH config without a recovery path.

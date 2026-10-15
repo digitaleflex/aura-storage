@@ -132,6 +132,24 @@ paths:
       responses:
         "200": { description: Object metadata }
         "404": { description: Object not found or not visible }
+    patch:
+      summary: File or unfile an object in a logical folder (objects:write, human only)
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [folder_id]
+              properties:
+                folder_id: { $ref: "#/components/schemas/Uuid4", nullable: true, description: Folder owned by the caller; null unfiles the object (root level) }
+      responses:
+        "200": { description: Object metadata with its new folder_id }
+        "404": { description: Object or target folder not found or not visible }
+        "422": { description: No fields supplied, or malformed folder id }
     delete:
       summary: Soft-delete an object (objects:delete)
       parameters:
@@ -166,11 +184,19 @@ paths:
           name: parent_id
           schema: { $ref: "#/components/schemas/Uuid4" }
           description: Return the children of this folder; omitted = root level
+        - in: query
+          name: all
+          schema: { type: boolean, default: false }
+          description: >-
+            When true, return the caller's whole folder tree as a flat list
+            (each item still carries parent_id) in a single request. Cannot be
+            combined with parent_id (refused with 422).
       responses:
-        "200": { description: Folders directly under the requested parent }
+        "200": { description: Folders directly under the requested parent, or the full flat tree when all=true }
         "401": { description: Authentication required }
         "403": { description: Access denied }
         "404": { description: Parent folder not found or not visible }
+        "422": { description: all combined with parent_id }
     post:
       summary: Create a logical folder (objects:write, human only)
       requestBody:
