@@ -300,7 +300,10 @@ export interface QueueItem {
 
 export interface QueueState {
   items: QueueItem[];
+  /** Effective parallelism right now (shrinks while the link is degraded). */
   concurrency: number;
+  /** Configured ceiling; concurrency never exceeds it. */
+  maxConcurrency: number;
   /** Files currently transferring. */
   active: number;
   /** Files whose backend commit succeeded. */
@@ -317,6 +320,8 @@ export interface UploadQueue {
   cancelAll(): void;
   /** Re-queue the failed and cancelled files, keeping the success ones. */
   retryFailed(): void;
+  /** Re-queue one failed or cancelled file as a fresh submission. */
+  retryItem(id: string): void;
   /** Resolves with the final queue state once every file has settled. */
   done: Promise<QueueState>;
 }
@@ -325,17 +330,39 @@ export interface QueueOptions {
   folderId: string | null;
   /** How many files transfer at once (default 3). */
   concurrency?: number;
+  /**
+   * Delay between the start of two parallel files, in milliseconds.
+   * Paces connection bursts against the storage gateway instead of firing
+   * every PUT at once (JDownLoader's per-host pacing idea, adapted to our
+   * presigned PUTs). 0 disables. Default 250.
+   */
+  startStaggerMs?: number;
+  /**
+   * Shrink the effective parallelism after repeated congestion failures and
+   * restore it after sustained success (JDownLoader's MaxJumpStrategy idea,
+   * adapted from chunks to whole files). Fatal errors and cancellations carry
+   * no congestion signal. Default true.
+   */
+  adaptiveConcurrency?: boolean;
+  /** Consecutive congestion failures that cost one parallel slot. Default 2. */
+  congestionThreshold?: number;
+  /** Consecutive successes that restore one parallel slot. Default 3. */
+  recoveryThreshold?: number;
   signal?: AbortSignal;
   onUpdate?: (queue: QueueState) => void;
   config?: Partial<TransferConfig>;
 }
 
 export const DEFAULT_QUEUE_CONCURRENCY = 3;
+export const DEFAULT_START_STAGGER_MS = 250;
+export const DEFAULT_CONGESTION_THRESHOLD = 2;
+export const DEFAULT_RECOVERY_THRESHOLD = 3;
 
 export function emptyQueue(concurrency = DEFAULT_QUEUE_CONCURRENCY): QueueState {
   return {
     items: [],
     concurrency,
+    maxConcurrency: concurrency,
     active: 0,
     done: 0,
     failed: 0,
@@ -362,8 +389,20 @@ export function startUploadQueue(
   deps: TransferDeps,
   options: QueueOptions,
 ): UploadQueue {
-  const concurrency = Math.max(1, options.concurrency ?? DEFAULT_QUEUE_CONCURRENCY);
+  const maxConcurrency = Math.max(1, options.concurrency ?? DEFAULT_QUEUE_CONCURRENCY);
+  const startStaggerMs = Math.max(0, options.startStaggerMs ?? DEFAULT_START_STAGGER_MS);
+  const adaptive = options.adaptiveConcurrency ?? true;
+  const congestionThreshold = Math.max(1, options.congestionThreshold ?? DEFAULT_CONGESTION_THRESHOLD);
+  const recoveryThreshold = Math.max(1, options.recoveryThreshold ?? DEFAULT_RECOVERY_THRESHOLD);
   const defaultFolder = options.folderId ?? null;
+
+  // Effective parallelism, adapted at runtime (see adaptToOutcome). It never
+  // exceeds the configured maximum, so the queue can only get gentler.
+  let effectiveConcurrency = maxConcurrency;
+  let congestedStreak = 0;
+  let healthyStreak = 0;
+  // Scheduled (staggered) starts not running yet: they hold a slot like actives.
+  let pendingStarts = 0;
 
   interface Internal {
     id: string;
@@ -372,6 +411,8 @@ export function startUploadQueue(
     state: TransferState;
     controller: AbortController | null;
     settled: boolean;
+    /** A staggered start is scheduled but not running yet. */
+    reserved: boolean;
   }
 
   const items: Internal[] = entries.map((entry) => {
@@ -383,6 +424,7 @@ export function startUploadQueue(
       state: idleTransfer(input.file),
       controller: null,
       settled: false,
+      reserved: false,
     };
   });
 
@@ -400,7 +442,8 @@ export function startUploadQueue(
       sizeBytes: item.file.size,
       state: item.state,
     })),
-    concurrency,
+    concurrency: effectiveConcurrency,
+    maxConcurrency,
     active,
     done: items.filter((item) => item.state.phase === "available").length,
     failed: items.filter((item) => item.state.phase === "failed").length,
@@ -418,18 +461,84 @@ export function startUploadQueue(
     }
   };
 
+  /**
+   * JDownLoader-style adaptation (cf. MaxJumpStrategy.processFinishedChunks):
+   * repeated congestion (network errors, 5xx, expired URLs) shrinks the
+   * effective parallelism one slot at a time, down to a single file;
+   * sustained success restores it one slot at a time. Fatal errors and
+   * cancellations carry no congestion signal, so a rejected file or a user
+   * cancel never throttles the queue.
+   */
+  const adaptToOutcome = (item: Internal, lastError: unknown): void => {
+    if (!adaptive) return;
+    if (item.state.phase === "available") {
+      congestedStreak = 0;
+      healthyStreak += 1;
+      if (healthyStreak >= recoveryThreshold && effectiveConcurrency < maxConcurrency) {
+        effectiveConcurrency += 1;
+        healthyStreak = 0;
+      }
+      return;
+    }
+    if (item.state.phase !== "failed") return; // cancelled: no signal
+    healthyStreak = 0;
+    const kind = classifyError(lastError);
+    if (kind !== "retryable" && kind !== "expired") return;
+    congestedStreak += 1;
+    if (congestedStreak >= congestionThreshold && effectiveConcurrency > 1) {
+      effectiveConcurrency -= 1;
+      congestedStreak = 0;
+    }
+  };
+
   const runItem = (item: Internal) => {
-    if (item.settled) return;
+    // A stale staggered start may fire after the item was cancelled, retried
+    // or picked up by another pump pass: starting twice is never allowed.
+    if (item.settled || item.controller !== null || item.state.phase !== "idle") {
+      item.reserved = false;
+      return;
+    }
+    item.reserved = false;
     const controller = new AbortController();
     item.controller = controller;
     if (options.signal) {
       if (options.signal.aborted) controller.abort();
       else options.signal.addEventListener("abort", () => controller.abort(), { once: true });
     }
+    // Remember the terminal cause: runTransfer resolves (never rejects), so
+    // the last error seen is what the transfer failed with, if it failed.
+    let lastError: unknown = null;
+    const tracked: TransferDeps = {
+      ...deps,
+      requestIntent: async (input) => {
+        try {
+          return await deps.requestIntent(input);
+        } catch (err) {
+          lastError = err;
+          throw err;
+        }
+      },
+      upload: async (url, file, opts) => {
+        try {
+          await deps.upload(url, file, opts);
+        } catch (err) {
+          lastError = err;
+          throw err;
+        }
+      },
+      commit: async (id) => {
+        try {
+          return await deps.commit(id);
+        } catch (err) {
+          lastError = err;
+          throw err;
+        }
+      },
+    };
     active += 1;
     item.state = { ...idleTransfer(item.file), phase: "requesting-intent" };
     emit();
-    runTransfer(item.file, deps, {
+    runTransfer(item.file, tracked, {
       folderId: item.folderId,
       idempotencyKey: queueItemId(),
       signal: controller.signal,
@@ -444,6 +553,7 @@ export function startUploadQueue(
         item.controller = null;
         item.settled = true;
         active -= 1;
+        adaptToOutcome(item, lastError);
         emit();
         pump();
         maybeFinish();
@@ -452,16 +562,38 @@ export function startUploadQueue(
 
   const nextQueued = (): Internal | undefined =>
     items.find(
-      (item) => !item.settled && item.controller === null && item.state.phase === "idle",
+      (item) =>
+        !item.settled &&
+        item.controller === null &&
+        !item.reserved &&
+        item.state.phase === "idle",
     );
 
   const pump = () => {
-    let slot = concurrency - active;
+    let slot = effectiveConcurrency - active - pendingStarts;
+    let immediateStarted = false;
     while (slot > 0) {
       const item = nextQueued();
       if (!item) break;
-      runItem(item);
       slot -= 1;
+      if (!immediateStarted || startStaggerMs <= 0) {
+        immediateStarted = true;
+        runItem(item);
+        continue;
+      }
+      // Reserve the slot and start after a short delay, re-validating: the
+      // item may have been cancelled or retried in the meantime. The release
+      // runs on sleep success and failure alike so a throwing sleep cannot
+      // leak the reserved slot.
+      item.reserved = true;
+      pendingStarts += 1;
+      const release = () => {
+        pendingStarts -= 1;
+        runItem(item);
+      };
+      void Promise.resolve()
+        .then(() => deps.sleep(startStaggerMs))
+        .then(release, release);
     }
     maybeFinish();
   };
@@ -501,10 +633,25 @@ export function startUploadQueue(
         if (item.state.phase === "failed" || item.state.phase === "cancelled") {
           item.state = idleTransfer(item.file);
           item.settled = false;
+          item.reserved = false;
           requeued = true;
         }
       }
       if (!requeued) return;
+      finished = false;
+      emit();
+      pump();
+    },
+    retryItem(id: string) {
+      const item = items.find((candidate) => candidate.id === id);
+      // Only a failed or cancelled file can restart: active items keep
+      // their controller (cancel first), queued items run in turn, and
+      // successes stay untouched.
+      if (!item || item.controller !== null) return;
+      if (item.state.phase !== "failed" && item.state.phase !== "cancelled") return;
+      item.state = idleTransfer(item.file);
+      item.settled = false;
+      item.reserved = false;
       finished = false;
       emit();
       pump();
