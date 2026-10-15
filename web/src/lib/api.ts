@@ -107,6 +107,108 @@ export interface IdentityRotateResponse {
   token: string;
 }
 
+/** One audit event as returned by the M07 search endpoint (newest first). */
+export interface AuditEvent {
+  ts: number;
+  actor: string | null;
+  action: string;
+  result: string;
+  request_id?: string | null;
+  space_id?: string | null;
+  application_id?: string | null;
+  [key: string]: unknown;
+}
+
+/** Filters and paging for `GET /api/v1/admin/audit` (M07). */
+export interface AuditQuery {
+  since?: number;
+  until?: number;
+  actor?: string;
+  action?: string;
+  result?: string;
+  spaceId?: string;
+  applicationId?: string;
+  requestId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface AuditSearchResponse {
+  items: AuditEvent[];
+  total: number;
+  truncated: boolean;
+  scanned: number;
+  retention_days: number;
+  queried_at: number;
+}
+
+export interface AuditPruneResponse {
+  kept: number;
+  dropped: number;
+  cutoff: number;
+  retention_days: number;
+}
+
+/** Real per-space consumption (verified available bytes only, M07). */
+export interface UsageSpaceEntry {
+  space_id: string;
+  space_name: string;
+  environment: string;
+  application_id: string;
+  application_name: string | null;
+  objects_by_status: Record<string, number>;
+  available_count: number;
+  stored_bytes: number;
+  pending_count: number;
+}
+
+export interface UsageResponse {
+  /** Live query time (epoch seconds): the freshness marker. */
+  measured_at: number;
+  limits: {
+    max_object_bytes: number;
+    max_pending_intents: number;
+    intent_ttl: number;
+    allow_empty_objects: boolean;
+  };
+  totals: {
+    objects_by_status: Record<string, number>;
+    available_count: number;
+    stored_bytes: number;
+  };
+  spaces: UsageSpaceEntry[];
+}
+
+export interface HealthComponent {
+  status: string;
+  latency_ms?: number;
+  uptime_s?: number;
+  version?: string;
+  error?: string;
+  note?: string;
+  total_bytes?: number;
+  used_bytes?: number;
+  free_bytes?: number;
+}
+
+export interface HealthResponse {
+  status: string;
+  checked_at: number;
+  components: Record<string, HealthComponent>;
+  recent_errors: {
+    window_s: number;
+    events: Array<{
+      ts: number;
+      action: string;
+      actor: string | null;
+      result: string;
+      request_id?: string | null;
+    }>;
+    scanned: number;
+  };
+  note: string;
+}
+
 export interface ReconcileResponse {
   expired: number;
   storage_deletes_attempted: number;
@@ -527,9 +629,43 @@ export const api = {
     return request<ListResponse<IdentityItem>>("/api/v1/admin/identities");
   },
 
+  // --- Observability reads (M07, `admin:read`) ---
+  searchAudit(query: AuditQuery): Promise<AuditSearchResponse> {
+    const params = new URLSearchParams();
+    if (query.since !== undefined) params.set("since", String(query.since));
+    if (query.until !== undefined) params.set("until", String(query.until));
+    if (query.actor) params.set("actor", query.actor);
+    if (query.action) params.set("action", query.action);
+    if (query.result) params.set("result", query.result);
+    if (query.spaceId) params.set("space_id", query.spaceId);
+    if (query.applicationId) params.set("application_id", query.applicationId);
+    if (query.requestId) params.set("request_id", query.requestId);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return request<AuditSearchResponse>(`/api/v1/admin/audit${suffix}`);
+  },
+
+  adminUsage(spaceId?: string): Promise<UsageResponse> {
+    const suffix = spaceId ? `?space_id=${encodeURIComponent(spaceId)}` : "";
+    return request<UsageResponse>(`/api/v1/admin/usage${suffix}`);
+  },
+
+  adminHealth(): Promise<HealthResponse> {
+    return request<HealthResponse>("/api/v1/admin/health");
+  },
+
   // --- Administration mutations (`admin:write`) ---
   reconcile(csrf: string): Promise<ReconcileResponse> {
     return request<ReconcileResponse>("/api/v1/admin/reconcile", {
+      method: "POST",
+      csrf,
+    });
+  },
+
+  /** Enforce the audit retention window (M07, `admin:write`). */
+  pruneAudit(csrf: string): Promise<AuditPruneResponse> {
+    return request<AuditPruneResponse>("/api/v1/admin/audit/prune", {
       method: "POST",
       csrf,
     });

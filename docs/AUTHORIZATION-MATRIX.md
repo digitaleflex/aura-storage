@@ -69,6 +69,10 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | DELETE | `/api/v1/folders/{fid}` | `objects:delete` | **human only**; refuses a non-empty folder |
 | POST | `/api/v1/admin/reconcile` | `admin:write` | global sweep of stale intents; returns `{expired, storage_deletes_attempted, storage_failures}` — a storage failure keeps the intent `pending` for the next sweep and is counted in `storage_failures`, never as cleaned (M06) |
 | GET | `/api/v1/admin/stats` | `admin:read` | aggregate counts, no content |
+| GET | `/api/v1/admin/audit` | `admin:read` | audit search newest-first (period/actor/action/result/space/application/request filters, `limit` 1..500 + `offset`); `total` counts window matches, `truncated` warns of older history (M07) |
+| POST | `/api/v1/admin/audit/prune` | `admin:write` | enforce `AURA_AUDIT_RETENTION_DAYS` (default 90); timestamp-less lines kept (M07) |
+| GET | `/api/v1/admin/usage` | `admin:read` | real per-space consumption (verified available bytes + counts) with `measured_at` and configured limits; optional `space_id` filter (M07) |
+| GET | `/api/v1/admin/health` | `admin:read` | supervision snapshot (api/database/storage/disk + recent errors); always 200, top-level `degraded` on dependency failure (M07) |
 | POST/GET | `/api/v1/admin/applications` | `admin:write` / `admin:read` | platform registry |
 | GET | `/api/v1/admin/applications/{aid}` | `admin:read` | detail + stable id + space count |
 | PATCH | `/api/v1/admin/applications/{aid}` | `admin:write` | rename and/or soft activate/disable |
@@ -145,6 +149,28 @@ Admin-only, via the API (no direct database editing required):
    recorded in the JSON-lines audit log by identity ID, never by secret.
 
 Never place a token in logs, tickets, chat, the frontend bundle, or this repository.
+
+## Audit and observability (M07)
+
+- Every response carries `X-Request-Id` (a safe client value echoed, otherwise
+  a server-minted UUID v4); every in-request audit event stores it, so a UI
+  action traces to its backend events. Pre-authentication events (e.g. failed
+  logins) carry the request id but no tenant.
+- Post-authentication events are attributed with the caller's `space_id` /
+  `application_id` by the authorization layer; explicit event fields always
+  win, so attribution can never be rewritten silently.
+- The log stays append-only JSON-lines with a scalar whitelist: passwords,
+  secrets, session/CSRF tokens and (presigned) URLs are never recorded, not
+  even truncated. Reads (`GET /api/v1/admin/audit`, `admin:read`) scan a
+  bounded tail (`AURA_AUDIT_MAX_SCAN_LINES`, default 20000) newest-first with
+  `limit` 1..500 + `offset`; `truncated` warns of older history beyond the
+  window. Retention (`POST /api/v1/admin/audit/prune`, `admin:write`)
+  enforces `AURA_AUDIT_RETENTION_DAYS` (default 90) and keeps
+  timestamp-less lines.
+- Usage (`GET /api/v1/admin/usage`, `admin:read`) reports live catalogue
+  values only — verified available bytes, counts, configured ceilings — with
+  `measured_at` as the freshness marker. See `docs/OBSERVABILITY.md` for the
+  unavailable metrics and the validations that need real infrastructure.
 
 ## Secret handling
 

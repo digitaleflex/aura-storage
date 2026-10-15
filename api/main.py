@@ -4,6 +4,7 @@ Catalogue metadata lives here; object bytes travel directly between the client
 and S3 through short-lived presigned URLs. The API never stores a browser session
 token in the response body and never puts S3 credentials in the frontend.
 """
+import shutil
 import time
 from typing import Annotated, Literal
 
@@ -12,7 +13,15 @@ from fastapi.responses import JSONResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 from . import authz, ids, netinfo
-from .audit import audit_event
+from .audit import (
+    audit_event,
+    audit_path,
+    bind_request_context,
+    prune_audit_log,
+    query_audit_log,
+    recent_error_events,
+    reset_request_context,
+)
 from .auth import hash_password, new_token, verify_password
 from .authz import (
     ADMIN_READ,
@@ -56,6 +65,44 @@ async def security_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
+    return response
+
+
+# Process boot time for the M07 supervision endpoint (uptime is informational).
+_BOOT_TIME = int(time.time())
+
+
+def _incoming_request_id(request: Request) -> str:
+    """Correlation id: echo a safe client value, otherwise mint a UUID v4.
+
+    A client value is echoed only when it is short printable ASCII with no
+    whitespace or controls, so it can be logged and indexed safely; anything
+    else is replaced by a server-minted id (never 400: correlation must not
+    break callers).
+    """
+    incoming = request.headers.get("x-request-id", "")
+    if (incoming and len(incoming) <= 128
+            and all(33 <= ord(ch) <= 126 for ch in incoming)):
+        return incoming
+    return ids.new_id()
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    """Bind the M07 audit context for exactly one request.
+
+    A fresh mutable holder carries the request id; the authorization layer
+    fills the tenant in once the caller authenticates. The binding is reset
+    after the response so sequential requests sharing a worker thread can
+    never inherit each other's attribution.
+    """
+    request_id = _incoming_request_id(request)
+    _, token = bind_request_context(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        reset_request_context(token)
+    response.headers["X-Request-Id"] = request_id
     return response
 
 
@@ -949,6 +996,185 @@ def reconcile(principal: dict = Depends(authorize(ADMIN_WRITE))):
 @app.get("/api/v1/admin/stats")
 def admin_stats(principal: dict = Depends(authorize(ADMIN_READ))):
     return repo.stats()
+
+
+# ---------------------------------------------------------------------------
+# Observability (M07): audit search, usage, supervision. Reads require
+# admin:read; retention pruning requires admin:write. Every value returned is
+# measured live from the catalogue, the audit file or the OS — see
+# docs/OBSERVABILITY.md for what is (and is not) available.
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/admin/audit")
+def search_audit(
+    since: int | None = Query(default=None, ge=0),
+    until: int | None = Query(default=None, ge=0),
+    actor: str | None = Query(default=None, max_length=200),
+    action: str | None = Query(default=None, max_length=100),
+    result: str | None = Query(default=None, max_length=50),
+    space_id: str | None = None,
+    application_id: str | None = None,
+    request_id: str | None = Query(default=None, max_length=128),
+    limit: int = 100,
+    offset: int = 0,
+    principal: dict = Depends(authorize(ADMIN_READ)),
+):
+    # Search the append-only audit log newest-first. `total` counts matches
+    # inside the scanned tail window; `truncated` warns that older history
+    # exists beyond it. A missing log file is an empty history, never an
+    # error. Pagination: limit is clamped to 1..500, offset counts matches.
+    if space_id is not None:
+        space_id = _canonical_id(space_id, "space id")
+    if application_id is not None:
+        application_id = _canonical_id(application_id, "application id")
+    if since is not None and until is not None and since > until:
+        raise HTTPException(
+            status_code=422, detail="since must not exceed until"
+        )
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    out = query_audit_log(
+        since=since, until=until, actor=actor or None, action=action or None,
+        result=result or None, space_id=space_id,
+        application_id=application_id, request_id=request_id or None,
+        limit=limit, offset=offset,
+        max_scan_lines=settings.audit_max_scan_lines,
+    )
+    return {
+        **out, "retention_days": settings.audit_retention_days,
+        "queried_at": int(time.time()),
+    }
+
+
+@app.post("/api/v1/admin/audit/prune")
+def prune_audit(principal: dict = Depends(authorize(ADMIN_WRITE))):
+    # Enforce the retention window: drop lines older than
+    # AURA_AUDIT_RETENTION_DAYS. Lines without a valid timestamp are kept,
+    # so audit data is never deleted silently.
+    try:
+        out = prune_audit_log(retention_days=settings.audit_retention_days)
+    except OSError:
+        raise HTTPException(status_code=503, detail="audit log unavailable")
+    audit_event("admin.audit.prune", principal["id"], "success", out)
+    return out
+
+
+@app.get("/api/v1/admin/usage")
+def admin_usage(
+    space_id: str | None = None,
+    principal: dict = Depends(authorize(ADMIN_READ)),
+):
+    # Real consumption from the catalogue (M07): verified bytes are
+    # `available` objects only; pending intents carry no committed bytes.
+    # `measured_at` is the live query time (freshness), `limits` the
+    # configured technical ceilings. No bandwidth or capacity figures exist
+    # offline — they are documented as unavailable, never invented.
+    if space_id is not None:
+        space_id = _canonical_id(space_id, "space id")
+        space = repo.get_space(space_id)
+        if space is None:
+            raise HTTPException(status_code=404, detail="space not found")
+        spaces = [space]
+    else:
+        spaces = repo.list_spaces()
+    applications = {a["id"]: a for a in repo.list_applications()}
+    items = []
+    totals_by_status: dict[str, int] = {}
+    total_bytes = 0
+    total_available = 0
+    for space in spaces:
+        space = _as_dict(space)
+        usage = repo.space_usage(space["id"])
+        for status, count in usage["objects_by_status"].items():
+            totals_by_status[status] = totals_by_status.get(status, 0) + count
+        total_bytes += usage["stored_bytes"]
+        total_available += usage["available_count"]
+        application = applications.get(space["application_id"])
+        items.append({
+            "space_id": space["id"], "space_name": space["name"],
+            "environment": space["environment"],
+            "application_id": space["application_id"],
+            "application_name": application["name"] if application else None,
+            **usage,
+        })
+    return {
+        "measured_at": int(time.time()),
+        "limits": {
+            "max_object_bytes": settings.max_object_bytes,
+            "max_pending_intents": settings.max_pending_intents,
+            "intent_ttl": settings.intent_ttl,
+            "allow_empty_objects": settings.allow_empty_objects,
+        },
+        "totals": {
+            "objects_by_status": totals_by_status,
+            "available_count": total_available,
+            "stored_bytes": total_bytes,
+        },
+        "spaces": items,
+    }
+
+
+@app.get("/api/v1/admin/health")
+def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
+    """Supervision snapshot (M07): process, database, storage, local disk.
+
+    Always 200 with per-component statuses (`ok`/`down`); the top-level
+    status is `degraded` when any dependency fails. The storage check proves
+    S3 reachability, not a full upload/download round-trip — that proof is
+    the live S3 smoke test, unavailable offline.
+    """
+    checked_at = int(time.time())
+    components: dict[str, dict] = {
+        "api": {
+            "status": "ok", "uptime_s": checked_at - _BOOT_TIME,
+            "version": app.version,
+        },
+    }
+    start = time.monotonic()
+    try:
+        repo.ping()
+        components["database"] = {
+            "status": "ok",
+            "latency_ms": int((time.monotonic() - start) * 1000),
+        }
+    except Exception:
+        components["database"] = {"status": "down", "error": "unreachable"}
+    start = time.monotonic()
+    try:
+        s3ops.list_buckets()
+        components["storage"] = {
+            "status": "ok",
+            "latency_ms": int((time.monotonic() - start) * 1000),
+            "note": "S3 reachable; not a full upload/download round-trip",
+        }
+    except Exception:
+        components["storage"] = {"status": "down", "error": "unreachable"}
+    try:
+        disk = shutil.disk_usage(audit_path())
+        components["disk"] = {
+            "status": "ok", "total_bytes": disk.total,
+            "used_bytes": disk.used, "free_bytes": disk.free,
+            "note": "local process volume; not the object-store capacity",
+        }
+    except OSError:
+        components["disk"] = {"status": "down", "error": "unreadable"}
+    errors, scanned = recent_error_events(
+        window_s=settings.audit_error_window_s, limit=5,
+        max_scan_lines=settings.audit_error_scan_lines,
+    )
+    degraded = any(c.get("status") != "ok" for c in components.values())
+    return {
+        "status": "degraded" if degraded else "ok",
+        "checked_at": checked_at,
+        "components": components,
+        "recent_errors": {
+            "window_s": settings.audit_error_window_s,
+            "events": errors, "scanned": scanned,
+        },
+        "note": (
+            "Degraded storage means uploads/downloads will fail; full "
+            "data-plane proof requires the live S3 smoke test."
+        ),
+    }
 
 
 @app.post("/api/v1/admin/applications")

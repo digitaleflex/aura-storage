@@ -164,7 +164,14 @@ def authorize(scope: str | None = None, human: bool = False):
         request: Request,
         x_csrf_token: str | None = Header(default=None),
     ) -> dict:
+        from . import audit as audit_log
         principal = authenticate(request)
+        # M07: attribute subsequent audit events of this request to the
+        # caller's tenant (mutates the shared request holder, so the
+        # endpoint thread sees it; the middleware resets it afterwards).
+        audit_log.set_request_principal(
+            principal.get("space_id"), principal.get("application_id")
+        )
         if human and principal["kind"] != "user":
             raise HTTPException(status_code=403, detail="forbidden")
         if principal["kind"] == "user":

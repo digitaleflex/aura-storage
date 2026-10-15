@@ -340,6 +340,89 @@ paths:
       responses:
         "200": { description: Counts by status/application/space/identity }
         "403": { description: Not authorised }
+  /api/v1/admin/audit:
+    get:
+      summary: Search the audit log newest-first (admin:read)
+      parameters:
+        - in: query
+          name: since
+          schema: { type: integer, minimum: 0 }
+          description: Inclusive lower bound on event time (epoch seconds)
+        - in: query
+          name: until
+          schema: { type: integer, minimum: 0 }
+          description: Inclusive upper bound on event time (epoch seconds)
+        - in: query
+          name: actor
+          schema: { type: string, maxLength: 200 }
+          description: Substring match on the actor (username or identity id)
+        - in: query
+          name: action
+          schema: { type: string, maxLength: 100 }
+          description: Exact action name (e.g. login, upload-intent, admin.reconcile)
+        - in: query
+          name: result
+          schema: { type: string, maxLength: 50 }
+          description: Exact result (e.g. success, failure, rate_limited)
+        - in: query
+          name: space_id
+          schema: { $ref: "#/components/schemas/Uuid4" }
+          description: Events attributed to this space (post-authentication events only)
+        - in: query
+          name: application_id
+          schema: { $ref: "#/components/schemas/Uuid4" }
+          description: Events attributed to this application (post-authentication events only)
+        - in: query
+          name: request_id
+          schema: { type: string, maxLength: 128 }
+          description: Exact request correlation id (also returned as X-Request-Id)
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200": { description: "Matching events newest-first (items, total in window, truncated flag, scanned lines, retention_days, queried_at)" }
+        "403": { description: Not authorised }
+        "422": { description: Malformed id, or since exceeding until }
+  /api/v1/admin/audit/prune:
+    post:
+      summary: Drop audit lines older than the retention window (admin:write)
+      description: >-
+        Enforces AURA_AUDIT_RETENTION_DAYS (default 90). Lines without a valid
+        timestamp are kept, so audit data is never deleted silently.
+      responses:
+        "200": { description: Prune counts (kept, dropped, cutoff, retention_days) }
+        "403": { description: Not authorised }
+        "503": { description: Audit log unavailable }
+  /api/v1/admin/usage:
+    get:
+      summary: Real consumption per space plus configured limits (admin:read)
+      description: >-
+        Verified bytes count available objects only; measured_at is the live
+        query time. No bandwidth or capacity figures exist — see
+        docs/OBSERVABILITY.md.
+      parameters:
+        - in: query
+          name: space_id
+          schema: { $ref: "#/components/schemas/Uuid4" }
+          description: Restrict to one space; omitted = every space plus totals
+      responses:
+        "200": { description: Limits, totals and per-space usage (bytes are verified available bytes) }
+        "403": { description: Not authorised }
+        "404": { description: Space not found }
+        "422": { description: Identifier is not a canonical UUID v4 }
+  /api/v1/admin/health:
+    get:
+      summary: Supervision snapshot for api, database, storage and disk (admin:read)
+      description: >-
+        Always 200 with per-component ok/down statuses; top-level degraded when
+        any dependency fails. The storage check proves S3 reachability, not a
+        full upload/download round-trip.
+      responses:
+        "200": { description: Component statuses, recent non-success audit events, operator notes }
+        "403": { description: Not authorised }
   /api/v1/admin/applications:
     post:
       summary: Register an application (admin:write)

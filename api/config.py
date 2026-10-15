@@ -89,6 +89,13 @@ class Settings:
         for part in os.environ.get("AURA_ALLOWED_CONTENT_TYPES", "").split(",")
         if part.strip()
     )
+    # Audit observability bounds (M07). Reads scan a bounded tail so a large
+    # history cannot exhaust the API; retention pruning drops only lines older
+    # than the window and never lines without a valid timestamp.
+    audit_retention_days: int = _int("AURA_AUDIT_RETENTION_DAYS", 90)
+    audit_max_scan_lines: int = _int("AURA_AUDIT_MAX_SCAN_LINES", 20000)
+    audit_error_scan_lines: int = _int("AURA_AUDIT_ERROR_SCAN_LINES", 5000)
+    audit_error_window_s: int = _int("AURA_AUDIT_ERROR_WINDOW_S", 3600)
     # Upper bound (characters) for a client-supplied ``Idempotency-Key`` header.
     idempotency_key_max: int = _int("AURA_IDEMPOTENCY_KEY_MAX", 200)
     # Cookie security.

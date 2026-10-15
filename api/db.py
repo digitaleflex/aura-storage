@@ -577,7 +577,48 @@ class Repository:
         )
         self.conn.commit()
 
-    # -- observability (#40) ----------------------------------------------
+    # -- observability (#40, M07) ----------------------------------------
+    def ping(self) -> None:
+        """Liveness probe for supervision: raises on any backend failure."""
+        self.conn.execute("SELECT 1").fetchone()
+
+    def stored_bytes(self) -> int:
+        """Verified bytes currently held: available objects only (M07).
+
+        Pending intents still carry ``size_bytes = -1`` and deleted/expired
+        rows hold no retrievable bytes, so only ``available`` rows count.
+        """
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(size_bytes), 0) AS n FROM objects "
+            "WHERE status = 'available'"
+        ).fetchone()
+        return int(row["n"])
+
+    def space_usage(self, sid: str) -> dict:
+        """Real per-space consumption for the M07 usage endpoint."""
+        by_status = {
+            row["status"]: row["n"]
+            for row in self.conn.execute(
+                "SELECT status, COUNT(*) AS n FROM objects "
+                "WHERE space_id = ? GROUP BY status", (sid,)
+            ).fetchall()
+        }
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(size_bytes), 0) AS bytes "
+            "FROM objects WHERE space_id = ? AND status = 'available'",
+            (sid,),
+        ).fetchone()
+        pending = int(self.conn.execute(
+            "SELECT COUNT(*) AS n FROM objects "
+            "WHERE space_id = ? AND status = 'pending'", (sid,)
+        ).fetchone()["n"])
+        return {
+            "objects_by_status": by_status,
+            "available_count": int(row["n"]),
+            "stored_bytes": int(row["bytes"]),
+            "pending_count": pending,
+        }
+
     def stats(self) -> dict:
         objects = {
             row["status"]: row["n"]
