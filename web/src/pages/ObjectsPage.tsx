@@ -684,6 +684,13 @@ export function ObjectsPage() {
   }
 
   const items = objectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+
+  // Real weight of what is currently loaded — shown as a rail readout, so the
+  // casiers column carries information instead of empty graphite.
+  const loadedBytes = items.reduce(
+    (sum, item) => sum + (item.size_bytes > 0 ? item.size_bytes : 0),
+    0,
+  );
   const currentName = currentFolderId ? byId.get(currentFolderId)?.name : null;
 
   const moveBlocked = moveTarget ? forbiddenTargets(moveTarget.id) : new Set<string>();
@@ -716,7 +723,7 @@ export function ObjectsPage() {
           </button>
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn"
             onClick={() => {
               setNewFolderName("");
               setNewFolderOpen(true);
@@ -785,6 +792,25 @@ export function ObjectsPage() {
 
       <aside className="casiers" aria-labelledby="folders-title">
         <h2 id="folders-title">Dossiers</h2>
+        <ul className="casier-list">
+          <li
+            className={
+              currentFolderId === null ? "casier casier-current" : "casier"
+            }
+          >
+            <button
+              type="button"
+              className="folder-open"
+              aria-current={currentFolderId === null ? "true" : undefined}
+              onClick={() => setCurrentFolderId(null)}
+            >
+              <span className="folder-icon" aria-hidden="true">
+                <FolderMark />
+              </span>
+              <span className="folder-name">Racine</span>
+            </button>
+          </li>
+        </ul>
         {treeQuery.isError ? (
           <p role="alert" className="alert alert-error">
             Dossiers indisponibles.
@@ -848,7 +874,204 @@ export function ObjectsPage() {
             ))}
           </ul>
         )}
+        <div className="casiers-foot">
+          <dl>
+            <dt>Position</dt>
+            <dd>{currentName ?? "Racine"}</dd>
+            <dt>Poids affiché</dt>
+            <dd className="num">{formatBytes(loadedBytes)}</dd>
+          </dl>
+        </div>
       </aside>
+
+      <section
+        className="card intake"
+        aria-labelledby="upload-title"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (!transferActive) handleFilesChange(e.dataTransfer.files);
+        }}
+      >
+        <h2 id="upload-title">
+          Importer{currentName ? ` dans « ${currentName} »` : ""}
+        </h2>
+        <p className="muted">
+          Déposez des fichiers ici ou choisissez-les. Chaque fichier est vérifié
+          par empreinte SHA-256 avant d'être déclaré disponible.
+        </p>
+        <form onSubmit={handleUpload} className="form form-inline">
+          <div className="field file-field">
+            <span>Fichiers</span>
+            <label className="file-picker">
+              <input
+                type="file"
+                name="files"
+                multiple
+                data-testid="files-input"
+                className="visually-hidden"
+                disabled={transferActive}
+                onChange={(e) => {
+                  handleFilesChange(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <span className="btn">Choisir des fichiers…</span>
+              <span className="file-picker-name">
+                {pendingFiles.length === 0
+                  ? "Aucun fichier sélectionné"
+                  : pendingFiles.length === 1
+                    ? (pendingFiles[0]?.name ?? "")
+                    : `${pendingFiles.length} fichiers sélectionnés`}
+              </span>
+            </label>
+          </div>
+          <input
+            ref={dirInputRef}
+            type="file"
+            multiple
+            data-testid="folder-input"
+            className="visually-hidden"
+            disabled={transferActive}
+            onChange={(e) => {
+              void handleFolderUpload(e.target.files);
+              e.target.value = "";
+            }}
+            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+          />
+          <button
+            type="button"
+            className="btn"
+            disabled={transferActive}
+            onClick={() => dirInputRef.current?.click()}
+          >
+            Importer un dossier…
+          </button>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={transferActive || pendingFiles.length === 0}
+          >
+            {transferActive ? "Transfert…" : "Importer et valider"}
+          </button>
+          {transferActive ? (
+            <button type="button" className="btn" onClick={handleCancelUpload}>
+              Annuler
+            </button>
+          ) : null}
+          {!transferActive && (queue.failed > 0 || queue.cancelled > 0) ? (
+            <button type="button" className="btn" onClick={handleRetryFailed}>
+              Réessayer les échecs
+            </button>
+          ) : null}
+        </form>
+
+        {pendingFiles.length > 0 && !transferActive ? (
+          <ul className="pending">
+            {pendingFiles.map((pending, index) => (
+              <li key={`${pending.name}-${index}`} className="pending-item">
+                <span className="transfer-name">{pending.name}</span>
+                <span className="muted">{formatBytes(pending.size)}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  aria-label={`Retirer ${pending.name}`}
+                  onClick={() => removePendingFile(index)}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {queue.items.length > 0 ? (
+          <div className="transfer" data-testid="transfer-status" aria-live="polite">
+            <div className="queue-head">
+              <span className="muted">
+                {queue.done}/{queue.items.length} transféré
+                {queue.items.length > 1 ? "s" : ""}
+                {queue.failed > 0 ? ` · ${queue.failed} en échec` : ""}
+                {queue.cancelled > 0
+                  ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
+                  : ""}
+              </span>
+              {transferActive ? (
+                <span className="muted">
+                  jusqu'à {queue.concurrency} en parallèle
+                </span>
+              ) : null}
+            </div>
+            <ul className="queue">
+              {queue.items.map((item) => (
+                <li key={item.id} className="queue-item">
+                  <div className="queue-line">
+                    <span className="transfer-name">{item.fileName}</span>
+                    <span className="muted">{formatBytes(item.sizeBytes)}</span>
+                    <span className={queuePhaseClass(item.state.phase)}>
+                      {PHASE_LABEL[item.state.phase]}
+                    </span>
+                    {ACTIVE_PHASES.includes(item.state.phase) ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-small"
+                        aria-label={`Interrompre ${item.fileName}`}
+                        onClick={() => queueRef.current?.cancelItem(item.id)}
+                      >
+                        ×
+                      </button>
+                    ) : null}
+                  </div>
+                  {item.state.phase === "uploading" ? (
+                    <div
+                      className="progress"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(item.state.progress * 100)}
+                      aria-label={`Progression de ${item.fileName}`}
+                    >
+                      <span
+                        className="progress-bar"
+                        style={{ width: `${Math.round(item.state.progress * 100)}%` }}
+                      />
+                    </div>
+                  ) : null}
+                  {item.state.attempts > 0 &&
+                  ACTIVE_PHASES.includes(item.state.phase) ? (
+                    <p className="muted">
+                      Nouvelle tentative ({item.state.attempts})…
+                    </p>
+                  ) : null}
+                  {item.state.error && item.state.phase === "failed" ? (
+                    <p className="muted">{item.state.error}</p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {uploadError ? (
+          <p role="alert" className="alert alert-error">
+            {uploadError}
+          </p>
+        ) : null}
+        {queue.finished &&
+        queue.items.length > 0 &&
+        queue.done === queue.items.length ? (
+          <p role="status" className="alert alert-ok">
+            Import validé et vérifié par le backend.
+          </p>
+        ) : null}
+        {queue.finished &&
+        queue.items.length > 0 &&
+        queue.cancelled === queue.items.length ? (
+          <p role="status" className="alert">
+            Import annulé.
+          </p>
+        ) : null}
+      </section>
 
       <section className="section" aria-labelledby="objects-title">
         <div className="section-head">
@@ -1155,196 +1378,6 @@ export function ObjectsPage() {
         ) : null}
       </section>
 
-      <section
-        className="card intake"
-        aria-labelledby="upload-title"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          if (!transferActive) handleFilesChange(e.dataTransfer.files);
-        }}
-      >
-        <h2 id="upload-title">
-          Importer{currentName ? ` dans « ${currentName} »` : ""}
-        </h2>
-        <p className="muted">
-          Déposez des fichiers ici ou choisissez-les. Transfert direct vers l'URL
-          à courte durée, validation avec contrôle d'intégrité (SHA-256 côté
-          serveur).
-        </p>
-        <form onSubmit={handleUpload} className="form form-inline">
-          <div className="field file-field">
-            <span>Fichiers</span>
-            <label className="file-picker">
-              <input
-                type="file"
-                name="files"
-                multiple
-                data-testid="files-input"
-                className="visually-hidden"
-                disabled={transferActive}
-                onChange={(e) => {
-                  handleFilesChange(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-              <span className="btn">Choisir des fichiers…</span>
-              <span className="file-picker-name">
-                {pendingFiles.length === 0
-                  ? "Aucun fichier sélectionné"
-                  : pendingFiles.length === 1
-                    ? (pendingFiles[0]?.name ?? "")
-                    : `${pendingFiles.length} fichiers sélectionnés`}
-              </span>
-            </label>
-          </div>
-          <input
-            ref={dirInputRef}
-            type="file"
-            multiple
-            data-testid="folder-input"
-            className="visually-hidden"
-            disabled={transferActive}
-            onChange={(e) => {
-              void handleFolderUpload(e.target.files);
-              e.target.value = "";
-            }}
-            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
-          />
-          <button
-            type="button"
-            className="btn"
-            disabled={transferActive}
-            onClick={() => dirInputRef.current?.click()}
-          >
-            Importer un dossier…
-          </button>
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={transferActive || pendingFiles.length === 0}
-          >
-            {transferActive ? "Transfert…" : "Importer et valider"}
-          </button>
-          {transferActive ? (
-            <button type="button" className="btn" onClick={handleCancelUpload}>
-              Annuler
-            </button>
-          ) : null}
-          {!transferActive && (queue.failed > 0 || queue.cancelled > 0) ? (
-            <button type="button" className="btn" onClick={handleRetryFailed}>
-              Réessayer les échecs
-            </button>
-          ) : null}
-        </form>
-
-        {pendingFiles.length > 0 && !transferActive ? (
-          <ul className="pending">
-            {pendingFiles.map((pending, index) => (
-              <li key={`${pending.name}-${index}`} className="pending-item">
-                <span className="transfer-name">{pending.name}</span>
-                <span className="muted">{formatBytes(pending.size)}</span>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-small"
-                  aria-label={`Retirer ${pending.name}`}
-                  onClick={() => removePendingFile(index)}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        {queue.items.length > 0 ? (
-          <div className="transfer" data-testid="transfer-status" aria-live="polite">
-            <div className="queue-head">
-              <span className="muted">
-                {queue.done}/{queue.items.length} transféré
-                {queue.items.length > 1 ? "s" : ""}
-                {queue.failed > 0 ? ` · ${queue.failed} en échec` : ""}
-                {queue.cancelled > 0
-                  ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
-                  : ""}
-              </span>
-              {transferActive ? (
-                <span className="muted">
-                  jusqu'à {queue.concurrency} en parallèle
-                </span>
-              ) : null}
-            </div>
-            <ul className="queue">
-              {queue.items.map((item) => (
-                <li key={item.id} className="queue-item">
-                  <div className="queue-line">
-                    <span className="transfer-name">{item.fileName}</span>
-                    <span className="muted">{formatBytes(item.sizeBytes)}</span>
-                    <span className={queuePhaseClass(item.state.phase)}>
-                      {PHASE_LABEL[item.state.phase]}
-                    </span>
-                    {ACTIVE_PHASES.includes(item.state.phase) ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        aria-label={`Interrompre ${item.fileName}`}
-                        onClick={() => queueRef.current?.cancelItem(item.id)}
-                      >
-                        ×
-                      </button>
-                    ) : null}
-                  </div>
-                  {item.state.phase === "uploading" ? (
-                    <div
-                      className="progress"
-                      role="progressbar"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Math.round(item.state.progress * 100)}
-                      aria-label={`Progression de ${item.fileName}`}
-                    >
-                      <span
-                        className="progress-bar"
-                        style={{ width: `${Math.round(item.state.progress * 100)}%` }}
-                      />
-                    </div>
-                  ) : null}
-                  {item.state.attempts > 0 &&
-                  ACTIVE_PHASES.includes(item.state.phase) ? (
-                    <p className="muted">
-                      Nouvelle tentative ({item.state.attempts})…
-                    </p>
-                  ) : null}
-                  {item.state.error && item.state.phase === "failed" ? (
-                    <p className="muted">{item.state.error}</p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        {uploadError ? (
-          <p role="alert" className="alert alert-error">
-            {uploadError}
-          </p>
-        ) : null}
-        {queue.finished &&
-        queue.items.length > 0 &&
-        queue.done === queue.items.length ? (
-          <p role="status" className="alert alert-ok">
-            Import validé et vérifié par le backend.
-          </p>
-        ) : null}
-        {queue.finished &&
-        queue.items.length > 0 &&
-        queue.cancelled === queue.items.length ? (
-          <p role="status" className="alert">
-            Import annulé.
-          </p>
-        ) : null}
-      </section>
-
       {/* Object details side panel (only fields the API actually exposes). */}
       {details ? (
         <>
@@ -1396,14 +1429,37 @@ export function ObjectsPage() {
             <dt>Modifié le</dt>
             <dd>{formatDateTime(details.updated_at)}</dd>
             <dt>Empreinte SHA-256</dt>
-            <dd className="mono">
-              {details.checksum_sha256 ? details.checksum_sha256 : "non disponible"}
+            <dd className="detail-hash">
+              {details.checksum_sha256 ? (
+                <>
+                  <code className="mono">{details.checksum_sha256}</code>
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={() => {
+                      const value = details.checksum_sha256;
+                      if (!navigator.clipboard) {
+                        setNotice("Copie impossible : contexte non sécurisé.");
+                        return;
+                      }
+                      void navigator.clipboard.writeText(value).then(
+                        () => setNotice("Empreinte SHA-256 copiée."),
+                        () => setNotice("Copie refusée par le navigateur."),
+                      );
+                    }}
+                  >
+                    Copier
+                  </button>
+                </>
+              ) : (
+                "non disponible"
+              )}
             </dd>
           </dl>
           <div className="drawer-actions">
             <button
               type="button"
-              className="btn"
+              className="btn btn-primary"
               disabled={details.status !== "available" || downloadingId !== null}
               onClick={() => void handleDownload(details)}
             >
@@ -1435,7 +1491,7 @@ export function ObjectsPage() {
               }
               confirmLabel="Supprimer"
               danger
-              className="btn"
+              className="btn drawer-actions-danger"
               disabled={objectBusy}
               pending={deletePendingId === details.id}
               onConfirm={() => deleteObjectMutation.mutate(details.id)}
@@ -1452,7 +1508,7 @@ export function ObjectsPage() {
                 }
                 confirmLabel="Purger"
                 danger
-                className="btn btn-danger"
+                className="btn btn-danger-text"
                 disabled={objectBusy}
                 pending={purgePendingId === details.id}
                 onConfirm={() => purgeMutation.mutate(details.id)}

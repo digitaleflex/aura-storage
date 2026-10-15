@@ -1,76 +1,76 @@
-/* AURA Vault — direction A « Registre ».
- * Un registre d'archives moderne : papier chaud, encre, serif d'affichage pour
- * les titres, listes de documents plutôt que tableaux à boutons. Un seul accent
- * (encre bleu profond) ; le vert n'est réservé qu'à l'état vérifié (« Disponible »).
+/* AURA Vault — direction A « Salle des coffres ».
+ * Métal brossé et émail mat dans une salle de coffres éclairée : structure
+ * graphite (bandeau, casiers), surface de travail en acier clair, et UNE seule
+ * couleur de signalisation (ambre) réservée aux actions et aux changements
+ * d'état. Aucun dégradé, aucune ombre décorative, aucun serif d'apparat.
  * Les états ne reposent jamais sur la seule couleur : pastille + libellé.
  */
 
-/* Plus Jakarta Sans, self-hosted (OFL). */
+/* IBM Plex Sans (fichier variable, 400–600) et IBM Plex Mono, self-hosted (OFL). */
 @font-face {
-  font-family: "Plus Jakarta Sans";
-  src: url("/fonts/plus-jakarta-sans-v12-latin-regular.woff2") format("woff2");
-  font-weight: 400;
+  font-family: "IBM Plex Sans";
+  src: url("/fonts/ibm-plex-sans-var.woff2") format("woff2");
+  font-weight: 400 600;
+  font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "Plus Jakarta Sans";
-  src: url("/fonts/plus-jakarta-sans-v12-latin-500.woff2") format("woff2");
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-500.woff2") format("woff2");
   font-weight: 500;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Plus Jakarta Sans";
-  src: url("/fonts/plus-jakarta-sans-v12-latin-600.woff2") format("woff2");
-  font-weight: 600;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Plus Jakarta Sans";
-  src: url("/fonts/plus-jakarta-sans-v12-latin-700.woff2") format("woff2");
-  font-weight: 700;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Plus Jakarta Sans";
-  src: url("/fonts/plus-jakarta-sans-v12-latin-800.woff2") format("woff2");
-  font-weight: 800;
-  font-display: swap;
-}
-
-/* Instrument Serif, self-hosted (OFL) — display face only. */
-@font-face {
-  font-family: "Instrument Serif";
-  src: url("/fonts/InstrumentSerif-Regular.ttf") format("truetype");
-  font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 
 :root {
-  /* Warm paper canvas, hairline rules — printed matter, not a dashboard. */
-  --paper: #f5f2ec;
-  --paper-2: #eeE9df;
-  --surface: #ffffff;
-  --ink: #16191f;
-  --ink-2: #3c434e;
-  --muted: #6e6a63;
-  --faint: #9c968b;
-  --line: #e3ded3;
-  --line-2: #d2cabb;
-  --field-line: #b7afa0;
-  --accent: #1e3a5f;
-  --accent-2: #16304f;
-  --accent-soft: #e9eef5;
-  --ok: #2e6b4a;
+  /* Structure : graphite. Surface de travail : acier clair. */
+  --graphite: #1a1f27;
+  --graphite-2: #232a34;
+  --graphite-3: #303a46;
+
+  --steel-0: #eceff3;
+  --steel-1: #ffffff;
+  --steel-2: #e3e8ee;
+  --steel-3: #d4dbe3;
+
+  --ink: #14181f;
+  --ink-2: #414a56;
+  --muted: #5f6874;
+  --faint: #8a94a1;
+
+  --line: #d8dee6;
+  --line-2: #c1c9d3;
+  --field-line: #a9b2be;
+
+  /* Signalisation : la seule couleur d'action du produit. */
+  --signal: #a06a08;
+  --signal-2: #8a5605;
+  --signal-soft: #fdf3e2;
+  --signal-line: #e6c893;
+
+  --ok: #1e6a4a;
+  --ok-bg: #e7f0ea;
   --warn: #8a6410;
-  --warn-bg: #f6efdc;
-  --danger: #a23a2c;
-  --danger-bg: #f8e8e4;
-  --radius: 6px;
-  --radius-small: 4px;
-  --font-ui: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-display: "Instrument Serif", "Iowan Old Style", Georgia, serif;
-  --content-width: 1160px;
+  --warn-bg: #f8f0dc;
+  --danger: #a63328;
+  --danger-bg: #f9e9e6;
+
+  --radius: 3px;
+  --radius-small: 2px;
+
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --band-h: 56px;
+  --rail-w: 248px;
+  --content-width: 1440px;
 }
 
 * {
@@ -79,44 +79,55 @@
 
 body {
   margin: 0;
-  background: var(--paper);
+  background: var(--steel-0);
   color: var(--ink);
   font-family: var(--font-ui);
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Type roles: display (serif) for titles, ui sans for text and data. */
+/* Type roles: heavy sans for titles, mono for anything you compare. */
 h1 {
-  font-family: var(--font-display);
-  font-size: 40px;
-  font-weight: 400;
-  line-height: 1.05;
-  letter-spacing: -0.01em;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  line-height: 1.15;
   margin: 0;
 }
 
 h2 {
-  font-family: var(--font-display);
-  font-size: 23px;
-  font-weight: 400;
-  line-height: 1.2;
-  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.3;
+  margin: 0;
 }
 
 h3 {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 600;
   margin: 0 0 6px;
+}
+
+/* Section labels read like equipment plates, not like headings. */
+.section-head h2,
+.casiers h2 {
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 .muted {
   color: var(--muted);
-  font-size: 13.5px;
+  font-size: 13px;
 }
 
 .mono {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
 }
 
@@ -125,47 +136,47 @@ h3 {
 }
 
 /* ------------------------------------------------------------------ */
-/* Shell: a slim paper masthead instead of a dark sidebar.            */
+/* Shell: a graphite identity band, then the working surface.          */
 /* ------------------------------------------------------------------ */
 .shell {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--paper);
+  background: var(--steel-0);
 }
 
 .topbar {
   position: sticky;
   top: 0;
   z-index: 40;
-  background: var(--paper);
-  border-bottom: 1px solid var(--line-2);
+  background: var(--graphite);
+  border-bottom: 1px solid var(--graphite-3);
 }
 
 .topbar-inner {
   max-width: var(--content-width);
   margin: 0 auto;
-  padding: 0 32px;
-  height: 64px;
+  padding: 0 28px;
+  height: var(--band-h);
   display: flex;
   align-items: center;
-  gap: 28px;
+  gap: 26px;
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  font-family: var(--font-display);
-  font-size: 24px;
-  color: var(--ink);
-  text-decoration: none;
+  gap: 9px;
+  font-size: 16px;
+  font-weight: 600;
   letter-spacing: 0.01em;
+  color: #f2f5f8;
+  text-decoration: none;
 }
 
 .brand svg {
   flex: none;
-  color: var(--accent);
+  color: #cfd6de;
 }
 
 .nav {
@@ -176,27 +187,38 @@ h3 {
 
 .nav a,
 .nav button {
-  color: var(--muted);
+  position: relative;
+  color: #aab4c0;
   background: none;
   border: none;
   font: inherit;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 500;
   text-decoration: none;
   cursor: pointer;
-  padding: 7px 11px;
+  padding: 8px 12px;
   border-radius: var(--radius-small);
 }
 
 .nav a:hover,
 .nav button:hover {
-  color: var(--ink);
-  background: var(--paper-2);
+  color: #f2f5f8;
+  background: var(--graphite-2);
 }
 
 .nav a[aria-current="page"] {
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: #ffffff;
+}
+
+/* The active bay is marked by the same amber used for action. */
+.nav a[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--signal);
 }
 
 .session {
@@ -206,50 +228,66 @@ h3 {
   gap: 14px;
 }
 
+/* "Coffre déverrouillé" is a state, so it is drawn as an instrument readout. */
 .session .whoami {
-  font-size: 12.5px;
-  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9fb0a4;
+}
+
+.session .whoami::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: #4fae7c;
+  border-radius: 50%;
+  flex: none;
 }
 
 .session a {
-  color: var(--muted);
-  font-size: 14px;
-  font-weight: 600;
+  color: #aab4c0;
+  font-size: 13.5px;
+  font-weight: 500;
   text-decoration: none;
 }
 
 .session a:hover {
-  color: var(--ink);
+  color: #ffffff;
 }
 
 .content {
   width: 100%;
   max-width: var(--content-width);
   margin: 0 auto;
-  padding: 40px 32px 96px;
+  padding: 26px 28px 132px;
 }
 
 /* ------------------------------------------------------------------ */
-/* Controls: one grammar — small radius, hairline, deliberate press.  */
+/* Controls: one grammar — square, hairline, deliberate press.         */
 /* ------------------------------------------------------------------ */
 .btn {
   appearance: none;
   border: 1px solid var(--line-2);
-  background: var(--surface);
+  background: var(--steel-1);
   color: var(--ink);
   font: inherit;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 500;
   border-radius: var(--radius-small);
-  padding: 9px 15px;
+  padding: 8px 14px;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease,
-    transform 80ms ease;
+  transition: background 110ms ease, border-color 110ms ease, color 110ms ease,
+    transform 70ms ease;
 }
 
 .btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--ink-2);
+  background: var(--steel-2);
 }
 
 .btn:active {
@@ -260,26 +298,34 @@ h3 {
 a:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: 2px solid var(--signal);
+  outline-offset: 1px;
 }
 
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
   transform: none;
 }
 
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--signal);
+  border-color: var(--signal);
   color: #ffffff;
 }
 
 .btn-primary:hover {
-  background: var(--accent-2);
-  border-color: var(--accent-2);
+  background: var(--signal-2);
+  border-color: var(--signal-2);
   color: #ffffff;
+}
+
+/* A disabled primary must read as inert, not as the brightest thing on screen. */
+.btn-primary:disabled {
+  background: var(--steel-2);
+  border-color: var(--line-2);
+  color: var(--muted);
+  opacity: 1;
 }
 
 .btn-ghost {
@@ -291,12 +337,12 @@ select:focus-visible {
 .btn-ghost:hover {
   border-color: transparent;
   color: var(--ink);
-  background: var(--paper-2);
+  background: var(--steel-2);
 }
 
 .btn-small {
-  font-size: 13px;
-  padding: 6px 11px;
+  font-size: 12.5px;
+  padding: 5px 10px;
 }
 
 .btn-danger {
@@ -306,12 +352,11 @@ select:focus-visible {
 }
 
 .btn-danger:hover {
-  border-color: #7f2c21;
-  background: #8f3327;
+  background: #8f2c22;
+  border-color: #8f2c22;
   color: #ffffff;
 }
 
-/* Inline destructive affordance that must not shout as loud as the action. */
 .btn-danger-text {
   color: var(--danger);
 }
@@ -324,10 +369,13 @@ select:focus-visible {
 .field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink-2);
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 .field input[type="text"],
@@ -337,33 +385,39 @@ select:focus-visible {
 .field input[type="number"],
 .field input[type="date"],
 .field select {
-  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 14px;
   font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
   border: 1px solid var(--field-line);
   border-radius: var(--radius-small);
-  padding: 9px 11px;
-  background: var(--surface);
+  padding: 8px 10px;
+  background: var(--steel-1);
   color: var(--ink);
   max-width: 420px;
+}
+
+.field input::placeholder {
+  color: #8a94a1;
 }
 
 .form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  margin-top: 14px;
+  gap: 13px;
+  margin-top: 13px;
 }
 
 .form-inline {
   flex-direction: row;
   align-items: flex-end;
-  gap: 12px;
+  gap: 11px;
   flex-wrap: wrap;
 }
 
-/* File picker: a styled control with French copy instead of the native widget. */
 .file-field {
-  gap: 7px;
+  gap: 6px;
 }
 
 .file-picker {
@@ -375,37 +429,38 @@ select:focus-visible {
 
 .file-picker-name {
   color: var(--muted);
-  font-size: 13.5px;
-  font-weight: 400;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
   overflow-wrap: anywhere;
 }
 
 .search {
-  margin: 14px 0 4px;
+  margin: 13px 0 4px;
   max-width: 420px;
 }
 
 /* ------------------------------------------------------------------ */
-/* Page header, breadcrumb, folders.                                  */
+/* Page header and breadcrumb.                                         */
 /* ------------------------------------------------------------------ */
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
+/* A heavy plate rule, not a decorative underline. */
 .page-head {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 20px;
   flex-wrap: wrap;
-  padding-bottom: 14px;
-  border-bottom: 2px solid var(--ink);
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-2);
 }
 
 .page-head h1 {
-  line-height: 1;
+  line-height: 1.1;
 }
 
 .head-actions {
@@ -415,7 +470,7 @@ select:focus-visible {
 }
 
 .section {
-  margin-top: 30px;
+  margin-top: 0;
 }
 
 .section-head {
@@ -424,7 +479,7 @@ select:focus-visible {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .breadcrumb {
@@ -432,27 +487,29 @@ select:focus-visible {
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  font-size: 13.5px;
-  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  margin: 2px 0 0;
 }
 
 .crumb {
   border: none;
   background: none;
   font: inherit;
-  color: var(--accent);
+  color: var(--ink-2);
   cursor: pointer;
-  padding: 2px 6px;
+  padding: 2px 5px;
   border-radius: var(--radius-small);
 }
 
 .crumb:hover {
-  background: var(--accent-soft);
+  background: var(--steel-2);
+  color: var(--ink);
 }
 
 .crumb-current {
   color: var(--ink);
-  font-weight: 700;
+  font-weight: 500;
   cursor: default;
 }
 
@@ -470,29 +527,145 @@ select:focus-visible {
   color: var(--faint);
 }
 
-/* Folders: compact chips in a wrapping strip, not a card grid. */
-.folder-grid {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+/* ------------------------------------------------------------------ */
+/* The workspace: a dark casiers rail beside the light register.       */
+/* This replaces the usual "top chips + card grid" console layout.     */
+/* Scoped to the Fichiers page: .stack is shared with Administration.  */
+/* ------------------------------------------------------------------ */
+.vault-workspace {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px 0;
 }
 
-.folder-card {
+.vault-workspace > .page-head,
+.vault-workspace > .breadcrumb,
+.vault-workspace > .alert {
+  grid-column: 1 / -1;
+}
+
+.vault-workspace > .casiers {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+/* The register is the light working surface. */
+.vault-workspace > .section[aria-labelledby="objects-title"] {
+  grid-column: 2;
+  grid-row: 3;
+  min-width: 0;
+  margin-left: 16px;
+  background: var(--steel-1);
+  border: 1px solid var(--line-2);
+  padding: 16px 18px 4px;
+}
+
+.casiers {
+  display: flex;
+  flex-direction: column;
+  background: var(--graphite);
+  border: 1px solid var(--graphite-3);
+  padding: 14px 0 0;
+  /* Hug the content: a stretched rail left ~54% of the column as flat void. */
+  align-self: start;
+}
+
+/* The rail carries a real readout, so it is not a black column with a tail. */
+.casiers-foot {
+  margin-top: auto;
+  border-top: 1px solid var(--graphite-2);
+  padding: 12px 16px 14px;
+}
+
+.casiers-foot dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 10px;
+}
+
+.casiers-foot dt {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8b96a3;
+  align-self: center;
+}
+
+.casiers-foot dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: #dfe5eb;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.casiers h2 {
+  color: #8b96a3;
+  padding: 0 16px 10px;
+  margin: 0;
+}
+
+.casier-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Each folder is a deposit slot, not a pill. */
+.casier {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 6px 5px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  flex: none;
+  padding: 0 8px 0 4px;
+  border-top: 1px solid var(--graphite-2);
+  border-left: 3px solid transparent;
+  transition: border-color 120ms ease, background 120ms ease;
 }
 
-.folder-card:hover {
-  border-color: var(--line-2);
+.casier:hover {
+  background: var(--graphite-2);
+  border-left-color: var(--signal);
+}
+
+/* Current location, marked the same way as an active nav bay. */
+.casier-current {
+  background: var(--graphite-2);
+  border-left-color: var(--signal);
+}
+
+.casier-current .folder-open {
+  color: #ffffff;
+}
+
+.casier-current .folder-icon {
+  color: var(--signal);
+}
+
+.casier .folder-open {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.casier .folder-icon {
+  color: #7d8b99;
+}
+
+.casier:hover .folder-icon {
+  color: var(--signal);
+}
+
+.casier .menu-trigger {
+  color: #8b96a3;
+}
+
+.casier .menu-trigger:hover,
+.casier .menu-trigger[aria-expanded="true"] {
+  background: var(--graphite-3);
+  color: #ffffff;
 }
 
 .folder-open {
@@ -502,39 +675,39 @@ select:focus-visible {
   border: none;
   background: none;
   font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #dfe5eb;
   cursor: pointer;
   text-align: left;
-  padding: 3px 2px;
+  padding: 10px 6px;
   border-radius: var(--radius-small);
+}
+
+.folder-open:hover {
+  color: #ffffff;
 }
 
 .folder-icon {
   display: inline-flex;
-  color: var(--accent);
+  flex: none;
 }
 
 .folder-name {
-  font-family: var(--font-display);
-  font-size: 17px;
-  font-weight: 400;
-  overflow-wrap: break-word;
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
 }
 
-.folder-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1px;
-  border-left: 1px solid var(--line);
-  padding-left: 5px;
-  margin-left: 2px;
-}
-
-.folder-actions .btn {
+/* Empty / error notes inside the rail. */
+.casiers .empty,
+.casiers .muted {
+  color: #7d8b99;
+  padding: 6px 16px;
   font-size: 12.5px;
-  padding: 4px 8px;
+}
+
+.casiers .alert {
+  margin: 6px 12px 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -544,25 +717,27 @@ select:focus-visible {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 12px;
-  margin: 14px 0 4px;
+  gap: 11px;
+  margin: 0 0 4px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
 }
 
 .filters .field input,
 .filters .field select {
-  max-width: 190px;
+  max-width: 178px;
 }
 
 .filters-advanced {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 12px;
+  gap: 11px;
   margin-top: 12px;
-  padding: 14px;
+  padding: 13px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--paper-2);
+  background: var(--steel-2);
 }
 
 .filters-toggle {
@@ -572,53 +747,62 @@ select:focus-visible {
 }
 
 .filters-toggle[aria-expanded="true"] {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--signal-line);
+  color: var(--signal-2);
+  background: var(--signal-soft);
 }
 
 .filters-count {
+  font-family: var(--font-mono);
   font-size: 11.5px;
-  font-weight: 700;
+  font-weight: 500;
   color: #ffffff;
-  background: var(--accent);
-  border-radius: 999px;
-  padding: 0 6px;
-  line-height: 1.6;
+  background: var(--signal);
+  border-radius: var(--radius-small);
+  padding: 0 5px;
+  line-height: 1.7;
 }
 
 /* ------------------------------------------------------------------ */
-/* Object ledger: the document is the hero.                           */
+/* Object register: dense rows, mono for anything you compare.         */
 /* ------------------------------------------------------------------ */
 .ledger {
-  margin-top: 6px;
-  border-top: 1px solid var(--line-2);
+  margin-top: 0;
 }
 
 .ledger-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 130px 100px 120px 150px 44px;
-  gap: 12px;
-  padding: 8px 10px;
+  grid-template-columns: minmax(0, 1fr) 104px 96px 116px 140px 40px;
+  gap: 10px;
+  padding: 7px 8px;
   border-bottom: 1px solid var(--line-2);
+  font-family: var(--font-mono);
   font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-weight: 500;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
 }
 
+/* The size header must share an edge with its right-aligned values. */
+.ledger-head > :nth-child(3) {
+  text-align: right;
+}
+
 .ledger-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 130px 100px 120px 150px 44px;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 104px 96px 116px 140px 40px;
+  gap: 10px;
   align-items: center;
-  padding: 12px 10px;
+  padding: 10px 8px;
   border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  transition: border-color 120ms ease, background 120ms ease;
 }
 
 .ledger-row:hover {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--steel-2);
+  border-left-color: var(--signal);
 }
 
 .ledger-meta {
@@ -630,30 +814,34 @@ select:focus-visible {
 }
 
 .ledger-name .link-button {
-  font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: 400;
-  line-height: 1.25;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.ledger-type,
+.ledger-size,
+.ledger-date {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ledger-type {
   color: var(--muted);
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .ledger-size {
   color: var(--ink-2);
-  font-size: 13.5px;
-  white-space: nowrap;
+  text-align: right;
 }
 
 .ledger-date {
   color: var(--muted);
-  font-size: 13px;
-  white-space: nowrap;
 }
 
 .ledger-menu {
@@ -665,7 +853,6 @@ select:focus-visible {
   border: none;
   background: none;
   font: inherit;
-  font-weight: 600;
   color: var(--ink);
   cursor: pointer;
   padding: 0;
@@ -674,23 +861,25 @@ select:focus-visible {
 }
 
 .link-button:hover {
-  color: var(--accent);
+  color: var(--signal-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* Status: a dot plus a word — never colour alone. */
 .status {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 13px;
+  gap: 6px;
+  font-size: 12.5px;
   color: var(--ink-2);
   white-space: nowrap;
 }
 
 .status::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--faint);
   flex: none;
@@ -709,7 +898,7 @@ select:focus-visible {
 }
 
 /* ------------------------------------------------------------------ */
-/* Row menu: one quiet control instead of six buttons.                */
+/* Row menu.                                                          */
 /* ------------------------------------------------------------------ */
 .menu {
   position: relative;
@@ -720,16 +909,16 @@ select:focus-visible {
   background: none;
   color: var(--muted);
   font: inherit;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
-  padding: 4px 9px;
+  padding: 4px 8px;
   border-radius: var(--radius-small);
   cursor: pointer;
 }
 
 .menu-trigger:hover,
 .menu-trigger[aria-expanded="true"] {
-  background: var(--paper-2);
+  background: var(--steel-3);
   color: var(--ink);
 }
 
@@ -737,16 +926,16 @@ select:focus-visible {
   position: absolute;
   right: 0;
   top: calc(100% + 4px);
-  min-width: 210px;
-  background: var(--surface);
+  min-width: 208px;
+  background: var(--steel-1);
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
-  box-shadow: 0 12px 32px rgba(22, 25, 31, 0.14);
+  box-shadow: 0 10px 26px rgba(20, 24, 31, 0.16);
   padding: 4px;
   z-index: 50;
   display: flex;
   flex-direction: column;
-  animation: menu-in 140ms ease-out;
+  animation: menu-in 130ms ease-out;
   transform-origin: top right;
 }
 
@@ -755,7 +944,7 @@ select:focus-visible {
   border: none;
   background: none;
   font: inherit;
-  font-size: 13.5px;
+  font-size: 13px;
   color: var(--ink);
   padding: 8px 10px;
   border-radius: var(--radius-small);
@@ -763,7 +952,7 @@ select:focus-visible {
 }
 
 .menu-item:hover {
-  background: var(--paper-2);
+  background: var(--steel-2);
 }
 
 .menu-item:disabled {
@@ -780,22 +969,52 @@ select:focus-visible {
 }
 
 /* ------------------------------------------------------------------ */
-/* Transfer (import) and progress.                                    */
+/* Deposit (import): a fixed control, always within reach.            */
+/* This is the structural fix — the main task used to sit below the   */
+/* fold, after a list that can be hundreds of rows long.              */
 /* ------------------------------------------------------------------ */
-.intake {
-  border: 1px solid var(--line);
+/* Deposit: the anchor of the register, first thing in the working column.
+   It used to be pinned over the list, which hid rows and left the product's
+   main task looking like an orphaned toast in the corner. */
+.vault-workspace > .intake {
+  grid-column: 2;
+  grid-row: 2;
+  margin-left: 16px;
+  margin-bottom: 0;
+  background: var(--steel-1);
+  border: 1px solid var(--line-2);
+  border-left: 3px solid var(--signal);
   border-radius: var(--radius);
-  background: var(--surface);
-  padding: 16px 18px;
-  margin-top: 26px;
+  padding: 14px 16px 16px;
+}
+
+.intake .muted {
+  margin: 6px 0 0;
+  max-width: 64ch;
+}
+
+.intake h2 {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.intake .form-inline {
+  margin-top: 11px;
+  /* Push the action to the far edge so the panel does not read as half empty. */
+  justify-content: space-between;
+  width: 100%;
 }
 
 .transfer {
-  margin-top: 14px;
-  padding: 12px 14px;
+  margin-top: 12px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-small);
-  background: var(--paper-2);
+  background: var(--steel-2);
 }
 
 .transfer-head {
@@ -806,7 +1025,7 @@ select:focus-visible {
 }
 
 .transfer-name {
-  font-weight: 600;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 
@@ -872,9 +1091,8 @@ select:focus-visible {
 
 .progress {
   position: relative;
-  height: 4px;
-  margin-top: 10px;
-  border-radius: 2px;
+  height: 3px;
+  margin-top: 9px;
   background: var(--line-2);
   overflow: hidden;
 }
@@ -882,22 +1100,24 @@ select:focus-visible {
 .progress-bar {
   display: block;
   height: 100%;
-  background: var(--accent);
+  background: var(--signal);
   transition: width 120ms linear;
 }
 
-/* Chips remain for the transfer panel (compact inline status). */
 .chip {
   display: inline-block;
-  font-size: 12px;
-  font-weight: 600;
-  border-radius: 3px;
-  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: var(--radius-small);
+  padding: 2px 7px;
   white-space: nowrap;
 }
 
 .chip-ok {
-  background: #e6efe8;
+  background: var(--ok-bg);
   color: var(--ok);
 }
 
@@ -907,7 +1127,7 @@ select:focus-visible {
 }
 
 .chip-muted {
-  background: var(--paper-2);
+  background: var(--steel-2);
   color: var(--muted);
 }
 
@@ -928,22 +1148,25 @@ p .chip {
   align-items: center;
   gap: 10px;
   border-radius: var(--radius-small);
-  padding: 10px 14px;
-  font-size: 14px;
-  margin: 12px 0 0;
+  padding: 9px 12px;
+  font-size: 13.5px;
+  margin: 10px 0 0;
   border: 1px solid transparent;
+  border-left-width: 3px;
 }
 
 .alert-error {
   background: var(--danger-bg);
   color: var(--danger);
-  border-color: #eccfc8;
+  border-color: var(--danger-bg);
+  border-left-color: var(--danger);
 }
 
 .alert-ok {
-  background: #e8f0ea;
+  background: var(--ok-bg);
   color: var(--ok);
-  border-color: #cfe0d4;
+  border-color: var(--ok-bg);
+  border-left-color: var(--ok);
 }
 
 .alert .btn {
@@ -951,15 +1174,15 @@ p .chip {
 }
 
 .empty {
-  padding: 26px 8px;
+  padding: 22px 4px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 .load-more {
   display: flex;
   justify-content: center;
-  margin-top: 16px;
+  margin-top: 14px;
 }
 
 .row-actions {
@@ -973,16 +1196,16 @@ p .chip {
 /* Dialog and details drawer.                                         */
 /* ------------------------------------------------------------------ */
 .dialog {
-  border: none;
+  border: 1px solid var(--graphite-3);
   border-radius: var(--radius);
   padding: 0;
   width: min(520px, 92vw);
-  box-shadow: 0 24px 60px rgba(22, 25, 31, 0.28);
+  box-shadow: 0 20px 50px rgba(20, 24, 31, 0.3);
   color: var(--ink);
 }
 
 .dialog::backdrop {
-  background: rgba(22, 25, 31, 0.4);
+  background: rgba(20, 24, 31, 0.45);
 }
 
 .dialog-head {
@@ -990,8 +1213,9 @@ p .chip {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 20px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--line);
+  background: var(--steel-2);
 }
 
 .dialog-head h2 {
@@ -999,11 +1223,11 @@ p .chip {
 }
 
 .dialog-body {
-  padding: 18px 20px 20px;
+  padding: 16px 18px 18px;
 }
 
 .dialog-text {
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 .dialog-actions {
@@ -1015,7 +1239,7 @@ p .chip {
 
 .move-list {
   list-style: none;
-  margin: 14px 0 0;
+  margin: 13px 0 0;
   padding: 0;
   display: flex;
   flex-wrap: wrap;
@@ -1027,7 +1251,7 @@ p .chip {
 .drawer-scrim {
   position: fixed;
   inset: 0;
-  background: rgba(22, 25, 31, 0.28);
+  background: rgba(20, 24, 31, 0.32);
   z-index: 55;
 }
 
@@ -1037,13 +1261,12 @@ p .chip {
   right: 0;
   height: 100vh;
   width: min(440px, 92vw);
-  background: var(--surface);
-  border-left: 1px solid var(--line-2);
-  box-shadow: -18px 0 50px rgba(22, 25, 31, 0.16);
-  padding: 22px 24px 40px;
+  background: var(--steel-1);
+  border-left: 1px solid var(--graphite-3);
+  padding: 20px 22px 40px;
   overflow-y: auto;
   z-index: 60;
-  animation: drawer-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: drawer-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .drawer-head {
@@ -1053,11 +1276,12 @@ p .chip {
   gap: 12px;
   margin-bottom: 6px;
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-2);
 }
 
 .drawer-head h2 {
   margin: 0;
+  font-size: 15px;
 }
 
 .detail-list {
@@ -1065,17 +1289,38 @@ p .chip {
 }
 
 .detail-list dt {
+  font-family: var(--font-mono);
   font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  font-weight: 500;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
-  margin-top: 16px;
+  margin-top: 15px;
 }
 
 .detail-list dd {
   margin: 3px 0 0;
-  font-size: 14px;
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+/* The integrity hash is the product's central claim: show all of it. */
+.detail-hash {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.detail-hash code {
+  flex: 1 1 100%;
+  padding: 8px 10px;
+  background: var(--steel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
@@ -1083,11 +1328,16 @@ p .chip {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 24px;
+  margin-top: 22px;
+}
+
+/* Keep the irreversible actions apart from the ordinary ones. */
+.drawer-actions-danger {
+  margin-left: auto;
 }
 
 /* ------------------------------------------------------------------ */
-/* Login: a quiet card on paper, serif wordmark, one accent button.   */
+/* Login: a steel plate on a graphite wall.                           */
 /* ------------------------------------------------------------------ */
 .login-wrap {
   min-height: 100vh;
@@ -1095,86 +1345,101 @@ p .chip {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: var(--paper);
+  background: var(--graphite);
+  /* Faint plate grid — the room's tiling, not a decorative glow. */
+  background-image: linear-gradient(var(--graphite-2) 1px, transparent 1px),
+    linear-gradient(90deg, var(--graphite-2) 1px, transparent 1px);
+  background-size: 48px 48px;
 }
 
 .login-card {
-  background: var(--surface);
-  border: 1px solid var(--line-2);
+  background: var(--steel-1);
+  border: 1px solid var(--graphite-3);
   border-radius: var(--radius);
-  padding: 34px 36px;
+  padding: 30px 32px 32px;
   width: 100%;
-  max-width: 400px;
-  box-shadow: 0 20px 50px rgba(22, 25, 31, 0.08);
+  max-width: 396px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
+  border-top: 3px solid var(--signal);
 }
 
 .login-mark {
-  margin-bottom: 14px;
-  color: var(--accent);
+  margin-bottom: 12px;
+  color: var(--ink-2);
 }
 
 .login-card h1 {
-  font-size: 34px;
+  font-size: 24px;
+}
+
+.login-card .muted {
+  margin: 6px 0 0;
 }
 
 /* ------------------------------------------------------------------ */
-/* Admin console: registries on hairline surfaces.                    */
+/* Admin console.                                                     */
 /* ------------------------------------------------------------------ */
 .card {
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--steel-1);
+  border: 1px solid var(--line-2);
   border-radius: var(--radius);
-  padding: 20px 22px;
-  margin-bottom: 20px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
 }
 
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  gap: 10px;
   margin: 12px 0 4px;
 }
 
 .stat {
-  background: var(--surface);
+  background: var(--steel-1);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 14px 16px;
+  border-left: 3px solid var(--line-2);
+  border-radius: var(--radius-small);
+  padding: 12px 14px;
 }
 
 .stat .value {
-  font-family: var(--font-display);
-  font-size: 30px;
-  line-height: 1.1;
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.15;
   font-variant-numeric: tabular-nums;
 }
 
 .stat .label {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 13.5px;
   margin-top: 12px;
 }
 
 .table th {
   text-align: left;
+  font-family: var(--font-mono);
   font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  font-weight: 500;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
-  padding: 8px 10px;
+  padding: 7px 9px;
   border-bottom: 1px solid var(--line-2);
 }
 
 .table td {
-  padding: 9px 10px;
+  padding: 9px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
 }
@@ -1184,7 +1449,7 @@ p .chip {
 }
 
 .table .name {
-  font-weight: 600;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 
@@ -1194,27 +1459,28 @@ p .chip {
 }
 
 .token-panel {
-  border: 1px solid var(--accent);
-  background: var(--accent-soft);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-  margin: 14px 0 4px;
+  border: 1px solid var(--signal-line);
+  border-left: 3px solid var(--signal);
+  background: var(--signal-soft);
+  border-radius: var(--radius-small);
+  padding: 15px 17px;
+  margin: 13px 0 4px;
 }
 
 .token-panel h3 {
   margin: 0 0 6px;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .token-value {
   display: block;
   margin: 10px 0;
   padding: 10px 12px;
-  background: var(--ink);
-  color: #e8eef6;
+  background: var(--graphite);
+  color: #e6ecf2;
   border-radius: var(--radius-small);
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
   overflow-wrap: anywhere;
 }
 
@@ -1231,7 +1497,10 @@ p .chip {
 }
 
 .scopes-field legend {
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: var(--muted);
   padding: 0 4px;
 }
@@ -1241,7 +1510,7 @@ p .chip {
   align-items: center;
   gap: 6px;
   font-weight: 400;
-  font-size: 13.5px;
+  font-size: 13px;
 }
 
 .visually-hidden {
@@ -1253,12 +1522,13 @@ p .chip {
 }
 
 /* ------------------------------------------------------------------ */
-/* Motion: press feedback, menu/drawer entry, one staggered first-in.  */
+/* Motion: three basics — a row settles into its slot, the deposit     */
+/* seals, the rail slot lights up. Nothing decorative.                */
 /* ------------------------------------------------------------------ */
 @keyframes menu-in {
   from {
     opacity: 0;
-    transform: translateY(-4px) scale(0.98);
+    transform: translateY(-4px) scale(0.99);
   }
   to {
     opacity: 1;
@@ -1269,7 +1539,7 @@ p .chip {
 @keyframes drawer-in {
   from {
     opacity: 0;
-    transform: translateX(16px);
+    transform: translateX(14px);
   }
   to {
     opacity: 1;
@@ -1277,10 +1547,14 @@ p .chip {
   }
 }
 
-@keyframes row-in {
+/* A row drops into its slot and settles: 3px of travel, slight overshoot. */
+@keyframes slot-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(3px);
+  }
+  70% {
+    transform: translateY(-1px);
   }
   to {
     opacity: 1;
@@ -1288,18 +1562,60 @@ p .chip {
   }
 }
 
+/* The seal lands: a short, firm stamp rather than a soft fade. */
+@keyframes seal-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .ledger-row {
     /* `backwards` (not `both`): once the entrance ends the row keeps no
        transform, so later rows are not lifted above an open row menu. */
-    animation: row-in 260ms ease-out backwards;
+    animation: slot-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
   }
   .ledger-row:nth-child(1) { animation-delay: 0ms; }
-  .ledger-row:nth-child(2) { animation-delay: 30ms; }
-  .ledger-row:nth-child(3) { animation-delay: 60ms; }
-  .ledger-row:nth-child(4) { animation-delay: 90ms; }
-  .ledger-row:nth-child(5) { animation-delay: 120ms; }
-  .ledger-row:nth-child(6) { animation-delay: 150ms; }
+  .ledger-row:nth-child(2) { animation-delay: 24ms; }
+  .ledger-row:nth-child(3) { animation-delay: 48ms; }
+  .ledger-row:nth-child(4) { animation-delay: 72ms; }
+  .ledger-row:nth-child(5) { animation-delay: 96ms; }
+  .ledger-row:nth-child(6) { animation-delay: 120ms; }
+
+  /* The rail answers the same way, one beat behind the register. */
+  .casier {
+    animation: rail-in 180ms ease-out backwards;
+  }
+  .casier:nth-child(1) { animation-delay: 0ms; }
+  .casier:nth-child(2) { animation-delay: 20ms; }
+  .casier:nth-child(3) { animation-delay: 40ms; }
+  .casier:nth-child(4) { animation-delay: 60ms; }
+  .casier:nth-child(5) { animation-delay: 80ms; }
+
+  /* Integrity confirmed: the seal stamps down on the transfer panel. */
+  .transfer .chip-ok {
+    animation: seal-in 260ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1311,22 +1627,62 @@ p .chip {
 }
 
 /* ------------------------------------------------------------------ */
-/* Narrow screens: stack the masthead and the ledger rows.            */
+/* Narrow screens: the rail becomes a shelf, rows stack.              */
 /* ------------------------------------------------------------------ */
-@media (max-width: 760px) {
-  .topbar-inner {
-    padding: 0 16px;
-    gap: 10px;
-    height: 56px;
+@media (max-width: 1000px) {
+  .vault-workspace {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .nav {
-    gap: 0;
+  .vault-workspace > .casiers,
+  .vault-workspace > .intake,
+  .vault-workspace > .section[aria-labelledby="objects-title"] {
+    grid-column: 1;
+    /* Single column: the explicit rows above would make the rail span the
+       deposit and the register and paint over them. Back to DOM order. */
+    grid-row: auto;
+    margin-left: 0;
+  }
+
+  .casiers {
+    padding-bottom: 10px;
+  }
+
+  .casier-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 12px;
+  }
+
+  .casier {
+    border: 1px solid var(--graphite-3);
+    border-left-width: 3px;
+    border-radius: var(--radius-small);
+    padding: 0 4px;
+    /* Two even columns: a shelf, not a ragged row of chips. */
+    flex: 1 1 45%;
+  }
+
+  .folder-open {
+    padding: 8px 4px;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar-inner {
+    /* The band wraps instead of hiding the vault state: it is the one status
+       a vault console must not drop, least of all on a phone. */
+    flex-wrap: wrap;
+    height: auto;
+    padding: 7px 14px 9px;
+    gap: 8px;
+    row-gap: 4px;
   }
 
   .nav a,
   .nav button {
-    padding: 6px 8px;
+    padding: 7px 9px;
     font-size: 13px;
   }
 
@@ -1335,15 +1691,15 @@ p .chip {
   }
 
   .brand {
-    font-size: 20px;
+    font-size: 15px;
   }
 
   .session .whoami {
-    display: none;
+    font-size: 10.5px;
   }
 
   .content {
-    padding: 24px 16px 72px;
+    padding: 18px 14px 72px;
   }
 
   .page-head {
@@ -1351,7 +1707,11 @@ p .chip {
   }
 
   .page-head h1 {
-    font-size: 32px;
+    font-size: 22px;
+  }
+
+  .register {
+    padding: 12px 12px 4px;
   }
 
   .ledger-head {
@@ -1359,13 +1719,13 @@ p .chip {
   }
 
   .ledger-row {
-    grid-template-columns: minmax(0, 1fr) 40px;
+    grid-template-columns: minmax(0, 1fr) 36px;
     grid-template-areas:
       "name menu"
       "meta menu";
-    row-gap: 6px;
+    row-gap: 5px;
     align-items: start;
-    padding: 14px 4px;
+    padding: 12px 4px;
   }
 
   .ledger-name {
@@ -1384,6 +1744,10 @@ p .chip {
     grid-area: menu;
   }
 
+  .ledger-size {
+    text-align: left;
+  }
+
   .filters .field,
   .filters-advanced .field {
     flex: 1 1 45%;
@@ -1397,26 +1761,18 @@ p .chip {
     width: 100%;
   }
 
-  .folder-grid {
-    gap: 6px;
-  }
-
-  .folder-card {
-    flex-wrap: nowrap;
-    max-width: 100%;
-  }
-
-  .folder-name {
-    white-space: normal;
-  }
-
   .ledger-date {
     flex-basis: 100%;
   }
 
   .menu-trigger {
-    padding: 10px 12px;
-    font-size: 20px;
+    padding: 9px 11px;
+    font-size: 18px;
+  }
+
+  .intake .form-inline {
+    margin-top: 10px;
+    gap: 8px;
   }
 
   .drawer {
@@ -1425,8 +1781,8 @@ p .chip {
 
   .dialog-head,
   .dialog-body {
-    padding-left: 16px;
-    padding-right: 16px;
+    padding-left: 15px;
+    padding-right: 15px;
   }
 
   .row-actions {
