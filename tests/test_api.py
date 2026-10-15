@@ -79,6 +79,8 @@ def test_login_rate_limit_429_after_window_exhausted():
         assert r.status_code == 401
     r = c.post("/api/v1/login", json={"username": "admin", "password": "wrong"})
     assert r.status_code == 429
+    # #86: a rate-limited client is told when it may retry.
+    assert r.headers.get("Retry-After") == str(main.settings.login_rate_window)
 
 
 def test_successful_logins_do_not_consume_the_rate_limit():

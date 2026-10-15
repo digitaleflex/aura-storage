@@ -452,7 +452,9 @@ def login(body: LoginIn, request: Request, response: Response):
     client_ip = _client_ip(request)
     if _login_blocked(client_ip):
         audit_event("login", body.username, "rate_limited")
-        raise HTTPException(status_code=429, detail="too many login attempts")
+        # Honor-your-limits (#86): tell the client when it may retry.
+        raise HTTPException(status_code=429, detail="too many login attempts",
+                            headers={"Retry-After": str(settings.login_rate_window)})
     row = repo.get_user_by_name(body.username)
     if row is None or not verify_password(row["pass_hash"], body.password):
         _login_record_failure(client_ip)
@@ -989,10 +991,42 @@ def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, 
 # Administration (#35, #36, #38): require the admin:* capabilities.
 # ---------------------------------------------------------------------------
 @app.post("/api/v1/admin/reconcile")
-def reconcile(principal: dict = Depends(authorize(ADMIN_WRITE))):
-    out = reconcile_pending(repo, s3ops)
+def reconcile(limit: int = 500,
+              principal: dict = Depends(authorize(ADMIN_WRITE))):
+    # Bounded sweep (#87): at most `limit` stale intents per run so a huge
+    # backlog cannot monopolize the API; repeat until expired is 0.
+    limit = max(1, min(limit, 5000))
+    out = reconcile_pending(repo, s3ops, limit=limit)
     audit_event("admin.reconcile", principal["id"], "success", out)
     return out
+
+
+@app.get("/api/v1/admin/orphans")
+def list_orphan_candidates(limit: int = 100,
+                           principal: dict = Depends(authorize(ADMIN_READ))):
+    """Read-only orphan candidates (#87): `available` rows whose bytes are
+    missing at storage. Candidates only — nothing is ever deleted on this
+    signal alone; a transient outage also produces candidates, so an operator
+    confirms before any destructive action. Bounded scan, oldest first.
+    """
+    limit = max(1, min(limit, 1000))
+    checked = 0
+    candidates = []
+    for row in repo.list_available(limit=limit):
+        row = _as_dict(row)
+        checked += 1
+        try:
+            s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            candidates.append({
+                "id": row["id"], "display_name": row["display_name"],
+                "space_id": row["space_id"],
+                "application_id": row["application_id"],
+                "size_bytes": row["size_bytes"],
+                "updated_at": row["updated_at"],
+            })
+    return {"checked": checked, "candidates": candidates,
+            "checked_at": int(time.time())}
 
 
 @app.get("/api/v1/admin/stats")

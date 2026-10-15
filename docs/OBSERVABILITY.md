@@ -55,6 +55,21 @@ unknown space) returns:
 AURA enforces no per-application byte quota and no transfer-rate quota
 (server-side ceilings only), so none is displayed.
 
+## Politique retry côté serveur (#86, partielle)
+
+- Les 429 à fenêtre temporelle portent `Retry-After` : login
+  (`AURA_LOGIN_RATE_LIMIT`/`AURA_LOGIN_RATE_WINDOW`) et M2M
+  (`AURA_M2M_RATE_LIMIT`/`AURA_M2M_RATE_WINDOW`). Le 429 « trop d'intentions
+  en attente » n'a pas de fenêtre : le client doit solder (commit/abandon)
+  avant de réessayer, jamais réessayer en boucle.
+- Les 401/403/409/410/413/422 sont définitifs : ne jamais les réessayer sans
+  changer la requête (le client web les classe `fatal`/`expired`, jamais
+  `retryable`).
+- Les 5xx et erreurs réseau sont réessayables avec backoff exponentiel
+  plafonné + jitter côté client ; le serveur n'ordonnance aucun retry
+  automatique d'opération non idempotente. La classification complète vit
+  dans `web/src/lib/transfer.ts` (`classifyError`) et est exercée offline.
+
 ## Supervision
 
 `GET /api/v1/admin/health` (`admin:read`) always answers 200 with

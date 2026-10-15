@@ -103,7 +103,8 @@ def authenticate(request: Request) -> dict:
     if token:
         client_ip = _client_ip(request)
         if _m2m_blocked(client_ip):
-            raise HTTPException(status_code=429, detail="too many requests")
+            raise HTTPException(status_code=429, detail="too many requests",
+                                headers={"Retry-After": str(settings.m2m_rate_window)})
         row = identity.authenticate(repo, token)
         if row is None:
             _m2m_record_failure(client_ip)

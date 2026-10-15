@@ -460,10 +460,19 @@ class Repository:
         )
         self.conn.commit()
 
-    def list_pending_before(self, cutoff: int):
+    def list_pending_before(self, cutoff: int, limit: int = 500):
         return self.conn.execute(
-            "SELECT * FROM objects WHERE status = 'pending' AND created_at < ?",
-            (cutoff,),
+            "SELECT * FROM objects WHERE status = 'pending' AND created_at < ? "
+            "ORDER BY created_at ASC LIMIT ?",
+            (cutoff, limit),
+        ).fetchall()
+
+    def list_available(self, limit: int = 500):
+        """Available rows oldest-first, bounded (M07 orphan scan)."""
+        return self.conn.execute(
+            "SELECT * FROM objects WHERE status = 'available' "
+            "ORDER BY updated_at ASC LIMIT ?",
+            (limit,),
         ).fetchall()
 
     def set_status(self, oid: str, status: str) -> None:

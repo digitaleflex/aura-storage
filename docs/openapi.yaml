@@ -332,6 +332,11 @@ paths:
   /api/v1/admin/reconcile:
     post:
       summary: Expire stale pending uploads (admin:write)
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
+          description: Bounded sweep, oldest first; repeat until expired is 0 (server clamps to 1..5000)
       responses:
         "200": { description: "Reconcile counts (expired, storage_deletes_attempted, storage_failures); failed storage deletes keep the intent pending" }
         "403": { description: Not authorised }
@@ -401,6 +406,21 @@ paths:
         "401": { description: Authentication required }
         "403": { description: Not authorised }
         "503": { description: Audit log rewrite failed (the file itself is still readable) }
+  /api/v1/admin/orphans:
+    get:
+      summary: Read-only orphan candidates, available rows missing at storage (admin:read)
+      description: >-
+        Candidates only — nothing is ever deleted on this signal alone, since a
+        transient outage also produces candidates. Bounded scan, oldest first.
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+          description: Rows scanned (server clamps to 1..1000)
+      responses:
+        "200": { description: Checked count, candidate rows and check time }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
   /api/v1/admin/usage:
     get:
       summary: Real consumption per space plus configured limits (admin:read)

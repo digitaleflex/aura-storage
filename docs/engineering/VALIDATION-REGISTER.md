@@ -47,7 +47,7 @@ Commande exacte § Phase 11. Branche `main`, worktree propre (hors
   échec → `pending` + `storage_failures` (tests M06).
 - Interruptions S3→commit, expirés, doublons (`Idempotency-Key`),
   8 commits concurrents → un digest (`test_transfer_engine.py`).
-- Orphelins S3↔catalogue, lots bornés, crash worker : **non prouvés** (live requis).
+- Orphelins S3↔catalogue : détection lecture seule (`GET /admin/orphans`, ne supprime jamais) + reconcile borné (`limit` 1..5000) testés offline ; suppression sur candidat et crash worker : **non prouvés** (live requis).
 
 ## Phase 3 — Contrat API (#18, #37, #38, #41) : VALIDÉ (offline)
 
@@ -60,7 +60,7 @@ Commande exacte § Phase 11. Branche `main`, worktree propre (hors
 
 - Transitions invalides refusées, commit idempotent, SHA-256/taille serveur,
   expiration/abandon/timeout : tests offline verts.
-- Manque : intégration PG/S3, panne PG, redémarrage — **BLOQUÉ (infra)**.
+- Manque : intégration PG/S3, redémarrage — **BLOQUÉ (infra)** ; panne catalogue au commit testée offline (500, intent reste `pending`).
 
 ## Phase 5 — Reprise (#85) : ABSENT → BLOQUÉ
 
@@ -71,7 +71,7 @@ Commande exacte § Phase 11. Branche `main`, worktree propre (hors
 
 - Client web : classification + backoff exponentiel+jitter borné + concurrence
   (défaut 3, adaptative), tests (`transfer-engine.spec.ts`, `test_transfer_engine.py`).
-- Serveur : **ABSENT** (pas de `Retry-After`, pas de politique) — à spécifier.
+- Serveur : `Retry-After` sur les 429 à fenêtre (login, M2M) + politique documentée (`docs/OBSERVABILITY.md`) ; pas de retry auto serveur d'opération non idempotente (choix assumé).
 
 ## Phase 7 — Multipart (#84) : ABSENT → BLOQUÉ
 

@@ -508,3 +508,28 @@ def test_audit_log_never_records_presigned_urls(monkeypatch, tmp_path):
     records = [json.loads(line) for line in blob.strip().splitlines()]
     assert any(r["action"] == "upload-intent" and r["result"] == "replay" for r in records)
     assert any(r["action"] == "abort" and r["result"] == "success" for r in records)
+
+
+# ---------------------------------------------------------------------------
+# #83: a catalogue failure at commit must not fake success (#87 invariant)
+# ---------------------------------------------------------------------------
+def test_commit_catalogue_failure_keeps_intent_pending(monkeypatch):
+    from fastapi.testclient import TestClient as _TestClient
+    data = b"no-false-success"
+    monkeypatch.setattr(main, "s3ops", DummyS3(data))
+    c = _TestClient(main.app, raise_server_exceptions=False)
+    r = c.post("/api/v1/login", json={
+        "username": "admin", "password": os.environ["AURA_API_ADMIN_PASSWORD"],
+    })
+    assert r.status_code == 200, r.text
+    headers = {"X-CSRF-Token": r.json()["csrf_token"]}
+    oid = _intent(c, headers, size_bytes=len(data)).json()["id"]
+
+    def _boom(oid_, size_, digest_):
+        raise RuntimeError("catalogue down")
+
+    monkeypatch.setattr(main.repo, "mark_available", _boom)
+    r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
+    assert r.status_code == 500
+    row = main.repo.get_object(oid, space_id=main.repo.default_scope()[1])
+    assert dict(row)["status"] == "pending"

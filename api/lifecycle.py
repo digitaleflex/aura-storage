@@ -10,7 +10,8 @@ class StorageDeleteError(RuntimeError):
     """
 
 
-def reconcile_pending(repo, s3ops, expire_after_s: int = 3600) -> dict:
+def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
+                      limit: int = 500) -> dict:
     """Expire pending objects older than the grace period.
 
     Administrative sweep across every space; the route that calls it requires
@@ -24,7 +25,7 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600) -> dict:
     expired = 0
     storage_deletes = 0
     storage_failures = 0
-    for r in repo.list_pending_before(cutoff):
+    for r in repo.list_pending_before(cutoff, limit=max(1, limit)):
         row = dict(r) if not isinstance(r, dict) else r
         try:
             s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])

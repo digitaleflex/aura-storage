@@ -539,3 +539,81 @@ def test_m07_prune_preserves_concurrent_appends():
     kept = [rec for rec in _audit_log_lines()
             if isinstance(rec, dict) and rec.get("action") == "m07.writer"]
     assert len(kept) == 80
+
+
+# ---------------------------------------------------------------------------
+# #87 follow-ups: orphan candidates (read-only) and bounded reconcile.
+# ---------------------------------------------------------------------------
+def test_m07_orphan_candidates_are_read_only(monkeypatch):
+    from api import authz as _authz
+
+    c, headers = _admin()
+    _, space, _ = _make_app_space(c, headers)
+    token = _make_identity(c, headers, space, FULL)["token"]
+    h = _svc(token)
+    healthy_oid = c.post("/api/v1/objects/upload-intents",
+                         json={"display_name": "whole.bin", "size_bytes": 1},
+                         headers=h).json()["id"]
+    main.repo.mark_available(healthy_oid, 1, "abc")
+    missing_oid = c.post("/api/v1/objects/upload-intents",
+                         json={"display_name": "ghost.bin", "size_bytes": 1},
+                         headers=h).json()["id"]
+    main.repo.mark_available(missing_oid, 1, "def")
+
+    class SelectiveS3:
+        def head_object(self, Bucket, Key):
+            row = main.repo.get_object(missing_oid, space_id=space,
+                                       owner_id=None)
+            if row is not None and Key == dict(row)["object_key"]:
+                raise RuntimeError("NoSuchKey")
+            return {"ContentLength": 1}
+
+        def list_buckets(self):
+            return {"Buckets": []}
+
+    monkeypatch.setattr(main, "s3ops", SelectiveS3())
+    r = c.get("/api/v1/admin/orphans", headers=headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["checked"] >= 2
+    ids = {item["id"] for item in body["candidates"]}
+    assert missing_oid in ids and healthy_oid not in ids
+    # Read-only: both rows are untouched and still downloadable in principle.
+    assert c.get(f"/api/v1/objects/{missing_oid}",
+                 headers=h).json()["status"] == "available"
+
+    # Permissions mirror the other observability reads.
+    anon = TestClient(main.app)
+    assert anon.get("/api/v1/admin/orphans").status_code in (401, 403)
+    name, password = _user_with_role("user")
+    u, uh = _login(name, password)
+    assert u.get("/api/v1/admin/orphans", headers=uh).status_code == 403
+    assert c.get("/api/v1/admin/orphans",
+                 headers=h).status_code == 403  # service: no admin:read
+
+
+def test_m07_reconcile_sweep_is_bounded(monkeypatch):
+    c, headers = _admin()
+    _, space, _ = _make_app_space(c, headers)
+    token = _make_identity(c, headers, space, FULL)["token"]
+    oids = [c.post("/api/v1/objects/upload-intents",
+                   json={"display_name": f"stale-{i}.bin", "size_bytes": 1},
+                   headers=_svc(token)).json()["id"] for i in range(3)]
+    for oid in oids:
+        main.repo.conn.execute(
+            "UPDATE objects SET created_at = ? WHERE id = ?",
+            (main.repo.now() - 7200, oid),
+        )
+    main.repo.conn.commit()
+
+    class HealthyS3:
+        def delete_object(self, Bucket, Key):
+            return {}
+
+    monkeypatch.setattr(main, "s3ops", HealthyS3())
+    first = c.post("/api/v1/admin/reconcile", params={"limit": 2},
+                   headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["expired"] == 2
+    second = c.post("/api/v1/admin/reconcile", headers=headers)
+    assert second.json()["expired"] == 1
