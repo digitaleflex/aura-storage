@@ -142,11 +142,40 @@ class Repository:
     def list_applications(self) -> list:
         return self._all("SELECT * FROM applications ORDER BY created_at")
 
+    def application_name_exists(self, name: str, exclude_id: Optional[str] = None) -> bool:
+        sql = "SELECT 1 AS x FROM applications WHERE name = %s"
+        params: list = [name]
+        if exclude_id is not None:
+            sql += " AND id != %s"
+            params.append(exclude_id)
+        return self._one(sql, tuple(params)) is not None
+
+    def update_application(
+        self, aid: str, *, name: Optional[str] = None, status: Optional[str] = None
+    ) -> None:
+        sets: list[str] = []
+        params: list = []
+        if name is not None:
+            sets.append("name = %s")
+            params.append(name)
+        if status is not None:
+            sets.append("status = %s")
+            params.append(status)
+        if not sets:
+            return
+        params.append(aid)
+        self._run(f"UPDATE applications SET {', '.join(sets)} WHERE id = %s", tuple(params))
+
+    def count_spaces_for_application(self, aid: str) -> int:
+        return int(self._one(
+            "SELECT COUNT(*) AS n FROM spaces WHERE application_id = %s", (aid,)
+        )["n"])
+
     def create_space(self, application_id: str, name: str, environment: str) -> str:
         sid = self.new_id()
         self._run(
-            "INSERT INTO spaces (id, application_id, name, environment, created_at) "
-            "VALUES (%s, %s, %s, %s, %s)",
+            "INSERT INTO spaces (id, application_id, name, environment, status, "
+            "created_at) VALUES (%s, %s, %s, %s, 'active', %s)",
             (sid, application_id, name, environment, self.now()),
         )
         return sid
@@ -161,6 +190,52 @@ class Repository:
                 (application_id,),
             )
         return self._all("SELECT * FROM spaces ORDER BY created_at")
+
+    def space_exists(
+        self, application_id: str, name: str, environment: str,
+        exclude_id: Optional[str] = None,
+    ) -> bool:
+        sql = (
+            "SELECT 1 AS x FROM spaces WHERE application_id = %s AND name = %s "
+            "AND environment = %s"
+        )
+        params: list = [application_id, name, environment]
+        if exclude_id is not None:
+            sql += " AND id != %s"
+            params.append(exclude_id)
+        return self._one(sql, tuple(params)) is not None
+
+    def update_space(
+        self, sid: str, *, name: Optional[str] = None,
+        environment: Optional[str] = None, status: Optional[str] = None,
+    ) -> None:
+        sets: list[str] = []
+        params: list = []
+        if name is not None:
+            sets.append("name = %s")
+            params.append(name)
+        if environment is not None:
+            sets.append("environment = %s")
+            params.append(environment)
+        if status is not None:
+            sets.append("status = %s")
+            params.append(status)
+        if not sets:
+            return
+        params.append(sid)
+        self._run(f"UPDATE spaces SET {', '.join(sets)} WHERE id = %s", tuple(params))
+
+    def space_counts(self, sid: str) -> dict:
+        def count(sql: str) -> int:
+            return int(self._one(sql, (sid,))["n"])
+
+        return {
+            "buckets": count("SELECT COUNT(*) AS n FROM buckets WHERE space_id = %s"),
+            "identities": count(
+                "SELECT COUNT(*) AS n FROM service_identities WHERE space_id = %s"
+            ),
+            "objects": count("SELECT COUNT(*) AS n FROM objects WHERE space_id = %s"),
+        }
 
     def create_bucket(self, space_id: str, name: str, is_default: bool = False) -> str:
         bid = self.new_id()
@@ -186,10 +261,33 @@ class Repository:
     def get_bucket_by_name(self, name: str) -> Optional[dict]:
         return self._one("SELECT * FROM buckets WHERE name = %s", (name,))
 
+    def get_bucket(self, bid: str) -> Optional[dict]:
+        return self._one("SELECT * FROM buckets WHERE id = %s", (bid,))
+
     def list_buckets(self, space_id: str) -> list:
         return self._all(
             "SELECT * FROM buckets WHERE space_id = %s ORDER BY created_at", (space_id,)
         )
+
+    def list_all_buckets(self) -> list:
+        # Every registered bucket, oldest first; the API joins space/application
+        # names so a bucket is never shown without its attachment (#M04).
+        return self._all("SELECT * FROM buckets ORDER BY created_at, name")
+
+    def set_default_bucket(self, space_id: str, bid: str, is_default: bool = True) -> None:
+        # Exactly one default per space: clear the flag on the space's other
+        # buckets, then set it on the target (scoped to the same space).
+        if is_default:
+            self._run("UPDATE buckets SET is_default = 0 WHERE space_id = %s", (space_id,))
+            self._run(
+                "UPDATE buckets SET is_default = 1 WHERE id = %s AND space_id = %s",
+                (bid, space_id),
+            )
+        else:
+            self._run(
+                "UPDATE buckets SET is_default = 0 WHERE id = %s AND space_id = %s",
+                (bid, space_id),
+            )
 
     # -- service identities (#38) -----------------------------------------
     def create_identity(

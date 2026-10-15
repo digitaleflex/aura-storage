@@ -167,6 +167,47 @@ def _folder_public(row) -> dict:
     }
 
 
+# Lifecycle values accepted by the admin registry (#M04). Applications and spaces
+# are soft-disabled, never deleted: a disable stops new provisioning/upload while
+# keeping every catalogue row readable.
+APPLICATION_STATUSES = frozenset({"active", "disabled"})
+SPACE_STATUSES = frozenset({"active", "disabled"})
+
+
+def _trim_name(value: str) -> str:
+    name = value.strip()
+    if not name:
+        raise ValueError("name must not be blank")
+    return name
+
+
+def _application_public(row) -> dict:
+    row = _as_dict(row)
+    return {
+        "id": row["id"], "name": row["name"], "status": row["status"],
+        "created_at": row["created_at"],
+    }
+
+
+def _space_public(row) -> dict:
+    row = _as_dict(row)
+    return {
+        "id": row["id"], "application_id": row["application_id"],
+        "name": row["name"], "environment": row["environment"],
+        "status": row["status"], "created_at": row["created_at"],
+    }
+
+
+def _bucket_public(row) -> dict:
+    row = _as_dict(row)
+    # A bucket row carries no S3 credential: the access key/secret live only in
+    # the deployment environment and are never part of the catalogue (#M04).
+    return {
+        "id": row["id"], "space_id": row["space_id"], "name": row["name"],
+        "is_default": bool(row["is_default"]), "created_at": row["created_at"],
+    }
+
+
 def _object_public(row) -> dict:
     row = _as_dict(row)
     return {
@@ -216,6 +257,11 @@ class ApplicationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=63)
 
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        return _trim_name(value)
+
 
 class SpaceIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -223,6 +269,71 @@ class SpaceIn(BaseModel):
     name: str = Field(min_length=1, max_length=63)
     environment: str = Field(min_length=1, max_length=32)
     default_bucket: str | None = Field(default=None, max_length=63)
+
+    @field_validator("name", "environment")
+    @classmethod
+    def _label(cls, value: str) -> str:
+        return _trim_name(value)
+
+
+class ApplicationPatchIn(BaseModel):
+    # Partial update of an application (#M04). `name` is the only mutable label;
+    # `status` carries activation/deactivation. `model_fields_set` tells "not
+    # sent" apart from an explicit null (which is refused for both fields).
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=63)
+    status: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str | None) -> str | None:
+        return None if value is None else _trim_name(value)
+
+    @field_validator("status")
+    @classmethod
+    def _status(cls, value: str | None) -> str | None:
+        if value is not None and value not in APPLICATION_STATUSES:
+            raise ValueError("invalid status")
+        return value
+
+
+class SpacePatchIn(BaseModel):
+    # Controlled modification of a space (#M04). `application_id` is deliberately
+    # absent: reassigning a space to another application would move every object,
+    # bucket and identity to a different tenant, so it is not an editable field.
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=63)
+    environment: str | None = Field(default=None, min_length=1, max_length=32)
+    status: str | None = None
+
+    @field_validator("name", "environment")
+    @classmethod
+    def _label(cls, value: str | None) -> str | None:
+        return None if value is None else _trim_name(value)
+
+    @field_validator("status")
+    @classmethod
+    def _status(cls, value: str | None) -> str | None:
+        if value is not None and value not in SPACE_STATUSES:
+            raise ValueError("invalid status")
+        return value
+
+
+class BucketIn(BaseModel):
+    # Register an additional bucket for an existing space (#M04). The name is
+    # validated against the S3 naming rules before it can be used by a client.
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=63)
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        return _trim_name(value)
+
+
+class BucketPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    is_default: bool
 
 
 class IdentityIn(BaseModel):
@@ -321,6 +432,10 @@ def me(principal: dict = Depends(authorize())):
 def upload_intent(body: UploadIntentIn, principal: dict = Depends(authorize(OBJECTS_WRITE))):
     space_id = principal["space_id"]
     if not space_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    # A disabled space refuses new uploads (#M04): existing objects stay readable
+    # and downloadable, but the space is closed to new writes.
+    if principal.get("space_status") not in (None, "active"):
         raise HTTPException(status_code=403, detail="forbidden")
 
     if body.bucket:
@@ -697,21 +812,80 @@ def create_application(body: ApplicationIn, principal: dict = Depends(authorize(
         raise HTTPException(status_code=409, detail="application already exists")
     aid = repo.create_application(body.name)
     audit_event("admin.application.create", principal["id"], "success", {"application_id": aid})
-    return {"id": aid, "name": body.name}
+    return _application_public(repo.get_application(aid))
 
 
 @app.get("/api/v1/admin/applications")
 def list_applications(principal: dict = Depends(authorize(ADMIN_READ))):
-    return {"items": [
-        {"id": a["id"], "name": a["name"], "status": a["status"]}
-        for a in repo.list_applications()
-    ]}
+    return {"items": [_application_public(a) for a in repo.list_applications()]}
+
+
+@app.get("/api/v1/admin/applications/{aid}")
+def get_application(aid: str, principal: dict = Depends(authorize(ADMIN_READ))):
+    aid = _canonical_id(aid, "application id")
+    row = repo.get_application(aid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="application not found")
+    # The stable identifier is returned verbatim; it is never derived from name.
+    out = _application_public(row)
+    out["space_count"] = repo.count_spaces_for_application(aid)
+    return out
+
+
+@app.patch("/api/v1/admin/applications/{aid}")
+def update_application(
+    aid: str, body: ApplicationPatchIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    aid = _canonical_id(aid, "application id")
+    row = repo.get_application(aid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="application not found")
+    fields = body.model_fields_set
+    if not fields:
+        raise HTTPException(status_code=422, detail="no fields to update")
+    if "name" in fields and body.name is None:
+        raise HTTPException(status_code=422, detail="name cannot be null")
+    if "status" in fields and body.status is None:
+        raise HTTPException(status_code=422, detail="status cannot be null")
+    if "name" in fields and body.name != row["name"]:
+        if repo.application_name_exists(body.name, exclude_id=aid):
+            raise HTTPException(status_code=409, detail="application name already exists")
+    repo.update_application(
+        aid,
+        name=body.name if "name" in fields else None,
+        status=body.status if "status" in fields else None,
+    )
+    audit_event("admin.application.update", principal["id"], "success",
+                {"application_id": aid})
+    out = _application_public(repo.get_application(aid))
+    out["space_count"] = repo.count_spaces_for_application(aid)
+    return out
+
+
+def _space_detail(sid: str) -> dict:
+    """Space detail with its application, buckets and attachment counts."""
+    row = repo.get_space(sid)
+    out = _space_public(row)
+    application = repo.get_application(row["application_id"])
+    out["application_name"] = application["name"] if application else None
+    out["buckets"] = [_bucket_public(b) for b in repo.list_buckets(sid)]
+    out["counts"] = repo.space_counts(sid)
+    return out
 
 
 @app.post("/api/v1/admin/spaces")
 def create_space(body: SpaceIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
-    if repo.get_application(body.application_id) is None:
+    application = repo.get_application(body.application_id)
+    if application is None:
         raise HTTPException(status_code=404, detail="application not found")
+    if application["status"] != "active":
+        # A space may only be attached to an allowed (active) application.
+        raise HTTPException(status_code=409, detail="application is not active")
+    if repo.space_exists(body.application_id, body.name, body.environment):
+        # The unique (application_id, name, environment) is enforced up front so a
+        # duplicate is a 409, never a database integrity error.
+        raise HTTPException(status_code=409, detail="space already exists")
     bucket = body.default_bucket or f"aura-{body.name}-{body.environment}"
     if not is_valid_bucket_name(bucket):
         # Refuse up front rather than register a bucket name S3 will reject (#41).
@@ -721,16 +895,120 @@ def create_space(body: SpaceIn, principal: dict = Depends(authorize(ADMIN_WRITE)
     sid = repo.create_space(body.application_id, body.name, body.environment)
     repo.create_bucket(sid, bucket, is_default=True)
     audit_event("admin.space.create", principal["id"], "success", {"space_id": sid})
-    return {"id": sid, "bucket": bucket}
+    return {**_space_detail(sid), "bucket": bucket}
 
 
 @app.get("/api/v1/admin/spaces")
 def list_spaces(principal: dict = Depends(authorize(ADMIN_READ))):
-    return {"items": [
-        {"id": s["id"], "application_id": s["application_id"], "name": s["name"],
-         "environment": s["environment"]}
-        for s in repo.list_spaces()
-    ]}
+    return {"items": [_space_public(s) for s in repo.list_spaces()]}
+
+
+@app.get("/api/v1/admin/spaces/{sid}")
+def get_space(sid: str, principal: dict = Depends(authorize(ADMIN_READ))):
+    sid = _canonical_id(sid, "space id")
+    if repo.get_space(sid) is None:
+        raise HTTPException(status_code=404, detail="space not found")
+    return _space_detail(sid)
+
+
+@app.patch("/api/v1/admin/spaces/{sid}")
+def update_space(
+    sid: str, body: SpacePatchIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    sid = _canonical_id(sid, "space id")
+    row = repo.get_space(sid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="space not found")
+    fields = body.model_fields_set
+    if not fields:
+        raise HTTPException(status_code=422, detail="no fields to update")
+    if "name" in fields and body.name is None:
+        raise HTTPException(status_code=422, detail="name cannot be null")
+    if "environment" in fields and body.environment is None:
+        raise HTTPException(status_code=422, detail="environment cannot be null")
+    if "status" in fields and body.status is None:
+        raise HTTPException(status_code=422, detail="status cannot be null")
+    new_name = body.name if "name" in fields else row["name"]
+    new_environment = (
+        body.environment if "environment" in fields else row["environment"]
+    )
+    # `application_id` is immutable (it is not an editable field), so uniqueness
+    # is only ever re-checked inside the same application.
+    if (new_name, new_environment) != (row["name"], row["environment"]):
+        if repo.space_exists(
+            row["application_id"], new_name, new_environment, exclude_id=sid
+        ):
+            raise HTTPException(status_code=409, detail="space already exists")
+    repo.update_space(
+        sid,
+        name=new_name if "name" in fields else None,
+        environment=new_environment if "environment" in fields else None,
+        status=body.status if "status" in fields else None,
+    )
+    audit_event("admin.space.update", principal["id"], "success", {"space_id": sid})
+    return _space_detail(sid)
+
+
+@app.post("/api/v1/admin/spaces/{sid}/buckets")
+def create_space_bucket(
+    sid: str, body: BucketIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    # Register an extra bucket for a space. The bucket name is validated against
+    # the S3 rules and must be globally unique; a bucket is never made the default
+    # here (that is an explicit, separate action) and never deleted (#M04).
+    sid = _canonical_id(sid, "space id")
+    if repo.get_space(sid) is None:
+        raise HTTPException(status_code=404, detail="space not found")
+    if not is_valid_bucket_name(body.name):
+        raise HTTPException(status_code=422, detail="invalid bucket name")
+    if repo.get_bucket_by_name(body.name) is not None:
+        raise HTTPException(status_code=409, detail="bucket name already in use")
+    bid = repo.create_bucket(sid, body.name, is_default=False)
+    audit_event("admin.bucket.create", principal["id"], "success",
+                {"bucket_id": bid, "space_id": sid})
+    return _bucket_public(repo.get_bucket(bid))
+
+
+@app.get("/api/v1/admin/buckets")
+def list_buckets(principal: dict = Depends(authorize(ADMIN_READ))):
+    # Every registered bucket with its space/application attachment. The payload
+    # has no S3 credential field: only the bucket name and its owner are exposed.
+    spaces = {s["id"]: s for s in repo.list_spaces()}
+    applications = {a["id"]: a for a in repo.list_applications()}
+    items = []
+    for bucket in repo.list_all_buckets():
+        space = spaces.get(bucket["space_id"])
+        application = applications.get(space["application_id"]) if space else None
+        items.append({
+            **_bucket_public(bucket),
+            "space_name": space["name"] if space else None,
+            "environment": space["environment"] if space else None,
+            "application_id": space["application_id"] if space else None,
+            "application_name": application["name"] if application else None,
+        })
+    return {"items": items}
+
+
+@app.patch("/api/v1/admin/buckets/{bid}")
+def update_bucket(
+    bid: str, body: BucketPatchIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    # Toggle the default flag. Setting a bucket default clears the flag on the
+    # other buckets of the same space, so exactly one default is possible; the
+    # existing objects keep their own bucket locator, so the change is reversible.
+    bid = _canonical_id(bid, "bucket id")
+    bucket = repo.get_bucket(bid)
+    if bucket is None:
+        raise HTTPException(status_code=404, detail="bucket not found")
+    repo.set_default_bucket(bucket["space_id"], bid, is_default=body.is_default)
+    audit_event("admin.bucket.default", principal["id"], "success", {
+        "bucket_id": bid, "space_id": bucket["space_id"],
+        "is_default": body.is_default,
+    })
+    return _bucket_public(repo.get_bucket(bid))
 
 
 @app.post("/api/v1/admin/identities")
@@ -738,6 +1016,9 @@ def create_identity(body: IdentityIn, principal: dict = Depends(authorize(ADMIN_
     space = repo.get_space(body.space_id)
     if space is None:
         raise HTTPException(status_code=404, detail="space not found")
+    if space.get("status") not in (None, "active"):
+        # No new identity may be minted for a disabled space (#M04).
+        raise HTTPException(status_code=409, detail="space is not active")
     scopes = set(body.scopes)
     unknown = scopes - ALL_SCOPES
     if unknown:

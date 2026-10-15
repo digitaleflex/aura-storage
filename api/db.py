@@ -145,11 +145,43 @@ class Repository:
             "SELECT * FROM applications ORDER BY created_at"
         ).fetchall()]
 
+    def application_name_exists(self, name: str, exclude_id: Optional[str] = None) -> bool:
+        sql = "SELECT 1 FROM applications WHERE name = ?"
+        params: list = [name]
+        if exclude_id is not None:
+            sql += " AND id != ?"
+            params.append(exclude_id)
+        return self.conn.execute(sql, params).fetchone() is not None
+
+    def update_application(
+        self, aid: str, *, name: Optional[str] = None, status: Optional[str] = None
+    ) -> None:
+        sets: list[str] = []
+        params: list = []
+        if name is not None:
+            sets.append("name = ?")
+            params.append(name)
+        if status is not None:
+            sets.append("status = ?")
+            params.append(status)
+        if not sets:
+            return
+        params.append(aid)
+        self.conn.execute(
+            f"UPDATE applications SET {', '.join(sets)} WHERE id = ?", params
+        )
+        self.conn.commit()
+
+    def count_spaces_for_application(self, aid: str) -> int:
+        return int(self.conn.execute(
+            "SELECT COUNT(*) AS n FROM spaces WHERE application_id = ?", (aid,)
+        ).fetchone()["n"])
+
     def create_space(self, application_id: str, name: str, environment: str) -> str:
         sid = self.new_id()
         self.conn.execute(
-            "INSERT INTO spaces (id, application_id, name, environment, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO spaces (id, application_id, name, environment, status, "
+            "created_at) VALUES (?, ?, ?, ?, 'active', ?)",
             (sid, application_id, name, environment, self.now()),
         )
         self.conn.commit()
@@ -171,6 +203,53 @@ class Repository:
                 "SELECT * FROM spaces ORDER BY created_at"
             ).fetchall()
         return [_as_dict(r) for r in rows]
+
+    def space_exists(
+        self, application_id: str, name: str, environment: str,
+        exclude_id: Optional[str] = None,
+    ) -> bool:
+        sql = (
+            "SELECT 1 FROM spaces WHERE application_id = ? AND name = ? "
+            "AND environment = ?"
+        )
+        params: list = [application_id, name, environment]
+        if exclude_id is not None:
+            sql += " AND id != ?"
+            params.append(exclude_id)
+        return self.conn.execute(sql, params).fetchone() is not None
+
+    def update_space(
+        self, sid: str, *, name: Optional[str] = None,
+        environment: Optional[str] = None, status: Optional[str] = None,
+    ) -> None:
+        sets: list[str] = []
+        params: list = []
+        if name is not None:
+            sets.append("name = ?")
+            params.append(name)
+        if environment is not None:
+            sets.append("environment = ?")
+            params.append(environment)
+        if status is not None:
+            sets.append("status = ?")
+            params.append(status)
+        if not sets:
+            return
+        params.append(sid)
+        self.conn.execute(f"UPDATE spaces SET {', '.join(sets)} WHERE id = ?", params)
+        self.conn.commit()
+
+    def space_counts(self, sid: str) -> dict:
+        def count(sql: str) -> int:
+            return int(self.conn.execute(sql, (sid,)).fetchone()["n"])
+
+        return {
+            "buckets": count("SELECT COUNT(*) AS n FROM buckets WHERE space_id = ?"),
+            "identities": count(
+                "SELECT COUNT(*) AS n FROM service_identities WHERE space_id = ?"
+            ),
+            "objects": count("SELECT COUNT(*) AS n FROM objects WHERE space_id = ?"),
+        }
 
     def create_bucket(self, space_id: str, name: str, is_default: bool = False) -> str:
         bid = self.new_id()
@@ -199,10 +278,40 @@ class Repository:
             "SELECT * FROM buckets WHERE name = ?", (name,)
         ).fetchone())
 
+    def get_bucket(self, bid: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM buckets WHERE id = ?", (bid,)
+        ).fetchone())
+
     def list_buckets(self, space_id: str) -> list:
         return [_as_dict(r) for r in self.conn.execute(
             "SELECT * FROM buckets WHERE space_id = ? ORDER BY created_at", (space_id,)
         ).fetchall()]
+
+    def list_all_buckets(self) -> list:
+        # Every registered bucket, oldest first; the API joins space/application
+        # names so a bucket is never shown without its attachment (#M04).
+        return [_as_dict(r) for r in self.conn.execute(
+            "SELECT * FROM buckets ORDER BY created_at, name"
+        ).fetchall()]
+
+    def set_default_bucket(self, space_id: str, bid: str, is_default: bool = True) -> None:
+        # Exactly one default per space: clear the flag on the space's other
+        # buckets, then set it on the target (scoped to the same space).
+        if is_default:
+            self.conn.execute(
+                "UPDATE buckets SET is_default = 0 WHERE space_id = ?", (space_id,)
+            )
+            self.conn.execute(
+                "UPDATE buckets SET is_default = 1 WHERE id = ? AND space_id = ?",
+                (bid, space_id),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE buckets SET is_default = 0 WHERE id = ? AND space_id = ?",
+                (bid, space_id),
+            )
+        self.conn.commit()
 
     # -- service identities (#38) -----------------------------------------
     def create_identity(
