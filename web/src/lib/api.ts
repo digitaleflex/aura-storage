@@ -110,6 +110,7 @@ export interface IdentityRotateResponse {
 export interface ReconcileResponse {
   expired: number;
   storage_deletes_attempted: number;
+  storage_failures: number;
 }
 
 /**

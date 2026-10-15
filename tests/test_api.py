@@ -255,7 +255,15 @@ def test_upload_intent_rejects_size_above_the_cap(monkeypatch):
     assert r.status_code == 422, r.text
 
 
-def test_soft_delete_and_purge():
+def test_soft_delete_and_purge(monkeypatch):
+    # Purge deletes storage bytes first (M06): stub the S3 data plane offline.
+    # Presigning is local crypto, but delete_object is a real call, so the
+    # offline suite fakes a healthy backend; the failure path is covered in
+    # tests/test_m06_isolation_matrix.py (502 + reference kept).
+    class HealthyS3:
+        def delete_object(self, Bucket, Key):
+            return {}
+    monkeypatch.setattr(main, "s3ops", HealthyS3())
     c, headers = authed_client()
     oid = c.post(
         "/api/v1/objects/upload-intents",
@@ -314,7 +322,7 @@ def test_reconcile_expires_stale_pending():
             self.deleted.append((Bucket, Key))
 
     out = reconcile_pending(main.repo, DummyS3(), expire_after_s=3600)
-    assert out == {"expired": 1, "storage_deletes_attempted": 1}
+    assert out == {"expired": 1, "storage_deletes_attempted": 1, "storage_failures": 0}
     assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "expired"
     assert c.get(f"/api/v1/objects/{fresh}").json()["status"] == "pending"
 

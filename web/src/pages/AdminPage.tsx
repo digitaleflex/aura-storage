@@ -493,7 +493,11 @@ export function AdminPage() {
           <p role="status" className="alert alert-ok">
             Réconciliation : {reconcile.data.expired} expiré(s),{" "}
             {reconcile.data.storage_deletes_attempted} suppression(s) stockage
-            tentée(s).
+            tentée(s)
+            {reconcile.data.storage_failures
+              ? `, ${reconcile.data.storage_failures} échec(s) stockage (réessayer plus tard)`
+              : ""}
+            .
           </p>
         ) : null}
         {stats.isError ? (

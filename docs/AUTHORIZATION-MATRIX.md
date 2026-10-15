@@ -11,10 +11,13 @@ AURA has two kinds of caller. Every request resolves to exactly one principal.
 | Principal | Authenticates with | CSRF | Capabilities |
 |---|---|---|---|
 | **user** (human) | HttpOnly `aura_session` cookie | required on non-GET | role map below |
-| **service** (machine-to-machine) | `Authorization: Bearer aura_<id>_<secret>` | not applicable | explicit scopes stored on the identity |
+| **service** (machine-to-machine) | `Authorization: Bearer aura_<id>_<secret>` (**only** channel; M06) | not applicable | explicit scopes stored on the identity |
 
 A service identity is scoped to one space and one application/environment. It never
 uses a human session cookie, and cookie auth is never accepted for a service.
+The former undocumented `X-AURA-Key` alias was removed (M06): machine callers
+authenticate with the Bearer header and nothing else, so there is exactly one
+credential channel with one scope check.
 
 ### Roles (human users)
 
@@ -58,13 +61,13 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/objects/{oid}/abort` | `objects:write` | cancel a pending intent (best-effort delete); idempotent; refused on available/deleted |
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |
-| POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin |
+| POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin; a storage failure keeps the catalogue row and returns **502** (M06) |
 | GET | `/api/v1/folders` | `objects:read` | **human only**; owner-scoped, root, `?parent_id=`, or `?all=true` (flat tree) |
 | POST | `/api/v1/folders` | `objects:write` | **human only**; logical folder, no host directory |
 | GET | `/api/v1/folders/{fid}` | `objects:read` | **human only**; 404 outside the owner's tree |
 | PATCH | `/api/v1/folders/{fid}` | `objects:write` | **human only**; rename/move, cycle-refused |
 | DELETE | `/api/v1/folders/{fid}` | `objects:delete` | **human only**; refuses a non-empty folder |
-| POST | `/api/v1/admin/reconcile` | `admin:write` | global sweep of stale intents |
+| POST | `/api/v1/admin/reconcile` | `admin:write` | global sweep of stale intents; returns `{expired, storage_deletes_attempted, storage_failures}` — a storage failure keeps the intent `pending` for the next sweep and is counted in `storage_failures`, never as cleaned (M06) |
 | GET | `/api/v1/admin/stats` | `admin:read` | aggregate counts, no content |
 | POST/GET | `/api/v1/admin/applications` | `admin:write` / `admin:read` | platform registry |
 | GET | `/api/v1/admin/applications/{aid}` | `admin:read` | detail + stable id + space count |
@@ -93,7 +96,10 @@ never counts as closed — it would let an auth-less route pass if its body were
 - The **object key is always generated server-side** (`aura/<space>/<actor>/<uuid>`).
   Client-supplied `object_key`, `owner_id`, `space_id` fields are rejected (422).
 - The **bucket is never client-chosen**: the caller's space has a registered bucket
-  allow-list; an unregistered bucket is refused (403).
+  allow-list; an unregistered bucket is refused (403). An upload without an
+  explicit bucket uses the space's **default bucket only** (M06): a space with
+  no default is refused with 409 instead of silently falling back to a
+  non-default bucket.
 - A space's default bucket name (derived or supplied) is validated against the S3
   naming rules on creation; an invalid name is refused (422) so no space can point at
   a bucket S3 would reject.

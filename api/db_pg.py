@@ -259,9 +259,10 @@ class Repository:
         )
 
     def get_default_bucket(self, space_id: str) -> Optional[dict]:
+        # Strict default only (M06): see api/db.py.
         return self._one(
-            "SELECT * FROM buckets WHERE space_id = %s "
-            "ORDER BY is_default DESC, created_at ASC LIMIT 1",
+            "SELECT * FROM buckets WHERE space_id = %s AND is_default = 1 "
+            "ORDER BY created_at ASC LIMIT 1",
             (space_id,),
         )
 

@@ -741,8 +741,16 @@ def update_object(
 @app.post("/api/v1/objects/{oid}/purge")
 def purge(oid: str, principal: dict = Depends(authorize(OBJECTS_PURGE))):
     # Destructive: requires objects:purge (operator/admin), not merely a session.
+    # A storage failure keeps the catalogue row and surfaces 502 (M06): the
+    # reference is never dropped on a failed backend delete.
+    from .lifecycle import StorageDeleteError
     oid = _canonical_id(oid, "object id")
-    if not purge_object(repo, s3ops, oid, **_object_scope(principal)):
+    try:
+        purged = purge_object(repo, s3ops, oid, **_object_scope(principal))
+    except StorageDeleteError:
+        audit_event("purge", principal["id"], "storage_failure", {"object_id": oid})
+        raise HTTPException(status_code=502, detail="storage delete failed")
+    if not purged:
         raise HTTPException(status_code=404, detail="object not found")
     audit_event("purge", principal["id"], "success", {"object_id": oid})
     return {"id": oid, "status": "purged"}

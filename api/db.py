@@ -274,9 +274,12 @@ class Repository:
         ).fetchone())
 
     def get_default_bucket(self, space_id: str) -> Optional[dict]:
+        # Strict default only (M06): a space with no default bucket yields None
+        # so upload-intents without an explicit registered bucket fail with 409
+        # instead of silently falling back to a non-default bucket.
         return _as_dict(self.conn.execute(
-            "SELECT * FROM buckets WHERE space_id = ? "
-            "ORDER BY is_default DESC, created_at ASC LIMIT 1",
+            "SELECT * FROM buckets WHERE space_id = ? AND is_default = 1 "
+            "ORDER BY created_at ASC LIMIT 1",
             (space_id,),
         ).fetchone())
 

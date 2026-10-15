@@ -81,12 +81,15 @@ def _m2m_record_failure(client_ip: str) -> None:
 
 
 def _bearer_token(request: Request) -> str | None:
+    # Machine identities authenticate with a Bearer token only (M06): the
+    # previously accepted ``X-AURA-Key`` alias was undocumented (absent from
+    # OpenAPI and the authorization matrix) and is refused, so there is exactly
+    # one machine credential channel with one scope check.
     header = request.headers.get("authorization", "")
     if header.lower().startswith("bearer "):
         token = header[7:].strip()
         return token or None
-    key = request.headers.get("x-aura-key")
-    return key.strip() if key and key.strip() else None
+    return None
 
 
 def authenticate(request: Request) -> dict:
