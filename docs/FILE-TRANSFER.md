@@ -104,6 +104,7 @@ This design does not add user billing/subscriptions, public anonymous sharing, a
 ## Related documents
 
 - [Architecture](ARCHITECTURE.md)
+- [Vault transfer engine (M03)](TRANSFER-ENGINE.md)
 - [Management API specification](API-SPECIFICATION.md)
 - [Catalogue data model](DATA-MODEL.md)
 - [Security baseline](SECURITY.md)

@@ -10,8 +10,9 @@ minimal house CSS (no Tailwind), Playwright for e2e.
   HttpOnly `aura_session` cookie, CSRF token kept in memory only and sent as
   `x-csrf-token` on mutations.
 - Protected `/` route: a folder-aware file browser (breadcrumb, logical folder
-  CRUD, object list with pagination, upload / download / file-in-folder /
-  soft-delete / purge), public `/login` route.
+  CRUD, object list with pagination, search/filter/sort, upload / download /
+  file-in-folder / soft-delete / purge, and an object details panel), public
+  `/login` route.
 - Administration console at `/admin` (roles `operator`/`admin`): dashboard
   counters (`/api/v1/admin/stats`) and registries for applications, spaces,
   buckets and machine-to-machine identities. The nav entry and the route are
@@ -23,11 +24,18 @@ minimal house CSS (no Tailwind), Playwright for e2e.
   nothing is deleted through the API, and no bucket payload ever carries an S3
   credential. An identity token is displayed exactly once (creation or rotation)
   and never re-read.
-- Typed API client (`src/lib/api.ts`): list objects (optionally filtered by
-  folder and paged with `limit`/`offset`), logical folder CRUD, upload intent →
-  PUT to the short-lived URL → commit, download intent → open short-lived GET
-  URL, file/unfile an object into a folder, soft-delete, purge, and the
-  administration mutations.
+- Typed API client (`src/lib/api.ts`): list objects with server-side search,
+  filters, sort and paging (name substring, status, MIME type, size range,
+  creation period), logical folder CRUD, upload intent → PUT to the short-lived
+  URL → commit, download intent → open short-lived GET URL, file/unfile an
+  object into a folder, soft-delete, purge, and the administration mutations.
+- Uploads run through the M03 transfer engine (`src/lib/transfer.ts`): real XHR
+  upload progress, explicit phases (autorisation → envoi → validation →
+  disponible), bounded retries with exponential backoff + jitter, automatic
+  recovery from an expired presigned URL, an accidental-double-submit guard
+  backed by an `Idempotency-Key`, and cancellation that calls the backend
+  `abort` endpoint. Success is shown only after the backend confirms the commit.
+  See [Vault transfer engine](../docs/TRANSFER-ENGINE.md).
 - The UI never shows fake data as real: empty catalogue renders an explicit
   empty state, errors render explicit alerts.
 - No S3 keys in the code or bundle. All calls use relative paths; in dev,
@@ -64,6 +72,11 @@ asserts the token is shown once, then revokes it.
 `e2e/admin-management.spec.ts` renames, deactivates/reactivates an application,
 re-environments a space, registers a bucket and makes it the default.
 `e2e/folders.spec.ts` creates, renames, opens and deletes a folder.
+`e2e/transfer-engine.spec.ts` unit-tests the upload state machine (retry,
+expiry, cancellation, never-fake-success); it needs no browser or servers.
+`e2e/upload-flow.spec.ts` mocks the API and the presigned endpoint to check
+progress/phase display, the double-submit guard, server-error surfacing,
+expired-URL recovery and real cancellation.
 (All use the local admin password below.)
 
 ```bash
@@ -99,9 +112,25 @@ npx playwright test
   hard-codes `aura`); a folder can be chosen as the upload target.
 - The folder tree is loaded in a single request (`GET /api/v1/folders?all=true`,
   flat list rebuilt client-side from `parent_id`).
-- The object table is paged (50 per page, "Charger plus" increments `offset`);
-  the name filter applies to the objects already loaded, not the whole catalogue.
+- The object table is paged (50 per page, "Charger plus" increments `offset`).
+  Search, filters (status, MIME type, size range, creation period) and sort run
+  **server-side** over the whole catalogue (`GET /api/v1/objects`, M02), so the
+  UI never loads every object to answer a query. `q` is a display-name substring
+  and never matches the internal object key.
+- The object details panel shows only fields the API exposes (name, id, MIME
+  type, exact/readable size, status, folder, `created_at`/`updated_at`, SHA-256).
+  The logical storage key, bucket, space and application are **not** returned by
+  the catalogue API; the panel says so instead of inventing values.
+- A pending object has `size_bytes = -1` until its upload is committed, so it
+  renders as "taille inconnue" and is excluded by any `min_size`/`max_size`
+  filter. That is faithful to the catalogue, not a UI bug.
 - Filing an object into a folder uses `PATCH /api/v1/objects/{id}`; folders are
   human-owned, so a machine identity cannot file objects.
+- Zero-byte uploads are refused unless the API sets `AURA_ALLOW_EMPTY_OBJECTS=1`;
+  the allowed media types are enforced server-side (`AURA_ALLOWED_CONTENT_TYPES`),
+  not by the file picker.
+- Cancellation is offered only because the backend has `POST /api/v1/objects/{id}/abort`.
+  Retries are bounded (3 attempts, exponential backoff with jitter) and an expired
+  presigned URL is re-issued at most twice per transfer.
 - Production serving (static `dist/` + same-origin `/api` proxy) is a
   deployment concern and is not configured here.

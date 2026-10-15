@@ -83,12 +83,19 @@ so the format is enforced in code, not in DDL.
 - `bucket`, `object_key`: unique storage locator, private to the service. The key is
   always generated server-side as `aura/<space>/<actor>/<uuid>`.
 - `display_name`, `content_type`, `size_bytes`, `checksum_sha256`.
+- `expected_size_bytes`: the size declared at intent time, kept distinct from the
+  verified `size_bytes` (which stays `-1` until commit). Added by the M03 transfer
+  engine migration.
+- `idempotency_key`: optional opaque client key deduping an accidental double
+  submit (scoped to actor + space). Never logged. Added by M03.
 - `folder_id`: nullable foreign key to logical folder.
 - `owner_id` (nullable) / `actor_id` + `actor_kind` / `space_id` / `application_id` /
   `environment`: ownership and isolation boundary.
 - `visibility` (private by default), `status`
-  (`pending`/`available`/`failed`/`expired`/`deleted`), `intent_expires_at`,
-  `created_at`, `updated_at`.
+  (`pending`/`available`/`failed`/`expired`/`aborted`/`deleted`), `intent_expires_at`,
+  `created_at`, `updated_at`. `aborted` is the terminal state of a client-cancelled
+  pending intent (see `docs/TRANSFER-ENGINE.md`); `failed` and `expired` are terminal
+  too and are never downloadable.
 
 ### Folder
 - `id`, `owner_id`, `parent_id`, `name`, `created_at`.

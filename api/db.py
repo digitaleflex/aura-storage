@@ -11,6 +11,7 @@ from .migrations import (
     DEFAULT_SPACE_NAME,
     apply_migrations,
 )
+from .object_query import build_object_where, order_clause
 
 SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
 
@@ -369,6 +370,8 @@ class Repository:
         bucket: str, object_key: str, display_name: str, content_type: str,
         owner_id: Optional[str], actor_id: str, actor_kind: str,
         intent_expires_at: Optional[int], folder_id: Optional[str] = None,
+        expected_size_bytes: Optional[int] = None,
+        idempotency_key: Optional[str] = None,
     ) -> str:
         oid = self.new_id()
         now = self.now()
@@ -376,11 +379,11 @@ class Repository:
             """INSERT INTO objects (id, bucket, object_key, display_name, content_type,
                size_bytes, checksum_sha256, folder_id, owner_id, visibility, status,
                created_at, updated_at, actor_kind, actor_id, application_id, space_id,
-               environment, intent_expires_at)
-               VALUES (?, ?, ?, ?, ?, -1, '', ?, ?, 'private', 'pending', ?, ?, ?, ?, ?, ?, ?, ?)""",
+               environment, intent_expires_at, expected_size_bytes, idempotency_key)
+               VALUES (?, ?, ?, ?, ?, -1, '', ?, ?, 'private', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (oid, bucket, object_key, display_name, content_type, folder_id, owner_id,
              now, now, actor_kind, actor_id, application_id, space_id, environment,
-             intent_expires_at),
+             intent_expires_at, expected_size_bytes, idempotency_key),
         )
         self.conn.commit()
         return oid
@@ -395,23 +398,27 @@ class Repository:
 
     def list_objects(
         self, *, space_id: str, owner_id: Optional[str] = None,
-        folder_id: Optional[str] = None, limit: int = 50, offset: int = 0,
+        folder_id: Optional[str] = None, q: Optional[str] = None,
+        status: Optional[str] = None, content_type: Optional[str] = None,
+        min_size: Optional[int] = None, max_size: Optional[int] = None,
+        created_after: Optional[int] = None, created_before: Optional[int] = None,
+        sort: str = "created_at", order: str = "desc",
+        limit: int = 50, offset: int = 0,
     ):
-        # ``folder_id`` narrows the list when supplied: an empty string means
-        # "not filed in any folder" (folder_id IS NULL), a uuid means that
-        # folder. Omitting it keeps the previous behaviour (every object).
-        sql = "SELECT * FROM objects WHERE space_id = ?"
-        params = [space_id]
-        if owner_id is not None:
-            sql += " AND owner_id = ?"
-            params.append(owner_id)
-        if folder_id is not None:
-            if folder_id == "":
-                sql += " AND folder_id IS NULL"
-            else:
-                sql += " AND folder_id = ?"
-                params.append(folder_id)
-        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        # Filters and sort are built by api/object_query.py so this stays in
+        # lockstep with the PostgreSQL repository (M02). Every argument is
+        # optional: omitting them keeps the historical "every visible object,
+        # newest first" query.
+        where, params = build_object_where(
+            space_id=space_id, owner_id=owner_id, folder_id=folder_id, q=q,
+            status=status, content_type=content_type, min_size=min_size,
+            max_size=max_size, created_after=created_after,
+            created_before=created_before,
+        )
+        sql = (
+            f"SELECT * FROM objects WHERE {where} "
+            f"{order_clause(sort=sort, order=order)} LIMIT ? OFFSET ?"
+        )
         params += [limit, offset]
         return self.conn.execute(sql, params).fetchall()
 
@@ -422,6 +429,20 @@ class Repository:
             sql += " AND owner_id = ?"
             params.append(owner_id)
         return int(self.conn.execute(sql, params).fetchone()["n"])
+
+    def get_pending_by_idempotency(
+        self, *, actor_id: str, idempotency_key: str, space_id: str,
+    ):
+        """The live pending intent for an ``Idempotency-Key`` + actor, if any.
+
+        Scoped by actor and space so one caller can never replay or observe
+        another caller's (or another space's) intent. Returns the newest match.
+        """
+        return self.conn.execute(
+            "SELECT * FROM objects WHERE status = 'pending' AND actor_id = ? "
+            "AND idempotency_key = ? AND space_id = ? ORDER BY created_at DESC LIMIT 1",
+            (actor_id, idempotency_key, space_id),
+        ).fetchone()
 
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
         self.conn.execute(

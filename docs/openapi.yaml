@@ -85,14 +85,74 @@ paths:
             Optional catalogue filter (#62): the literal "root" returns objects
             not filed in any folder; a canonical uuid returns that folder's
             objects. A malformed value is refused with 422.
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 200 }
+          description: >-
+            Case-insensitive display-name substring (M02). Never matches the
+            internal object key; a blank value is ignored.
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, available, deleted, expired, failed]
+          description: Exact catalogue status.
+        - in: query
+          name: content_type
+          schema: { type: string, maxLength: 127 }
+          description: Exact media type, compared case-insensitively.
+        - in: query
+          name: min_size
+          schema: { type: integer, minimum: 0 }
+          description: Minimum committed size in bytes (pending rows still carry size -1).
+        - in: query
+          name: max_size
+          schema: { type: integer, minimum: 0 }
+          description: Maximum committed size in bytes.
+        - in: query
+          name: created_after
+          schema: { type: integer, minimum: 0 }
+          description: Inclusive lower bound on creation time (epoch seconds).
+        - in: query
+          name: created_before
+          schema: { type: integer, minimum: 0 }
+          description: Inclusive upper bound on creation time (epoch seconds).
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [created_at, display_name, size_bytes]
+            default: created_at
+          description: Sort key; ties break on id so OFFSET paging stays stable.
+        - in: query
+          name: order
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+          description: Sort direction.
       responses:
-        "200": { description: Page of object metadata (each item carries folder_id) }
+        "200":
+          description: >-
+            Page of object metadata. Each item carries folder_id, created_at and
+            updated_at; internal storage coordinates (bucket, object_key) are
+            never returned.
         "401": { description: Authentication required }
         "403": { description: Access denied }
-        "422": { description: Malformed folder_id }
+        "422": { description: Malformed folder_id, or an unsupported status/sort/order value }
   /api/v1/objects/upload-intents:
     post:
       summary: Create a short-lived upload intent (capability objects:write)
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, maxLength: 200 }
+          description: >-
+            Optional opaque key. A repeated request carrying the same key and
+            actor returns the same pending intent (idempotent_replay=true) with a
+            freshly signed URL instead of creating a second object. Refused with
+            422 if empty, over-long or containing control characters.
       requestBody:
         required: true
         content:
@@ -104,13 +164,13 @@ paths:
               properties:
                 bucket: { type: string, maxLength: 63, description: Must be registered to the caller's space; omitted = space default }
                 display_name: { type: string, minLength: 1, maxLength: 255 }
-                content_type: { type: string, maxLength: 127, default: application/octet-stream }
-                size_bytes: { type: integer, minimum: 1, description: Declared upload size; bound into the presigned URL as a signed Content-Length and capped at the configured maximum object size }
+                content_type: { type: string, maxLength: 127, default: application/octet-stream, description: Normalized server-side; refused with 422 when the deployment sets an allow-list that excludes it }
+                size_bytes: { type: integer, minimum: 0, description: "Declared upload size; bound into the presigned URL as a signed Content-Length and capped at the configured maximum object size. 0 is accepted only when empty objects are enabled." }
                 folder_id: { $ref: "#/components/schemas/Uuid4", nullable: true }
       responses:
-        "200": { description: "Upload intent with a presigned PUT URL bound to the declared Content-Length" }
+        "200": { description: "Upload intent (id, status, method, presigned upload_url, required headers, content_type, size_bytes, expiry)" }
         "403": { description: Bucket not allowed / not authorised }
-        "422": { description: Invalid request }
+        "422": { description: Invalid request, disallowed content type, or empty/size over the cap }
         "429": { description: Too many pending uploads }
   /api/v1/objects/{oid}/commit:
     post:
@@ -118,19 +178,33 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: Object available (idempotent on repeat) }
+        "200": { description: Object available with checksum_sha256 (algorithm sha256); idempotent on repeat }
         "404": { description: Object not found or not visible }
-        "409": { description: Object not committable }
+        "409": { description: Object not committable (including aborted/expired/deleted) }
         "410": { description: Upload intent expired }
         "413": { description: Object exceeds the maximum allowed size }
         "422": { description: Upload missing or size mismatch }
+  /api/v1/objects/{oid}/abort:
+    post:
+      summary: Cancel a pending upload intent (objects:write)
+      description: >-
+        Best-effort deletes the partial bytes and marks the intent aborted.
+        Idempotent for an already aborted/expired intent; a committed (available)
+        or deleted object is refused with 409. This is the only cancellation the
+        UI uses — cancellation is not offered where the backend does not support it.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Intent aborted (or already in a terminal pending state) }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not abortable }
   /api/v1/objects/{oid}:
     get:
       summary: Get object metadata
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: Object metadata }
+        "200": { description: Object metadata (size_bytes is -1 until verified; expected_size_bytes carries the declared size) }
         "404": { description: Object not found or not visible }
     patch:
       summary: File or unfile an object in a logical folder (objects:write, human only)
@@ -164,7 +238,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: Presigned GET URL }
+        "200": { description: Presigned GET URL plus display_name, content_type, size_bytes and checksum_sha256 for progress/verification display }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
   /api/v1/objects/{oid}/purge:

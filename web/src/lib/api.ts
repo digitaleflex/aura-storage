@@ -31,14 +31,46 @@ export interface ObjectItem {
   display_name: string;
   content_type: string;
   size_bytes: number;
+  /** Declared size at intent time; null until the first intent (server field). */
+  expected_size_bytes?: number | null;
   checksum_sha256: string;
+  checksum_algorithm?: string;
   status: string;
   /** Folder the object is filed in, or null when unfiled. */
   folder_id: string | null;
+  /** Catalogue creation time, epoch seconds. */
+  created_at: number;
+  /** Catalogue last-update time, epoch seconds. */
+  updated_at: number;
 }
 
 export interface ObjectsListResponse {
   items: ObjectItem[];
+}
+
+/**
+ * Filters and paging for `GET /api/v1/objects` (M02). Every field is optional;
+ * omitted fields are left out of the query string so the default request stays
+ * the historical "first page of every visible object, newest first".
+ */
+export interface ObjectQuery {
+  /** undefined = all objects, null = unfiled only, string = that folder. */
+  folderId?: string | null;
+  /** Case-insensitive display-name substring. */
+  q?: string;
+  /** Exact catalogue status. */
+  status?: string;
+  /** Exact media type (compared case-insensitively by the API). */
+  contentType?: string;
+  minSize?: number;
+  maxSize?: number;
+  /** Inclusive epoch-second bounds on creation time. */
+  createdAfter?: number;
+  createdBefore?: number;
+  sort?: "created_at" | "display_name" | "size_bytes";
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
 }
 
 /** A logical folder owned by the signed-in human user (#61). */
@@ -106,8 +138,20 @@ export interface UploadIntentRequest {
 
 export interface UploadIntentResponse {
   id: string;
+  status: string;
+  /** Data-plane method the browser must use. */
+  method: string;
   upload_url: string;
+  /** Headers to send with the presigned PUT (Content-Type is signed). */
+  headers: Record<string, string>;
+  /** Server-normalized media type actually stored/authorized. */
+  content_type: string;
+  size_bytes: number;
   expires_in: number;
+  /** Absolute expiry (epoch seconds) when the URL stops being valid. */
+  expires_at: number | null;
+  /** True when the server replayed an earlier intent for the same key. */
+  idempotent_replay: boolean;
 }
 
 export interface CommitResponse {
@@ -115,11 +159,20 @@ export interface CommitResponse {
   status: string;
   size_bytes: number;
   checksum_sha256: string;
+  checksum_algorithm?: string;
 }
 
 export interface DownloadIntentResponse {
+  id: string;
   download_url: string;
+  method: string;
   expires_in: number;
+  expires_at: number | null;
+  display_name: string;
+  content_type: string;
+  size_bytes: number;
+  checksum_sha256: string;
+  checksum_algorithm?: string;
 }
 
 /** Principal metadata returned by GET /api/v1/me. */
@@ -239,10 +292,11 @@ interface RequestOptions {
   method?: string;
   body?: unknown;
   csrf?: string | null;
+  headers?: Record<string, string>;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(options.headers ?? {}) };
   let body: BodyInit | undefined;
   if (options.body !== undefined) {
     headers["content-type"] = "application/json";
@@ -291,27 +345,37 @@ export const api = {
   },
 
   /**
-   * List objects. `folderId` narrows the list against the catalogue:
-   * `undefined` = every object, `null` = only unfiled objects, a string = that
-   * folder. The folder id is validated by the server. `limit`/`offset` page the
-   * result (the server caps `limit` at 100).
+   * List objects with optional search, filters, sort and paging (M02). The
+   * server owns the filtering/sorting/paging so the UI never has to hold the
+   * whole catalogue; see `ObjectQuery` for each field. `folderId`: `undefined`
+   * = every object, `null` = only unfiled objects, a string = that folder. The
+   * server caps `limit` at 100.
    */
-  listObjects(
-    folderId?: string | null,
-    page?: { limit?: number; offset?: number },
-  ): Promise<ObjectsListResponse> {
+  listObjects(query: ObjectQuery = {}): Promise<ObjectsListResponse> {
     const params = new URLSearchParams();
-    if (folderId !== undefined) {
-      params.set("folder_id", folderId ?? "root");
+    if (query.folderId !== undefined) {
+      params.set("folder_id", query.folderId ?? "root");
     }
-    if (page?.limit !== undefined) {
-      params.set("limit", String(page.limit));
+    const q = query.q?.trim();
+    if (q) params.set("q", q);
+    if (query.status) params.set("status", query.status);
+    if (query.contentType) params.set("content_type", query.contentType);
+    if (query.minSize !== undefined) params.set("min_size", String(query.minSize));
+    if (query.maxSize !== undefined) params.set("max_size", String(query.maxSize));
+    if (query.createdAfter !== undefined) {
+      params.set("created_after", String(query.createdAfter));
     }
-    if (page?.offset !== undefined) {
-      params.set("offset", String(page.offset));
+    if (query.createdBefore !== undefined) {
+      params.set("created_before", String(query.createdBefore));
     }
-    const query = params.toString();
-    return request<ObjectsListResponse>(`/api/v1/objects${query ? `?${query}` : ""}`);
+    if (query.sort) params.set("sort", query.sort);
+    if (query.order) params.set("order", query.order);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
+    const query2 = params.toString();
+    return request<ObjectsListResponse>(
+      `/api/v1/objects${query2 ? `?${query2}` : ""}`,
+    );
   },
 
   me(): Promise<SessionInfo> {
@@ -322,11 +386,19 @@ export const api = {
     return request<ObjectItem>(`/api/v1/objects/${encodeURIComponent(id)}`);
   },
 
-  createUploadIntent(input: UploadIntentRequest, csrf: string): Promise<UploadIntentResponse> {
+  createUploadIntent(
+    input: UploadIntentRequest,
+    csrf: string,
+    options?: { idempotencyKey?: string },
+  ): Promise<UploadIntentResponse> {
+    const headers = options?.idempotencyKey
+      ? { "Idempotency-Key": options.idempotencyKey }
+      : undefined;
     return request<UploadIntentResponse>("/api/v1/objects/upload-intents", {
       method: "POST",
       body: input,
       csrf,
+      headers,
     });
   },
 
@@ -335,6 +407,14 @@ export const api = {
       method: "POST",
       csrf,
     });
+  },
+
+  /** Cancel a pending upload intent (the only backend-supported cancellation). */
+  abortObject(id: string, csrf: string): Promise<{ id: string; status: string }> {
+    return request<{ id: string; status: string }>(
+      `/api/v1/objects/${encodeURIComponent(id)}/abort`,
+      { method: "POST", csrf },
+    );
   },
 
   createDownloadIntent(id: string, csrf: string): Promise<DownloadIntentResponse> {
@@ -557,14 +637,106 @@ export const api = {
   },
 };
 
-/** PUT file bytes to the short-lived URL issued by the upload intent. */
-export async function putToPresignedUrl(url: string, file: File): Promise<void> {
-  const res = await fetch(url, {
-    method: "PUT",
-    headers: { "content-type": file.type || "application/octet-stream" },
-    body: file,
-  });
-  if (!res.ok) {
-    throw new Error(`Presigned upload failed (HTTP ${res.status}).`);
+/** Failure kinds the transfer engine reacts to. */
+export type UploadFailureKind = "network" | "expired" | "rejected" | "aborted";
+
+/** Error raised by the presigned PUT transport, classified for retry logic. */
+export class PresignedUploadError extends Error {
+  readonly kind: UploadFailureKind;
+  readonly status: number;
+
+  constructor(kind: UploadFailureKind, status: number, message: string) {
+    super(message);
+    this.name = "PresignedUploadError";
+    this.kind = kind;
+    this.status = status;
   }
+}
+
+export interface PutOptions {
+  /** Signed headers the API returned for this intent (Content-Type). */
+  headers?: Record<string, string>;
+  /** Real byte progress, available because XHR exposes upload progress. */
+  onProgress?: (loaded: number, total: number) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * PUT file bytes to the short-lived URL issued by the upload intent.
+ *
+ * Uses XMLHttpRequest (not fetch) because only XHR exposes *upload* progress,
+ * and supports real cancellation through the caller's AbortSignal. The URL is a
+ * bearer capability: it is never logged here, only passed to XHR.
+ */
+export function putToPresignedUrl(
+  url: string,
+  file: File,
+  options: PutOptions = {},
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let settled = false;
+    const fail = (err: Error) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    };
+
+    const onAbort = () => {
+      xhr.abort();
+      fail(new PresignedUploadError("aborted", 0, "Transfert annulé."));
+    };
+    if (options.signal) {
+      if (options.signal.aborted) {
+        onAbort();
+        return;
+      }
+      options.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    xhr.open("PUT", url, true);
+    for (const [name, value] of Object.entries(options.headers ?? {})) {
+      xhr.setRequestHeader(name, value);
+    }
+    xhr.upload.onprogress = (event) => {
+      const total = event.lengthComputable ? event.total : file.size;
+      options.onProgress?.(event.loaded, total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        options.onProgress?.(file.size, file.size);
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+        return;
+      }
+      // 403 on a presigned PUT classically means the signature/URL expired.
+      const kind: UploadFailureKind = xhr.status === 403 ? "expired" : "rejected";
+      fail(
+        new PresignedUploadError(
+          kind,
+          xhr.status,
+          `Dépôt refusé (HTTP ${xhr.status}).`,
+        ),
+      );
+    };
+    xhr.onerror = () =>
+      fail(new PresignedUploadError("network", xhr.status || 0, "Réseau interrompu."));
+    xhr.ontimeout = () =>
+      fail(new PresignedUploadError("network", xhr.status || 0, "Délai dépassé."));
+    xhr.onabort = () =>
+      fail(new PresignedUploadError("aborted", 0, "Transfert annulé."));
+
+    try {
+      xhr.send(file);
+    } catch (err) {
+      fail(
+        err instanceof Error
+          ? err
+          : new PresignedUploadError("network", 0, "Envoi impossible."),
+      );
+    }
+  });
 }

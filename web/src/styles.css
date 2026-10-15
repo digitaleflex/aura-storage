@@ -342,6 +342,48 @@ input:focus-visible {
   border: 1px solid var(--line);
 }
 
+.chip-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* Transfer panel: name, size, phase and real upload progress. */
+.transfer {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--paper);
+}
+
+.transfer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.transfer-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.progress {
+  position: relative;
+  height: 8px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.progress-bar {
+  display: block;
+  height: 100%;
+  background: var(--electric);
+  transition: width 120ms linear;
+}
+
 .alert {
   border-radius: var(--radius-small);
   padding: 10px 14px;
@@ -750,5 +792,136 @@ p .chip {
   .dialog-body {
     padding-left: 16px;
     padding-right: 16px;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Fichiers workspace — search, filters and the object details panel.  */
+/* ------------------------------------------------------------------ */
+
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Filter bar: a compact wrapping row of labelled controls. */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 16px 0 6px;
+}
+
+.filters .field {
+  font-size: 12.5px;
+}
+
+.filters .field input,
+.filters .field select {
+  max-width: 180px;
+}
+
+/* The shell only styled text/password/file inputs; the filter bar adds more. */
+.field input[type="search"],
+.field input[type="number"],
+.field input[type="date"],
+.filters .field select {
+  font: inherit;
+  font-weight: 400;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  padding: 9px 12px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* The object name doubles as the "open details" control. */
+.link-button {
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--electric-deep);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  border-radius: var(--radius-small);
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+/* Object details side panel: only fields the API actually exposes. */
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: min(430px, 92vw);
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  box-shadow: -14px 0 40px rgba(6, 13, 26, 0.18);
+  padding: 20px 22px 32px;
+  overflow-y: auto;
+  z-index: 60;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.drawer-head h2 {
+  margin: 0;
+}
+
+.detail-list {
+  margin: 8px 0 0;
+}
+
+.detail-list dt {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-top: 14px;
+}
+
+.detail-list dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.drawer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+@media (max-width: 760px) {
+  .drawer {
+    width: 100vw;
+  }
+
+  .filters .field input,
+  .filters .field select {
+    max-width: none;
+    width: 100%;
+  }
+
+  .filters .field {
+    flex: 1 1 45%;
   }
 }

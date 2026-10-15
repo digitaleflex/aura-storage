@@ -68,6 +68,34 @@ def test_postgres_repository_parity():
         row = repo.get_object(oid, space_id=space_id, owner_id=uid)
         assert row is not None and row["folder_id"] is None
 
+        # M02: the search/filter/sort grammar behaves identically on PostgreSQL.
+        second = repo.create_pending_object(
+            space_id=space_id, application_id=application_id, environment="prod",
+            bucket=bucket, object_key=f"aura/{space_id}/{uid}/{uuid.uuid4().hex}",
+            display_name="Report.PDF", content_type="application/pdf",
+            owner_id=uid, actor_id=uid, actor_kind="user",
+            intent_expires_at=None, folder_id=None,
+        )
+        repo.mark_available(second, 2048, uuid.uuid4().hex)
+
+        assert [o["id"] for o in repo.list_objects(
+            space_id=space_id, owner_id=uid, q="report")] == [second]
+        # "%" is a literal, not a LIKE wildcard.
+        assert repo.list_objects(space_id=space_id, owner_id=uid, q="%") == []
+        assert {o["id"] for o in repo.list_objects(
+            space_id=space_id, owner_id=uid, content_type="APPLICATION/PDF")} == {second}
+        assert second in {o["id"] for o in repo.list_objects(
+            space_id=space_id, owner_id=uid, status="available")}
+        assert oid in {o["id"] for o in repo.list_objects(
+            space_id=space_id, owner_id=uid, status="pending")}
+        assert second in {o["id"] for o in repo.list_objects(
+            space_id=space_id, owner_id=uid, min_size=1000)}
+        assert second not in {o["id"] for o in repo.list_objects(
+            space_id=space_id, owner_id=uid, max_size=100)}
+        asc = repo.list_objects(
+            space_id=space_id, owner_id=uid, sort="display_name", order="asc")
+        assert [o["display_name"] for o in asc] == ["pg.txt", "Report.PDF"]
+
         # Counts the folder-delete guard relies on.
         assert repo.folder_child_count(root, owner_id=uid) == 1
         assert repo.folder_object_count(root, owner_id=uid) == 0
