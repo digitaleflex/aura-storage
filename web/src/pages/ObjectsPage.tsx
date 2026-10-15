@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import {
   useInfiniteQuery,
@@ -8,12 +8,33 @@ import {
 } from "@tanstack/react-query";
 import { ApiError, api, hasScope, putToPresignedUrl } from "../lib/api";
 import type { FolderItem, ObjectItem } from "../lib/api";
+import { idleTransfer, runTransfer } from "../lib/transfer";
+import type { TransferDeps, TransferPhase, TransferState } from "../lib/transfer";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { FolderMark } from "../components/FolderMark";
 
 /** Objects fetched per page ("Charger plus" increments the offset). */
 const OBJECTS_PAGE_SIZE = 50;
+
+/** Human label for each transfer phase (import → validation → availability). */
+const PHASE_LABEL: Record<TransferPhase, string> = {
+  idle: "Prêt",
+  "requesting-intent": "Autorisation…",
+  uploading: "Envoi…",
+  validating: "Validation…",
+  available: "Disponible",
+  failed: "Échec",
+  cancelled: "Annulé",
+};
+
+/** One idempotency key per user submission; automatic retries reuse it. */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `k-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 function formatBytes(size: number): string {
   if (!Number.isFinite(size) || size < 0) {
@@ -47,9 +68,12 @@ export function ObjectsPage() {
 
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [transfer, setTransfer] = useState<TransferState>(() => idleTransfer(null));
+  const uploadController = useRef<AbortController | null>(null);
   const [filter, setFilter] = useState("");
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -59,6 +83,41 @@ export function ObjectsPage() {
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
+
+  /** True while a submission is in flight (blocks accidental double submit). */
+  const transferActive =
+    transfer.phase === "requesting-intent" ||
+    transfer.phase === "uploading" ||
+    transfer.phase === "validating";
+
+  /** Wire the injected engine to the real API for one authenticated session. */
+  function transferDeps(activeCsrf: string): TransferDeps {
+    return {
+      requestIntent: (input) =>
+        api.createUploadIntent(
+          {
+            display_name: input.fileName,
+            content_type: input.contentType,
+            size_bytes: input.sizeBytes,
+            folder_id: input.folderId,
+          },
+          activeCsrf,
+          { idempotencyKey: input.idempotencyKey },
+        ),
+      upload: (url, selected, opts) =>
+        putToPresignedUrl(url, selected, {
+          headers: opts.headers,
+          onProgress: opts.onProgress,
+          signal: opts.signal,
+        }),
+      commit: (id) => api.commitObject(id, activeCsrf),
+      abortIntent: async (id) => {
+        await api.abortObject(id, activeCsrf);
+      },
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      random: Math.random,
+    };
+  }
 
   const treeQuery = useQuery({
     queryKey: ["folders", "all"],
@@ -120,33 +179,6 @@ export function ObjectsPage() {
   }
 
   // -- mutations -----------------------------------------------------------
-  const uploadMutation = useMutation({
-    mutationFn: async (selected: File) => {
-      if (!csrf) {
-        throw new Error("Session expirée. Reconnectez-vous.");
-      }
-      const intent = await api.createUploadIntent(
-        {
-          display_name: selected.name,
-          content_type: selected.type || "application/octet-stream",
-          size_bytes: selected.size,
-          folder_id: currentFolderId,
-        },
-        csrf,
-      );
-      await putToPresignedUrl(intent.upload_url, selected);
-      return api.commitObject(intent.id, csrf);
-    },
-    onSuccess: () => {
-      setFile(null);
-      setUploadError(null);
-      invalidateLibrary();
-    },
-    onError: (err: unknown) => {
-      setUploadError(err instanceof Error ? err.message : "Envoi impossible.");
-    },
-  });
-
   const createFolderMutation = useMutation({
     mutationFn: (name: string) => {
       if (!csrf) throw new Error("Session expirée.");
@@ -227,25 +259,71 @@ export function ObjectsPage() {
   });
 
   // -- handlers ------------------------------------------------------------
-  function handleUpload(event: FormEvent) {
+  async function handleUpload(event: FormEvent) {
     event.preventDefault();
     setUploadError(null);
     if (!file) {
       setUploadError("Choisissez d'abord un fichier.");
       return;
     }
-    uploadMutation.mutate(file);
+    if (transferActive) {
+      // Block an accidental second submission while one is in flight.
+      return;
+    }
+    if (!csrf) {
+      setUploadError("Session expirée. Reconnectez-vous.");
+      return;
+    }
+    const controller = new AbortController();
+    uploadController.current = controller;
+    setTransfer({ ...idleTransfer(file), phase: "requesting-intent" });
+    try {
+      const result = await runTransfer(file, transferDeps(csrf), {
+        folderId: currentFolderId,
+        idempotencyKey: newIdempotencyKey(),
+        signal: controller.signal,
+        onUpdate: setTransfer,
+      });
+      if (result.state.phase === "available") {
+        // Only the backend commit sets this phase, so success is never faked.
+        setFile(null);
+        setUploadError(null);
+        invalidateLibrary();
+      } else if (result.state.phase === "failed") {
+        setUploadError(result.state.error ?? "Envoi impossible.");
+      }
+      // "cancelled": keep the chosen file, surface no error.
+    } finally {
+      uploadController.current = null;
+    }
+  }
+
+  function handleCancelUpload() {
+    uploadController.current?.abort();
+  }
+
+  function handleFileChange(selected: File | null) {
+    setFile(selected);
+    setUploadError(null);
+    setTransfer(idleTransfer(selected));
   }
 
   async function handleDownload(item: ObjectItem) {
     setDownloadError(null);
+    setDownloadStatus(null);
     if (!csrf) {
       setDownloadError("Session expirée. Reconnectez-vous.");
       return;
     }
     try {
       const intent = await api.createDownloadIntent(item.id, csrf);
+      // The browser performs the direct S3 GET; it manages its own progress.
       window.open(intent.download_url, "_blank", "noopener");
+      setDownloadStatus(
+        `Téléchargement de « ${intent.display_name} » lancé (${formatBytes(
+          intent.size_bytes,
+        )}).`,
+      );
     } catch (err) {
       setDownloadError(
         err instanceof ApiError
@@ -453,7 +531,13 @@ export function ObjectsPage() {
                   <tr key={item.id}>
                     <td className="name">{item.display_name}</td>
                     <td className="muted">{item.content_type}</td>
-                    <td className="num">{formatBytes(item.size_bytes)}</td>
+                    <td className="num">
+                      {formatBytes(
+                        item.status === "pending" && item.expected_size_bytes != null
+                          ? item.expected_size_bytes
+                          : item.size_bytes,
+                      )}
+                    </td>
                     <td>{statusChip(item.status)}</td>
                     <td className="row-actions">
                       <button
@@ -528,13 +612,18 @@ export function ObjectsPage() {
             {downloadError}
           </p>
         ) : null}
+        {downloadStatus ? (
+          <p role="status" className="alert alert-ok">
+            {downloadStatus}
+          </p>
+        ) : null}
       </section>
 
       <section className="card" aria-labelledby="upload-title">
         <h2 id="upload-title">Importer{currentName ? ` dans « ${currentName} »` : ""}</h2>
         <p className="muted">
           Intention d'envoi → dépôt direct vers l'URL à courte durée → validation
-          avec contrôle d'intégrité.
+          avec contrôle d'intégrité (SHA-256 côté serveur).
         </p>
         <form onSubmit={handleUpload} className="form form-inline">
           <label className="field">
@@ -542,25 +631,79 @@ export function ObjectsPage() {
             <input
               type="file"
               name="file"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              disabled={transferActive}
+              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
             />
           </label>
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={uploadMutation.isPending}
+            disabled={transferActive || !file}
           >
-            {uploadMutation.isPending ? "Envoi…" : "Importer et valider"}
+            {transferActive ? "Transfert…" : "Importer et valider"}
           </button>
+          {transferActive ? (
+            <button type="button" className="btn" onClick={handleCancelUpload}>
+              Annuler
+            </button>
+          ) : null}
         </form>
+
+        {transfer.phase !== "idle" ? (
+          <div className="transfer" data-testid="transfer-status" aria-live="polite">
+            <div className="transfer-head">
+              <span className="transfer-name">{transfer.fileName}</span>
+              <span className="muted">{formatBytes(transfer.sizeBytes)}</span>
+              <span
+                className={
+                  transfer.phase === "available"
+                    ? "chip chip-ok"
+                    : transfer.phase === "failed"
+                      ? "chip chip-error"
+                      : transfer.phase === "cancelled"
+                        ? "chip chip-muted"
+                        : "chip chip-warn"
+                }
+              >
+                {PHASE_LABEL[transfer.phase]}
+              </span>
+            </div>
+            {transfer.phase === "uploading" ? (
+              <div
+                className="progress"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(transfer.progress * 100)}
+                aria-label="Progression du transfert"
+              >
+                <span
+                  className="progress-bar"
+                  style={{ width: `${Math.round(transfer.progress * 100)}%` }}
+                />
+              </div>
+            ) : null}
+            {transfer.attempts > 0 ? (
+              <p className="muted">
+                Tentatives : {transfer.attempts} — temporisation avec jitter.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         {uploadError ? (
           <p role="alert" className="alert alert-error">
             {uploadError}
           </p>
         ) : null}
-        {uploadMutation.isSuccess ? (
+        {transfer.phase === "available" ? (
           <p role="status" className="alert alert-ok">
-            Import validé et vérifié.
+            Import validé et vérifié par le backend.
+          </p>
+        ) : null}
+        {transfer.phase === "cancelled" ? (
+          <p role="status" className="alert">
+            Import annulé.
           </p>
         ) : null}
       </section>

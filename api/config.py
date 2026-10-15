@@ -68,9 +68,29 @@ class Settings:
         if part.strip()
     )
     # Upload/commit technical limits (#37, #40). Defaults are guard rails, not billing.
+    #
+    # ``max_object_bytes`` is the single-request upload ceiling. It must stay at
+    # or below the S3 backend's single-PUT limit (SeaweedFS/AWS: 5 GiB) until the
+    # multipart workflow is implemented and compatibility-tested; see
+    # docs/TRANSFER-ENGINE.md. The default equals that limit on purpose.
     max_object_bytes: int = _int("AURA_MAX_OBJECT_BYTES", 5 * 1024 * 1024 * 1024)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
+    # Zero-byte objects are refused by default: an empty upload is usually a
+    # client bug rather than intent. Enable only when a caller legitimately needs
+    # empty placeholders (the commit path verifies the empty SHA-256 either way).
+    allow_empty_objects: bool = os.environ.get("AURA_ALLOW_EMPTY_OBJECTS", "0") == "1"
+    # Optional server-side content-type allow-list, comma-separated and
+    # case-insensitive (``image/png,application/pdf,text/*``). Empty means every
+    # syntactically valid media type is accepted. This is a server-enforced
+    # control: a frontend ``accept`` attribute is never trusted as a policy.
+    allowed_content_types: tuple[str, ...] = tuple(
+        part.strip().lower()
+        for part in os.environ.get("AURA_ALLOWED_CONTENT_TYPES", "").split(",")
+        if part.strip()
+    )
+    # Upper bound (characters) for a client-supplied ``Idempotency-Key`` header.
+    idempotency_key_max: int = _int("AURA_IDEMPOTENCY_KEY_MAX", 200)
     # Cookie security.
     cookie_secure: bool = os.environ.get("AURA_COOKIE_SECURE", "1") == "1"
 

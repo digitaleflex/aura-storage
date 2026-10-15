@@ -237,6 +237,8 @@ class Repository:
         bucket: str, object_key: str, display_name: str, content_type: str,
         owner_id: Optional[str], actor_id: str, actor_kind: str,
         intent_expires_at: Optional[int], folder_id: Optional[str] = None,
+        expected_size_bytes: Optional[int] = None,
+        idempotency_key: Optional[str] = None,
     ) -> str:
         oid = self.new_id()
         now = self.now()
@@ -244,12 +246,12 @@ class Repository:
             """INSERT INTO objects (id, bucket, object_key, display_name, content_type,
                size_bytes, checksum_sha256, folder_id, owner_id, visibility, status,
                created_at, updated_at, actor_kind, actor_id, application_id, space_id,
-               environment, intent_expires_at)
+               environment, intent_expires_at, expected_size_bytes, idempotency_key)
                VALUES (%s, %s, %s, %s, %s, -1, '', %s, %s, 'private', 'pending', %s, %s,
-                       %s, %s, %s, %s, %s, %s)""",
+                       %s, %s, %s, %s, %s, %s, %s, %s)""",
             (oid, bucket, object_key, display_name, content_type, folder_id, owner_id,
              now, now, actor_kind, actor_id, application_id, space_id, environment,
-             intent_expires_at),
+             intent_expires_at, expected_size_bytes, idempotency_key),
         )
         return oid
 
@@ -291,6 +293,16 @@ class Repository:
             params.append(owner_id)
         row = self._one(sql, tuple(params))
         return int(row["n"])
+
+    def get_pending_by_idempotency(
+        self, *, actor_id: str, idempotency_key: str, space_id: str,
+    ):
+        """The live pending intent for an ``Idempotency-Key`` + actor, if any."""
+        return self._one(
+            "SELECT * FROM objects WHERE status = 'pending' AND actor_id = %s "
+            "AND idempotency_key = %s AND space_id = %s ORDER BY created_at DESC LIMIT 1",
+            (actor_id, idempotency_key, space_id),
+        )
 
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
         self._run(
