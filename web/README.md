@@ -1,6 +1,6 @@
 # AURA frontend — neutral scaffold (issue #20)
 
-Neutral app shell, no definitive visual direction (direction A to follow).
+App shell with visual direction A applied (« Coffre Linear »).
 Stack: Vite + TypeScript (strict) + TanStack Router + TanStack Query,
 minimal house CSS (no Tailwind), Playwright for e2e.
 
@@ -9,15 +9,21 @@ minimal house CSS (no Tailwind), Playwright for e2e.
 - `POST /api/v1/login` with username/password; session travels in the
   HttpOnly `aura_session` cookie, CSRF token kept in memory only and sent as
   `x-csrf-token` on mutations.
-- Protected `/` route (object list + upload), public `/login` route.
-- Read-only administration console at `/admin` (roles `operator`/`admin`):
-  dashboard counters (`/api/v1/admin/stats`) and registries for applications,
-  spaces and machine-to-machine identities. The nav entry and the route are
-  hidden/refused for a plain `user`; the API stays authoritative. No token is
-  ever shown here — identity tokens are only displayable once, at creation or
-  rotation (mutations are a later increment).
-- Typed API client (`src/lib/api.ts`): list objects, upload intent → PUT to
-  the short-lived URL → commit, download intent → open short-lived GET URL.
+- Protected `/` route: a folder-aware file browser (breadcrumb, logical folder
+  CRUD, object list / upload / download / soft-delete / purge), public `/login`
+  route.
+- Administration console at `/admin` (roles `operator`/`admin`): dashboard
+  counters (`/api/v1/admin/stats`) and registries for applications, spaces and
+  machine-to-machine identities. The nav entry and the route are hidden/refused
+  for a plain `user`; the API stays authoritative. With `admin:write` (the
+  `admin` role) the console also creates applications/spaces/identities, rotates
+  and revokes identity tokens, and runs the expired-upload reconciliation. An
+  identity token is displayed exactly once (creation or rotation) and never
+  re-read.
+- Typed API client (`src/lib/api.ts`): list objects (optionally filtered by
+  folder), logical folder CRUD, upload intent → PUT to the short-lived URL →
+  commit, download intent → open short-lived GET URL, soft-delete, purge, and
+  the administration mutations.
 - The UI never shows fake data as real: empty catalogue renders an explicit
   empty state, errors render explicit alerts.
 - No S3 keys in the code or bundle. All calls use relative paths; in dev,
@@ -47,9 +53,12 @@ Needs two local servers. The API runs with an in-memory catalogue and dummy
 S3 credentials; a rejected login never contacts S3.
 
 `e2e/login.spec.ts` checks that a wrong password is rejected.
-`e2e/admin.spec.ts` checks that `/admin` requires auth and that an
-`admin` login reaches the read-only console (using the local admin password
-below).
+`e2e/admin.spec.ts` checks that `/admin` requires auth and that an `admin`
+login reaches the console with its write controls.
+`e2e/admin-mutations.spec.ts` creates an application, space and identity,
+asserts the token is shown once, then revokes it.
+`e2e/folders.spec.ts` creates, renames, opens and deletes a folder.
+(All use the local admin password below.)
 
 ```bash
 # Terminal 1 — API (from repo root; values are throwaway local-only secrets)
@@ -80,7 +89,9 @@ npx playwright test
 
 - CSRF token lives in memory: a page reload requires logging in again even
   though the session cookie is still valid.
-- Uploads use a fixed `aura` bucket; folder selection is not implemented.
+- Uploads rely on the server's default space bucket (the client no longer
+  hard-codes `aura`); a folder can be chosen as the upload target.
+- The folder tree is loaded breadth-first from the per-level list endpoint
+  (bounded to 500 nodes); there is no single "list all folders" route.
 - Production serving (static `dist/` + same-origin `/api` proxy) is a
   deployment concern and is not configured here.
-- Board/product wording and visual direction are intentionally not applied.

@@ -48,7 +48,7 @@ Track asynchronous bulk uploads/imports with a stable job ID, status (`queued`, 
 
 - `GET /health/live` — process liveness; no secrets.
 - `GET /health/ready` — readiness including required dependencies.
-- `GET /api/v1/objects` — paginated object search; filters must be allow-listed.
+- `GET /api/v1/objects` — paginated object search; filters must be allow-listed (implemented filter: `folder_id`, where `root` means "not filed", #62).
 - `POST /api/v1/objects/upload-intents` — authorize and issue a short-lived upload URL/intent.
 - `POST /api/v1/objects/{id}/commit` or an equivalent intent-scoped completion endpoint — verify the stored object and transition it to available idempotently.
 - `GET /api/v1/objects/{id}` — metadata only.
