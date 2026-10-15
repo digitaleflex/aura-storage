@@ -378,7 +378,7 @@ paths:
       responses:
         "200": { description: Space created }
         "404": { description: Application not found }
-        "409": { description: Bucket name already in use }
+        "409": { description: Duplicate (application_id, name, environment), inactive application, or bucket name already in use }
         "422": { description: Invalid bucket name }
     get:
       summary: List spaces (admin:read)
@@ -433,6 +433,127 @@ paths:
       responses:
         "200": { description: Identity revoked }
         "404": { description: Identity not found }
+  /api/v1/admin/applications/{aid}:
+    get:
+      summary: Application detail with its stable id and space count (admin:read)
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+      responses:
+        "200": { description: Application with name, status, stable id and space count }
+        "404": { description: Application not found }
+        "422": { description: Identifier is not a canonical UUID v4 }
+    patch:
+      summary: Rename or activate/deactivate an application (admin:write)
+      description: >-
+        Soft lifecycle only: an application is never deleted. Deactivating it
+        blocks new spaces from being attached while existing ones stay readable.
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 63 }
+                status: { type: string, enum: [active, disabled] }
+      responses:
+        "200": { description: Application updated }
+        "404": { description: Application not found }
+        "409": { description: Application name already exists }
+        "422": { description: No field, an explicit null, or an invalid status }
+  /api/v1/admin/spaces/{sid}:
+    get:
+      summary: Space detail with buckets and attachment counts (admin:read)
+      parameters:
+        - $ref: "#/components/parameters/SpaceId"
+      responses:
+        "200": { description: Space with its application, buckets and counts }
+        "404": { description: Space not found }
+        "422": { description: Identifier is not a canonical UUID v4 }
+    patch:
+      summary: Rename, re-environment or activate/deactivate a space (admin:write)
+      description: >-
+        `application_id` is immutable — a space is never moved to another
+        application. `name`/`environment` must stay unique within the
+        application. Deactivating a space refuses new uploads and new identities
+        while keeping existing rows readable.
+      parameters:
+        - $ref: "#/components/parameters/SpaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 63 }
+                environment: { type: string, minLength: 1, maxLength: 32 }
+                status: { type: string, enum: [active, disabled] }
+      responses:
+        "200": { description: Space updated }
+        "404": { description: Space not found }
+        "409": { description: Duplicate (application_id, name, environment) }
+        "422": { description: No field, an explicit null, or an invalid status }
+  /api/v1/admin/spaces/{sid}/buckets:
+    post:
+      summary: Register an additional bucket for a space (admin:write)
+      description: >-
+        Additive and non-destructive: the bucket is created in the catalogue and
+        the S3 name rules are enforced. It is not made the default here and no
+        bucket is ever deleted through the API.
+      parameters:
+        - $ref: "#/components/parameters/SpaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  description: Must be a valid S3 bucket name.
+      responses:
+        "200": { description: Bucket registered (not the space default) }
+        "404": { description: Space not found }
+        "409": { description: Bucket name already in use }
+        "422": { description: Invalid bucket name }
+  /api/v1/admin/buckets:
+    get:
+      summary: List every bucket with its space/application attachment (admin:read)
+      responses:
+        "200": { description: Buckets and their attachment; never any S3 credential }
+  /api/v1/admin/buckets/{bid}:
+    patch:
+      summary: Set or clear a bucket's default flag (admin:write)
+      description: >-
+        Setting a bucket default clears the flag on the other buckets of the
+        same space, so exactly one default is possible. Existing objects keep
+        their own bucket locator, so the change is reversible.
+      parameters:
+        - $ref: "#/components/parameters/BucketId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [is_default]
+              properties:
+                is_default: { type: boolean }
+      responses:
+        "200": { description: Bucket default flag updated }
+        "404": { description: Bucket not found }
+        "422": { description: Invalid or missing body field }
 components:
   schemas:
     Uuid4:
@@ -457,6 +578,21 @@ components:
     FolderId:
       in: path
       name: fid
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid4" }
+    ApplicationId:
+      in: path
+      name: aid
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid4" }
+    SpaceId:
+      in: path
+      name: sid
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid4" }
+    BucketId:
+      in: path
+      name: bid
       required: true
       schema: { $ref: "#/components/schemas/Uuid4" }
   securitySchemes:

@@ -54,11 +54,15 @@ CREATE TABLE IF NOT EXISTS applications (
   status TEXT NOT NULL DEFAULT 'active',
   created_at INTEGER NOT NULL
 );
+-- `status` is a soft lifecycle flag (active/disabled). A space is never deleted
+-- through the API: disabling it stops new identities and new uploads while the
+-- existing catalogue rows stay readable (#M04). Added additively on upgrades.
 CREATE TABLE IF NOT EXISTS spaces (
   id TEXT PRIMARY KEY,
   application_id TEXT NOT NULL REFERENCES applications(id),
   name TEXT NOT NULL,
   environment TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
   created_at INTEGER NOT NULL,
   UNIQUE (application_id, name, environment)
 );

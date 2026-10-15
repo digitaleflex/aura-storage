@@ -37,9 +37,11 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0002_canonical_ids"
+SCHEMA_VERSION = "0003_space_status"
 
-# (table, column, declaration) added only if absent.
+# (table, column, declaration) added only if absent. A constant DEFAULT is
+# allowed by both engines on ADD COLUMN, so existing rows are filled with the
+# default and new inserts keep working even before the backfill runs.
 ADDED_COLUMNS = {
     "users": [
         ("role", "TEXT"),
@@ -58,6 +60,11 @@ ADDED_COLUMNS = {
         # client idempotency key dedupes accidental double submits.
         ("expected_size_bytes", "INTEGER"),
         ("idempotency_key", "TEXT"),
+    ],
+    # #M04: a space is soft-disabled, never deleted. Pre-existing spaces are
+    # backfilled to 'active' in `_seed`.
+    "spaces": [
+        ("status", "TEXT DEFAULT 'active'"),
     ],
 }
 
@@ -332,6 +339,8 @@ def _seed(runner: _Runner) -> None:
         )
     # Backfill legacy users/objects so pre-#35 data keeps working.
     runner.exec("UPDATE users SET role = 'user' WHERE role IS NULL OR role = ''")
+    # #M04: a space added before the status column is active by default.
+    runner.exec("UPDATE spaces SET status = 'active' WHERE status IS NULL OR status = ''")
     runner.exec(
         "UPDATE users SET application_id = ? WHERE application_id IS NULL",
         (application_id,),

@@ -110,6 +110,7 @@ def authenticate(request: Request) -> dict:
             "space_id": row["space_id"],
             "application_id": row["application_id"],
             "environment": space.get("environment"),
+            "space_status": space.get("status"),
             "csrf": None,
         }
 
@@ -131,6 +132,7 @@ def authenticate(request: Request) -> dict:
         "space_id": user["space_id"],
         "application_id": user["application_id"],
         "environment": space.get("environment") if space else None,
+        "space_status": space.get("status") if space else None,
         "session_id": session["id"],
         "csrf": session["csrf"],
     }
