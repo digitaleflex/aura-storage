@@ -9,13 +9,10 @@ export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
   fullyParallel: false,
-  // The dev/test stack shares ONE catalogue connection across FastAPI's
-  // threadpool (api/db.py sqlite3 / api/db_pg.py psycopg). Concurrent admin
-  // reads can therefore raise `sqlite3.InterfaceError` and surface as a
-  // transient 401/500 (pre-existing, unrelated to a specific feature). One
-  // retry keeps the smoke suite stable until the catalogue layer is made
-  // concurrency-safe; a real regression still fails every attempt.
-  retries: 1,
+  // The catalogue repository serializes access to its single shared connection
+  // (api/dblock.py), so concurrent admin requests no longer flake; no retry is
+  // needed to keep this suite stable.
+  retries: 0,
   use: {
     baseURL: "http://127.0.0.1:5173",
     launchOptions: {

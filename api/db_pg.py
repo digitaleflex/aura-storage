@@ -1,4 +1,5 @@
 """PostgreSQL catalogue implementing the same Repository interface as db.py (#19)."""
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -7,6 +8,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from . import ids
+from .dblock import synchronized
 from .migrations import (
     DEFAULT_APPLICATION_NAME,
     DEFAULT_ENVIRONMENT,
@@ -18,10 +20,14 @@ from .object_query import build_object_where, order_clause
 SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
 
 
+@synchronized
 class Repository:
     dialect = "postgres"
 
     def __init__(self, dsn: str):
+        # psycopg connections are not thread-safe and FastAPI runs sync endpoints
+        # in a threadpool, so `_lock` serializes access; see api/dblock.py.
+        self._lock = threading.RLock()
         self.conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
         with self.conn.cursor() as cur:
             cur.execute(SCHEMA)

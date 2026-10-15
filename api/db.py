@@ -1,10 +1,12 @@
 """SQLite catalogue behind a small Repository interface (#18; PostgreSQL in #19)."""
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Optional
 
 from . import ids
+from .dblock import synchronized
 from .migrations import (
     DEFAULT_APPLICATION_NAME,
     DEFAULT_ENVIRONMENT,
@@ -20,11 +22,15 @@ def _as_dict(row):
     return dict(row) if row is not None else None
 
 
+@synchronized
 class Repository:
     dialect = "sqlite"
 
     def __init__(self, path: str):
         self.path = path
+        # One connection is shared by every request thread (FastAPI runs sync
+        # endpoints in a threadpool). `_lock` serializes access; see api/dblock.py.
+        self._lock = threading.RLock()
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
