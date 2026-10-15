@@ -17,10 +17,22 @@ table or migration is required for this volume.
 """
 import json
 import os
+import threading
 import time
 from collections import deque
 from contextvars import ContextVar
 from typing import Any
+
+try:
+    import fcntl  # POSIX hardening for multi-process deployments
+except ImportError:  # pragma: no cover - pilot and CI run on Linux
+    fcntl = None  # type: ignore[assignment]
+
+# Serializes audit appends against retention pruning inside this process
+# (the deployed API runs a single worker). Combined with an exclusive
+# advisory lock on the file, a prune rewrite can never interleave with an
+# append and no event is lost or duplicated.
+_AUDIT_LOCK = threading.Lock()
 
 # Ambient request context (M07). The middleware binds one *mutable* holder per
 # request and resets it afterwards. A plain immutable value would not work
@@ -96,8 +108,11 @@ def audit_event(action: str, actor: str | None, result: str,
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record) + "\n")
+        with _AUDIT_LOCK:
+            with open(path, "a", encoding="utf-8") as fh:
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                fh.write(json.dumps(record) + "\n")
     except OSError:
         # Audit must never break the API itself.
         pass
@@ -139,6 +154,10 @@ def query_audit_log(
     the window may exclude older history. A missing log file is an empty
     history, never an error.
     """
+    # Defensive clamp: a non-positive window would scan nothing (or loop on a
+    # zero-length deque). The import-time check in config.py is the primary
+    # guard; this keeps a direct caller from silently disabling reads.
+    max_scan_lines = max(1, max_scan_lines)
     lines, window_full = _tail_lines(audit_path(), max_scan_lines)
     scanned = len(lines)
     matches: list[dict] = []
@@ -183,6 +202,8 @@ def recent_error_events(*, window_s: int = 3600, limit: int = 5,
     Only timestamp/action/actor/result/request correlation are returned: no
     payload that could carry tenant data. Returns ``(events, scanned)``.
     """
+    # Same defensive clamp as ``query_audit_log`` (see there).
+    max_scan_lines = max(1, max_scan_lines)
     cutoff = int(time.time()) - window_s
     lines, _ = _tail_lines(audit_path(), max_scan_lines)
     scanned = len(lines)
@@ -218,36 +239,48 @@ def prune_audit_log(*, retention_days: int) -> dict:
     silently. The rewrite is atomic (temporary file + rename). Returns
     ``{"kept", "dropped", "cutoff", "retention_days"}``.
     """
+    # A non-positive retention would drop (or keep, depending on sign) the whole
+    # history. Refuse rather than delete audit data by accident.
+    if retention_days < 1:
+        raise ValueError("retention_days must be >= 1")
     cutoff = int(time.time()) - retention_days * 86400
     path = audit_path()
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except FileNotFoundError:
-        return {"kept": 0, "dropped": 0, "cutoff": cutoff,
-                "retention_days": retention_days}
-    kept_lines: list[str] = []
-    dropped = 0
-    for raw in lines:
+    with _AUDIT_LOCK:
         try:
-            record = json.loads(raw)
-            ts = record.get("ts") if isinstance(record, dict) else None
-        except (json.JSONDecodeError, ValueError):
-            ts = None
-        if isinstance(ts, (int, float)) and ts < cutoff:
-            dropped += 1
-        else:
-            kept_lines.append(raw)
-    tmp_path = f"{path}.prune.tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            fh.writelines(kept_lines)
-        os.replace(tmp_path, path)
-    except OSError:
+            with open(path, "r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except FileNotFoundError:
+            return {"kept": 0, "dropped": 0, "cutoff": cutoff,
+                    "retention_days": retention_days}
+        kept_lines: list[str] = []
+        dropped = 0
+        for raw in lines:
+            try:
+                record = json.loads(raw)
+                ts = record.get("ts") if isinstance(record, dict) else None
+            except (json.JSONDecodeError, ValueError):
+                ts = None
+            if isinstance(ts, (int, float)) and ts < cutoff:
+                dropped += 1
+            else:
+                kept_lines.append(raw)
+        tmp_path = f"{path}.prune.tmp"
         try:
-            os.unlink(tmp_path)
+            # Best-effort exclusive advisory lock across the rewrite. The real
+            # guarantee is the in-process _AUDIT_LOCK (the API runs a single
+            # worker); a multi-worker deployment must serialize prune calls
+            # externally, e.g. one operator at a time.
+            with open(path, "a", encoding="utf-8") as lock_fh:
+                if fcntl is not None:
+                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+                with open(tmp_path, "w", encoding="utf-8") as fh:
+                    fh.writelines(kept_lines)
+                os.replace(tmp_path, path)
         except OSError:
-            pass
-        raise
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     return {"kept": len(kept_lines), "dropped": dropped, "cutoff": cutoff,
             "retention_days": retention_days}

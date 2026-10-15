@@ -100,10 +100,12 @@ async def request_context(request: Request, call_next):
     _, token = bind_request_context(request_id)
     try:
         response = await call_next(request)
+        response.headers["X-Request-Id"] = request_id
+        return response
     finally:
+        # Always reset, including when call_next raises: the original
+        # exception then reaches ServerErrorMiddleware unmasked.
         reset_request_context(token)
-    response.headers["X-Request-Id"] = request_id
-    return response
 
 
 # In-memory login rate limiter: {client_ip: [failure_epoch, ...]}.
@@ -1081,6 +1083,7 @@ def admin_usage(
     totals_by_status: dict[str, int] = {}
     total_bytes = 0
     total_available = 0
+    total_pending = 0
     for space in spaces:
         space = _as_dict(space)
         usage = repo.space_usage(space["id"])
@@ -1088,6 +1091,7 @@ def admin_usage(
             totals_by_status[status] = totals_by_status.get(status, 0) + count
         total_bytes += usage["stored_bytes"]
         total_available += usage["available_count"]
+        total_pending += usage["pending_count"]
         application = applications.get(space["application_id"])
         items.append({
             "space_id": space["id"], "space_name": space["name"],
@@ -1107,6 +1111,7 @@ def admin_usage(
         "totals": {
             "objects_by_status": totals_by_status,
             "available_count": total_available,
+            "pending_count": total_pending,
             "stored_bytes": total_bytes,
         },
         "spaces": items,

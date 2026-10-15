@@ -103,3 +103,16 @@ class Settings:
 
 
 settings = Settings()
+
+# Fail fast on misconfigured audit observability bounds (M07). A zero/negative
+# scan window would silently disable reads and a negative retention would make
+# pruning unbounded, so refuse the process at import instead of degrading at
+# runtime. The readers in api/audit.py are also hardened defensively.
+if settings.audit_retention_days < 1:
+    raise RuntimeError("AURA_AUDIT_RETENTION_DAYS must be >= 1")
+if settings.audit_max_scan_lines < 1:
+    raise RuntimeError("AURA_AUDIT_MAX_SCAN_LINES must be >= 1")
+if settings.audit_error_scan_lines < 1:
+    raise RuntimeError("AURA_AUDIT_ERROR_SCAN_LINES must be >= 1")
+if settings.audit_error_window_s < 0:
+    raise RuntimeError("AURA_AUDIT_ERROR_WINDOW_S must be >= 0")

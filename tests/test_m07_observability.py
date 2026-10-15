@@ -411,3 +411,131 @@ def test_m07_audit_events_carry_tenant_and_request():
     events = search(request_id=rid)["items"]
     assert len(events) == 1
     assert "space_id" not in events[0] and "application_id" not in events[0]
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups: middleware coverage, window semantics, clamps,
+# attribution isolation, whitelist contract, prune concurrency.
+# ---------------------------------------------------------------------------
+def test_m07_request_id_present_on_error_responses():
+    c, headers = _admin()
+    # 404 with a request id: unknown object, authenticated caller.
+    r = c.get("/api/v1/objects/00000000-0000-4000-8000-000000000000",
+              headers=headers)
+    assert r.status_code == 404
+    assert r.headers["x-request-id"]
+    # 403 with a request id: valid session, forbidden admin route.
+    name, password = _user_with_role("user")
+    u, uh = _login(name, password)
+    r = u.get("/api/v1/admin/stats", headers=uh)
+    assert r.status_code == 403
+    assert r.headers["x-request-id"]
+
+
+def test_m07_truncated_window_semantics():
+    from api.audit import query_audit_log
+    for i in range(5):
+        c, headers = _admin()
+        c.post("/api/v1/objects/upload-intents",
+               json={"display_name": f"win-{i}.bin", "size_bytes": 1},
+               headers=headers)
+    out = query_audit_log(action="upload-intent", limit=100, offset=0,
+                          max_scan_lines=3)
+    assert out["scanned"] == 3
+    assert out["truncated"] is True
+    assert out["total"] <= 3
+    full = query_audit_log(action="upload-intent", limit=100, offset=0)
+    assert full["truncated"] is False
+    assert full["total"] >= out["total"]
+
+
+def test_m07_audit_pagination_clamp_edges():
+    c, headers = _admin()
+
+    def search(**params):
+        r = c.get("/api/v1/admin/audit", params=params, headers=headers)
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    assert len(search(limit=0)["items"]) <= 1  # clamped to limit=1
+    huge = search(limit=99999)
+    assert len(huge["items"]) <= 500  # clamped to limit=500
+    assert search(offset=10 ** 9)["items"] == []
+    assert search(action="no-such-action", limit=0)["total"] == 0
+
+
+def test_m07_audit_attribution_isolated_across_threads():
+    import threading
+    from api.audit import (audit_event, bind_request_context,
+                           reset_request_context, set_request_principal)
+    seen: dict = {}
+
+    def emit(tag, space):
+        holder, token = bind_request_context(f"rid-{tag}")
+        try:
+            set_request_principal(space, f"app-{tag}")
+            audit_event("m07.probe", f"actor-{tag}", "success")
+            seen[tag] = dict(holder)
+        finally:
+            reset_request_context(token)
+
+    threads = [threading.Thread(target=emit, args=(f"t{i}", f"space-{i}"))
+               for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    for i in range(8):
+        assert seen[f"t{i}"]["request_id"] == f"rid-t{i}"
+        assert seen[f"t{i}"]["space_id"] == f"space-{i}"
+
+
+def test_m07_audit_whitelist_and_explicit_scope_win():
+    import threading
+    from api.audit import (audit_event, bind_request_context,
+                           reset_request_context, set_request_principal)
+    holder, token = bind_request_context("rid-white")
+    try:
+        set_request_principal("ambient-space", "ambient-app")
+        audit_event("m07.probe", "actor", "success", {
+            "ok_id": "x", "count": 3, "flag": True, "nothing": None,
+            "nested": {"a": 1}, "items": [1, 2],
+            "space_id": "explicit-space",
+        })
+    finally:
+        reset_request_context(token)
+    records = [r for r in _audit_log_lines() if isinstance(r, dict)
+               and r.get("request_id") == "rid-white"]
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["ok_id"] == "x" and rec["count"] == 3
+    assert "nested" not in rec and "items" not in rec
+    assert rec["space_id"] == "explicit-space"  # explicit wins
+    assert rec["application_id"] == "ambient-app"
+
+
+def test_m07_prune_preserves_concurrent_appends():
+    import threading
+    from api.audit import audit_event
+    c, headers = _admin()
+    stop = threading.Event()
+    errors: list = []
+
+    def writer(n):
+        try:
+            for i in range(20):
+                audit_event("m07.writer", f"w-{n}", "success", {"n": i})
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    r = c.post("/api/v1/admin/audit/prune", headers=headers)
+    for t in threads:
+        t.join()
+    assert r.status_code == 200, r.text
+    assert not errors
+    kept = [rec for rec in _audit_log_lines()
+            if isinstance(rec, dict) and rec.get("action") == "m07.writer"]
+    assert len(kept) == 80

@@ -21,14 +21,19 @@ live catalogue queries.
   caller's `space_id` / `application_id` by the authorization layer; explicit
   event fields always win.
 - **Search** (`GET /api/v1/admin/audit`, `admin:read`): newest-first filters
-  `since`, `until` (epoch seconds, `since <= until` else 422), `actor`
-  (substring), `action` / `result` (exact), `space_id`, `application_id`,
-  `request_id` (exact; malformed UUID filters are 422). A missing log file
-  is an empty history, never an error.
-- **Pagination:** `limit` clamped to 1..500 (default 100), `offset` counts
-  matches. `total` counts matches **inside the scanned window**; `scanned`
-  is the window size and `truncated: true` warns that older history exists
-  beyond it. The window is `AURA_AUDIT_MAX_SCAN_LINES` (default 20000).
+  `since`, `until` (epoch seconds, `since <= until` else 422). `space_id` and
+  `application_id` are canonical UUID v4 filters (malformed → 422); `actor`
+  (substring) and `action` / `result` / `request_id` (exact) are plain string
+  filters and never 422. A missing log file is an empty history, never an
+  error.
+- **Pagination:** `limit` is **clamped** server-side to 1..500 (default 100) —
+  an out-of-range value is clamped, not 422, even though OpenAPI lists
+  `minimum`/`maximum`; `offset` counts matches (a negative `offset`
+  clamps to 0, never 422). `total` counts matches **inside the scanned
+  window**; `scanned` is the window size and `truncated: true` means the
+  window was full, so older history *may* exist beyond it (conservative:
+  may over-warn, never under-warn). The window is
+  `AURA_AUDIT_MAX_SCAN_LINES` (default 20000).
 - **Retention:** `POST /api/v1/admin/audit/prune` (`admin:write`) drops lines
   older than `AURA_AUDIT_RETENTION_DAYS` (default 90) via an atomic rewrite
   and returns `{kept, dropped, cutoff, retention_days}`. Lines without a

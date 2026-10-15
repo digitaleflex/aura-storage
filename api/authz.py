@@ -72,7 +72,12 @@ def _m2m_blocked(client_ip: str, now: float | None = None) -> bool:
     now = time.time() if now is None else now
     window = settings.m2m_rate_window
     attempts = [t for t in _M2M_ATTEMPTS.get(client_ip, []) if now - t < window]
-    _M2M_ATTEMPTS[client_ip] = attempts
+    if attempts:
+        _M2M_ATTEMPTS[client_ip] = attempts
+    else:
+        # No permanent empty entry: every distinct probing IP must not leave
+        # residue (mirrors the login limiter).
+        _M2M_ATTEMPTS.pop(client_ip, None)
     return len(attempts) >= settings.m2m_rate_limit
 
 

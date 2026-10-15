@@ -70,3 +70,16 @@ gates SeaweedFS (#84,#85), benchmarks (#88), Go/No-Go (#10,#11,#89).
 - Fiabilisation : #86 serveur + #85 documentée ou prouvée.
 - Gros fichiers : gate #84 tranché (implémenter ou documenter le refus).
 - Livraison : #89 avec recommandation GO/NO-GO explicite.
+
+## Suivi M7 (revue pré-merge)
+
+- **M7 (revue)** : les mutations non scopées du dépôt s'appuient sur le
+  contrôle de périmètre `get_object` effectué en amont ; tout appelant futur
+  doit préserver cette vérification (le dépôt ne la refait pas).
+- **M2/M3 (décisions acceptées, documentées sans changement)** :
+  - le balayage de réconciliation (`reconcile_pending`) se base sur
+    `created_at` avec une fenêtre par défaut de 3600 s, volontairement plus
+    conservatrice que la fenêtre d'expiration de commit (410) : documenter,
+    ne pas modifier ;
+  - `storage_deletes_attempted` compte les suppressions réellement effectuées
+    et `storage_failures` le reste : documenter, ne pas renommer.

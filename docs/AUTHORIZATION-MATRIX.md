@@ -171,6 +171,11 @@ Never place a token in logs, tickets, chat, the frontend bundle, or this reposit
   values only — verified available bytes, counts, configured ceilings — with
   `measured_at` as the freshness marker. See `docs/OBSERVABILITY.md` for the
   unavailable metrics and the validations that need real infrastructure.
+- Exceptions by design: a successful `login` is emitted before any
+  `authorize` call, so its audit event carries `user_id` but no tenant
+  (`space_id`/`application_id`). Purge stays owner-scoped for a human caller
+  (a user may only purge objects they own); a space-wide purge is performed
+  by a service identity holding `objects:purge`.
 
 ## Secret handling
 
