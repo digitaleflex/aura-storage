@@ -299,6 +299,87 @@ class Repository:
         self.conn.execute("DELETE FROM objects WHERE id = ?", (oid,))
         self.conn.commit()
 
+    # -- folders (#61) ----------------------------------------------------
+    # Folders are logical catalogue entities owned by a human user. They are
+    # never real host directories; parent/child links live in `parent_id`.
+    def create_folder(self, owner_id: str, name: str, parent_id: Optional[str] = None) -> str:
+        fid = self.new_id()
+        self.conn.execute(
+            "INSERT INTO folders (id, owner_id, parent_id, name, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (fid, owner_id, parent_id, name, self.now()),
+        )
+        self.conn.commit()
+        return fid
+
+    def get_folder(self, fid: str, *, owner_id: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM folders WHERE id = ? AND owner_id = ?", (fid, owner_id)
+        ).fetchone())
+
+    def list_folders(self, *, owner_id: str, parent_id: Optional[str] = None) -> list:
+        # parent_id=None lists the root level (parent_id IS NULL).
+        if parent_id is None:
+            rows = self.conn.execute(
+                "SELECT * FROM folders WHERE owner_id = ? AND parent_id IS NULL "
+                "ORDER BY name",
+                (owner_id,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM folders WHERE owner_id = ? AND parent_id = ? ORDER BY name",
+                (owner_id, parent_id),
+            ).fetchall()
+        return [_as_dict(r) for r in rows]
+
+    def folder_name_exists(
+        self, *, owner_id: str, parent_id: Optional[str], name: str,
+        exclude_id: Optional[str] = None,
+    ) -> bool:
+        if parent_id is None:
+            sql = "SELECT 1 FROM folders WHERE owner_id = ? AND parent_id IS NULL AND name = ?"
+            params: list = [owner_id, name]
+        else:
+            sql = "SELECT 1 FROM folders WHERE owner_id = ? AND parent_id = ? AND name = ?"
+            params = [owner_id, parent_id, name]
+        if exclude_id is not None:
+            sql += " AND id != ?"
+            params.append(exclude_id)
+        return self.conn.execute(sql, params).fetchone() is not None
+
+    def rename_folder(self, fid: str, *, owner_id: str, name: str) -> None:
+        self.conn.execute(
+            "UPDATE folders SET name = ? WHERE id = ? AND owner_id = ?", (name, fid, owner_id)
+        )
+        self.conn.commit()
+
+    def set_folder_parent(
+        self, fid: str, *, owner_id: str, parent_id: Optional[str]
+    ) -> None:
+        self.conn.execute(
+            "UPDATE folders SET parent_id = ? WHERE id = ? AND owner_id = ?",
+            (parent_id, fid, owner_id),
+        )
+        self.conn.commit()
+
+    def folder_child_count(self, fid: str, *, owner_id: str) -> int:
+        return int(self.conn.execute(
+            "SELECT COUNT(*) AS n FROM folders WHERE parent_id = ? AND owner_id = ?",
+            (fid, owner_id),
+        ).fetchone()["n"])
+
+    def folder_object_count(self, fid: str, *, owner_id: str) -> int:
+        return int(self.conn.execute(
+            "SELECT COUNT(*) AS n FROM objects WHERE folder_id = ? AND owner_id = ?",
+            (fid, owner_id),
+        ).fetchone()["n"])
+
+    def delete_folder(self, fid: str, *, owner_id: str) -> None:
+        self.conn.execute(
+            "DELETE FROM folders WHERE id = ? AND owner_id = ?", (fid, owner_id)
+        )
+        self.conn.commit()
+
     # -- observability (#40) ----------------------------------------------
     def stats(self) -> dict:
         objects = {

@@ -274,6 +274,79 @@ class Repository:
     def delete_object_row(self, oid: str) -> None:
         self._run("DELETE FROM objects WHERE id = %s", (oid,))
 
+    # -- folders (#61) ----------------------------------------------------
+    # Folders are logical catalogue entities owned by a human user. They are
+    # never real host directories; parent/child links live in `parent_id`.
+    def create_folder(self, owner_id: str, name: str, parent_id: Optional[str] = None) -> str:
+        fid = self.new_id()
+        self._run(
+            "INSERT INTO folders (id, owner_id, parent_id, name, created_at) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (fid, owner_id, parent_id, name, self.now()),
+        )
+        return fid
+
+    def get_folder(self, fid: str, *, owner_id: str) -> Optional[dict]:
+        return self._one(
+            "SELECT * FROM folders WHERE id = %s AND owner_id = %s", (fid, owner_id)
+        )
+
+    def list_folders(self, *, owner_id: str, parent_id: Optional[str] = None) -> list:
+        # parent_id=None lists the root level (parent_id IS NULL).
+        if parent_id is None:
+            return self._all(
+                "SELECT * FROM folders WHERE owner_id = %s AND parent_id IS NULL "
+                "ORDER BY name",
+                (owner_id,),
+            )
+        return self._all(
+            "SELECT * FROM folders WHERE owner_id = %s AND parent_id = %s ORDER BY name",
+            (owner_id, parent_id),
+        )
+
+    def folder_name_exists(
+        self, *, owner_id: str, parent_id: Optional[str], name: str,
+        exclude_id: Optional[str] = None,
+    ) -> bool:
+        if parent_id is None:
+            sql = "SELECT 1 AS x FROM folders WHERE owner_id = %s AND parent_id IS NULL AND name = %s"
+            params: list = [owner_id, name]
+        else:
+            sql = "SELECT 1 AS x FROM folders WHERE owner_id = %s AND parent_id = %s AND name = %s"
+            params = [owner_id, parent_id, name]
+        if exclude_id is not None:
+            sql += " AND id != %s"
+            params.append(exclude_id)
+        return self._one(sql, tuple(params)) is not None
+
+    def rename_folder(self, fid: str, *, owner_id: str, name: str) -> None:
+        self._run(
+            "UPDATE folders SET name = %s WHERE id = %s AND owner_id = %s", (name, fid, owner_id)
+        )
+
+    def set_folder_parent(
+        self, fid: str, *, owner_id: str, parent_id: Optional[str]
+    ) -> None:
+        self._run(
+            "UPDATE folders SET parent_id = %s WHERE id = %s AND owner_id = %s",
+            (parent_id, fid, owner_id),
+        )
+
+    def folder_child_count(self, fid: str, *, owner_id: str) -> int:
+        return int(self._one(
+            "SELECT COUNT(*) AS n FROM folders WHERE parent_id = %s AND owner_id = %s",
+            (fid, owner_id),
+        )["n"])
+
+    def folder_object_count(self, fid: str, *, owner_id: str) -> int:
+        return int(self._one(
+            "SELECT COUNT(*) AS n FROM objects WHERE folder_id = %s AND owner_id = %s",
+            (fid, owner_id),
+        )["n"])
+
+    def delete_folder(self, fid: str, *, owner_id: str) -> None:
+        self._run("DELETE FROM folders WHERE id = %s AND owner_id = %s", (fid, owner_id))
+
     # -- observability (#40) ----------------------------------------------
     def stats(self) -> dict:
         objects = {

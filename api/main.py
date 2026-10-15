@@ -117,6 +117,30 @@ def _object_scope(principal: dict) -> dict:
     }
 
 
+# Folders (#61) are logical catalogue entities owned by a human user. Names are
+# flat labels (no path semantics): a separator or control character is refused.
+MAX_FOLDER_DEPTH = 32
+
+
+def _validate_folder_name(value: str) -> str:
+    name = value.strip()
+    if not name or name in (".", ".."):
+        raise ValueError("invalid folder name")
+    if any(ch in name for ch in ("/", "\\")) or any(ord(ch) < 32 for ch in name):
+        raise ValueError("invalid folder name")
+    return name
+
+
+def _folder_public(row) -> dict:
+    row = _as_dict(row)
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "parent_id": row["parent_id"],
+        "created_at": row["created_at"],
+    }
+
+
 class LoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str
@@ -163,6 +187,31 @@ class IdentityIn(BaseModel):
     name: str = Field(min_length=1, max_length=63)
     scopes: list[str] = Field(default_factory=list)
     ttl_seconds: int | None = Field(default=None, ge=1)
+
+
+class FolderIn(BaseModel):
+    # Logical folder creation (#61). `parent_id` is omitted/null for a root folder.
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=255)
+    parent_id: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        return _validate_folder_name(value)
+
+
+class FolderPatchIn(BaseModel):
+    # Partial update. `model_fields_set` distinguishes "not sent" from an explicit
+    # null (which moves the folder back to the root level).
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    parent_id: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_folder_name(value)
 
 
 @app.get("/health/live")
@@ -244,6 +293,14 @@ def upload_intent(body: UploadIntentIn, principal: dict = Depends(authorize(OBJE
 
     if repo.count_pending(**_object_scope(principal)) >= settings.max_pending_intents:
         raise HTTPException(status_code=429, detail="too many pending uploads")
+
+    if body.folder_id is not None:
+        # A client-supplied folder must exist and be owned by the caller (#61).
+        # Service identities own no folders, so any folder_id they send is refused.
+        if principal["kind"] != "user" or repo.get_folder(
+            body.folder_id, owner_id=principal["id"]
+        ) is None:
+            raise HTTPException(status_code=403, detail="forbidden")
 
     owner_id = principal["id"] if principal["kind"] == "user" else None
     key = f"aura/{space_id}/{principal['id']}/{uuid.uuid4()}"
@@ -387,6 +444,150 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
     url = presigned_get(s3, row["bucket"], row["object_key"], settings.intent_ttl)
     audit_event("download-intent", principal["id"], "success", {"object_id": oid})
     return {"download_url": url, "expires_in": settings.intent_ttl}
+
+
+# ---------------------------------------------------------------------------
+# Logical folders (#61). Human-owned catalogue metadata: no bytes, no host
+# directories. A folder is addressed by its id and scoped to its owner, so one
+# user can never observe or mutate another user's tree.
+# ---------------------------------------------------------------------------
+def _folder_owner(principal: dict) -> str:
+    # ``folders.owner_id`` references ``users.id`` (NOT NULL), so folder
+    # management is a human-user capability. Service identities are refused by
+    # ``authorize(..., human=True)`` on every folder route below.
+    return principal["id"]
+
+
+def _folder_depth(fid: str, owner_id: str) -> int:
+    """Number of ancestors+self for a folder; bounded by MAX_FOLDER_DEPTH."""
+    depth = 0
+    current: str | None = fid
+    while current is not None:
+        depth += 1
+        if depth > MAX_FOLDER_DEPTH:
+            return depth
+        row = repo.get_folder(current, owner_id=owner_id)
+        current = row["parent_id"] if row else None
+    return depth
+
+
+def _folder_subtree_height(fid: str, owner_id: str) -> int:
+    """Longest downward path (in nodes) starting at ``fid``, including it."""
+    height = 1
+    frontier = [fid]
+    while frontier:
+        nxt: list[str] = []
+        for node in frontier:
+            nxt.extend(
+                c["id"] for c in repo.list_folders(owner_id=owner_id, parent_id=node)
+            )
+        if nxt:
+            height += 1
+        frontier = nxt
+    return height
+
+
+@app.get("/api/v1/folders")
+def list_folders(
+    parent_id: str | None = None,
+    principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
+):
+    owner_id = _folder_owner(principal)
+    if parent_id is not None and repo.get_folder(parent_id, owner_id=owner_id) is None:
+        raise HTTPException(status_code=404, detail="folder not found")
+    rows = repo.list_folders(owner_id=owner_id, parent_id=parent_id)
+    return {"items": [_folder_public(r) for r in rows]}
+
+
+@app.get("/api/v1/folders/{fid}")
+def get_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_READ, human=True))):
+    row = repo.get_folder(fid, owner_id=_folder_owner(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="folder not found")
+    return _folder_public(row)
+
+
+@app.post("/api/v1/folders")
+def create_folder(body: FolderIn, principal: dict = Depends(authorize(OBJECTS_WRITE, human=True))):
+    owner_id = _folder_owner(principal)
+    if body.parent_id is not None:
+        if repo.get_folder(body.parent_id, owner_id=owner_id) is None:
+            raise HTTPException(status_code=404, detail="parent folder not found")
+        if _folder_depth(body.parent_id, owner_id) >= MAX_FOLDER_DEPTH:
+            raise HTTPException(status_code=409, detail="folder depth limit reached")
+    if repo.folder_name_exists(owner_id=owner_id, parent_id=body.parent_id, name=body.name):
+        raise HTTPException(status_code=409, detail="folder name already exists")
+    fid = repo.create_folder(owner_id, body.name, body.parent_id)
+    audit_event("folder.create", principal["id"], "success", {"folder_id": fid})
+    return _folder_public(repo.get_folder(fid, owner_id=owner_id))
+
+
+@app.patch("/api/v1/folders/{fid}")
+def update_folder(
+    fid: str, body: FolderPatchIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
+):
+    owner_id = _folder_owner(principal)
+    row = repo.get_folder(fid, owner_id=owner_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="folder not found")
+    fields = body.model_fields_set
+    if not fields:
+        raise HTTPException(status_code=422, detail="no fields to update")
+    if "name" in fields and body.name is None:
+        raise HTTPException(status_code=422, detail="name cannot be null")
+    new_name = body.name if "name" in fields else row["name"]
+    new_parent = body.parent_id if "parent_id" in fields else row["parent_id"]
+
+    if "parent_id" in fields and new_parent is not None:
+        if new_parent == fid:
+            raise HTTPException(status_code=409, detail="folder cannot be its own parent")
+        # Walk up from the prospective parent: reaching `fid` would create a cycle.
+        current: str | None = new_parent
+        depth = 0
+        while current is not None:
+            if current == fid:
+                raise HTTPException(
+                    status_code=409, detail="cannot move a folder into its own subtree"
+                )
+            depth += 1
+            if depth > MAX_FOLDER_DEPTH:
+                raise HTTPException(status_code=409, detail="folder depth limit reached")
+            parent_row = repo.get_folder(current, owner_id=owner_id)
+            if parent_row is None:
+                raise HTTPException(status_code=404, detail="parent folder not found")
+            current = parent_row["parent_id"]
+        # Moving the whole subtree here must not push any descendant past the cap.
+        if depth + _folder_subtree_height(fid, owner_id) > MAX_FOLDER_DEPTH:
+            raise HTTPException(status_code=409, detail="folder depth limit reached")
+
+    if (new_name != row["name"] or new_parent != row["parent_id"]) and (
+        repo.folder_name_exists(
+            owner_id=owner_id, parent_id=new_parent, name=new_name, exclude_id=fid
+        )
+    ):
+        raise HTTPException(status_code=409, detail="folder name already exists")
+
+    if "name" in fields and new_name != row["name"]:
+        repo.rename_folder(fid, owner_id=owner_id, name=new_name)
+    if "parent_id" in fields and new_parent != row["parent_id"]:
+        repo.set_folder_parent(fid, owner_id=owner_id, parent_id=new_parent)
+    audit_event("folder.update", principal["id"], "success", {"folder_id": fid})
+    return _folder_public(repo.get_folder(fid, owner_id=owner_id))
+
+
+@app.delete("/api/v1/folders/{fid}")
+def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, human=True))):
+    owner_id = _folder_owner(principal)
+    if repo.get_folder(fid, owner_id=owner_id) is None:
+        raise HTTPException(status_code=404, detail="folder not found")
+    if repo.folder_child_count(fid, owner_id=owner_id) > 0:
+        raise HTTPException(status_code=409, detail="folder is not empty")
+    if repo.folder_object_count(fid, owner_id=owner_id) > 0:
+        raise HTTPException(status_code=409, detail="folder is not empty")
+    repo.delete_folder(fid, owner_id=owner_id)
+    audit_event("folder.delete", principal["id"], "success", {"folder_id": fid})
+    return {"id": fid, "status": "deleted"}
 
 
 # ---------------------------------------------------------------------------

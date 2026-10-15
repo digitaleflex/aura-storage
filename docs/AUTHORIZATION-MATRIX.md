@@ -57,6 +57,11 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |
 | POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin |
+| GET | `/api/v1/folders` | `objects:read` | **human only**; owner-scoped, root or `?parent_id=` |
+| POST | `/api/v1/folders` | `objects:write` | **human only**; logical folder, no host directory |
+| GET | `/api/v1/folders/{fid}` | `objects:read` | **human only**; 404 outside the owner's tree |
+| PATCH | `/api/v1/folders/{fid}` | `objects:write` | **human only**; rename/move, cycle-refused |
+| DELETE | `/api/v1/folders/{fid}` | `objects:delete` | **human only**; refuses a non-empty folder |
 | POST | `/api/v1/admin/reconcile` | `admin:write` | global sweep of stale intents |
 | GET | `/api/v1/admin/stats` | `admin:read` | aggregate counts, no content |
 | POST/GET | `/api/v1/admin/applications` | `admin:write` / `admin:read` | platform registry |
@@ -84,6 +89,14 @@ never counts as closed — it would let an auth-less route pass if its body were
   naming rules on creation; an invalid name is refused (422) so no space can point at
   a bucket S3 would reject.
 - Tenant/application/space identifiers received in a request never grant access.
+- **Folders** (`#61`) are logical catalogue rows, not host directories. They are
+  **owned by a human user** (`folders.owner_id → users.id`, NOT NULL) and every folder
+  route additionally requires a human principal, so a service identity never manages
+  them. Listing, reading, moving or deleting a folder filters by the caller's
+  `owner_id`; a folder owned by someone else is a 404, never a 403 (no existence leak).
+  A move that would place a folder inside its own subtree is refused (409), and a
+  folder that still has children or objects cannot be deleted (409). Space-scoped
+  folders for service identities are a follow-up tied to `#35`.
 - 401 (not authenticated) and 403 (not permitted) never reveal whether an object
   exists; cross-scope reads return 404.
 

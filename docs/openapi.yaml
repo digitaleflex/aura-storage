@@ -147,6 +147,75 @@ paths:
         "200": { description: Object purged }
         "403": { description: Not authorised }
         "404": { description: Object not found or not visible }
+  /api/v1/folders:
+    get:
+      summary: List folders owned by the caller (objects:read, human only)
+      parameters:
+        - in: query
+          name: parent_id
+          schema: { type: string }
+          description: Return the children of this folder; omitted = root level
+      responses:
+        "200": { description: Folders directly under the requested parent }
+        "401": { description: Authentication required }
+        "403": { description: Access denied }
+        "404": { description: Parent folder not found or not visible }
+    post:
+      summary: Create a logical folder (objects:write, human only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 255, description: Flat label; no path separators or control characters }
+                parent_id: { type: string, nullable: true, description: Existing folder owned by the caller; omitted/null = root }
+      responses:
+        "200": { description: Folder created }
+        "401": { description: Authentication required }
+        "403": { description: Access denied }
+        "404": { description: Parent folder not found or not visible }
+        "409": { description: Duplicate name at this level, or depth limit reached }
+        "422": { description: Invalid folder name }
+  /api/v1/folders/{fid}:
+    get:
+      summary: Get folder metadata (objects:read, human only)
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      responses:
+        "200": { description: Folder metadata }
+        "404": { description: Folder not found or not visible }
+    patch:
+      summary: Rename or move a folder (objects:write, human only)
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              description: At least one of name/parent_id; parent_id null moves the folder to the root
+              properties:
+                name: { type: string, minLength: 1, maxLength: 255, nullable: true }
+                parent_id: { type: string, nullable: true }
+      responses:
+        "200": { description: Folder updated }
+        "404": { description: Folder or target parent not found or not visible }
+        "409": { description: Duplicate name, cycle, or depth limit reached }
+        "422": { description: No fields supplied, or invalid name }
+    delete:
+      summary: Delete an empty folder (objects:delete, human only)
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      responses:
+        "200": { description: Folder deleted }
+        "404": { description: Folder not found or not visible }
+        "409": { description: Folder is not empty }
   /api/v1/admin/reconcile:
     post:
       summary: Expire stale pending uploads (admin:write)
@@ -263,6 +332,11 @@ components:
     IdentityId:
       in: path
       name: iid
+      required: true
+      schema: { type: string }
+    FolderId:
+      in: path
+      name: fid
       required: true
       schema: { type: string }
   securitySchemes:
