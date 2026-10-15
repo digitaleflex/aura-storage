@@ -5,13 +5,13 @@ and S3 through short-lived presigned URLs. The API never stores a browser sessio
 token in the response body and never puts S3 credentials in the frontend.
 """
 import time
-import uuid
+from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, netinfo
+from . import authz, ids, netinfo
 from .audit import audit_event
 from .auth import hash_password, new_token, verify_password
 from .authz import (
@@ -109,6 +109,32 @@ def _as_dict(row) -> dict:
     return dict(row) if not isinstance(row, dict) else row
 
 
+def _canonical_id(value: str, field: str) -> str:
+    """Return ``value`` as a canonical UUID v4, or raise 422.
+
+    Identifiers AURA issues are always canonical UUID v4 (``api/ids.py``), so a
+    request carrying anything else is a client error, not a lookup miss.
+    """
+    canonical = ids.canonical(value)
+    if canonical is None:
+        raise HTTPException(status_code=422, detail=f"invalid {field}")
+    return canonical
+
+
+def _canonical_uuid(value: str) -> str:
+    """Pydantic validator helper: canonicalize or fail with 422."""
+    canonical = ids.canonical(value)
+    if canonical is None:
+        raise ValueError("must be a canonical UUID v4")
+    return canonical
+
+
+# Canonical identifier type for request bodies. Accepts the alternate spellings
+# ``uuid.UUID`` understands (case, braces, ``urn:``) and normalizes them, but
+# rejects anything that is not a UUID v4.
+Uuid4 = Annotated[str, AfterValidator(_canonical_uuid)]
+
+
 def _object_scope(principal: dict) -> dict:
     """Catalogue filter for the caller: space always, owner for human users."""
     return {
@@ -158,7 +184,7 @@ class UploadIntentIn(BaseModel):
     # Content-Length so an uploader cannot exceed it (#40); the API refuses a
     # declared size above the configured object cap before presigning.
     size_bytes: int = Field(ge=1)
-    folder_id: str | None = None
+    folder_id: Uuid4 | None = None
 
     @field_validator("size_bytes")
     @classmethod
@@ -175,7 +201,7 @@ class ApplicationIn(BaseModel):
 
 class SpaceIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    application_id: str = Field(min_length=1, max_length=64)
+    application_id: Uuid4
     name: str = Field(min_length=1, max_length=63)
     environment: str = Field(min_length=1, max_length=32)
     default_bucket: str | None = Field(default=None, max_length=63)
@@ -183,7 +209,7 @@ class SpaceIn(BaseModel):
 
 class IdentityIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    space_id: str = Field(min_length=1, max_length=64)
+    space_id: Uuid4
     name: str = Field(min_length=1, max_length=63)
     scopes: list[str] = Field(default_factory=list)
     ttl_seconds: int | None = Field(default=None, ge=1)
@@ -193,7 +219,7 @@ class FolderIn(BaseModel):
     # Logical folder creation (#61). `parent_id` is omitted/null for a root folder.
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=255)
-    parent_id: str | None = None
+    parent_id: Uuid4 | None = None
 
     @field_validator("name")
     @classmethod
@@ -206,7 +232,7 @@ class FolderPatchIn(BaseModel):
     # null (which moves the folder back to the root level).
     model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    parent_id: str | None = None
+    parent_id: Uuid4 | None = None
 
     @field_validator("name")
     @classmethod
@@ -303,7 +329,7 @@ def upload_intent(body: UploadIntentIn, principal: dict = Depends(authorize(OBJE
             raise HTTPException(status_code=403, detail="forbidden")
 
     owner_id = principal["id"] if principal["kind"] == "user" else None
-    key = f"aura/{space_id}/{principal['id']}/{uuid.uuid4()}"
+    key = f"aura/{space_id}/{principal['id']}/{ids.new_id()}"
     intent_expires_at = int(time.time()) + settings.intent_ttl
     oid = repo.create_pending_object(
         space_id=space_id, application_id=principal["application_id"],
@@ -327,6 +353,7 @@ def upload_intent(body: UploadIntentIn, principal: dict = Depends(authorize(OBJE
 
 @app.post("/api/v1/objects/{oid}/commit")
 def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
+    oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")
@@ -401,6 +428,7 @@ def list_objects(
 
 @app.get("/api/v1/objects/{oid}")
 def get_object(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")
@@ -413,6 +441,7 @@ def get_object(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
 
 @app.delete("/api/v1/objects/{oid}")
 def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
+    oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")
@@ -427,6 +456,7 @@ def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DEL
 @app.post("/api/v1/objects/{oid}/purge")
 def purge(oid: str, principal: dict = Depends(authorize(OBJECTS_PURGE))):
     # Destructive: requires objects:purge (operator/admin), not merely a session.
+    oid = _canonical_id(oid, "object id")
     if not purge_object(repo, s3ops, oid, **_object_scope(principal)):
         raise HTTPException(status_code=404, detail="object not found")
     audit_event("purge", principal["id"], "success", {"object_id": oid})
@@ -435,6 +465,7 @@ def purge(oid: str, principal: dict = Depends(authorize(OBJECTS_PURGE))):
 
 @app.post("/api/v1/objects/{oid}/download-intent")
 def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")
@@ -493,14 +524,17 @@ def list_folders(
     principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
 ):
     owner_id = _folder_owner(principal)
-    if parent_id is not None and repo.get_folder(parent_id, owner_id=owner_id) is None:
-        raise HTTPException(status_code=404, detail="folder not found")
+    if parent_id is not None:
+        parent_id = _canonical_id(parent_id, "parent id")
+        if repo.get_folder(parent_id, owner_id=owner_id) is None:
+            raise HTTPException(status_code=404, detail="folder not found")
     rows = repo.list_folders(owner_id=owner_id, parent_id=parent_id)
     return {"items": [_folder_public(r) for r in rows]}
 
 
 @app.get("/api/v1/folders/{fid}")
 def get_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_READ, human=True))):
+    fid = _canonical_id(fid, "folder id")
     row = repo.get_folder(fid, owner_id=_folder_owner(principal))
     if row is None:
         raise HTTPException(status_code=404, detail="folder not found")
@@ -527,6 +561,7 @@ def update_folder(
     fid: str, body: FolderPatchIn,
     principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
 ):
+    fid = _canonical_id(fid, "folder id")
     owner_id = _folder_owner(principal)
     row = repo.get_folder(fid, owner_id=owner_id)
     if row is None:
@@ -578,6 +613,7 @@ def update_folder(
 
 @app.delete("/api/v1/folders/{fid}")
 def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, human=True))):
+    fid = _canonical_id(fid, "folder id")
     owner_id = _folder_owner(principal)
     if repo.get_folder(fid, owner_id=owner_id) is None:
         raise HTTPException(status_code=404, detail="folder not found")
@@ -684,6 +720,8 @@ def create_identity(body: IdentityIn, principal: dict = Depends(authorize(ADMIN_
 @app.get("/api/v1/admin/identities")
 def list_identities(space_id: str | None = None,
                     principal: dict = Depends(authorize(ADMIN_READ))):
+    if space_id is not None:
+        space_id = _canonical_id(space_id, "space id")
     items = []
     for i in repo.list_identities(space_id):
         items.append({
@@ -699,6 +737,7 @@ def list_identities(space_id: str | None = None,
 
 @app.post("/api/v1/admin/identities/{iid}/rotate")
 def rotate_identity(iid: str, principal: dict = Depends(authorize(ADMIN_WRITE))):
+    iid = _canonical_id(iid, "identity id")
     row = repo.get_identity(iid)
     if row is None or row.get("revoked_at"):
         raise HTTPException(status_code=404, detail="identity not found")
@@ -710,6 +749,7 @@ def rotate_identity(iid: str, principal: dict = Depends(authorize(ADMIN_WRITE)))
 
 @app.post("/api/v1/admin/identities/{iid}/revoke")
 def revoke_identity(iid: str, principal: dict = Depends(authorize(ADMIN_WRITE))):
+    iid = _canonical_id(iid, "identity id")
     row = repo.get_identity(iid)
     if row is None:
         raise HTTPException(status_code=404, detail="identity not found")

@@ -1,13 +1,14 @@
 """SQLite catalogue behind a small Repository interface (#18; PostgreSQL in #19)."""
 import sqlite3
 import time
-import uuid
 from pathlib import Path
 from typing import Optional
 
+from . import ids
 from .migrations import (
-    DEFAULT_APPLICATION_ID,
-    DEFAULT_SPACE_ID,
+    DEFAULT_APPLICATION_NAME,
+    DEFAULT_ENVIRONMENT,
+    DEFAULT_SPACE_NAME,
     apply_migrations,
 )
 
@@ -33,7 +34,7 @@ class Repository:
         return int(time.time())
 
     def new_id(self) -> str:
-        return str(uuid.uuid4())
+        return ids.new_id()
 
     # -- users ------------------------------------------------------------
     def get_user_by_name(self, username: str) -> Optional[sqlite3.Row]:
@@ -49,26 +50,55 @@ class Repository:
         space_id: Optional[str] = None, application_id: Optional[str] = None,
     ) -> str:
         uid = self.new_id()
+        application_id, space_id = self.default_scope(application_id, space_id)
         self.conn.execute(
             "INSERT INTO users (id, username, pass_hash, created_at, role, "
             "application_id, space_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (uid, username, pass_hash, self.now(), role,
-             application_id or DEFAULT_APPLICATION_ID, space_id or DEFAULT_SPACE_ID),
+            (uid, username, pass_hash, self.now(), role, application_id, space_id),
         )
         self.conn.commit()
         return uid
 
     def ensure_admin(self, uid: str) -> None:
+        application_id, space_id = self.default_scope()
         self.conn.execute("UPDATE users SET role = 'admin' WHERE id = ?", (uid,))
         self.conn.execute(
             "UPDATE users SET application_id = ? WHERE id = ? AND application_id IS NULL",
-            (DEFAULT_APPLICATION_ID, uid),
+            (application_id, uid),
         )
         self.conn.execute(
             "UPDATE users SET space_id = ? WHERE id = ? AND space_id IS NULL",
-            (DEFAULT_SPACE_ID, uid),
+            (space_id, uid),
         )
         self.conn.commit()
+
+    # -- default tenant ---------------------------------------------------
+    def get_default_space(self, application_id: str) -> Optional[dict]:
+        """The seeded default space of ``application_id`` (name + environment)."""
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM spaces WHERE application_id = ? AND name = ? "
+            "AND environment = ? ORDER BY created_at LIMIT 1",
+            (application_id, DEFAULT_SPACE_NAME, DEFAULT_ENVIRONMENT),
+        ).fetchone())
+
+    def default_scope(
+        self,
+        application_id: Optional[str] = None,
+        space_id: Optional[str] = None,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Resolve the seeded default application/space ids for a new row.
+
+        Ids are generated UUID v4 values, not constants, so they are looked up by
+        the seed names (``aura`` / ``default`` / ``prod``) and only used to fill a
+        missing argument. Either element stays ``None`` if the seed row is absent.
+        """
+        if not application_id:
+            application = self.get_application_by_name(DEFAULT_APPLICATION_NAME)
+            application_id = application["id"] if application else None
+        if not space_id and application_id:
+            space = self.get_default_space(application_id)
+            space_id = space["id"] if space else None
+        return application_id, space_id
 
     # -- sessions ---------------------------------------------------------
     def create_session(self, user_id: str, csrf: str, expires_at: int) -> str:

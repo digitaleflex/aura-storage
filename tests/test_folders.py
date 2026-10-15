@@ -24,9 +24,14 @@ from fastapi.testclient import TestClient  # noqa: E402
 import api.main as main  # noqa: E402
 from api import authz  # noqa: E402
 from api.auth import hash_password  # noqa: E402
-from api.migrations import DEFAULT_SPACE_ID  # noqa: E402
 
 client = TestClient(main.app)
+
+
+def _default_space_id():
+    # The default space id is a generated UUID v4, not a constant, so resolve it
+    # from the seeded catalogue (see api/migrations.py).
+    return main.repo.default_scope()[1]
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +63,7 @@ def _ordinary_user():
     name = f"user-{uuid.uuid4().hex[:8]}"
     password = "user-password-123"
     main.repo.create_user(name, hash_password(password), role="user",
-                          space_id=DEFAULT_SPACE_ID)
+                          space_id=_default_space_id())
     return name, password
 
 
@@ -243,7 +248,7 @@ def test_folders_are_owner_scoped():
 
 def test_service_identity_cannot_manage_folders():
     c, headers = _admin()
-    token = _make_identity(c, headers, DEFAULT_SPACE_ID,
+    token = _make_identity(c, headers, _default_space_id(),
                            ["objects:read", "objects:write", "objects:delete"])
     auth = {"Authorization": f"Bearer {token}"}
     assert c.get("/api/v1/folders", headers=auth).status_code == 403
@@ -294,7 +299,7 @@ def test_upload_intent_validates_folder_ownership():
                          "folder_id": str(uuid.uuid4())},
                    headers=h1).status_code == 403
     # A service identity never owns folders.
-    token = _make_identity(c, headers, DEFAULT_SPACE_ID, ["objects:write"])
+    token = _make_identity(c, headers, _default_space_id(), ["objects:write"])
     assert c.post("/api/v1/objects/upload-intents",
                   json={"display_name": "d.txt", "size_bytes": 1, "folder_id": fid},
                   headers={"Authorization": f"Bearer {token}"}).status_code == 403

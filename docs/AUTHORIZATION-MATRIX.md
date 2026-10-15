@@ -121,7 +121,9 @@ Never place a token in logs, tickets, chat, the frontend bundle, or this reposit
 
 ## Secret handling
 
-- Tokens are `aura_<uuid>_<64-hex>`; only `sha256(secret)` is stored.
+- Tokens are `aura_<uuid>_<64-hex>`, where `<uuid>` is a canonical UUID v4
+  (`docs/DATA-MODEL.md`); only `sha256(secret)` is stored. A token whose id is not a
+  canonical UUID v4 is rejected before any lookup.
 - Comparison is constant-time; unknown, revoked and expired tokens all yield 401.
 - Failed machine authentication is rate-limited per client IP (default 60/60s).
 - Failed human logins are rate-limited per client IP (default 10/60s); only
