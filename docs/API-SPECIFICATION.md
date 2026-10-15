@@ -41,6 +41,17 @@ An object is filed or unfiled with `PATCH /api/v1/objects/{id}` (`folder_id`, nu
 root). Folder routes require a human session; space-scoped folders for service
 identities remain a follow-up (#35).
 
+### Administration registry (implemented, M04)
+Applications, spaces and buckets are managed through the `admin:*` routes
+(`docs/openapi.yaml`, `docs/AUTHORIZATION-MATRIX.md`). Applications and spaces
+have a **soft** lifecycle: `PATCH` renames or activates/disables them, and
+nothing is deleted through the API. A space can only be attached to an active
+application and its `application_id` is immutable. Buckets are listed with their
+space/application attachment; an extra bucket can be registered and one made the
+default, but buckets are never deleted and no bucket payload carries an S3
+credential. Machine identities (`POST /api/v1/admin/identities`) are refused for a
+disabled space.
+
 ### Upload intents
 An upload intent is a server-side record that authorizes one upload to a server-generated object key for a bounded time. It must bind the authenticated application/tenant, expected size and checksum constraints where provided, allowed method, expiry, and lifecycle status. The client must not choose arbitrary buckets or object keys.
 
