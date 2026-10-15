@@ -587,7 +587,7 @@ select:focus-visible {
 
 .casiers-foot dt {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11.5px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: #8b96a3;
@@ -754,7 +754,7 @@ select:focus-visible {
 
 .filters-count {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 500;
   color: #ffffff;
   background: var(--signal);
@@ -777,7 +777,7 @@ select:focus-visible {
   padding: 7px 8px;
   border-bottom: 1px solid var(--line-2);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1290,7 +1290,7 @@ p .chip {
 
 .detail-list dt {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1412,7 +1412,7 @@ p .chip {
 
 .stat .label {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1429,7 +1429,7 @@ p .chip {
 .table th {
   text-align: left;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1498,7 +1498,7 @@ p .chip {
 
 .scopes-field legend {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
@@ -1671,9 +1671,13 @@ p .chip {
 
 @media (max-width: 760px) {
   .topbar-inner {
-    padding: 0 14px;
-    gap: 10px;
-    height: 52px;
+    /* The band wraps instead of hiding the vault state: it is the one status
+       a vault console must not drop, least of all on a phone. */
+    flex-wrap: wrap;
+    height: auto;
+    padding: 7px 14px 9px;
+    gap: 8px;
+    row-gap: 4px;
   }
 
   .nav a,
@@ -1691,7 +1695,7 @@ p .chip {
   }
 
   .session .whoami {
-    display: none;
+    font-size: 10.5px;
   }
 
   .content {
