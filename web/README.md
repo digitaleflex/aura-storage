@@ -10,6 +10,12 @@ minimal house CSS (no Tailwind), Playwright for e2e.
   HttpOnly `aura_session` cookie, CSRF token kept in memory only and sent as
   `x-csrf-token` on mutations.
 - Protected `/` route (object list + upload), public `/login` route.
+- Read-only administration console at `/admin` (roles `operator`/`admin`):
+  dashboard counters (`/api/v1/admin/stats`) and registries for applications,
+  spaces and machine-to-machine identities. The nav entry and the route are
+  hidden/refused for a plain `user`; the API stays authoritative. No token is
+  ever shown here — identity tokens are only displayable once, at creation or
+  rotation (mutations are a later increment).
 - Typed API client (`src/lib/api.ts`): list objects, upload intent → PUT to
   the short-lived URL → commit, download intent → open short-lived GET URL.
 - The UI never shows fake data as real: empty catalogue renders an explicit
@@ -35,10 +41,15 @@ npm run build    # tsc --noEmit + vite build -> web/dist/
 npm run preview  # serves web/dist on 127.0.0.1:5173
 ```
 
-## E2E smoke (login KO rejected)
+## E2E smoke
 
 Needs two local servers. The API runs with an in-memory catalogue and dummy
 S3 credentials; a rejected login never contacts S3.
+
+`e2e/login.spec.ts` checks that a wrong password is rejected.
+`e2e/admin.spec.ts` checks that `/admin` requires auth and that an
+`admin` login reaches the read-only console (using the local admin password
+below).
 
 ```bash
 # Terminal 1 — API (from repo root; values are throwaway local-only secrets)

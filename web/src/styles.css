@@ -365,6 +365,43 @@ input:focus-visible {
   font-size: 14px;
 }
 
+/* Admin console: read-only. Stat cards on a grid, then registry tables. */
+.section {
+  margin-top: 28px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 12px 0 4px;
+}
+
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.stat .value {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat .label {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* Chips used inline (e.g. object statuses) need breathing room. */
+p .chip {
+  margin-right: 6px;
+}
+
 /* Login: centered narrow card on paper; vault mark above the title. */
 .login-wrap {
   min-height: 100vh;

@@ -1,10 +1,14 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useAuth } from "../lib/auth";
+import { useAuth, useSession } from "../lib/auth";
+import { hasAdminAccess } from "../lib/api";
 import { VaultMark } from "./VaultMark";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { csrf, logout } = useAuth();
+  const session = useSession();
   const navigate = useNavigate();
+
+  const canAdmin = hasAdminAccess(session.data?.role);
 
   async function handleLogout() {
     await logout();
@@ -22,6 +26,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <Link to="/" activeOptions={{ exact: true }}>
             Fichiers
           </Link>
+          {canAdmin ? <Link to="/admin">Administration</Link> : null}
         </nav>
         <span className="spacer" />
         {csrf ? (
