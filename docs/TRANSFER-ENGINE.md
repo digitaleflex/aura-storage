@@ -63,6 +63,7 @@ authorization or validation error.
 | Block accidental double submit | submit disabled while active; stable `Idempotency-Key` per submission dedupes at the API |
 | Cancel only when the backend supports it | `POST /api/v1/objects/{oid}/abort` exists, so the UI offers cancel and calls it; no fake client-only cancel |
 | Controlled retries with backoff + jitter | `backoffDelay` (equal jitter, exponential, capped) for network/5xx; expired URLs get a fresh intent (bounded) |
+| Adaptive parallelism + paced starts | the queue shrinks its effective parallelism after repeated congestion failures (network/5xx/expired, never fatal/cancelled) and restores it after sustained success; parallel PUT starts are staggered (`QueueOptions.startStaggerMs`). JDownLoader-inspired, adapted from chunks to whole files |
 | Distinguish upload / validation / availability / failure | the five phases above |
 | Handle expired URLs and network errors | 403 → new intent; network/5xx → retry; both bounded |
 | Clean local state after failure | `failed`/`cancelled` states; a new submit mints a new idempotency key |
@@ -186,7 +187,7 @@ against a real endpoint. It is **not** run in CI and was **not** run here.
 | Content-type policy + normalization | `test_content_type_…` (3 tests) | offline, pure |
 | Idempotent double submit | `test_same_idempotency_key_…`, `…scoped_to_the_actor`, `…invalid_…` | offline, simulated S3 |
 | Audit log has no presigned URL/key | `test_audit_log_never_records_presigned_urls` | offline, simulated S3 |
-| Frontend state machine (success, retry, expiry, cancel, never-fake-success) | `web/e2e/transfer-engine.spec.ts` (12) | executed, no browser |
+| Frontend state machine (success, retry, expiry, cancel, never-fake-success, adaptive parallelism, paced starts) | `web/e2e/transfer-engine.spec.ts` (22) | executed, no browser |
 | Frontend page (progress/phase, double-submit guard, error surfacing, expired-URL recovery, cancel) | `web/e2e/upload-flow.spec.ts` (5) | executed, mocked network + real Chromium |
 | **PostgreSQL catalogue parity** (incl. new columns) | `tests/test_pg_parity.py` | **NOT run here** — needs `AURA_TEST_PG_DSN` |
 | **Live SeaweedFS** round trip + presigned expiry | `tests/test_api.py::test_live_round_trip_with_integrity` | **NOT run here** — needs `AURA_LIVE_S3=1` |
