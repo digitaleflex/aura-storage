@@ -134,7 +134,7 @@ async function login(page: Page): Promise<void> {
 }
 
 async function chooseFile(page: Page, name = "rapport.pdf"): Promise<void> {
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.getByTestId('files-input').setInputFiles({
     name,
     mimeType: "application/pdf",
     buffer: Buffer.from("hello world"),

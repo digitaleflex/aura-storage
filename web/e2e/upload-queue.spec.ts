@@ -84,7 +84,7 @@ test("queues several files, isolates one failure and retries only it", async ({ 
   await installMocks(page, state);
   await login(page);
 
-  await page.locator('input[type="file"]').setInputFiles([
+  await page.getByTestId('files-input').setInputFiles([
     { name: "alpha.pdf", mimeType: "application/pdf", buffer: Buffer.from("aaaa") },
     { name: "bad.pdf", mimeType: "application/pdf", buffer: Buffer.from("bbbb") },
     { name: "gamma.pdf", mimeType: "application/pdf", buffer: Buffer.from("cccc") },

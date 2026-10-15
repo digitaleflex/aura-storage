@@ -351,28 +351,40 @@ function queueItemId(): string {
   return `q-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+export interface QueueInput {
+  file: File;
+  /** Target catalogue folder for this file (defaults to `options.folderId`). */
+  folderId?: string | null;
+}
+
 export function startUploadQueue(
-  files: File[],
+  entries: Array<File | QueueInput>,
   deps: TransferDeps,
   options: QueueOptions,
 ): UploadQueue {
   const concurrency = Math.max(1, options.concurrency ?? DEFAULT_QUEUE_CONCURRENCY);
+  const defaultFolder = options.folderId ?? null;
 
   interface Internal {
     id: string;
     file: File;
+    folderId: string | null;
     state: TransferState;
     controller: AbortController | null;
     settled: boolean;
   }
 
-  const items: Internal[] = files.map((file) => ({
-    id: queueItemId(),
-    file,
-    state: idleTransfer(file),
-    controller: null,
-    settled: false,
-  }));
+  const items: Internal[] = entries.map((entry) => {
+    const input: QueueInput = "file" in entry ? entry : { file: entry };
+    return {
+      id: queueItemId(),
+      file: input.file,
+      folderId: input.folderId !== undefined ? input.folderId : defaultFolder,
+      state: idleTransfer(input.file),
+      controller: null,
+      settled: false,
+    };
+  });
 
   let active = 0;
   let finished = false;
@@ -418,7 +430,7 @@ export function startUploadQueue(
     item.state = { ...idleTransfer(item.file), phase: "requesting-intent" };
     emit();
     runTransfer(item.file, deps, {
-      folderId: options.folderId,
+      folderId: item.folderId,
       idempotencyKey: queueItemId(),
       signal: controller.signal,
       config: options.config,
