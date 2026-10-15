@@ -5,9 +5,9 @@ and S3 through short-lived presigned URLs. The API never stores a browser sessio
 token in the response body and never puts S3 credentials in the frontend.
 """
 import time
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
@@ -143,6 +143,12 @@ def _canonical_uuid(value: str) -> str:
 # rejects anything that is not a UUID v4.
 Uuid4 = Annotated[str, AfterValidator(_canonical_uuid)]
 
+# Object list query vocabulary (M02). Literals make FastAPI return 422 for any
+# unsupported value and let the OpenAPI document describe the accepted set.
+ObjectStatus = Literal["pending", "available", "deleted", "expired", "failed"]
+ObjectSort = Literal["created_at", "display_name", "size_bytes"]
+SortOrder = Literal["asc", "desc"]
+
 
 def _object_scope(principal: dict) -> dict:
     """Catalogue filter for the caller: space always, owner for human users."""
@@ -178,6 +184,8 @@ def _folder_public(row) -> dict:
 
 def _object_public(row) -> dict:
     row = _as_dict(row)
+    # Only catalogue metadata that is safe to surface. ``bucket`` and
+    # ``object_key`` are internal storage coordinates and are never returned.
     return {
         "id": row["id"], "display_name": row["display_name"],
         "content_type": row["content_type"], "size_bytes": row["size_bytes"],
@@ -186,6 +194,7 @@ def _object_public(row) -> dict:
         "checksum_algorithm": "sha256",
         "status": row["status"],
         "folder_id": row["folder_id"],
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
 
 
@@ -534,6 +543,15 @@ def abort_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
 def list_objects(
     principal: dict = Depends(authorize(OBJECTS_READ)), limit: int = 50, offset: int = 0,
     folder_id: str | None = None,
+    q: str | None = Query(default=None, max_length=200),
+    status: ObjectStatus | None = None,
+    content_type: str | None = Query(default=None, max_length=127),
+    min_size: int | None = Query(default=None, ge=0),
+    max_size: int | None = Query(default=None, ge=0),
+    created_after: int | None = Query(default=None, ge=0),
+    created_before: int | None = Query(default=None, ge=0),
+    sort: ObjectSort = "created_at",
+    order: SortOrder = "desc",
 ):
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
@@ -543,8 +561,15 @@ def list_objects(
     folder_filter: str | None = None
     if folder_id is not None:
         folder_filter = "" if folder_id == "root" else _canonical_id(folder_id, "folder id")
+    # ``q`` is a case-insensitive display-name substring. It never touches the
+    # internal object key, and a blank value is treated as "no search".
+    needle = (q or "").strip() or None
     rows = repo.list_objects(
-        **_object_scope(principal), folder_id=folder_filter, limit=limit, offset=offset
+        **_object_scope(principal), folder_id=folder_filter, q=needle,
+        status=status, content_type=(content_type or None),
+        min_size=min_size, max_size=max_size,
+        created_after=created_after, created_before=created_before,
+        sort=sort, order=order, limit=limit, offset=offset,
     )
     return {"items": [_object_public(r) for r in rows]}
 

@@ -65,3 +65,66 @@ test("the folders tab shows the empty state rather than fake data", async ({
     page.getByText(/Aucun sous-dossier ici\.|Aucun fichier dans ce dossier\./).first(),
   ).toBeVisible();
 });
+
+test("the name filter is applied server-side (not over loaded pages)", async ({
+  page,
+}) => {
+  const objectRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = request.url();
+    if (url.includes("/api/v1/objects?")) objectRequests.push(url);
+  });
+
+  await login(page);
+
+  // The first page carries the default sort/order so the server owns ordering.
+  await expect
+    .poll(() =>
+      objectRequests.some(
+        (url) => url.includes("sort=created_at") && url.includes("order=desc"),
+      ),
+    )
+    .toBe(true);
+
+  await page.getByLabel("Rechercher").fill("rapport");
+  await expect
+    .poll(() => objectRequests.some((url) => url.includes("q=rapport")))
+    .toBe(true);
+});
+
+test("status and sort controls reach the API", async ({ page }) => {
+  const objectRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = request.url();
+    if (url.includes("/api/v1/objects?")) objectRequests.push(url);
+  });
+
+  await login(page);
+
+  await page.getByLabel("État").selectOption("available");
+  await expect
+    .poll(() => objectRequests.some((url) => url.includes("status=available")))
+    .toBe(true);
+
+  await page.getByLabel("Trier par").selectOption("display_name");
+  await page.getByLabel("Ordre").selectOption("asc");
+  await expect
+    .poll(() =>
+      objectRequests.some(
+        (url) => url.includes("sort=display_name") && url.includes("order=asc"),
+      ),
+    )
+    .toBe(true);
+});
+
+test("a search with no match shows an explicit empty state", async ({ page }) => {
+  await login(page);
+  await page.getByLabel("Rechercher").fill(`zz-no-such-file-${Date.now()}`);
+  await expect(
+    page.getByText("Aucun fichier ne correspond à ces critères."),
+  ).toBeVisible();
+  // The details panel is not opened by a search.
+  await expect(
+    page.getByRole("heading", { name: "Détails de l'objet" }),
+  ).toHaveCount(0);
+});
