@@ -342,6 +342,48 @@ input:focus-visible {
   border: 1px solid var(--line);
 }
 
+.chip-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* Transfer panel: name, size, phase and real upload progress. */
+.transfer {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--paper);
+}
+
+.transfer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.transfer-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.progress {
+  position: relative;
+  height: 8px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.progress-bar {
+  display: block;
+  height: 100%;
+  background: var(--electric);
+  transition: width 120ms linear;
+}
+
 .alert {
   border-radius: var(--radius-small);
   padding: 10px 14px;

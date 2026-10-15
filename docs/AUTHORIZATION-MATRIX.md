@@ -53,8 +53,9 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | GET | `/api/v1/objects` | `objects:read` | scoped to space (+ owner for humans); optional `folder_id` filter (`root` = unfiled) |
 | GET | `/api/v1/objects/{oid}` | `objects:read` | 404 if outside the caller's scope |
 | PATCH | `/api/v1/objects/{oid}` | `objects:write` | **human only**; file/unfile an object into an owned folder |
-| POST | `/api/v1/objects/upload-intents` | `objects:write` | server picks the object key |
+| POST | `/api/v1/objects/upload-intents` | `objects:write` | server picks the object key; server enforces type/size/empty policy; optional `Idempotency-Key` dedupes double submits |
 | POST | `/api/v1/objects/{oid}/commit` | `objects:write` | streaming SHA-256, idempotent |
+| POST | `/api/v1/objects/{oid}/abort` | `objects:write` | cancel a pending intent (best-effort delete); idempotent; refused on available/deleted |
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |
 | POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin |

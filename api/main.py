@@ -38,6 +38,15 @@ from .s3 import (
     stream_sha256,
 )
 from .store import repo
+from .transfer import (
+    ABORTED,
+    AVAILABLE,
+    DELETED,
+    EXPIRED,
+    PENDING,
+    validate_upload_policy,
+    valid_idempotency_key,
+)
 
 app = FastAPI(title="AURA Management API", version="0.2.0")
 
@@ -172,7 +181,10 @@ def _object_public(row) -> dict:
     return {
         "id": row["id"], "display_name": row["display_name"],
         "content_type": row["content_type"], "size_bytes": row["size_bytes"],
-        "checksum_sha256": row["checksum_sha256"], "status": row["status"],
+        "expected_size_bytes": row.get("expected_size_bytes"),
+        "checksum_sha256": row["checksum_sha256"],
+        "checksum_algorithm": "sha256",
+        "status": row["status"],
         "folder_id": row["folder_id"],
     }
 
@@ -192,16 +204,10 @@ class UploadIntentIn(BaseModel):
     content_type: str = Field(default="application/octet-stream", max_length=127)
     # Declared upload size. It is bound into the presigned URL as a signed
     # Content-Length so an uploader cannot exceed it (#40); the API refuses a
-    # declared size above the configured object cap before presigning.
-    size_bytes: int = Field(ge=1)
+    # declared size above the configured object cap before presigning. Zero is
+    # accepted only when empty objects are enabled for this deployment.
+    size_bytes: int = Field(ge=0)
     folder_id: Uuid4 | None = None
-
-    @field_validator("size_bytes")
-    @classmethod
-    def _within_object_cap(cls, value: int) -> int:
-        if value > settings.max_object_bytes:
-            raise ValueError("size_bytes exceeds the maximum allowed object size")
-        return value
 
 
 class ObjectPatchIn(BaseModel):
@@ -318,10 +324,32 @@ def me(principal: dict = Depends(authorize())):
 
 
 @app.post("/api/v1/objects/upload-intents")
-def upload_intent(body: UploadIntentIn, principal: dict = Depends(authorize(OBJECTS_WRITE))):
+def upload_intent(
+    body: UploadIntentIn, request: Request,
+    principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
     space_id = principal["space_id"]
     if not space_id:
         raise HTTPException(status_code=403, detail="forbidden")
+
+    # Authoritative server-side transfer policy: media type, size ceiling and
+    # empty-file rule. A malformed/blocked type or an out-of-range size is a 422
+    # before any intent row or presigned URL exists. The browser checks are UX.
+    try:
+        content_type = validate_upload_policy(
+            body.content_type, body.size_bytes,
+            max_bytes=settings.max_object_bytes,
+            allow_empty=settings.allow_empty_objects,
+            allowed_types=settings.allowed_content_types,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    idem_key = request.headers.get("idempotency-key")
+    if idem_key is not None and not valid_idempotency_key(
+        idem_key, max_length=settings.idempotency_key_max
+    ):
+        raise HTTPException(status_code=422, detail="invalid idempotency key")
 
     if body.bucket:
         if repo.get_bucket_for_space(space_id, body.bucket) is None:
@@ -334,6 +362,40 @@ def upload_intent(body: UploadIntentIn, principal: dict = Depends(authorize(OBJE
         if default_bucket is None:
             raise HTTPException(status_code=409, detail="no storage bucket configured")
         bucket = default_bucket["name"]
+
+    # Idempotent replay: an accidental double submit carrying the same
+    # Idempotency-Key returns the same pending intent with a freshly signed URL
+    # instead of creating a second object row. The key is opaque and never
+    # logged; only the replay outcome is audited.
+    if idem_key:
+        existing = repo.get_pending_by_idempotency(
+            actor_id=principal["id"], idempotency_key=idem_key, space_id=space_id
+        )
+        if existing is not None:
+            existing = _as_dict(existing)
+            expires_at = existing.get("intent_expires_at")
+            if not expires_at or int(time.time()) <= int(expires_at) + settings.intent_grace_s:
+                expected = existing.get("expected_size_bytes")
+                if expected is None or expected < 0:
+                    expected = body.size_bytes
+                url = presigned_put(
+                    s3, existing["bucket"], existing["object_key"],
+                    existing["content_type"], settings.intent_ttl, expected,
+                )
+                audit_event("upload-intent", principal["id"], "replay", {
+                    "object_id": existing["id"], "bucket": existing["bucket"],
+                })
+                return {
+                    "id": existing["id"], "status": PENDING, "method": "PUT",
+                    "upload_url": url,
+                    "headers": {"Content-Type": existing["content_type"]},
+                    "content_type": existing["content_type"],
+                    "size_bytes": expected, "expires_in": settings.intent_ttl,
+                    "expires_at": expires_at, "idempotent_replay": True,
+                }
+            # The prior intent is past its grace window: retire it so the
+            # catalogue never keeps two live intents for one key.
+            repo.set_status(existing["id"], EXPIRED)
 
     if repo.count_pending(**_object_scope(principal)) >= settings.max_pending_intents:
         raise HTTPException(status_code=429, detail="too many pending uploads")
@@ -352,20 +414,24 @@ def upload_intent(body: UploadIntentIn, principal: dict = Depends(authorize(OBJE
     oid = repo.create_pending_object(
         space_id=space_id, application_id=principal["application_id"],
         environment=principal["environment"], bucket=bucket, object_key=key,
-        display_name=body.display_name, content_type=body.content_type,
+        display_name=body.display_name, content_type=content_type,
         owner_id=owner_id, actor_id=principal["id"], actor_kind=principal["kind"],
         intent_expires_at=intent_expires_at, folder_id=body.folder_id,
+        expected_size_bytes=body.size_bytes, idempotency_key=idem_key,
     )
     url = presigned_put(
-        s3, bucket, key, body.content_type, settings.intent_ttl, body.size_bytes
+        s3, bucket, key, content_type, settings.intent_ttl, body.size_bytes
     )
     audit_event("upload-intent", principal["id"], "success", {
         "object_id": oid, "bucket": bucket, "expires_in": settings.intent_ttl,
         "size_bytes": body.size_bytes,
     })
     return {
-        "id": oid, "upload_url": url, "size_bytes": body.size_bytes,
-        "expires_in": settings.intent_ttl,
+        "id": oid, "status": PENDING, "method": "PUT", "upload_url": url,
+        "headers": {"Content-Type": content_type},
+        "content_type": content_type, "size_bytes": body.size_bytes,
+        "expires_in": settings.intent_ttl, "expires_at": intent_expires_at,
+        "idempotent_replay": False,
     }
 
 
@@ -382,6 +448,7 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
         return {
             "id": oid, "status": "available", "size_bytes": row["size_bytes"],
             "checksum_sha256": row["checksum_sha256"],
+            "checksum_algorithm": "sha256",
         }
     if row["status"] != "pending":
         raise HTTPException(status_code=409, detail="object not committable")
@@ -422,7 +489,45 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
 
     repo.mark_available(oid, size, digest)
     audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
-    return {"id": oid, "status": "available", "size_bytes": size, "checksum_sha256": digest}
+    return {
+        "id": oid, "status": "available", "size_bytes": size,
+        "checksum_sha256": digest, "checksum_algorithm": "sha256",
+    }
+
+
+@app.post("/api/v1/objects/{oid}/abort")
+def abort_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
+    """Cancel a pending upload intent and best-effort remove its partial bytes.
+
+    This is the explicit backend cancellation mechanism the UI is allowed to use
+    (``OBJECTS_WRITE``). It is idempotent: aborting an already aborted/expired
+    intent returns the same terminal state. A committed (available) object cannot
+    be aborted — that would be a delete, not a transfer cancellation — so it is
+    refused with 409. Only the caller's own space/scope is visible (404 else).
+    """
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+
+    if row["status"] in (AVAILABLE, DELETED):
+        raise HTTPException(status_code=409, detail="object not abortable")
+    if row["status"] in (ABORTED, EXPIRED):
+        # Idempotent: a repeated abort returns the existing terminal state.
+        return {"id": oid, "status": row["status"], "aborted": True}
+    if row["status"] != PENDING:
+        raise HTTPException(status_code=409, detail="object not abortable")
+
+    try:
+        s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+    except Exception:
+        # A transient storage error must not block the catalogue transition; the
+        # reconciliation sweep retries orphan cleanup after its grace period.
+        pass
+    repo.set_status(oid, ABORTED)
+    audit_event("abort", principal["id"], "success", {"object_id": oid})
+    return {"id": oid, "status": ABORTED, "aborted": True}
 
 
 @app.get("/api/v1/objects")
@@ -514,7 +619,14 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
         raise HTTPException(status_code=409, detail="object not available")
     url = presigned_get(s3, row["bucket"], row["object_key"], settings.intent_ttl)
     audit_event("download-intent", principal["id"], "success", {"object_id": oid})
-    return {"download_url": url, "expires_in": settings.intent_ttl}
+    return {
+        "id": oid, "download_url": url, "method": "GET",
+        "expires_in": settings.intent_ttl,
+        "expires_at": int(time.time()) + settings.intent_ttl,
+        "display_name": row["display_name"], "content_type": row["content_type"],
+        "size_bytes": row["size_bytes"], "checksum_sha256": row["checksum_sha256"],
+        "checksum_algorithm": "sha256",
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -53,6 +53,11 @@ ADDED_COLUMNS = {
         ("space_id", "TEXT"),
         ("environment", "TEXT"),
         ("intent_expires_at", "INTEGER"),
+        # Transfer engine (M03): declared size is kept distinct from the verified
+        # ``size_bytes`` (which stays -1 until commit), and an optional opaque
+        # client idempotency key dedupes accidental double submits.
+        ("expected_size_bytes", "INTEGER"),
+        ("idempotency_key", "TEXT"),
     ],
 }
 

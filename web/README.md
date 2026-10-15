@@ -25,6 +25,13 @@ minimal house CSS (no Tailwind), Playwright for e2e.
   PUT to the short-lived URL → commit, download intent → open short-lived GET
   URL, file/unfile an object into a folder, soft-delete, purge, and the
   administration mutations.
+- Uploads run through the M03 transfer engine (`src/lib/transfer.ts`): real XHR
+  upload progress, explicit phases (autorisation → envoi → validation →
+  disponible), bounded retries with exponential backoff + jitter, automatic
+  recovery from an expired presigned URL, an accidental-double-submit guard
+  backed by an `Idempotency-Key`, and cancellation that calls the backend
+  `abort` endpoint. Success is shown only after the backend confirms the commit.
+  See [Vault transfer engine](../docs/TRANSFER-ENGINE.md).
 - The UI never shows fake data as real: empty catalogue renders an explicit
   empty state, errors render explicit alerts.
 - No S3 keys in the code or bundle. All calls use relative paths; in dev,
@@ -59,6 +66,11 @@ login reaches the console with its write controls.
 `e2e/admin-mutations.spec.ts` creates an application, space and identity,
 asserts the token is shown once, then revokes it.
 `e2e/folders.spec.ts` creates, renames, opens and deletes a folder.
+`e2e/transfer-engine.spec.ts` unit-tests the upload state machine (retry,
+expiry, cancellation, never-fake-success); it needs no browser or servers.
+`e2e/upload-flow.spec.ts` mocks the API and the presigned endpoint to check
+progress/phase display, the double-submit guard, server-error surfacing,
+expired-URL recovery and real cancellation.
 (All use the local admin password below.)
 
 ```bash
@@ -98,5 +110,11 @@ npx playwright test
   the name filter applies to the objects already loaded, not the whole catalogue.
 - Filing an object into a folder uses `PATCH /api/v1/objects/{id}`; folders are
   human-owned, so a machine identity cannot file objects.
+- Zero-byte uploads are refused unless the API sets `AURA_ALLOW_EMPTY_OBJECTS=1`;
+  the allowed media types are enforced server-side (`AURA_ALLOWED_CONTENT_TYPES`),
+  not by the file picker.
+- Cancellation is offered only because the backend has `POST /api/v1/objects/{id}/abort`.
+  Retries are bounded (3 attempts, exponential backoff with jitter) and an expired
+  presigned URL is re-issued at most twice per transfer.
 - Production serving (static `dist/` + same-origin `/api` proxy) is a
   deployment concern and is not configured here.

@@ -93,6 +93,16 @@ paths:
   /api/v1/objects/upload-intents:
     post:
       summary: Create a short-lived upload intent (capability objects:write)
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, maxLength: 200 }
+          description: >-
+            Optional opaque key. A repeated request carrying the same key and
+            actor returns the same pending intent (idempotent_replay=true) with a
+            freshly signed URL instead of creating a second object. Refused with
+            422 if empty, over-long or containing control characters.
       requestBody:
         required: true
         content:
@@ -104,13 +114,13 @@ paths:
               properties:
                 bucket: { type: string, maxLength: 63, description: Must be registered to the caller's space; omitted = space default }
                 display_name: { type: string, minLength: 1, maxLength: 255 }
-                content_type: { type: string, maxLength: 127, default: application/octet-stream }
-                size_bytes: { type: integer, minimum: 1, description: Declared upload size; bound into the presigned URL as a signed Content-Length and capped at the configured maximum object size }
+                content_type: { type: string, maxLength: 127, default: application/octet-stream, description: Normalized server-side; refused with 422 when the deployment sets an allow-list that excludes it }
+                size_bytes: { type: integer, minimum: 0, description: "Declared upload size; bound into the presigned URL as a signed Content-Length and capped at the configured maximum object size. 0 is accepted only when empty objects are enabled." }
                 folder_id: { $ref: "#/components/schemas/Uuid4", nullable: true }
       responses:
-        "200": { description: "Upload intent with a presigned PUT URL bound to the declared Content-Length" }
+        "200": { description: "Upload intent (id, status, method, presigned upload_url, required headers, content_type, size_bytes, expiry)" }
         "403": { description: Bucket not allowed / not authorised }
-        "422": { description: Invalid request }
+        "422": { description: Invalid request, disallowed content type, or empty/size over the cap }
         "429": { description: Too many pending uploads }
   /api/v1/objects/{oid}/commit:
     post:
@@ -118,19 +128,33 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: Object available (idempotent on repeat) }
+        "200": { description: Object available with checksum_sha256 (algorithm sha256); idempotent on repeat }
         "404": { description: Object not found or not visible }
-        "409": { description: Object not committable }
+        "409": { description: Object not committable (including aborted/expired/deleted) }
         "410": { description: Upload intent expired }
         "413": { description: Object exceeds the maximum allowed size }
         "422": { description: Upload missing or size mismatch }
+  /api/v1/objects/{oid}/abort:
+    post:
+      summary: Cancel a pending upload intent (objects:write)
+      description: >-
+        Best-effort deletes the partial bytes and marks the intent aborted.
+        Idempotent for an already aborted/expired intent; a committed (available)
+        or deleted object is refused with 409. This is the only cancellation the
+        UI uses — cancellation is not offered where the backend does not support it.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Intent aborted (or already in a terminal pending state) }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not abortable }
   /api/v1/objects/{oid}:
     get:
       summary: Get object metadata
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: Object metadata }
+        "200": { description: Object metadata (size_bytes is -1 until verified; expected_size_bytes carries the declared size) }
         "404": { description: Object not found or not visible }
     patch:
       summary: File or unfile an object in a logical folder (objects:write, human only)
@@ -164,7 +188,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: Presigned GET URL }
+        "200": { description: Presigned GET URL plus display_name, content_type, size_bytes and checksum_sha256 for progress/verification display }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
   /api/v1/objects/{oid}/purge:
