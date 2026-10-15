@@ -572,6 +572,13 @@ export function ObjectsPage() {
   }
 
   const items = objectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+
+  // Real weight of what is currently loaded — shown as a rail readout, so the
+  // casiers column carries information instead of empty graphite.
+  const loadedBytes = items.reduce(
+    (sum, item) => sum + (item.size_bytes > 0 ? item.size_bytes : 0),
+    0,
+  );
   const currentName = currentFolderId ? byId.get(currentFolderId)?.name : null;
 
   const moveBlocked = moveTarget ? forbiddenTargets(moveTarget.id) : new Set<string>();
@@ -604,7 +611,7 @@ export function ObjectsPage() {
           </button>
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn"
             onClick={() => {
               setNewFolderName("");
               setNewFolderOpen(true);
@@ -673,6 +680,25 @@ export function ObjectsPage() {
 
       <aside className="casiers" aria-labelledby="folders-title">
         <h2 id="folders-title">Dossiers</h2>
+        <ul className="casier-list">
+          <li
+            className={
+              currentFolderId === null ? "casier casier-current" : "casier"
+            }
+          >
+            <button
+              type="button"
+              className="folder-open"
+              aria-current={currentFolderId === null ? "true" : undefined}
+              onClick={() => setCurrentFolderId(null)}
+            >
+              <span className="folder-icon" aria-hidden="true">
+                <FolderMark />
+              </span>
+              <span className="folder-name">Racine</span>
+            </button>
+          </li>
+        </ul>
         {treeQuery.isError ? (
           <p role="alert" className="alert alert-error">
             Dossiers indisponibles.
@@ -736,7 +762,111 @@ export function ObjectsPage() {
             ))}
           </ul>
         )}
+        <div className="casiers-foot">
+          <dl>
+            <dt>Position</dt>
+            <dd>{currentName ?? "Racine"}</dd>
+            <dt>Poids affiché</dt>
+            <dd className="num">{formatBytes(loadedBytes)}</dd>
+          </dl>
+        </div>
       </aside>
+
+      <section className="card intake" aria-labelledby="upload-title">
+        <h2 id="upload-title">Importer{currentName ? ` dans « ${currentName} »` : ""}</h2>
+        <p className="muted">
+          Le fichier est déposé, puis vérifié par empreinte SHA-256 avant d'être
+          déclaré disponible.
+        </p>
+        <form onSubmit={handleUpload} className="form form-inline">
+          <div className="field file-field">
+            <span>Fichier</span>
+            <label className="file-picker">
+              <input
+                type="file"
+                name="file"
+                className="visually-hidden"
+                disabled={transferActive}
+                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+              />
+              <span className="btn">Choisir un fichier…</span>
+              <span className="file-picker-name">
+                {file ? file.name : "Aucun fichier sélectionné"}
+              </span>
+            </label>
+          </div>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={transferActive || !file}
+          >
+            {transferActive ? "Transfert…" : "Importer et valider"}
+          </button>
+          {transferActive ? (
+            <button type="button" className="btn" onClick={handleCancelUpload}>
+              Annuler
+            </button>
+          ) : null}
+        </form>
+
+        {transfer.phase !== "idle" ? (
+          <div className="transfer" data-testid="transfer-status" aria-live="polite">
+            <div className="transfer-head">
+              <span className="transfer-name">{transfer.fileName}</span>
+              <span className="muted">{formatBytes(transfer.sizeBytes)}</span>
+              <span
+                className={
+                  transfer.phase === "available"
+                    ? "chip chip-ok"
+                    : transfer.phase === "failed"
+                      ? "chip chip-error"
+                      : transfer.phase === "cancelled"
+                        ? "chip chip-muted"
+                        : "chip chip-warn"
+                }
+              >
+                {PHASE_LABEL[transfer.phase]}
+              </span>
+            </div>
+            {transfer.phase === "uploading" ? (
+              <div
+                className="progress"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(transfer.progress * 100)}
+                aria-label="Progression du transfert"
+              >
+                <span
+                  className="progress-bar"
+                  style={{ width: `${Math.round(transfer.progress * 100)}%` }}
+                />
+              </div>
+            ) : null}
+            {transfer.attempts > 0 ? (
+              <p className="muted">
+                Tentatives : {transfer.attempts} — temporisation avec jitter.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {uploadError ? (
+          <p role="alert" className="alert alert-error">
+            {uploadError}
+          </p>
+        ) : null}
+        {transfer.phase === "available" ? (
+          <p role="status" className="alert alert-ok">
+            Import validé et vérifié par le backend.
+          </p>
+        ) : null}
+        {transfer.phase === "cancelled" ? (
+          <p role="status" className="alert">
+            Import annulé.
+          </p>
+        ) : null}
+      </section>
 
       <section className="section" aria-labelledby="objects-title">
         <div className="section-head">
@@ -1043,102 +1173,6 @@ export function ObjectsPage() {
         ) : null}
       </section>
 
-      <section className="card intake" aria-labelledby="upload-title">
-        <h2 id="upload-title">Importer{currentName ? ` dans « ${currentName} »` : ""}</h2>
-        <p className="muted">
-          Le fichier est déposé, puis vérifié par empreinte SHA-256 avant d'être
-          déclaré disponible.
-        </p>
-        <form onSubmit={handleUpload} className="form form-inline">
-          <div className="field file-field">
-            <span>Fichier</span>
-            <label className="file-picker">
-              <input
-                type="file"
-                name="file"
-                className="visually-hidden"
-                disabled={transferActive}
-                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
-              />
-              <span className="btn">Choisir un fichier…</span>
-              <span className="file-picker-name">
-                {file ? file.name : "Aucun fichier sélectionné"}
-              </span>
-            </label>
-          </div>
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={transferActive || !file}
-          >
-            {transferActive ? "Transfert…" : "Importer et valider"}
-          </button>
-          {transferActive ? (
-            <button type="button" className="btn" onClick={handleCancelUpload}>
-              Annuler
-            </button>
-          ) : null}
-        </form>
-
-        {transfer.phase !== "idle" ? (
-          <div className="transfer" data-testid="transfer-status" aria-live="polite">
-            <div className="transfer-head">
-              <span className="transfer-name">{transfer.fileName}</span>
-              <span className="muted">{formatBytes(transfer.sizeBytes)}</span>
-              <span
-                className={
-                  transfer.phase === "available"
-                    ? "chip chip-ok"
-                    : transfer.phase === "failed"
-                      ? "chip chip-error"
-                      : transfer.phase === "cancelled"
-                        ? "chip chip-muted"
-                        : "chip chip-warn"
-                }
-              >
-                {PHASE_LABEL[transfer.phase]}
-              </span>
-            </div>
-            {transfer.phase === "uploading" ? (
-              <div
-                className="progress"
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.round(transfer.progress * 100)}
-                aria-label="Progression du transfert"
-              >
-                <span
-                  className="progress-bar"
-                  style={{ width: `${Math.round(transfer.progress * 100)}%` }}
-                />
-              </div>
-            ) : null}
-            {transfer.attempts > 0 ? (
-              <p className="muted">
-                Tentatives : {transfer.attempts} — temporisation avec jitter.
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-
-        {uploadError ? (
-          <p role="alert" className="alert alert-error">
-            {uploadError}
-          </p>
-        ) : null}
-        {transfer.phase === "available" ? (
-          <p role="status" className="alert alert-ok">
-            Import validé et vérifié par le backend.
-          </p>
-        ) : null}
-        {transfer.phase === "cancelled" ? (
-          <p role="status" className="alert">
-            Import annulé.
-          </p>
-        ) : null}
-      </section>
-
       {/* Object details side panel (only fields the API actually exposes). */}
       {details ? (
         <>
@@ -1190,8 +1224,31 @@ export function ObjectsPage() {
             <dt>Modifié le</dt>
             <dd>{formatDateTime(details.updated_at)}</dd>
             <dt>Empreinte SHA-256</dt>
-            <dd className="mono">
-              {details.checksum_sha256 ? details.checksum_sha256 : "non disponible"}
+            <dd className="detail-hash">
+              {details.checksum_sha256 ? (
+                <>
+                  <code className="mono">{details.checksum_sha256}</code>
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={() => {
+                      const value = details.checksum_sha256;
+                      if (!navigator.clipboard) {
+                        setNotice("Copie impossible : contexte non sécurisé.");
+                        return;
+                      }
+                      void navigator.clipboard.writeText(value).then(
+                        () => setNotice("Empreinte SHA-256 copiée."),
+                        () => setNotice("Copie refusée par le navigateur."),
+                      );
+                    }}
+                  >
+                    Copier
+                  </button>
+                </>
+              ) : (
+                "non disponible"
+              )}
             </dd>
           </dl>
           <div className="drawer-actions">

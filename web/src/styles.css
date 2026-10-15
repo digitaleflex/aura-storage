@@ -320,6 +320,14 @@ select:focus-visible {
   color: #ffffff;
 }
 
+/* A disabled primary must read as inert, not as the brightest thing on screen. */
+.btn-primary:disabled {
+  background: var(--steel-2);
+  border-color: var(--line-2);
+  color: var(--muted);
+  opacity: 1;
+}
+
 .btn-ghost {
   border-color: transparent;
   color: var(--muted);
@@ -539,11 +547,15 @@ select:focus-visible {
 
 .vault-workspace > .casiers {
   grid-column: 1;
+  /* Span the deposit and the register so the rail cannot inflate row 2
+     and leave a hole under the deposit panel. */
+  grid-row: 2 / span 2;
 }
 
 /* The register is the light working surface. */
 .vault-workspace > .section[aria-labelledby="objects-title"] {
   grid-column: 2;
+  grid-row: 3;
   min-width: 0;
   margin-left: 16px;
   background: var(--steel-1);
@@ -552,10 +564,44 @@ select:focus-visible {
 }
 
 .casiers {
+  display: flex;
+  flex-direction: column;
   background: var(--graphite);
   border: 1px solid var(--graphite-3);
-  padding: 14px 0 18px;
+  padding: 14px 0 0;
   align-self: stretch;
+}
+
+/* The rail carries a real readout, so it is not a black column with a tail. */
+.casiers-foot {
+  margin-top: auto;
+  border-top: 1px solid var(--graphite-2);
+  padding: 12px 16px 14px;
+}
+
+.casiers-foot dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 10px;
+}
+
+.casiers-foot dt {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8b96a3;
+  align-self: center;
+}
+
+.casiers-foot dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: #dfe5eb;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .casiers h2 {
@@ -584,6 +630,20 @@ select:focus-visible {
 .casier:hover {
   background: var(--graphite-2);
   border-left-color: var(--signal);
+}
+
+/* Current location, marked the same way as an active nav bay. */
+.casier-current {
+  background: var(--graphite-2);
+  border-left-color: var(--signal);
+}
+
+.casier-current .folder-open {
+  color: #ffffff;
+}
+
+.casier-current .folder-icon {
+  color: var(--signal);
 }
 
 .casier .folder-open {
@@ -723,6 +783,11 @@ select:focus-visible {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+/* The size header must share an edge with its right-aligned values. */
+.ledger-head > :nth-child(3) {
+  text-align: right;
 }
 
 .ledger-row {
@@ -909,20 +974,24 @@ select:focus-visible {
 /* This is the structural fix — the main task used to sit below the   */
 /* fold, after a list that can be hundreds of rows long.              */
 /* ------------------------------------------------------------------ */
-.intake {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  width: min(560px, calc(100vw - 48px));
-  max-height: calc(100vh - 120px);
-  overflow-y: auto;
+/* Deposit: the anchor of the register, first thing in the working column.
+   It used to be pinned over the list, which hid rows and left the product's
+   main task looking like an orphaned toast in the corner. */
+.vault-workspace > .intake {
+  grid-column: 2;
+  grid-row: 2;
+  margin-left: 16px;
+  margin-bottom: 0;
   background: var(--steel-1);
-  border: 1px solid var(--graphite-3);
+  border: 1px solid var(--line-2);
   border-left: 3px solid var(--signal);
   border-radius: var(--radius);
   padding: 14px 16px 16px;
-  box-shadow: 0 14px 34px rgba(20, 24, 31, 0.2);
-  z-index: 45;
+}
+
+.intake .muted {
+  margin: 6px 0 0;
+  max-width: 64ch;
 }
 
 .intake h2 {
@@ -1170,6 +1239,26 @@ p .chip {
 .detail-list dd {
   margin: 3px 0 0;
   font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+/* The integrity hash is the product's central claim: show all of it. */
+.detail-hash {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.detail-hash code {
+  flex: 1 1 100%;
+  padding: 8px 10px;
+  background: var(--steel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
@@ -1479,8 +1568,12 @@ p .chip {
   }
 
   .vault-workspace > .casiers,
+  .vault-workspace > .intake,
   .vault-workspace > .section[aria-labelledby="objects-title"] {
     grid-column: 1;
+    /* Single column: the explicit rows above would make the rail span the
+       deposit and the register and paint over them. Back to DOM order. */
+    grid-row: auto;
     margin-left: 0;
   }
 
@@ -1500,6 +1593,8 @@ p .chip {
     border-left-width: 3px;
     border-radius: var(--radius-small);
     padding: 0 4px;
+    /* Two even columns: a shelf, not a ragged row of chips. */
+    flex: 1 1 45%;
   }
 
   .folder-open {
@@ -1533,7 +1628,7 @@ p .chip {
   }
 
   .content {
-    padding: 18px 14px 240px;
+    padding: 18px 14px 72px;
   }
 
   .page-head {
@@ -1604,20 +1699,8 @@ p .chip {
     font-size: 18px;
   }
 
-  .intake {
-    right: 10px;
-    bottom: 10px;
-    width: calc(100vw - 20px);
-    padding: 10px 12px 12px;
-  }
-
-  /* On a phone the panel must stay a strip, not a card that eats the list. */
-  .intake .muted {
-    display: none;
-  }
-
   .intake .form-inline {
-    margin-top: 8px;
+    margin-top: 10px;
     gap: 8px;
   }
 
