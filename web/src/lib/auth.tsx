@@ -1,5 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import { Navigate } from "@tanstack/react-router";
 import { api, ApiError } from "./api";
@@ -17,6 +25,22 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [csrf, setCsrf] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  // Server-verified session; shares the query key with RequireAuth, so this
+  // costs no extra request. The CSRF token is never persisted: it is
+  // re-hydrated from /me after a reload/new tab (csrf is memory-only).
+  const session = useSession();
+  // Last token adopted from /me. Lets us ignore stale cached session data
+  // (e.g. during the refetch that follows logout) and avoids re-arming the
+  // token after an explicit logout.
+  const hydratedToken = useRef<string | null>(null);
+
+  useEffect(() => {
+    const token = session.data?.csrf_token ?? null;
+    if (!token || token === hydratedToken.current) return;
+    hydratedToken.current = token;
+    // Only fill an empty slot so a value set by login() is never overwritten.
+    setCsrf((current) => current ?? token);
+  }, [session.data]);
 
   const login = useCallback(
     async (username: string, password: string) => {

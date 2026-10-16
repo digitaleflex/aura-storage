@@ -326,6 +326,12 @@ export interface SessionInfo {
   space_id: string | null;
   application_id: string | null;
   scopes: string[];
+  /**
+   * CSRF token for the current session (additive field of GET /api/v1/me).
+   * Present for human sessions, `null` for machine identities. Used to
+   * re-hydrate the in-memory CSRF token after a reload/new tab.
+   */
+  csrf_token: string | null;
 }
 
 /** True when a role may read the administration console (`admin:read`). */
@@ -899,9 +905,13 @@ export function putToPresignedUrl(
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let settled = false;
+    // Drop the signal listener as soon as the request settles so a long-lived
+    // queue never accumulates abort listeners on the per-file controller.
+    const detachSignal = () => options.signal?.removeEventListener("abort", onAbort);
     const fail = (err: Error) => {
       if (!settled) {
         settled = true;
+        detachSignal();
         reject(err);
       }
     };
@@ -931,6 +941,7 @@ export function putToPresignedUrl(
         options.onProgress?.(file.size, file.size);
         if (!settled) {
           settled = true;
+          detachSignal();
           resolve();
         }
         return;
