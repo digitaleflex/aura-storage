@@ -41,13 +41,24 @@ class Settings:
     # Only used when backend is 'postgres'. Never logged.
     db_dsn: str = os.environ.get("AURA_API_DSN", "")
     # Lifetimes (seconds).
-    session_ttl: int = _int("AURA_SESSION_TTL", 28800)
+    # Human session cookie lifetime: 30 days by default (2592000s), per the
+    # product decision. A longer session widens the window during which a stolen
+    # cookie stays valid; that is compensated by the HttpOnly + Secure +
+    # SameSite=Strict cookie and the CSRF double-submit enforced in api/main.py.
+    # The expiry is fixed at login (no rolling renewal), so logout or TTL expiry
+    # truly ends the session. Override via AURA_SESSION_TTL if needed.
+    session_ttl: int = _int("AURA_SESSION_TTL", 2592000)
     intent_ttl: int = _int("AURA_INTENT_TTL", 900)
     # Grace period after intent_ttl during which a commit is still accepted
     # (upload may finish just before expiry; #37).
     intent_grace_s: int = _int("AURA_INTENT_GRACE_SECONDS", 300)
     # Audit log (JSON-lines, IDs and statuses only — never secrets or URLs).
-    audit_log: str = os.environ.get("AURA_AUDIT_LOG", "aura-audit.jsonl")
+    # Absolute path on the dedicated audit volume of the Compose stack
+    # (docker-compose.yml mounts `${AURA_DATA_DIR}/audit` at /var/log/aura), so
+    # events survive container recreations instead of vanishing with the
+    # writable layer. `audit_event` creates the parent directory on first write;
+    # the /admin/health disk probe measures that directory, not the file.
+    audit_log: str = os.environ.get("AURA_AUDIT_LOG", "/var/log/aura/audit.jsonl")
     # Login rate limit (failed attempts per window, per client IP). A successful
     # login clears the counter for that client.
     login_rate_limit: int = _int("AURA_LOGIN_RATE_LIMIT", 10)

@@ -35,6 +35,11 @@
 - A valid session or CSRF token is authentication, not authorization: administrative
   and destructive actions (purge, reconcile, provisioning) require the matching role
   or scope and are refused with 403 otherwise.
+- Human sessions are long-lived by default (`AURA_SESSION_TTL` = 30 days). The wider
+  theft window is compensated by an HttpOnly, `Secure`, `SameSite=Strict` cookie and
+  the CSRF double-submit on mutations; the expiry is fixed at login (no rolling
+  renewal), so logout or expiry genuinely ends the session. Shorten the TTL where a
+  higher-value deployment warrants it.
 - Objects carry an application/space/environment boundary. Catalogue queries are
   always filtered by the caller's space, and human users are further limited to their
   own objects.
