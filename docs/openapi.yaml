@@ -247,6 +247,15 @@ paths:
         "200": { description: Presigned GET URL plus display_name, content_type, size_bytes and checksum_sha256 for progress/verification display }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
+  /api/v1/objects/{oid}/preview-intent:
+    post:
+      summary: Create a short-lived inline-preview intent (objects:read)
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Presigned GET URL bound to Content-Disposition inline and the object content type, plus display_name, content_type and size_bytes; the client falls back to a download when the type is not renderable }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not available }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)
