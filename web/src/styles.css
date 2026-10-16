@@ -1918,3 +1918,82 @@ p .chip {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Intake categories (informative, non-clickable) + drop backlog hint. */
+/* ------------------------------------------------------------------ */
+.intake-cats {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+/* Static badges: they describe what the intake accepts, they are not controls. */
+.intake-cat {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--steel-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-small);
+  padding: 2px 8px;
+  cursor: default;
+}
+
+/* Files dropped while a transfer runs are a real backlog for the next run. */
+.pending-hint {
+  margin: 10px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--signal-2);
+}
+
+.casiers-usage-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Vault S16 tokens wired into ObjectsPage.                            */
+/* Keeps the mock's accent (green primary, blue secondary, IMAGE badge, */
+/* neutral deleted pastille) while deferring to the existing .btn        */
+/* grammar for sizing/focus. Tokens themselves live in vault-tokens.css. */
+/* ------------------------------------------------------------------ */
+
+/* The `.btn:hover` steel fill would otherwise repaint the accent buttons. */
+.btn.vault-btn-primary:hover {
+  background: var(--vault-accent);
+  border-color: var(--vault-accent);
+  color: var(--vault-accent-ink);
+  filter: brightness(0.95);
+}
+
+.btn.vault-btn-blue:hover {
+  background: var(--vault-blue);
+  border-color: var(--vault-blue);
+  color: #ffffff;
+  filter: brightness(0.95);
+}
+
+/* IMAGE type as a soft badge; the grid cell stretches, so hug the text. */
+.ledger-type.vault-badge-image {
+  justify-self: start;
+  width: fit-content;
+  padding: 2px 8px;
+}
+
+/* The vault token paints a neutral grey background; scope it to the status
+   dot and keep the label itself transparent. Deletion stays grey, never the
+   activity/accent green. */
+.status.vault-dot-deleted-neutre {
+  background: none;
+}
+
+.status.vault-dot-deleted-neutre::before {
+  background: var(--vault-muted, var(--faint));
+}

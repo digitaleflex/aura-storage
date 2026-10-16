@@ -6,7 +6,13 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { ApiError, api, hasScope, putToPresignedUrl } from "../lib/api";
+import {
+  ApiError,
+  api,
+  hasAdminAccess,
+  hasScope,
+  putToPresignedUrl,
+} from "../lib/api";
 import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
 import type {
@@ -70,6 +76,16 @@ const SORT_OPTIONS: {
   { value: "created_at", label: "Date" },
   { value: "display_name", label: "Nom" },
   { value: "size_bytes", label: "Taille" },
+];
+
+/** Accepted import categories, shown as informative (non-clickable) badges. */
+const IMPORT_CATEGORIES = [
+  "Documents",
+  "Images",
+  "Vidéos",
+  "Audio",
+  "Archives",
+  "Autres",
 ];
 
 /** Common media types offered as suggestions; the field stays free text. */
@@ -167,8 +183,19 @@ function StatusLabel({ status }: { status: string }) {
         ? "status status-warn"
         : status === "failed"
           ? "status status-error"
-          : "status";
+          : status === "deleted"
+            ? // Vault token: the deleted pastille stays neutral grey (never the
+              // mock's green, so deletion never borrows the activity colour).
+              "status vault-dot-deleted-neutre"
+            : "status";
   return <span className={variant}>{STATUS_LABELS[status] ?? status}</span>;
+}
+
+/** Server-side soft delete accepts only `available` or `pending` rows; anything
+ * else is refused with 409. The bulk selection and the per-row "Supprimer"
+ * action share this predicate so they never diverge. */
+function isDeletable(item: ObjectItem): boolean {
+  return item.status === "available" || item.status === "pending";
 }
 
 /** The whole folder tree is fetched in one request (`?all=true`); the hierarchy
@@ -187,6 +214,12 @@ export function ObjectsPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // A refused (409, non-empty) folder deletion is actionable: keep the target
+  // so the user can empty it and retry, instead of losing the failure.
+  const [folderDeleteError, setFolderDeleteError] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   function dismissToast(id: number) {
@@ -287,6 +320,15 @@ export function ObjectsPage() {
   }
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
+
+  // Storage usage is only ever the real admin figure (`GET /admin/usage`,
+  // `admin:read`): no fabricated capacity is displayed for anyone else.
+  const usageQuery = useQuery({
+    queryKey: ["admin", "usage"],
+    queryFn: () => api.adminUsage(),
+    enabled: hasAdminAccess(session.data?.role),
+    retry: false,
+  });
 
   /** True while any file of the queue is transferring (blocks double submit). */
   const transferActive = queue.active > 0;
@@ -448,17 +490,30 @@ export function ObjectsPage() {
     onError: (err) => reportError(err, "Déplacement de l'objet impossible."),
   });
 
+  // Folder delete is confirmed against the server: a non-empty folder (409) is
+  // surfaced as an actionable refusal (friendly FR + retry), never a fake success.
   const deleteFolderMutation = useMutation({
-    mutationFn: (id: string) => {
+    mutationFn: (input: { id: string; name: string }) => {
       if (!csrf) throw new Error("Session expirée.");
-      return api.deleteFolder(id, csrf);
+      return api.deleteFolder(input.id, csrf);
     },
-    onSuccess: (_data, id) => {
-      if (currentFolderId === id) setCurrentFolderId(null);
+    onSuccess: (_data, input) => {
+      if (currentFolderId === input.id) setCurrentFolderId(null);
+      setFolderDeleteError(null);
       setNotice("Dossier supprimé.");
       invalidateLibrary();
     },
-    onError: (err) => reportError(err, "Suppression du dossier impossible."),
+    onError: (err, input) => {
+      setNotice(null);
+      if (err instanceof ApiError && err.status === 409) {
+        // The server refuses a folder that still holds files or subfolders.
+        setActionError(null);
+        setFolderDeleteError({ id: input.id, name: input.name });
+        return;
+      }
+      setFolderDeleteError(null);
+      reportError(err, "Suppression du dossier impossible.");
+    },
   });
 
   // Delete is confirmed against the server: the row is only refreshed (never
@@ -558,7 +613,6 @@ export function ObjectsPage() {
     } else {
       setUploadError(null);
     }
-    setPendingFiles([]);
   }
 
   function handleUpload(event: FormEvent) {
@@ -570,7 +624,11 @@ export function ObjectsPage() {
       return;
     }
     if (transferActive) {
-      // Block an accidental second submission while files are in flight.
+      // A submit can still reach here (e.g. Enter in the form) even though the
+      // button is disabled: say why instead of returning silently.
+      setUploadError(
+        "Un transfert est déjà en cours : attendez sa fin ou annulez-le avant de relancer l'import.",
+      );
       return;
     }
     if (!csrf) {
@@ -582,6 +640,9 @@ export function ObjectsPage() {
       onUpdate: handleQueueUpdate,
     });
     queueRef.current = uploadQueue;
+    // The queue now owns the submitted files: clear them so anything dropped
+    // during the transfer stays visible as a real backlog for the next run.
+    setPendingFiles([]);
   }
 
   /** Directory import (#64): recreate the missing folders, then upload in place. */
@@ -701,50 +762,95 @@ export function ObjectsPage() {
   // Drop visual state (P0.3): a counter avoids flicker when crossing children.
   const [dragDepth, setDragDepth] = useState(0);
 
-  /** Walk dropped entries: files keep their folder-relative path (P0.2). */
-  async function collectDroppedEntries(
-    items: DataTransferItemList,
-  ): Promise<{ file: File; rel: string }[]> {
+  /** Walk dropped entries: files keep their folder-relative path (P0.2).
+   * Empty (0 o) files and empty folders are skipped, but counted, so the caller
+   * can tell the two cases apart instead of showing one vague message. */
+  async function collectDroppedEntries(items: DataTransferItemList): Promise<{
+    entries: { file: File; rel: string }[];
+    emptyFiles: number;
+    emptyFolders: number;
+  }> {
     const out: { file: File; rel: string }[] = [];
+    let emptyFiles = 0;
+    let emptyFolders = 0;
     const readBatch = (reader: FileSystemDirectoryReader) =>
       new Promise<FileSystemEntry[]>((resolve) => reader.readEntries(resolve));
-    const walk = async (entry: FileSystemEntry, base: string): Promise<void> => {
+    // Returns how many importable files this entry's subtree contributed.
+    const walk = async (entry: FileSystemEntry, base: string): Promise<number> => {
       if (entry.isFile) {
         const file = await new Promise<File | null>((resolve) =>
           (entry as FileSystemFileEntry).file(resolve, () => resolve(null)),
         );
-        if (file && file.size > 0) out.push({ file, rel: `${base}${entry.name}` });
-      } else if (entry.isDirectory) {
+        if (!file) return 0;
+        if (file.size === 0) {
+          // A 0-o file is not importable: the backend refuses empty objects
+          // unless the policy explicitly allows them (AURA_ALLOW_EMPTY_OBJECTS).
+          emptyFiles += 1;
+          return 0;
+        }
+        out.push({ file, rel: `${base}${entry.name}` });
+        return 1;
+      }
+      if (entry.isDirectory) {
         const reader = (entry as FileSystemDirectoryEntry).createReader();
+        let found = 0;
         for (;;) {
           const batch = await readBatch(reader);
           if (batch.length === 0) break;
-          for (const child of batch) await walk(child, `${base}${entry.name}/`);
+          for (const child of batch) {
+            found += await walk(child, `${base}${entry.name}/`);
+          }
         }
+        // A dropped folder with no importable file anywhere is an empty folder.
+        if (found === 0) emptyFolders += 1;
+        return found;
       }
+      return 0;
     };
     for (const item of Array.from(items)) {
       const entry = item.webkitGetAsEntry?.();
       if (entry) {
         await walk(entry, "");
-      } else if (item.getAsFile()) {
-        const file = item.getAsFile();
-        if (file && file.size > 0) out.push({ file, rel: file.name });
+        continue;
+      }
+      const file = item.getAsFile();
+      if (!file) continue;
+      if (file.size === 0) {
+        emptyFiles += 1;
+      } else {
+        out.push({ file, rel: file.name });
       }
     }
-    return out.map(({ file, rel }) => ({
-      file,
-      rel: normalizeRelativePath(rel),
-    }));
+    return {
+      entries: out.map(({ file, rel }) => ({
+        file,
+        rel: normalizeRelativePath(rel),
+      })),
+      emptyFiles,
+      emptyFolders,
+    };
   }
 
   /** Drop intake: loose files buffer, folders reuse the folder pipeline. */
   async function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragDepth(0);
-    const entries = await collectDroppedEntries(e.dataTransfer.items);
+    const { entries, emptyFiles, emptyFolders } = await collectDroppedEntries(
+      e.dataTransfer.items,
+    );
     if (entries.length === 0) {
-      setUploadError("Aucun fichier importable dans ce dépôt (dossiers vides ignorés).");
+      // Distinguish a 0-o file from an empty folder, and recall the backend
+      // policy (empty objects are refused unless explicitly allowed).
+      const emptyFileNote = `${emptyFiles} fichier(s) vide(s) (0 o) ignoré(s) — le backend refuse les objets vides tant que la politique ne les autorise pas`;
+      let message = "Aucun fichier importable dans ce dépôt.";
+      if (emptyFiles > 0 && emptyFolders > 0) {
+        message = `Aucun fichier importable : ${emptyFileNote}, et ${emptyFolders} dossier(s) vide(s) ignoré(s).`;
+      } else if (emptyFiles > 0) {
+        message = `Aucun fichier importable : ${emptyFileNote}.`;
+      } else if (emptyFolders > 0) {
+        message = `Aucun fichier importable : ${emptyFolders} dossier(s) vide(s) ignoré(s) (aucun fichier à l'intérieur).`;
+      }
+      setUploadError(message);
       return;
     }
     const hasFolders = entries.some((entry) => entry.rel.includes("/"));
@@ -843,9 +949,7 @@ export function ObjectsPage() {
 
   // Only deletable rows are selectable: the server refuses anything else
   // with 409, so offering them would manufacture failures.
-  const selectableItems = items.filter(
-    (item) => item.status === "available" || item.status === "pending",
-  );
+  const selectableItems = items.filter(isDeletable);
   const selectableIds = new Set(selectableItems.map((item) => item.id));
 
   // Real weight of what is currently loaded — shown as a rail readout, so the
@@ -890,13 +994,13 @@ export function ObjectsPage() {
           </button>
           <button
             type="button"
-            className="btn"
+            className="btn vault-btn-primary"
             onClick={() => {
               setNewFolderName("");
               setNewFolderOpen(true);
             }}
           >
-            Nouveau dossier
+            + Nouveau dossier
           </button>
         </div>
       </div>
@@ -951,6 +1055,28 @@ export function ObjectsPage() {
             type="button"
             className="btn btn-ghost btn-small"
             onClick={() => setNotice(null)}
+          >
+            Fermer
+          </button>
+        </p>
+      ) : null}
+
+      {folderDeleteError ? (
+        <p role="alert" className="alert alert-error">
+          Le dossier «&nbsp;{folderDeleteError.name}&nbsp;» n'est pas vide : supprimez
+          ou déplacez d'abord ses fichiers et sous-dossiers, puis réessayez.
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            disabled={deleteFolderMutation.isPending}
+            onClick={() => deleteFolderMutation.mutate(folderDeleteError)}
+          >
+            {deleteFolderMutation.isPending ? "Suppression…" : "Réessayer"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => setFolderDeleteError(null)}
           >
             Fermer
           </button>
@@ -1027,12 +1153,17 @@ export function ObjectsPage() {
                           message: (
                             <>
                               Supprimer <strong>{folder.name}</strong> ? Un dossier
-                              non vide est refusé.
+                              contenant encore des fichiers ou sous-dossiers sera
+                              refusé.
                             </>
                           ),
                           confirmLabel: "Supprimer",
                           danger: true,
-                          onConfirm: () => deleteFolderMutation.mutate(folder.id),
+                          onConfirm: () =>
+                            deleteFolderMutation.mutate({
+                              id: folder.id,
+                              name: folder.name,
+                            }),
                         }),
                     },
                   ]}
@@ -1047,7 +1178,35 @@ export function ObjectsPage() {
             <dd>{currentName ?? "Racine"}</dd>
             <dt>Poids affiché</dt>
             <dd className="num">{formatBytes(loadedBytes)}</dd>
+            {usageQuery.data ? (
+              <>
+                <dt>Espace utilisé</dt>
+                <dd className="num">
+                  {formatBytes(usageQuery.data.totals.stored_bytes)}
+                </dd>
+              </>
+            ) : null}
           </dl>
+          {usageQuery.data ? (
+            <p className="muted casiers-usage-note">
+              Usage réel (admin), mesuré le{" "}
+              {formatDateTime(usageQuery.data.measured_at)}.
+            </p>
+          ) : null}
+          {/* Admin-only query: surface a real failure instead of leaving the
+              readout blank (non-admins are silently skipped — no error). */}
+          {hasAdminAccess(session.data?.role) && usageQuery.isError ? (
+            <p role="alert" className="alert alert-error">
+              Espace utilisé indisponible.
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => void usageQuery.refetch()}
+              >
+                Réessayer
+              </button>
+            </p>
+          ) : null}
         </div>
       </aside>
 
@@ -1078,9 +1237,19 @@ export function ObjectsPage() {
           </p>
         ) : null}
         <p className="muted">
-          Déposez des fichiers ici ou choisissez-les. Chaque fichier est vérifié
-          par empreinte SHA-256 avant d'être déclaré disponible.
+          Déposez des fichiers ici ou choisissez-les. Un fichier n'est déclaré
+          disponible qu'une fois sa taille et son empreinte SHA-256 vérifiées
+          par le backend, au moment du commit.
         </p>
+        {/* Informative only: these categories describe what the intake accepts;
+            they are not controls, so they stay non-interactive text. */}
+        <ul className="intake-cats" aria-label="Catégories de fichiers acceptées">
+          {IMPORT_CATEGORIES.map((category) => (
+            <li key={category} className="intake-cat">
+              {category}
+            </li>
+          ))}
+        </ul>
         <form onSubmit={handleUpload} className="form form-inline">
           <div className="field file-field">
             <span>Fichiers</span>
@@ -1097,7 +1266,7 @@ export function ObjectsPage() {
                   e.target.value = "";
                 }}
               />
-              <span className="btn">Choisir des fichiers…</span>
+              <span className="btn vault-btn-blue">Choisir des fichiers…</span>
               <span className="file-picker-name">
                 {pendingFiles.length === 0
                   ? "Aucun fichier sélectionné"
@@ -1147,23 +1316,31 @@ export function ObjectsPage() {
           ) : null}
         </form>
 
-        {pendingFiles.length > 0 && !transferActive ? (
-          <ul className="pending">
-            {pendingFiles.map((pending, index) => (
-              <li key={`${pending.name}-${index}`} className="pending-item">
-                <span className="transfer-name">{pending.name}</span>
-                <span className="muted">{formatBytes(pending.size)}</span>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-small"
-                  aria-label={`Retirer ${pending.name}`}
-                  onClick={() => removePendingFile(index)}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
+        {pendingFiles.length > 0 ? (
+          <>
+            {transferActive ? (
+              <p className="pending-hint" role="status">
+                En attente du prochain import — le transfert en cours se termine
+                d'abord.
+              </p>
+            ) : null}
+            <ul className="pending">
+              {pendingFiles.map((pending, index) => (
+                <li key={`${pending.name}-${index}`} className="pending-item">
+                  <span className="transfer-name">{pending.name}</span>
+                  <span className="muted">{formatBytes(pending.size)}</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-small"
+                    aria-label={`Retirer ${pending.name}`}
+                    onClick={() => removePendingFile(index)}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
         ) : null}
 
         {queue.items.length > 0 ? (
@@ -1200,6 +1377,9 @@ export function ObjectsPage() {
                     <span className={queuePhaseClass(item.state.phase)}>
                       {PHASE_LABEL[item.state.phase]}
                     </span>
+                    {item.state.phase === "available" ? (
+                      <span className="chip chip-muted">SHA-256 vérifié</span>
+                    ) : null}
                     {ACTIVE_PHASES.includes(item.state.phase) ? (
                       <button
                         type="button"
@@ -1574,7 +1754,14 @@ export function ObjectsPage() {
                     </button>
                   </div>
                   <div className="ledger-meta">
-                    <span className="ledger-type" title={item.content_type}>
+                    <span
+                      className={`ledger-type${
+                        typeLabel(item.content_type) === "Image"
+                          ? " vault-badge-image"
+                          : ""
+                      }`}
+                      title={item.content_type}
+                    >
                       {typeLabel(item.content_type)}
                     </span>
                     <span className="ledger-size num">
@@ -1640,7 +1827,10 @@ export function ObjectsPage() {
                         {
                           label: "Supprimer",
                           danger: true,
-                          disabled: objectBusy,
+                          // Same rule as the bulk selection (available|pending):
+                          // the server 409s every other status, so an enabled
+                          // entry here would only manufacture a failure.
+                          disabled: objectBusy || !isDeletable(item),
                           onSelect: () =>
                             setPendingConfirm({
                               title: "Supprimer l'objet",
