@@ -576,6 +576,17 @@ export function ObjectsPage() {
   /** Directory import (#64): recreate the missing folders, then upload in place. */
   async function handleFolderUpload(selected: FileList | null) {
     if (!selected || selected.length === 0) return;
+    const list = Array.from(selected);
+    const relPaths = list.map((file) =>
+      normalizeRelativePath(
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+      ),
+    );
+    await uploadRelPaths(list, relPaths);
+  }
+
+  /** Shared core: plan folders, create them, queue files with folder ids. */
+  async function uploadRelPaths(list: File[], relPaths: string[]) {
     if (!csrf) {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
@@ -584,12 +595,6 @@ export function ObjectsPage() {
     setUploadError(null);
     setNotice(null);
 
-    const list = Array.from(selected);
-    const relPaths = list.map((file) =>
-      normalizeRelativePath(
-        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
-      ),
-    );
     const plan = planFolders(relPaths);
     const tooDeep = new Set(plan.tooDeep);
     const kept = list
@@ -680,6 +685,88 @@ export function ObjectsPage() {
     if (list.length === 0) return;
     setUploadError(null);
     setPendingFiles((current) => [...current, ...list]);
+  }
+
+  // Drop visual state (P0.3): a counter avoids flicker when crossing children.
+  const [dragDepth, setDragDepth] = useState(0);
+
+  /** Walk dropped entries: files keep their folder-relative path (P0.2). */
+  async function collectDroppedEntries(
+    items: DataTransferItemList,
+  ): Promise<{ file: File; rel: string }[]> {
+    const out: { file: File; rel: string }[] = [];
+    const readBatch = (reader: FileSystemDirectoryReader) =>
+      new Promise<FileSystemEntry[]>((resolve) => reader.readEntries(resolve));
+    const walk = async (entry: FileSystemEntry, base: string): Promise<void> => {
+      if (entry.isFile) {
+        const file = await new Promise<File | null>((resolve) =>
+          (entry as FileSystemFileEntry).file(resolve, () => resolve(null)),
+        );
+        if (file && file.size > 0) out.push({ file, rel: `${base}${entry.name}` });
+      } else if (entry.isDirectory) {
+        const reader = (entry as FileSystemDirectoryEntry).createReader();
+        for (;;) {
+          const batch = await readBatch(reader);
+          if (batch.length === 0) break;
+          for (const child of batch) await walk(child, `${base}${entry.name}/`);
+        }
+      }
+    };
+    for (const item of Array.from(items)) {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) {
+        await walk(entry, "");
+      } else if (item.getAsFile()) {
+        const file = item.getAsFile();
+        if (file && file.size > 0) out.push({ file, rel: file.name });
+      }
+    }
+    return out.map(({ file, rel }) => ({
+      file,
+      rel: normalizeRelativePath(rel),
+    }));
+  }
+
+  /** Drop intake: loose files buffer, folders reuse the folder pipeline. */
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragDepth(0);
+    const entries = await collectDroppedEntries(e.dataTransfer.items);
+    if (entries.length === 0) {
+      setUploadError("Aucun fichier importable dans ce dépôt (dossiers vides ignorés).");
+      return;
+    }
+    const hasFolders = entries.some((entry) => entry.rel.includes("/"));
+    if (transferActive) {
+      const loose = entries.filter((entry) => !entry.rel.includes("/"));
+      if (loose.length > 0) {
+        // Buffer loose files for the next run and say so (P0.1): never
+        // swallow a drop silently.
+        setUploadError(null);
+        setPendingFiles((current) => [
+          ...current,
+          ...loose.map((entry) => entry.file),
+        ]);
+        setNotice(
+          `Transfert en cours — ${loose.length} fichier(s) ajouté(s) à la file d'attente.` +
+            (hasFolders ? " Les dossiers attendront la fin du transfert." : ""),
+        );
+      } else {
+        // Folder creation needs a free queue: say so instead of swallowing.
+        setUploadError(
+          "Un transfert est en cours : attendez sa fin pour déposer un dossier.",
+        );
+      }
+      return;
+    }
+    if (hasFolders) {
+      await uploadRelPaths(
+        entries.map((entry) => entry.file),
+        entries.map((entry) => entry.rel),
+      );
+    } else {
+      handleFilesChange(entries.map((entry) => entry.file));
+    }
   }
 
   function removePendingFile(index: number) {
@@ -953,17 +1040,31 @@ export function ObjectsPage() {
       </aside>
 
       <section
-        className="card intake"
+        className={`card intake${dragDepth > 0 ? " drop-active" : ""}`}
         aria-labelledby="upload-title"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
+        onDragEnter={(e) => {
           e.preventDefault();
-          if (!transferActive) handleFilesChange(e.dataTransfer.files);
+          setDragDepth((depth) => depth + 1);
+        }}
+        onDragLeave={() => {
+          setDragDepth((depth) => Math.max(0, depth - 1));
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }}
+        onDrop={(e) => {
+          void handleDrop(e);
         }}
       >
         <h2 id="upload-title">
           Importer{currentName ? ` dans « ${currentName} »` : ""}
         </h2>
+        {dragDepth > 0 ? (
+          <p role="status" className="drop-hint">
+            Relâchez pour importer — dossiers acceptés.
+          </p>
+        ) : null}
         <p className="muted">
           Déposez des fichiers ici ou choisissez-les. Chaque fichier est vérifié
           par empreinte SHA-256 avant d'être déclaré disponible.
@@ -1380,7 +1481,7 @@ export function ObjectsPage() {
               </p>
             ) : null}
             <div className="ledger" role="list">
-            <div className="ledger-head" aria-hidden="true">
+            <div className="ledger-head">
               <span>
                 <input
                   type="checkbox"
@@ -1402,13 +1503,13 @@ export function ObjectsPage() {
                     }
                   }}
                 />{" "}
-                Nom
+                <span aria-hidden="true">Nom</span>
               </span>
-              <span>Type</span>
-              <span>Taille</span>
-              <span>État</span>
-              <span>Modifié</span>
-              <span />
+              <span aria-hidden="true">Type</span>
+              <span aria-hidden="true">Taille</span>
+              <span aria-hidden="true">État</span>
+              <span aria-hidden="true">Modifié</span>
+              <span aria-hidden="true" />
             </div>
             {items.map((item) => {
               const rowBusy =

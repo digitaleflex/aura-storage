@@ -993,6 +993,27 @@ select:focus-visible {
   max-width: 64ch;
 }
 
+/* Drop affordance (P0.3): unmistakable amber state while dragging over. */
+.intake.drop-active {
+  border-color: var(--signal);
+  border-left-width: 3px;
+  background: var(--signal-soft);
+  outline: 2px dashed var(--signal-2);
+  outline-offset: -6px;
+}
+
+.drop-hint {
+  margin: 8px 0 0;
+  font-weight: 600;
+  color: var(--signal-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intake.drop-active {
+    outline-style: solid;
+  }
+}
+
 .intake h2 {
   font-family: var(--font-mono);
   font-size: 11.5px;
