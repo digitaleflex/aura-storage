@@ -209,6 +209,21 @@ export interface HealthResponse {
   note: string;
 }
 
+export interface OrphanCandidate {
+  id: string;
+  display_name: string;
+  space_id: string;
+  application_id: string | null;
+  size_bytes: number;
+  updated_at: number;
+}
+
+export interface OrphanScanResponse {
+  checked: number;
+  candidates: OrphanCandidate[];
+  checked_at: number;
+}
+
 export interface ReconcileResponse {
   expired: number;
   storage_deletes_attempted: number;
@@ -653,6 +668,13 @@ export const api = {
 
   adminHealth(): Promise<HealthResponse> {
     return request<HealthResponse>("/api/v1/admin/health");
+  },
+
+  /** Read-only orphan candidates (admin:read, M07/#87). */
+  adminOrphans(limit = 100): Promise<OrphanScanResponse> {
+    return request<OrphanScanResponse>(
+      `/api/v1/admin/orphans?limit=${encodeURIComponent(String(limit))}`,
+    );
   },
 
   // --- Administration mutations (`admin:write`) ---

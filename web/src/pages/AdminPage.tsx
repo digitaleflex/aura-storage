@@ -280,6 +280,12 @@ export function AdminPage() {
     enabled: canAdmin,
     retry: false,
   });
+  const orphans = useQuery({
+    queryKey: ["admin", "orphans"],
+    queryFn: () => api.adminOrphans(),
+    enabled: canAdmin,
+    retry: false,
+  });
   const auditSearch = useQuery({
     queryKey: ["admin", "audit", auditApplied, auditOffset],
     queryFn: () =>
@@ -761,6 +767,57 @@ export function AdminPage() {
               </tbody>
             </table>
             <p className="muted">{health.data.note}</p>
+            <div className="section-head">
+              <h3>Candidats orphelins</h3>
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                disabled={orphans.isFetching}
+                onClick={() => void orphans.refetch()}
+              >
+                {orphans.isFetching ? "Analyse…" : "Analyser"}
+              </button>
+            </div>
+            <p className="muted">
+              Objets « disponibles » introuvables au stockage (lecture seule —
+              rien n'est jamais supprimé sur ce signal : une panne transitoire
+              produit les mêmes candidats).
+            </p>
+            {orphans.isError ? (
+              <p role="alert" className="alert alert-error">
+                Analyse des orphelins indisponible.
+              </p>
+            ) : orphans.isPending ? (
+              <p className="muted">Chargement…</p>
+            ) : orphans.data.candidates.length === 0 ? (
+              <p className="muted">
+                Aucun candidat sur {orphans.data.checked} objet(s) vérifié(s).
+              </p>
+            ) : (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Objet</th>
+                    <th>Espace</th>
+                    <th>Vérifié à</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orphans.data.candidates.map((candidate) => (
+                    <tr key={candidate.id}>
+                      <td>
+                        {candidate.display_name}{" "}
+                        <span className="muted">({candidate.id.slice(0, 8)}…)</span>
+                      </td>
+                      <td className="muted">
+                        {spaceNames.get(candidate.space_id) ?? candidate.space_id.slice(0, 8)}
+                      </td>
+                      <td className="muted">{formatTs(orphans.data.checked_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
             {health.data.recent_errors.events.length > 0 ? (
               <>
                 <h3>Erreurs récentes</h3>
