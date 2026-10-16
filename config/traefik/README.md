@@ -9,6 +9,8 @@ The Compose file defines Traefik via static CLI arguments and discovers the Seaw
 - ACME uses the HTTP-01 challenge. The DNS A/AAAA record for `S3_DOMAIN` must resolve to this VPS, port 80 must be reachable, and no conflicting proxy should intercept the challenge unexpectedly.
 - The dashboard API is enabled internally but no public router is defined. Do not add a public dashboard route without authentication and network restrictions.
 - The `aura-s3-landing` router answers only an unsigned `GET /` on `S3_DOMAIN` with a static page; signed requests and every other path stay on the `aura-s3` router (`docs/S3-ROOT-LANDING.md`).
+- The `aura-swagger` router serves the committed contract (`docs/openapi.yaml`) through the `swagger-ui` service on `SWAGGER_DOMAIN`. No host port is published and the service is on the `edge` network only.
+- Shared middlewares live as labels on the `traefik` service: `api-ratelimit` (30/s, burst 60) and `api-secure-headers`. The `aura-swagger` router uses both. `api-auth-forward` is documented but commented out: no verify endpoint exists yet (see `api/main.py` / `api/authz.py`), so keep `SWAGGER_DOMAIN` behind operator-side access control until forwardAuth is wired.
 - The Docker socket is mounted read-only. Read-only does not remove the security sensitivity of Docker API access; keep the host and Docker access tightly controlled.
 - ACME state is stored in the named volume `traefik-acme`. Back up its state securely and do not publish it.
 - The Compose labels and network names must be reviewed with the exact Traefik version before production.
