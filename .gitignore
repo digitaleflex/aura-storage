@@ -41,3 +41,6 @@ __pycache__/
 .envrc
 aura-audit.jsonl
 *.db
+
+# Local build backups (never commit)
+web/dist.bak-*/
