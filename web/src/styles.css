@@ -1997,3 +1997,111 @@ p .chip {
 .status.vault-dot-deleted-neutre::before {
   background: var(--vault-muted, var(--faint));
 }
+
+/* ------------------------------------------------------------------ */
+/* Recursive (cascade) folder deletion.                                */
+/* ------------------------------------------------------------------ */
+.cascade-dialog {
+  width: min(620px, 94vw);
+}
+
+/* The folder-delete confirmation offers "with its content" as a checkbox so
+   the plain "Supprimer" button stays the single, unambiguous default. */
+.cascade-option {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+}
+
+.cascade-option input {
+  margin-top: 2px;
+}
+
+.cascade-confirm-field {
+  margin-top: 14px;
+}
+
+.cascade-progress-text {
+  font-weight: 600;
+}
+
+.cascade-log {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 11px;
+}
+
+.cascade-log-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cascade-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 230px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cascade-log-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "chip name"
+    "path path"
+    "error error"
+    "actions actions";
+  align-items: center;
+  gap: 3px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--steel-1);
+}
+
+.cascade-log-item .chip {
+  grid-area: chip;
+}
+
+.cascade-log-name {
+  grid-area: name;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cascade-log-path,
+.cascade-log-error {
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.cascade-log-path {
+  grid-area: path;
+}
+
+.cascade-log-error {
+  grid-area: error;
+  color: var(--danger);
+}
+
+.cascade-log-actions {
+  grid-area: actions;
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}

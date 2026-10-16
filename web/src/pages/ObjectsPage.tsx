@@ -198,6 +198,205 @@ function isDeletable(item: ObjectItem): boolean {
   return item.status === "available" || item.status === "pending";
 }
 
+// -- Recursive (cascade) folder deletion ------------------------------------
+// The server refuses a folder that still holds files or subfolders (409). The
+// only sanctioned way to delete such a folder is to empty it explicitly: this
+// flow removes every object of the subtree, then the now-empty folders from the
+// leaves up to the target. Nothing is ever reported as deleted until the API
+// confirms it, and nothing is removed without an explicit confirmation.
+
+/** One file in the target subtree, resolved through real list requests. */
+interface CascadeObject {
+  id: string;
+  name: string;
+  folderId: string;
+  /** Human path ("Racine / Dossier / Sous-dossier"). */
+  path: string;
+}
+
+/** One folder of the target subtree; the target itself is included. */
+interface CascadeFolder {
+  id: string;
+  name: string;
+  parentId: string | null;
+  path: string;
+}
+
+/** The real content snapshot of a folder (never guessed, always listed). */
+interface CascadePlan {
+  rootId: string;
+  rootName: string;
+  objects: CascadeObject[];
+  folders: CascadeFolder[];
+  fileCount: number;
+  /** Descendant folders only: the target is not its own "subfolder". */
+  folderCount: number;
+}
+
+/** One delete step, ordered so a folder is emptied before it is removed. */
+interface CascadeOp {
+  kind: "object" | "folder";
+  id: string;
+  label: string;
+  path: string;
+}
+
+/** A step that failed; kept so the user can retry or abandon it explicitly. */
+interface CascadeFailure {
+  key: string;
+  kind: "object" | "folder";
+  id: string;
+  label: string;
+  path: string;
+  error: string;
+}
+
+type CascadePhase = "scanning" | "confirm" | "deleting" | "done";
+
+interface CascadeState {
+  rootId: string;
+  rootName: string;
+  phase: CascadePhase;
+  plan: CascadePlan | null;
+  ops: CascadeOp[];
+  done: number;
+  /** Path of the item currently being processed (live progress). */
+  current: string | null;
+  failures: CascadeFailure[];
+  cancelled: boolean;
+  scanError: string | null;
+}
+
+/** The server caps `limit` at 100; page until a short page comes back. */
+const CASCADE_PAGE_SIZE = 100;
+
+/** Every object filed directly in one folder, across all pages. */
+async function fetchFolderObjects(folderId: string): Promise<ObjectItem[]> {
+  const out: ObjectItem[] = [];
+  let offset = 0;
+  // Hard guard: a server that ignores `offset` can never spin forever.
+  for (let guard = 0; guard < 1000; guard += 1) {
+    const page = await api.listObjects({
+      folderId,
+      limit: CASCADE_PAGE_SIZE,
+      offset,
+    });
+    out.push(...page.items);
+    if (page.items.length < CASCADE_PAGE_SIZE) break;
+    offset += page.items.length;
+  }
+  return out;
+}
+
+/** Build the real content snapshot of `rootId`: descendant folders + files. */
+async function scanCascade(rootId: string, rootName: string): Promise<CascadePlan> {
+  const all = await api.listAllFolders();
+  const byId = new Map(all.items.map((folder) => [folder.id, folder]));
+  const childMap = new Map<string | null, FolderItem[]>();
+  for (const folder of all.items) {
+    const key = folder.parent_id ?? null;
+    const bucket = childMap.get(key);
+    if (bucket) bucket.push(folder);
+    else childMap.set(key, [folder]);
+  }
+  const pathOf = (id: string): string => {
+    const names: string[] = [];
+    let cursor: string | null = id;
+    let guard = 0;
+    while (cursor && guard < 64) {
+      const folder: FolderItem | undefined = byId.get(cursor);
+      if (!folder) break;
+      names.unshift(folder.name);
+      cursor = folder.parent_id;
+      guard += 1;
+    }
+    return ["Racine", ...names].join(" / ");
+  };
+  const folders: CascadeFolder[] = [];
+  const seen = new Set<string>();
+  const stack: string[] = [rootId];
+  while (stack.length > 0) {
+    const id = stack.pop();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const folder = byId.get(id);
+    if (!folder) continue;
+    folders.push({
+      id,
+      name: folder.name,
+      parentId: folder.parent_id,
+      path: pathOf(id),
+    });
+    for (const child of childMap.get(id) ?? []) stack.push(child.id);
+  }
+  const objects: CascadeObject[] = [];
+  for (const folder of folders) {
+    const list = await fetchFolderObjects(folder.id);
+    for (const item of list) {
+      objects.push({
+        id: item.id,
+        name: item.display_name,
+        folderId: folder.id,
+        path: folder.path,
+      });
+    }
+  }
+  return {
+    rootId,
+    rootName,
+    objects,
+    folders,
+    fileCount: objects.length,
+    folderCount: Math.max(0, folders.length - 1),
+  };
+}
+
+/** Flatten the snapshot into a leaf-first (post-order) list of delete steps:
+ * a folder's files, its subfolders (recursively), then the folder itself, so
+ * every folder is empty by the time its own DELETE is issued. */
+function planCascadeOps(plan: CascadePlan): CascadeOp[] {
+  const inTree = new Set(plan.folders.map((folder) => folder.id));
+  const children = new Map<string, CascadeFolder[]>();
+  for (const folder of plan.folders) {
+    if (folder.id === plan.rootId) continue;
+    const parent = folder.parentId;
+    if (!parent || !inTree.has(parent)) continue;
+    const bucket = children.get(parent);
+    if (bucket) bucket.push(folder);
+    else children.set(parent, [folder]);
+  }
+  const objectsByFolder = new Map<string, CascadeObject[]>();
+  for (const object of plan.objects) {
+    const bucket = objectsByFolder.get(object.folderId);
+    if (bucket) bucket.push(object);
+    else objectsByFolder.set(object.folderId, [object]);
+  }
+  const byId = new Map(plan.folders.map((folder) => [folder.id, folder]));
+  const ops: CascadeOp[] = [];
+  const visit = (folderId: string) => {
+    for (const object of objectsByFolder.get(folderId) ?? []) {
+      ops.push({
+        kind: "object",
+        id: object.id,
+        label: object.name,
+        path: object.path,
+      });
+    }
+    for (const child of children.get(folderId) ?? []) visit(child.id);
+    const self = byId.get(folderId);
+    if (self) {
+      ops.push({ kind: "folder", id: self.id, label: self.name, path: self.path });
+    }
+  };
+  visit(plan.rootId);
+  return ops;
+}
+
+/** Stable identity of a step, so a successful retry clears its failure entry. */
+function cascadeOpKey(op: { kind: string; id: string }): string {
+  return `${op.kind}:${op.id}`;
+}
+
 /** The whole folder tree is fetched in one request (`?all=true`); the hierarchy
  * is rebuilt client-side from parent_id for breadcrumbs and the move pickers. */
 export function ObjectsPage() {
@@ -220,6 +419,16 @@ export function ObjectsPage() {
     id: string;
     name: string;
   } | null>(null);
+  // Recursive folder deletion: opened from the 409 refusal or from the
+  // "Supprimer avec son contenu" option; always explicit and confirmed.
+  const [folderDeleteWithContent, setFolderDeleteWithContent] = useState(false);
+  const [cascade, setCascade] = useState<CascadeState | null>(null);
+  const [cascadeConfirmText, setCascadeConfirmText] = useState("");
+  // Mirror of the live cascade state, read/written by the async run loop where
+  // a state updater would otherwise close over a stale render.
+  const cascadeRef = useRef<CascadeState | null>(null);
+  const cascadeCancelRef = useRef(false);
+  const cascadeDialogRef = useRef<HTMLDialogElement | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   function dismissToast(id: number) {
@@ -243,7 +452,10 @@ export function ObjectsPage() {
     message: ReactNode;
     confirmLabel: string;
     danger?: boolean;
-    onConfirm: () => void;
+    /** Folder deletion: offer the "with its content" recursive option. */
+    folderCascade?: boolean;
+    /** `withContent` is only meaningful for a folder deletion confirmation. */
+    onConfirm: (withContent: boolean) => void;
   } | null>(null);
 
   // -- search / filter / sort (server-side; M02) ---------------------------
@@ -320,6 +532,14 @@ export function ObjectsPage() {
   }
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
+
+  // Recursive deletion deletes objects (objects:delete) inside folders the
+  // caller owns (objects:write); it is a human-only flow, like folders. When
+  // either scope is missing the option is never offered.
+  const canCascadeDelete =
+    session.data?.kind === "user" &&
+    hasScope(session.data?.scopes, "objects:delete") &&
+    hasScope(session.data?.scopes, "objects:write");
 
   // Storage usage is only ever the real admin figure (`GET /admin/usage`,
   // `admin:read`): no fabricated capacity is displayed for anyone else.
@@ -975,6 +1195,203 @@ export function ObjectsPage() {
     moveObjectMutation.isPending ||
     downloadingId !== null;
 
+  // -- recursive (cascade) folder deletion ---------------------------------
+  /** Keep the React state and the run-loop mirror in lockstep. */
+  function applyCascade(next: CascadeState | null) {
+    cascadeRef.current = next;
+    setCascade(next);
+  }
+
+  /** Open the cascade flow for `target`: scan its real content first. */
+  function openCascade(target: { id: string; name: string }) {
+    setPendingConfirm(null);
+    setFolderDeleteError(null);
+    setFolderDeleteWithContent(false);
+    setCascadeConfirmText("");
+    cascadeCancelRef.current = false;
+    applyCascade({
+      rootId: target.id,
+      rootName: target.name,
+      phase: "scanning",
+      plan: null,
+      ops: [],
+      done: 0,
+      current: null,
+      failures: [],
+      cancelled: false,
+      scanError: null,
+    });
+    void runCascadeScan(target.id, target.name);
+  }
+
+  /** List (never guess) the target's content; failure is surfaced, not hidden. */
+  async function runCascadeScan(rootId: string, rootName: string) {
+    const current = cascadeRef.current;
+    if (!current) return;
+    applyCascade({ ...current, phase: "scanning", plan: null, scanError: null });
+    try {
+      const plan = await scanCascade(rootId, rootName);
+      const live = cascadeRef.current;
+      if (!live || live.rootId !== rootId || live.phase !== "scanning") return;
+      applyCascade({ ...live, phase: "confirm", plan, ops: planCascadeOps(plan) });
+    } catch (err) {
+      const live = cascadeRef.current;
+      if (!live || live.rootId !== rootId || live.phase !== "scanning") return;
+      applyCascade({
+        ...live,
+        phase: "confirm",
+        scanError:
+          err instanceof ApiError
+            ? `Analyse impossible : ${err.detail}`
+            : "Analyse du contenu impossible.",
+      });
+    }
+  }
+
+  /** The typed confirmation matched: start the confirmed run. */
+  function startCascade() {
+    const current = cascadeRef.current;
+    if (!current || current.phase !== "confirm" || !current.plan) return;
+    void executeCascade([...current.ops]);
+  }
+
+  /** Run the ordered steps sequentially, recording each real server outcome. */
+  async function executeCascade(opsToRun: CascadeOp[]) {
+    const start = cascadeRef.current;
+    if (!start) return;
+    const activeCsrf = csrf;
+    if (!activeCsrf) {
+      notify("error", "Session expirée. Reconnectez-vous pour supprimer.");
+      applyCascade({
+        ...start,
+        phase: "done",
+        current: null,
+        scanError: "Session expirée.",
+      });
+      return;
+    }
+    cascadeCancelRef.current = false;
+    let done = start.done;
+    let failures = start.failures;
+    applyCascade({ ...start, phase: "deleting", current: null, cancelled: false });
+
+    for (const op of opsToRun) {
+      if (cascadeCancelRef.current) {
+        // Cancellation lands between items: whatever the server confirmed stays
+        // deleted, nothing local is faked.
+        const live = cascadeRef.current ?? start;
+        applyCascade({ ...live, done, failures, current: null, cancelled: true });
+        break;
+      }
+      const key = cascadeOpKey(op);
+      applyCascade({
+        ...(cascadeRef.current ?? start),
+        done,
+        failures,
+        current: op.path,
+      });
+      try {
+        if (op.kind === "object") await api.deleteObject(op.id, activeCsrf);
+        else await api.deleteFolder(op.id, activeCsrf);
+        done += 1;
+        failures = failures.filter((failure) => failure.key !== key);
+      } catch (err) {
+        const detail = err instanceof ApiError ? err.detail : "Échec de suppression.";
+        failures = [
+          ...failures.filter((failure) => failure.key !== key),
+          { key, kind: op.kind, id: op.id, label: op.label, path: op.path, error: detail },
+        ];
+      }
+      applyCascade({
+        ...(cascadeRef.current ?? start),
+        done,
+        failures,
+        current: null,
+      });
+    }
+
+    const end = cascadeRef.current ?? start;
+    invalidateLibrary();
+    applyCascade({ ...end, phase: "done", current: null });
+
+    const final = cascadeRef.current;
+    if (!final) return;
+    if (final.cancelled) {
+      notify(
+        "info",
+        `Suppression interrompue : ${final.done} élément(s) supprimé(s), ${final.failures.length} échec(s).`,
+      );
+    } else if (final.failures.length === 0) {
+      notify("ok", `Dossier et contenu supprimés : ${final.done} élément(s).`);
+    } else {
+      notify(
+        "error",
+        `${final.done} élément(s) supprimé(s), ${final.failures.length} échec(s) : ouvrez le journal pour réessayer.`,
+      );
+    }
+  }
+
+  function retryCascadeFailures() {
+    const current = cascadeRef.current;
+    if (!current || current.phase !== "done" || current.failures.length === 0) return;
+    void executeCascade(
+      current.failures.map((failure) => ({
+        kind: failure.kind,
+        id: failure.id,
+        label: failure.label,
+        path: failure.path,
+      })),
+    );
+  }
+
+  function retryCascadeItem(failure: CascadeFailure) {
+    const current = cascadeRef.current;
+    if (!current || current.phase !== "done") return;
+    void executeCascade([
+      { kind: failure.kind, id: failure.id, label: failure.label, path: failure.path },
+    ]);
+  }
+
+  function abandonCascadeItem(failure: CascadeFailure) {
+    const current = cascadeRef.current;
+    if (!current) return;
+    applyCascade({
+      ...current,
+      failures: current.failures.filter((entry) => entry.key !== failure.key),
+    });
+  }
+
+  /** Request a stop; it is honoured between items by the run loop. */
+  function cancelCascade() {
+    cascadeCancelRef.current = true;
+  }
+
+  function closeCascade() {
+    if (cascadeRef.current?.phase === "deleting") {
+      cascadeCancelRef.current = true;
+      return;
+    }
+    applyCascade(null);
+  }
+
+  // The cascade modal is a native <dialog> so Escape/focus trapping come for
+  // free; it is shown while a cascade state exists and closed when it clears.
+  useEffect(() => {
+    const el = cascadeDialogRef.current;
+    if (!el) return;
+    if (cascade && !el.open) {
+      el.showModal();
+    } else if (!cascade && el.open) {
+      el.close();
+    }
+  }, [cascade]);
+
+  const cascadeConfirmed =
+    cascade !== null &&
+    cascade.plan !== null &&
+    cascade.rootName.trim() !== "" &&
+    cascadeConfirmText.trim() === cascade.rootName.trim();
+
   return (
     <div className="stack vault-workspace">
       <div className="page-head">
@@ -1065,6 +1482,15 @@ export function ObjectsPage() {
         <p role="alert" className="alert alert-error">
           Le dossier «&nbsp;{folderDeleteError.name}&nbsp;» n'est pas vide : supprimez
           ou déplacez d'abord ses fichiers et sous-dossiers, puis réessayez.
+          {canCascadeDelete ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => openCascade(folderDeleteError)}
+            >
+              Supprimer avec son contenu…
+            </button>
+          ) : null}
           <button
             type="button"
             className="btn btn-ghost btn-small"
@@ -1147,7 +1573,9 @@ export function ObjectsPage() {
                     {
                       label: "Supprimer",
                       danger: true,
-                      onSelect: () =>
+                      onSelect: () => {
+                        setFolderDeleteWithContent(false);
+                        setCascadeConfirmText("");
                         setPendingConfirm({
                           title: "Supprimer le dossier",
                           message: (
@@ -1159,12 +1587,19 @@ export function ObjectsPage() {
                           ),
                           confirmLabel: "Supprimer",
                           danger: true,
-                          onConfirm: () =>
-                            deleteFolderMutation.mutate({
-                              id: folder.id,
-                              name: folder.name,
-                            }),
-                        }),
+                          folderCascade: canCascadeDelete,
+                          onConfirm: (withContent) => {
+                            if (withContent) {
+                              openCascade({ id: folder.id, name: folder.name });
+                            } else {
+                              deleteFolderMutation.mutate({
+                                id: folder.id,
+                                name: folder.name,
+                              });
+                            }
+                          },
+                        });
+                      },
                     },
                   ]}
                 />
@@ -2225,6 +2660,16 @@ export function ObjectsPage() {
         onClose={() => setPendingConfirm(null)}
       >
         <div className="dialog-text">{pendingConfirm?.message}</div>
+        {pendingConfirm?.folderCascade ? (
+          <label className="cascade-option">
+            <input
+              type="checkbox"
+              checked={folderDeleteWithContent}
+              onChange={(event) => setFolderDeleteWithContent(event.target.checked)}
+            />
+            <span>Supprimer aussi tout son contenu (fichiers et sous-dossiers)</span>
+          </label>
+        ) : null}
         <div className="dialog-actions">
           <button
             type="button"
@@ -2240,8 +2685,9 @@ export function ObjectsPage() {
             }
             onClick={() => {
               const action = pendingConfirm?.onConfirm;
+              const withContent = folderDeleteWithContent;
               setPendingConfirm(null);
-              action?.();
+              action?.(withContent);
             }}
           >
             {pendingConfirm?.confirmLabel ?? "Confirmer"}
@@ -2249,6 +2695,220 @@ export function ObjectsPage() {
         </div>
       </Dialog>
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
+
+      {/* Recursive (cascade) folder deletion: real listing, typed confirmation,
+          live progress, explicit per-item failure log. A native <dialog> so
+          Escape/focus trapping are built in; Escape is routed to an explicit
+          cancel while deleting instead of closing mid-run. */}
+      {cascade ? (
+        <dialog
+          ref={cascadeDialogRef}
+          className="dialog cascade-dialog"
+          aria-labelledby="cascade-title"
+          onCancel={(event) => {
+            if (cascade.phase === "deleting") {
+              event.preventDefault();
+              cancelCascade();
+            } else {
+              closeCascade();
+            }
+          }}
+        >
+          <div className="dialog-head">
+            <h2 id="cascade-title">Supprimer le dossier et son contenu</h2>
+            {cascade.phase === "scanning" || cascade.phase === "confirm" ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={closeCascade}
+                aria-label="Fermer"
+              >
+                Fermer
+              </button>
+            ) : null}
+          </div>
+          <div className="dialog-body">
+            {cascade.phase === "scanning" ? (
+              <p className="muted" role="status">
+                Analyse du contenu réel du dossier…
+              </p>
+            ) : null}
+
+            {cascade.phase === "confirm" ? (
+              cascade.scanError ? (
+                <p role="alert" className="alert alert-error">
+                  {cascade.scanError}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-small"
+                    onClick={() =>
+                      void runCascadeScan(cascade.rootId, cascade.rootName)
+                    }
+                  >
+                    Réessayer
+                  </button>
+                </p>
+              ) : cascade.plan ? (
+                <>
+                  <p className="dialog-text">
+                    Le dossier <strong>{cascade.rootName}</strong> contient{" "}
+                    <strong>{cascade.plan.fileCount} fichier(s)</strong> et{" "}
+                    <strong>{cascade.plan.folderCount} sous-dossier(s)</strong>.
+                  </p>
+                  <p role="alert" className="alert alert-error">
+                    Suppression du contenu : chaque fichier est marqué supprimé
+                    (les octets restent jusqu'à une purge), puis chaque dossier
+                    vidé est supprimé, des feuilles vers la racine.
+                  </p>
+                  <label className="field cascade-confirm-field">
+                    <span>Recopiez «&nbsp;{cascade.rootName}&nbsp;» pour confirmer</span>
+                    <input
+                      type="text"
+                      value={cascadeConfirmText}
+                      onChange={(event) =>
+                        setCascadeConfirmText(event.target.value)
+                      }
+                      autoFocus
+                      aria-label="Confirmation par recopie du nom"
+                    />
+                  </label>
+                  <div className="dialog-actions">
+                    <button type="button" className="btn" onClick={closeCascade}>
+                      Annuler
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      disabled={!cascadeConfirmed}
+                      onClick={startCascade}
+                    >
+                      Supprimer le contenu et le dossier
+                    </button>
+                  </div>
+                </>
+              ) : null
+            ) : null}
+
+            {cascade.phase === "deleting" || cascade.phase === "done" ? (
+              <>
+                <p
+                  role="status"
+                  className={
+                    cascade.phase === "done" &&
+                    !cascade.cancelled &&
+                    cascade.failures.length === 0
+                      ? "alert alert-ok"
+                      : "dialog-text cascade-progress-text"
+                  }
+                >
+                  {cascade.phase === "deleting"
+                    ? `Suppression en cours — ${cascade.done}/${cascade.ops.length}`
+                    : cascade.cancelled
+                      ? `Suppression interrompue — ${cascade.done}/${cascade.ops.length}`
+                      : cascade.failures.length === 0
+                        ? `Contenu supprimé et dossier supprimé — ${cascade.done}/${cascade.ops.length}`
+                        : `Suppression terminée avec échecs — ${cascade.done}/${cascade.ops.length}`}
+                </p>
+                <div
+                  className="progress"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={cascade.ops.length}
+                  aria-valuenow={cascade.done}
+                  aria-label="Progression de la suppression récursive"
+                >
+                  <span
+                    className="progress-bar"
+                    style={{
+                      width: `${
+                        cascade.ops.length > 0
+                          ? Math.round((cascade.done / cascade.ops.length) * 100)
+                          : 0
+                      }%`,
+                    }}
+                  />
+                </div>
+                {cascade.phase === "deleting" && cascade.current ? (
+                  <p className="muted">Traitement : {cascade.current}</p>
+                ) : null}
+
+                {cascade.failures.length > 0 ? (
+                  <div className="cascade-log">
+                    <h3 className="cascade-log-title">
+                      Journal des échecs ({cascade.failures.length})
+                    </h3>
+                    <ul className="cascade-log-list">
+                      {cascade.failures.map((failure) => (
+                        <li key={failure.key} className="cascade-log-item">
+                          <span
+                            className={`chip ${
+                              failure.kind === "folder" ? "chip-warn" : "chip-error"
+                            }`}
+                          >
+                            {failure.kind === "folder" ? "Dossier" : "Fichier"}
+                          </span>
+                          <span className="cascade-log-name">{failure.label}</span>
+                          <span className="muted cascade-log-path">
+                            {failure.path}
+                          </span>
+                          <span className="muted cascade-log-error">
+                            {failure.error}
+                          </span>
+                          {cascade.phase === "done" ? (
+                            <span className="cascade-log-actions">
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-small"
+                                onClick={() => retryCascadeItem(failure)}
+                              >
+                                Réessayer
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-small"
+                                onClick={() => abandonCascadeItem(failure)}
+                              >
+                                Abandonner
+                              </button>
+                            </span>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                <div className="dialog-actions">
+                  {cascade.phase === "deleting" ? (
+                    <button type="button" className="btn" onClick={cancelCascade}>
+                      Annuler
+                    </button>
+                  ) : (
+                    <>
+                      {cascade.failures.length > 0 ? (
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={retryCascadeFailures}
+                        >
+                          Réessayer les échecs
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={closeCascade}
+                      >
+                        Fermer
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            ) : null}
+          </div>
+        </dialog>
+      ) : null}
     </div>
   );
 }

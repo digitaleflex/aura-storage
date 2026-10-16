@@ -359,3 +359,314 @@ test("accepted import categories are informative, not interactive", async ({ pag
   await expect(categories.getByRole("link")).toHaveCount(0);
   await expect(categories.getByRole("listitem")).toHaveCount(6);
 });
+
+// -- 6. recursive (cascade) folder deletion ---------------------------------
+//
+// The server refuses a non-empty folder with 409. These tests drive the
+// front-end cascade: a real listing of the subtree, a typed confirmation, an
+// explicit execution (files first, folders from the leaves up), a live "n/m"
+// counter and a per-item failure log with Retry.
+
+interface CascadeFolderItem {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  created_at: number;
+}
+
+interface CascadeObjectItem {
+  id: string;
+  display_name: string;
+  folder_id: string | null;
+  content_type?: string;
+  size_bytes?: number;
+}
+
+interface CascadeOptions {
+  role?: string;
+  scopes?: string[];
+  folders: CascadeFolderItem[];
+  objects: CascadeObjectItem[];
+  /** Object id -> DELETEs that answer 500 before succeeding (transient fault). */
+  objectFailures?: Record<string, number>;
+  /** Folder id -> DELETEs that answer 500 before succeeding (transient fault). */
+  folderFailures?: Record<string, number>;
+}
+
+interface CascadeMocks {
+  /** Successful deletes in request order: "object:<id>" / "folder:<id>". */
+  deletedOrder: () => string[];
+}
+
+/**
+ * A mock with mutable, internally-consistent state: DELETE /folders enforces
+ * the real "not empty" rule, so a cascade that deletes in the wrong order
+ * would fail here exactly as it would against the API.
+ */
+async function installCascadeMocks(
+  page: Page,
+  options: CascadeOptions,
+): Promise<CascadeMocks> {
+  const folders = [...options.folders];
+  const objects = [...options.objects];
+  const objectFailures = { ...(options.objectFailures ?? {}) };
+  const folderFailures = { ...(options.folderFailures ?? {}) };
+  const deleted: string[] = [];
+  const scopes = options.scopes ?? [
+    "objects:read",
+    "objects:write",
+    "objects:delete",
+    "objects:purge",
+  ];
+
+  await page.route("**/api/v1/**", async (route: Route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path === "/api/v1/login" && method === "POST") {
+      await route.fulfill({ json: { csrf_token: CSRF } });
+      return;
+    }
+    if (path === "/api/v1/me") {
+      await route.fulfill({
+        json: {
+          id: "u1",
+          kind: "user",
+          role: options.role ?? "admin",
+          space_id: "s1",
+          application_id: "a1",
+          scopes,
+        },
+      });
+      return;
+    }
+    if (path === "/api/v1/folders" && method === "GET") {
+      await route.fulfill({ json: { items: folders } });
+      return;
+    }
+    const folderDelete = path.match(/^\/api\/v1\/folders\/([^/]+)$/);
+    if (folderDelete && method === "DELETE") {
+      const id = decodeURIComponent(folderDelete[1] ?? "");
+      if ((folderFailures[id] ?? 0) > 0) {
+        folderFailures[id] = (folderFailures[id] ?? 0) - 1;
+        await route.fulfill({ status: 500, json: { detail: "transient failure" } });
+        return;
+      }
+      const hasChildren = folders.some((folder) => folder.parent_id === id);
+      const hasObjects = objects.some((object) => object.folder_id === id);
+      if (hasChildren || hasObjects) {
+        await route.fulfill({ status: 409, json: { detail: "folder is not empty" } });
+        return;
+      }
+      const index = folders.findIndex((folder) => folder.id === id);
+      if (index >= 0) folders.splice(index, 1);
+      deleted.push(`folder:${id}`);
+      await route.fulfill({ json: { id, status: "deleted" } });
+      return;
+    }
+    const objectDelete = path.match(/^\/api\/v1\/objects\/([^/]+)$/);
+    if (objectDelete && method === "DELETE") {
+      const id = decodeURIComponent(objectDelete[1] ?? "");
+      if ((objectFailures[id] ?? 0) > 0) {
+        objectFailures[id] = (objectFailures[id] ?? 0) - 1;
+        await route.fulfill({ status: 500, json: { detail: "transient failure" } });
+        return;
+      }
+      const index = objects.findIndex((object) => object.id === id);
+      if (index >= 0) objects.splice(index, 1);
+      deleted.push(`object:${id}`);
+      await route.fulfill({ json: { id, status: "deleted" } });
+      return;
+    }
+    if (path === "/api/v1/objects" && method === "GET") {
+      const folderParam = url.searchParams.get("folder_id");
+      const limit = Number(url.searchParams.get("limit") ?? "50");
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const filtered =
+        folderParam === null
+          ? objects
+          : objects.filter(
+              (object) => (object.folder_id ?? "root") === folderParam,
+            );
+      await route.fulfill({
+        json: {
+          items: filtered.slice(offset, offset + limit).map((object) => ({
+            id: object.id,
+            display_name: object.display_name,
+            content_type: object.content_type ?? "application/pdf",
+            size_bytes: object.size_bytes ?? 11,
+            checksum_sha256: "abc",
+            status: "available",
+            folder_id: object.folder_id,
+            created_at: 0,
+            updated_at: 0,
+          })),
+        },
+      });
+      return;
+    }
+    if (path === "/api/v1/admin/usage" && method === "GET") {
+      await route.fulfill({ json: USAGE });
+      return;
+    }
+    await route.fulfill({
+      status: 404,
+      json: { detail: `unmocked ${method} ${path}` },
+    });
+  });
+
+  return { deletedOrder: () => [...deleted] };
+}
+
+const CASCADE_FOLDERS: CascadeFolderItem[] = [
+  { id: "f-1", name: "Photos", parent_id: null, created_at: 0 },
+  { id: "f-2", name: "2023", parent_id: "f-1", created_at: 0 },
+  { id: "f-3", name: "raw", parent_id: "f-2", created_at: 0 },
+];
+
+const CASCADE_OBJECTS: CascadeObjectItem[] = [
+  { id: "obj-r1", display_name: "racine.jpg", folder_id: "f-1" },
+  { id: "obj-23", display_name: "a.jpg", folder_id: "f-2" },
+  { id: "obj-raw", display_name: "b.raw", folder_id: "f-3" },
+];
+
+/** Files first, then folders from the leaves up to the target. */
+const CASCADE_EXPECTED_ORDER = [
+  "object:obj-r1",
+  "object:obj-23",
+  "object:obj-raw",
+  "folder:f-3",
+  "folder:f-2",
+  "folder:f-1",
+];
+
+const CASCADE_OPTION_LABEL =
+  "Supprimer aussi tout son contenu (fichiers et sous-dossiers)";
+
+test("a 409 folder deletion can cascade: content listed, confirmed, deleted leaves-to-root", async ({
+  page,
+}) => {
+  const mocks = await installCascadeMocks(page, {
+    folders: CASCADE_FOLDERS,
+    objects: CASCADE_OBJECTS,
+  });
+  await login(page);
+
+  const photos = page.getByRole("button", { name: "Photos", exact: true });
+  await expect(photos).toBeVisible();
+
+  // A plain delete is refused: the folder still holds files and subfolders.
+  await page.getByRole("button", { name: "Actions pour le dossier Photos" }).click();
+  await page.getByRole("menuitem", { name: "Supprimer" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Supprimer" }).click();
+  const refusal = page.getByRole("alert").filter({ hasText: "n'est pas vide" });
+  await expect(refusal).toBeVisible();
+
+  // The refusal offers the explicit recursive flow.
+  await refusal
+    .getByRole("button", { name: "Supprimer avec son contenu…" })
+    .click();
+
+  const dialog = page.getByRole("dialog", {
+    name: "Supprimer le dossier et son contenu",
+  });
+  await expect(dialog).toBeVisible();
+  // The inventory comes from real list requests (3 files, 2 subfolders).
+  await expect(dialog.getByText("3 fichier(s)", { exact: true })).toBeVisible();
+  await expect(
+    dialog.getByText("2 sous-dossier(s)", { exact: true }),
+  ).toBeVisible();
+
+  // Nothing runs until the folder name is typed back.
+  const run = dialog.getByRole("button", {
+    name: "Supprimer le contenu et le dossier",
+  });
+  await expect(run).toBeDisabled();
+  await dialog.getByLabel("Confirmation par recopie du nom").fill("Photos");
+  await expect(run).toBeEnabled();
+  await run.click();
+
+  await expect(
+    dialog.getByText(/Contenu supprimé et dossier supprimé/),
+  ).toBeVisible();
+  expect(mocks.deletedOrder()).toEqual(CASCADE_EXPECTED_ORDER);
+
+  // The explorer refreshes to the real state: the folder is gone.
+  await dialog.getByRole("button", { name: "Fermer" }).click();
+  await expect(photos).toHaveCount(0);
+});
+
+test("a partial cascade failure is logged and retried to completion", async ({
+  page,
+}) => {
+  const mocks = await installCascadeMocks(page, {
+    folders: CASCADE_FOLDERS,
+    objects: CASCADE_OBJECTS,
+    // The leaf folder's first DELETE fails once (transient server fault).
+    folderFailures: { "f-3": 1 },
+  });
+  await login(page);
+
+  // Reach the cascade directly from the folder confirmation dialog.
+  await page.getByRole("button", { name: "Actions pour le dossier Photos" }).click();
+  await page.getByRole("menuitem", { name: "Supprimer" }).click();
+  const confirmDialog = page.getByRole("dialog");
+  await confirmDialog.getByLabel(CASCADE_OPTION_LABEL).check();
+  await confirmDialog.getByRole("button", { name: "Supprimer" }).click();
+
+  const dialog = page.getByRole("dialog", {
+    name: "Supprimer le dossier et son contenu",
+  });
+  await dialog.getByLabel("Confirmation par recopie du nom").fill("Photos");
+  await dialog
+    .getByRole("button", { name: "Supprimer le contenu et le dossier" })
+    .click();
+
+  // A leaf folder fails, so its parents cannot be deleted either: real
+  // failures, each logged by item — never a fabricated success.
+  await expect(
+    dialog.getByText(/Suppression terminée avec échecs/),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("heading", { name: /Journal des échecs/ }),
+  ).toBeVisible();
+  await expect(dialog.getByText("raw", { exact: true })).toBeVisible();
+
+  // Retrying the failures completes the deletion.
+  await dialog.getByRole("button", { name: "Réessayer les échecs" }).click();
+  await expect(
+    dialog.getByText(/Contenu supprimé et dossier supprimé/),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("heading", { name: /Journal des échecs/ }),
+  ).toHaveCount(0);
+  expect(mocks.deletedOrder()).toEqual(CASCADE_EXPECTED_ORDER);
+});
+
+test("the cascade option is only offered with objects:delete + objects:write", async ({
+  page,
+}) => {
+  await installCascadeMocks(page, {
+    role: "user",
+    scopes: ["objects:read", "objects:write"],
+    folders: [{ id: "f-1", name: "Photos", parent_id: null, created_at: 0 }],
+    objects: [{ id: "obj-1", display_name: "a.jpg", folder_id: "f-1" }],
+  });
+  await login(page, "user");
+
+  // The folder confirmation never offers a flow this session may not run.
+  await page.getByRole("button", { name: "Actions pour le dossier Photos" }).click();
+  await page.getByRole("menuitem", { name: "Supprimer" }).click();
+  const confirmDialog = page.getByRole("dialog");
+  await expect(confirmDialog.getByLabel(CASCADE_OPTION_LABEL)).toHaveCount(0);
+  await confirmDialog.getByRole("button", { name: "Supprimer" }).click();
+
+  // The 409 refusal stays, but without the cascade entry point.
+  const refusal = page.getByRole("alert").filter({ hasText: "n'est pas vide" });
+  await expect(refusal).toBeVisible();
+  await expect(
+    refusal.getByRole("button", { name: "Supprimer avec son contenu…" }),
+  ).toHaveCount(0);
+});
