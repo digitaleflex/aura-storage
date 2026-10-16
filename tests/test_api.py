@@ -400,3 +400,20 @@ def test_live_round_trip_with_integrity():
     _time.sleep(4)
     expired = httpx.put(short_url, content=b"x", headers={"Content-Type": "text/plain"}, timeout=30)
     assert expired.status_code == 403, expired.text
+
+
+def test_default_list_hides_soft_deleted_objects():
+    c, headers = authed_client()
+    oid = c.post(
+        "/api/v1/objects/upload-intents",
+        json={"bucket": "aura", "display_name": "vanish.txt", "size_bytes": 1},
+        headers=headers,
+    ).json()["id"]
+    assert oid in {o["id"] for o in c.get("/api/v1/objects").json()["items"]}
+    assert c.delete(f"/api/v1/objects/{oid}", headers=headers).status_code == 200
+    # The file visibly disappears from the default listing...
+    assert oid not in {o["id"] for o in c.get("/api/v1/objects").json()["items"]}
+    # ...but stays reachable explicitly (future trash view) until purged.
+    assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "deleted"
+    deleted = c.get("/api/v1/objects", params={"status": "deleted"}).json()["items"]
+    assert oid in {o["id"] for o in deleted}

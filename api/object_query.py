@@ -45,6 +45,7 @@ def build_object_where(
     folder_id: Optional[str] = None,
     q: Optional[str] = None,
     status: Optional[str] = None,
+    hide_deleted: bool = False,
     content_type: Optional[str] = None,
     min_size: Optional[int] = None,
     max_size: Optional[int] = None,
@@ -77,6 +78,12 @@ def build_object_where(
     if status is not None:
         clauses.append(f"status = {ph}")
         params.append(status)
+    elif hide_deleted:
+        # Default listing hides soft-deleted rows so a delete visibly removes
+        # the file; pass status=deleted explicitly (future trash view) to see
+        # them.
+        clauses.append(f"status != {ph}")
+        params.append("deleted")
     if content_type is not None:
         clauses.append(f"LOWER(content_type) = LOWER({ph})")
         params.append(content_type)

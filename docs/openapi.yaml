@@ -137,7 +137,8 @@ paths:
           description: >-
             Page of object metadata. Each item carries folder_id, created_at and
             updated_at; internal storage coordinates (bucket, object_key) are
-            never returned.
+            never returned. Soft-deleted rows are hidden unless status=deleted
+            is passed explicitly.
         "401": { description: Authentication required }
         "403": { description: Access denied }
         "422": { description: Malformed folder_id, or an unsupported status/sort/order value }

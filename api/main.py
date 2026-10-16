@@ -732,7 +732,8 @@ def list_objects(
     needle = (q or "").strip() or None
     rows = repo.list_objects(
         **_object_scope(principal), folder_id=folder_filter, q=needle,
-        status=status, content_type=(content_type or None),
+        status=status, hide_deleted=status is None,
+        content_type=(content_type or None),
         min_size=min_size, max_size=max_size,
         created_after=created_after, created_before=created_before,
         sort=sort, order=order, limit=limit, offset=offset,

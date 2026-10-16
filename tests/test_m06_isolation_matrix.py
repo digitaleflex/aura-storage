@@ -419,7 +419,10 @@ def test_m06_reconcile_storage_failure_is_reported(monkeypatch):
 
     out = reconcile_pending(main.repo, BrokenS3(), expire_after_s=3600)
     assert out["expired"] == 0
-    assert out["storage_failures"] == 1
+    # >= 1: the shared offline catalogue may hold older stale intents from
+    # other test files; what matters is OUR intent is untouched, not the
+    # exact global count.
+    assert out["storage_failures"] >= 1
     # Not declared cleaned: still pending for the next sweep.
     assert c.get(f"/api/v1/objects/{oid}",
                  headers=_svc(token)).json()["status"] == "pending"
@@ -428,9 +431,13 @@ def test_m06_reconcile_storage_failure_is_reported(monkeypatch):
         def delete_object(self, Bucket, Key):
             return {}
 
+    before = c.get(f"/api/v1/objects/{oid}",
+                   headers=_svc(token)).json()["status"]
+    assert before == "pending"
     out = reconcile_pending(main.repo, HealthyS3(), expire_after_s=3600)
-    assert out == {"expired": 1, "storage_deletes_attempted": 1,
-                   "storage_failures": 0}
+    assert out["expired"] >= 1 and out["storage_failures"] == 0
+    assert c.get(f"/api/v1/objects/{oid}",
+                 headers=_svc(token)).json()["status"] == "expired"
 
 
 def test_m06_no_default_bucket_refuses_implicit_upload():
