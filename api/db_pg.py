@@ -526,10 +526,26 @@ class Repository:
         )["n"])
 
     def folder_object_count(self, fid: str, *, owner_id: str) -> int:
+        # Only live objects keep a folder "non-empty": soft-deleted rows are
+        # hidden from every listing (api/object_query.py) but still carry a
+        # ``folder_id``, so counting them would refuse the DELETE of a folder
+        # the user already sees as empty.
         return int(self._one(
-            "SELECT COUNT(*) AS n FROM objects WHERE folder_id = %s AND owner_id = %s",
+            "SELECT COUNT(*) AS n FROM objects WHERE folder_id = %s AND owner_id = %s "
+            "AND status != 'deleted'",
             (fid, owner_id),
         )["n"])
+
+    def detach_soft_deleted_objects(self, fid: str, *, owner_id: str) -> None:
+        # Called just before a folder is removed: soft-deleted objects are
+        # already gone from the UI, so drop only their folder reference to avoid
+        # a dangling ``objects.folder_id`` FK. The rows stay in the catalogue
+        # until an explicit purge.
+        self._run(
+            "UPDATE objects SET folder_id = NULL, updated_at = %s "
+            "WHERE folder_id = %s AND owner_id = %s AND status = 'deleted'",
+            (self.now(), fid, owner_id),
+        )
 
     def delete_folder(self, fid: str, *, owner_id: str) -> None:
         self._run("DELETE FROM folders WHERE id = %s AND owner_id = %s", (fid, owner_id))

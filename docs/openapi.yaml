@@ -66,7 +66,11 @@ paths:
       summary: Introspect the current principal
       responses:
         "200":
-          description: Principal metadata (kind, role, scopes, space, application)
+          description: >-
+            Principal metadata (kind, role, scopes, space, application). For a
+            human session, `csrf_token` re-exposes the token issued at login so
+            the client can recover it after a refresh without a new login; it is
+            always `null` for service (Bearer) principals.
         "401": { description: Authentication required }
   /api/v1/objects:
     get:

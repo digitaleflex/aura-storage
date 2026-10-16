@@ -71,8 +71,8 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/admin/reconcile` | `admin:write` | bounded global sweep of stale intents (`limit` 1..5000, oldest first; repeat until 0); returns `{expired, storage_deletes_attempted, storage_failures}` — a storage failure keeps the intent `pending` for the next sweep and is counted in `storage_failures`, never as cleaned (M06) |
 | GET | `/api/v1/admin/stats` | `admin:read` | aggregate counts, no content |
 | GET | `/api/v1/admin/audit` | `admin:read` | audit search newest-first (period/actor/action/result/space/application/request filters, `limit` 1..500 + `offset`); `total` counts window matches, `truncated` warns of older history (M07) |
-| POST | `/api/v1/admin/audit/prune` | `admin:write` | enforce `AURA_AUDIT_RETENTION_DAYS`
-| GET | `/api/v1/admin/orphans` | `admin:read` | read-only orphan candidates (available rows missing at storage); never deletes (M07/#87) | (default 90); timestamp-less lines kept (M07) |
+| POST | `/api/v1/admin/audit/prune` | `admin:write` | enforce `AURA_AUDIT_RETENTION_DAYS` (default 90); timestamp-less lines kept (M07) |
+| GET | `/api/v1/admin/orphans` | `admin:read` | read-only orphan candidates (available rows missing at storage); never deletes (M07/#87) |
 | GET | `/api/v1/admin/usage` | `admin:read` | real per-space consumption (verified available bytes + counts) with `measured_at` and configured limits; optional `space_id` filter (M07) |
 | GET | `/api/v1/admin/health` | `admin:read` | supervision snapshot (api/database/storage/disk + recent errors); always 200, top-level `degraded` on dependency failure (M07) |
 | POST/GET | `/api/v1/admin/applications` | `admin:write` / `admin:read` | platform registry |

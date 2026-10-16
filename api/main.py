@@ -4,6 +4,7 @@ Catalogue metadata lives here; object bytes travel directly between the client
 and S3 through short-lived presigned URLs. The API never stores a browser session
 token in the response body and never puts S3 credentials in the frontend.
 """
+import os
 import shutil
 import time
 from typing import Annotated, Literal
@@ -484,6 +485,14 @@ def logout(principal: dict = Depends(authorize(human=True))):
 
 @app.get("/api/v1/me")
 def me(principal: dict = Depends(authorize())):
+    # ``csrf_token`` is additive and human-only: the token is issued once at
+    # login and kept in the frontend's memory, so a refresh or a new tab used to
+    # lose it while the ``aura_session`` cookie stayed valid, making every
+    # mutation fail CSRF. Re-exposing it here lets the client recover the token
+    # from its still-valid session without a new login. A CSRF token is not a
+    # secret in the double-submit model (it is only meaningful paired with the
+    # HttpOnly cookie and unreadable cross-origin); service identities have no
+    # session and therefore receive ``null``.
     return {
         "id": principal["id"],
         "kind": principal["kind"],
@@ -491,6 +500,7 @@ def me(principal: dict = Depends(authorize())):
         "space_id": principal["space_id"],
         "application_id": principal["application_id"],
         "scopes": sorted(effective_scopes(principal)),
+        "csrf_token": principal.get("csrf") if principal["kind"] == "user" else None,
     }
 
 
@@ -1012,6 +1022,12 @@ def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, 
         raise HTTPException(status_code=409, detail="folder is not empty")
     if repo.folder_object_count(fid, owner_id=owner_id) > 0:
         raise HTTPException(status_code=409, detail="folder is not empty")
+    # Soft-deleted objects no longer block the delete (they are hidden from
+    # every listing); detach their folder reference before removing the folder
+    # so ``objects.folder_id`` is never left dangling on PostgreSQL. This is what
+    # lets the explorer's cascade flow finish: it soft-deletes the files first,
+    # then removes the now-empty folders from the leaves up.
+    repo.detach_soft_deleted_objects(fid, owner_id=owner_id)
     repo.delete_folder(fid, owner_id=owner_id)
     audit_event("folder.delete", principal["id"], "success", {"folder_id": fid})
     return {"id": fid, "status": "deleted"}
@@ -1218,7 +1234,11 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
     except Exception:
         components["storage"] = {"status": "down", "error": "unreachable"}
     try:
-        disk = shutil.disk_usage(audit_path())
+        # Measure the volume that HOLDS the audit log, not the file itself:
+        # ``shutil.disk_usage`` stats the exact path, so a log not written yet
+        # (fresh container, no request audited) would wrongly report the disk as
+        # unreadable. ``audit_path()`` may be relative (dev), hence the "." fallback.
+        disk = shutil.disk_usage(os.path.dirname(audit_path()) or ".")
         components["disk"] = {
             "status": "ok", "total_bytes": disk.total,
             "used_bytes": disk.used, "free_bytes": disk.free,
