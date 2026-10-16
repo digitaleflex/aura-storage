@@ -336,13 +336,13 @@ paths:
         "409": { description: Duplicate name, cycle, or depth limit reached }
         "422": { description: No fields supplied, or invalid name }
     delete:
-      summary: Delete an empty folder (objects:delete, human only)
+      summary: Delete a folder (objects:delete, human only)
       parameters:
         - $ref: "#/components/parameters/FolderId"
       responses:
         "200": { description: Folder deleted }
         "404": { description: Folder not found or not visible }
-        "409": { description: Folder is not empty }
+        "409": { description: Folder still has children or live objects; soft-deleted objects are ignored and detached before removal }
   /api/v1/admin/reconcile:
     post:
       summary: Expire stale pending uploads (admin:write)

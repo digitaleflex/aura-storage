@@ -34,9 +34,11 @@ Implemented (#61). Folders are logical catalogue entities, not real
 directories on the host. They support parent/child relationships, names and
 per-folder ownership. Implemented semantics: names are flat labels (no path
 separators), a name is unique per owner+parent, rename/move never creates a cycle,
-depth is capped, deletes refuse a non-empty folder, and every operation is scoped to
-the owner. `GET /api/v1/folders?all=true` returns the whole tree as a flat list
-(each item carries `parent_id`) so a client rebuilds the hierarchy in one request.
+depth is capped, deletes refuse a folder that still has children or live objects
+(soft-deleted objects are ignored and their folder reference detached first), and
+every operation is scoped to the owner. `GET /api/v1/folders?all=true` returns the
+whole tree as a flat list (each item carries `parent_id`) so a client rebuilds the
+hierarchy in one request.
 An object is filed or unfiled with `PATCH /api/v1/objects/{id}` (`folder_id`, null =
 root). Folder routes require a human session; space-scoped folders for service
 identities remain a follow-up (#35).
