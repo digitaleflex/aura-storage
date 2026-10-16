@@ -829,6 +829,35 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
     }
 
 
+@app.post("/api/v1/objects/{oid}/preview-intent")
+def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    # Mirror of download-intent: same scope, same 404 (foreign/unknown id is not
+    # an existence oracle) and same 409 (only available objects are previewable).
+    # The difference is the presigned GET is bound to ``Content-Disposition:
+    # inline`` and the object's own content type, so the browser renders PDFs,
+    # images and audio in place; the frontend falls back to a download when the
+    # type is not renderable. No storage coordinates are echoed back.
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != "available":
+        raise HTTPException(status_code=409, detail="object not available")
+    url = presigned_get(
+        s3, row["bucket"], row["object_key"], settings.intent_ttl,
+        content_disposition="inline", content_type=row["content_type"],
+    )
+    audit_event("preview-intent", principal["id"], "success", {"object_id": oid})
+    return {
+        "id": oid, "preview_url": url, "method": "GET",
+        "expires_in": settings.intent_ttl,
+        "expires_at": int(time.time()) + settings.intent_ttl,
+        "display_name": row["display_name"], "content_type": row["content_type"],
+        "size_bytes": row["size_bytes"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Logical folders (#61). Human-owned catalogue metadata: no bytes, no host
 # directories. A folder is addressed by its id and scoped to its owner, so one
