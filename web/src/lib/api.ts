@@ -293,6 +293,29 @@ export interface DownloadIntentResponse {
   checksum_algorithm?: string;
 }
 
+/**
+ * Response of `POST /api/v1/objects/{id}/preview-intent`. Same shape as a
+ * download intent, but the presigned GET is bound to `Content-Disposition:
+ * inline` so renderable types (image, audio, PDF) display in place.
+ */
+export interface PreviewIntentResponse {
+  id: string;
+  /** Short-lived, opaque presigned URL used directly as the media `src`. */
+  preview_url: string;
+  method: string;
+  expires_in: number;
+  expires_at: number | null;
+  display_name: string;
+  content_type: string;
+  size_bytes: number;
+  /**
+   * True when the preview endpoint was unavailable (404/501) and this intent
+   * was minted through the download endpoint instead: inline rendering is not
+   * guaranteed, so the UI should degrade to a download offer.
+   */
+  fallback?: boolean;
+}
+
 /** Principal metadata returned by GET /api/v1/me. */
 export interface SessionInfo {
   id: string;
@@ -540,6 +563,47 @@ export const api = {
       `/api/v1/objects/${encodeURIComponent(id)}/download-intent`,
       { method: "POST", csrf },
     );
+  },
+
+  /**
+   * Mint an inline preview intent (`objects:read`). Mirrors the download
+   * intent but asks the storage for `Content-Disposition: inline`, so images,
+   * audio and PDFs can be pointed at directly by the browser.
+   *
+   * Older backends (or a not-yet-deployed server) answer 404/501 to this
+   * route; we then degrade to a download intent so the feature never hard-fails
+   * on a server that only knows download-intent. Genuine 409s (object not
+   * available) are propagated unchanged.
+   */
+  async createPreviewIntent(
+    id: string,
+    csrf: string,
+  ): Promise<PreviewIntentResponse> {
+    try {
+      return await request<PreviewIntentResponse>(
+        `/api/v1/objects/${encodeURIComponent(id)}/preview-intent`,
+        { method: "POST", csrf },
+      );
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 404 || err.status === 501)) {
+        const download = await request<DownloadIntentResponse>(
+          `/api/v1/objects/${encodeURIComponent(id)}/download-intent`,
+          { method: "POST", csrf },
+        );
+        return {
+          id: download.id,
+          preview_url: download.download_url,
+          method: download.method,
+          expires_in: download.expires_in,
+          expires_at: download.expires_at,
+          display_name: download.display_name,
+          content_type: download.content_type,
+          size_bytes: download.size_bytes,
+          fallback: true,
+        };
+      }
+      throw err;
+    }
   },
 
   // --- Object lifecycle ---

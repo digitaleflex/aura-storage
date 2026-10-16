@@ -32,6 +32,7 @@ import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
+import { PreviewModal } from "../components/PreviewModal";
 import { RowMenu } from "../components/RowMenu";
 
 /** Objects fetched per page ("Charger plus" increments the offset). */
@@ -445,6 +446,8 @@ export function ObjectsPage() {
   const [moveTarget, setMoveTarget] = useState<FolderItem | null>(null);
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
   const [details, setDetails] = useState<ObjectItem | null>(null);
+  /** Object whose inline preview modal is open (null = closed). */
+  const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{
@@ -2219,6 +2222,11 @@ export function ObjectsPage() {
                       items={[
                         { label: "Détails", onSelect: () => setDetails(item) },
                         {
+                          label: "Aperçu",
+                          disabled: item.status !== "available",
+                          onSelect: () => setPreviewTarget(item),
+                        },
+                        {
                           label: "Télécharger",
                           disabled:
                             item.status !== "available" || downloadingId !== null,
@@ -2416,6 +2424,14 @@ export function ObjectsPage() {
             <button
               type="button"
               className="btn"
+              disabled={details.status !== "available"}
+              onClick={() => setPreviewTarget(details)}
+            >
+              Aperçu
+            </button>
+            <button
+              type="button"
+              className="btn"
               onClick={() => void handleCopyReference(details)}
             >
               Copier la référence
@@ -2466,6 +2482,18 @@ export function ObjectsPage() {
           </aside>
         </>
       ) : null}
+
+      {/* Inline preview: image / audio / PDF rendered from the presigned URL,
+          with a download fallback for anything the browser cannot display. */}
+      <PreviewModal
+        item={previewTarget}
+        csrf={csrf}
+        onClose={() => setPreviewTarget(null)}
+        onDownload={(target) => {
+          setPreviewTarget(null);
+          void handleDownload(target);
+        }}
+      />
 
       {/* New folder */}
       <Dialog
