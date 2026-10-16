@@ -303,6 +303,12 @@ export interface SessionInfo {
   space_id: string | null;
   application_id: string | null;
   scopes: string[];
+  /**
+   * CSRF token for the current session (additive field of GET /api/v1/me).
+   * Present for human sessions, `null` for machine identities. Used to
+   * re-hydrate the in-memory CSRF token after a reload/new tab.
+   */
+  csrf_token: string | null;
 }
 
 /** True when a role may read the administration console (`admin:read`). */

@@ -182,6 +182,57 @@ def test_me_endpoint():
     assert c2.get("/api/v1/me").json()["id"]
 
 
+def test_me_exposes_csrf_token_recoverable_without_relogin():
+    # Regression for "session expires all the time": the CSRF token was returned
+    # only by POST /login and kept in the frontend's memory, so a refresh/new tab
+    # lost it while the aura_session cookie stayed valid, breaking every mutation.
+    # GET /me must hand the token back for a human session.
+    c = make_client()
+    csrf = login(c)
+    me = c.get("/api/v1/me")
+    assert me.status_code == 200
+    token = me.json()["csrf_token"]
+    assert token and token == csrf
+    # The recovered token authorizes a real mutation (double-submit passes).
+    name = f"csrf-recovered-{os.urandom(4).hex()}"
+    ok = c.post("/api/v1/folders", json={"name": name},
+                headers={"X-CSRF-Token": token})
+    assert ok.status_code == 200, ok.text
+    # And a bogus token is still refused, proving the check was not bypassed.
+    bad = c.post("/api/v1/folders", json={"name": name + "-x"},
+                 headers={"X-CSRF-Token": "bogus"})
+    assert bad.status_code == 403
+
+
+def test_me_csrf_token_is_null_for_service_principal():
+    # Additive field, human-only: a service (Bearer) principal has no session,
+    # so the token must be null rather than leaking another identity's value.
+    from api.authz import SERVICE_SCOPES
+    tag = os.urandom(4).hex()
+    c, headers = authed_client()
+    aid = c.post("/api/v1/admin/applications", json={"name": f"csrf-app-{tag}"},
+                 headers=headers).json()["id"]
+    sid = c.post("/api/v1/admin/spaces", json={"application_id": aid,
+                 "name": f"csrf-space-{tag}", "environment": "test"},
+                 headers=headers).json()["id"]
+    token = c.post("/api/v1/admin/identities", json={"space_id": sid,
+                  "name": f"csrf-svc-{tag}", "scopes": sorted(SERVICE_SCOPES)},
+                  headers=headers).json()["token"]
+    svc = make_client()
+    me = svc.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+    assert me.json()["kind"] == "service"
+    assert me.json()["csrf_token"] is None
+
+
+def test_default_session_ttl_is_90_days():
+    # The shipped default (no override) is 7776000s = 90 days. Skip if the
+    # running environment deliberately overrides the TTL.
+    if os.environ.get("AURA_SESSION_TTL"):
+        pytest.skip("AURA_SESSION_TTL is overridden in this environment")
+    assert main.settings.session_ttl == 7776000
+
+
 def test_mutation_requires_csrf():
     c, _ = authed_client()
     r = c.post(

@@ -175,6 +175,10 @@ services:
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
       AURA_COOKIE_SECURE: "1"
+      # Human session cookie lifetime (seconds): 90 days. Pinned here so the
+      # deployed stack matches the documented default (api/config.py). Override
+      # in .env only deliberately; the expiry is fixed at login (no renewal).
+      AURA_SESSION_TTL: "7776000"
       # No origin/CORS allow-list here on purpose: the api has no Traefik route
       # and is reached same-origin through the app proxy (app/nginx.conf proxies
       # /api/ to this service). Browser uploads go straight to SeaweedFS via

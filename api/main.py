@@ -484,6 +484,14 @@ def logout(principal: dict = Depends(authorize(human=True))):
 
 @app.get("/api/v1/me")
 def me(principal: dict = Depends(authorize())):
+    # ``csrf_token`` is additive and human-only: the token is issued once at
+    # login and kept in the frontend's memory, so a refresh or a new tab used to
+    # lose it while the ``aura_session`` cookie stayed valid, making every
+    # mutation fail CSRF. Re-exposing it here lets the client recover the token
+    # from its still-valid session without a new login. A CSRF token is not a
+    # secret in the double-submit model (it is only meaningful paired with the
+    # HttpOnly cookie and unreadable cross-origin); service identities have no
+    # session and therefore receive ``null``.
     return {
         "id": principal["id"],
         "kind": principal["kind"],
@@ -491,6 +499,7 @@ def me(principal: dict = Depends(authorize())):
         "space_id": principal["space_id"],
         "application_id": principal["application_id"],
         "scopes": sorted(effective_scopes(principal)),
+        "csrf_token": principal.get("csrf") if principal["kind"] == "user" else None,
     }
 
 
