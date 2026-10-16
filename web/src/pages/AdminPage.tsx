@@ -565,7 +565,15 @@ export function AdminPage() {
             Statistiques indisponibles.
           </p>
         ) : stats.isPending ? (
-          <p className="muted">Chargement…</p>
+          <div className="stat-grid skeleton" role="status" aria-label="Chargement des statistiques">
+            <span className="visually-hidden">Chargement…</span>
+            {Array.from({ length: 5 }).map((_, index) => (
+              <div className="stat" key={index} aria-hidden="true">
+                <div className="skeleton-bar" style={{ height: 28 }} />
+                <div className="skeleton-bar" style={{ marginTop: 8 }} />
+              </div>
+            ))}
+          </div>
         ) : (
           <>
             <div className="stat-grid">

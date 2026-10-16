@@ -1014,6 +1014,108 @@ select:focus-visible {
   }
 }
 
+/* Toast stack (P1.2): bottom-right, above content, motion-safe. */
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(380px, calc(100vw - 32px));
+  z-index: 60;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-2);
+  border-left: 3px solid var(--muted);
+  background: var(--steel-1);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 160ms ease-out,
+    transform 160ms ease-out;
+}
+
+.toast-in {
+  opacity: 1;
+  transform: none;
+}
+
+.toast-ok {
+  border-left-color: var(--ok);
+}
+
+.toast-error {
+  border-left-color: var(--danger);
+}
+
+.toast-info {
+  border-left-color: var(--signal);
+}
+
+.toast-text {
+  flex: 1;
+}
+
+/* Skeleton loaders (P1.1): steel pulse bars matching the ledger grid. */
+.skeleton {
+  border-radius: var(--radius);
+}
+
+.skeleton-bar {
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--line) 25%, var(--steel-2) 50%, var(--line) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.skeleton-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 0.7fr 0.7fr 0.8fr 40px;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    transition: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .skeleton-bar {
+    animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .toasts {
+    right: 8px;
+    left: 8px;
+    bottom: 8px;
+    max-width: none;
+  }
+}
+
 .intake h2 {
   font-family: var(--font-mono);
   font-size: 11.5px;

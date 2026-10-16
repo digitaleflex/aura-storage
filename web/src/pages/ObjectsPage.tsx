@@ -24,6 +24,7 @@ import {
 } from "../lib/folderTree";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
+import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
 import { RowMenu } from "../components/RowMenu";
 
@@ -186,6 +187,15 @@ export function ObjectsPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  function dismissToast(id: number) {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }
+
+  function notify(kind: Toast["kind"], text: string) {
+    setToasts((current) => [...current.slice(-4), makeToast(kind, text)]);
+  }
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [renameTarget, setRenameTarget] = useState<FolderItem | null>(null);
@@ -194,7 +204,6 @@ export function ObjectsPage() {
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
   const [details, setDetails] = useState<ObjectItem | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
@@ -461,7 +470,7 @@ export function ObjectsPage() {
     },
     onSuccess: () => {
       setDetails(null);
-      setNotice("Objet marqué comme supprimé. Les octets restent jusqu'à une purge.");
+      notify("ok", "Objet marqué comme supprimé. Les octets restent jusqu'à une purge.");
       invalidateLibrary();
     },
     onError: (err) => reportError(err, "Suppression impossible."),
@@ -490,14 +499,13 @@ export function ObjectsPage() {
       setSelectedIds(new Set());
       setDetails(null);
       if (failed.length === 0) {
-        setNotice(
+        notify(
+          "ok",
           `${deleted} objet(s) marqué(s) comme supprimé(s). Les octets restent jusqu'à une purge.`,
         );
       } else {
-        // Per-file outcome matters here: ApiError carries only one detail,
-        // so the summary is set explicitly instead of via reportError.
-        setNotice(null);
-        setActionError(
+        notify(
+          "error",
           `${deleted} supprimé(s), ${failed.length} échec(s) : ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`,
         );
       }
@@ -540,7 +548,10 @@ export function ObjectsPage() {
   function handleQueueUpdate(next: QueueState) {
     setQueue(next);
     if (!next.finished) return;
-    if (next.done > 0) invalidateLibrary();
+    if (next.done > 0) {
+      invalidateLibrary();
+      notify("ok", `${next.done} fichier(s) vérifié(s) et disponible(s).`);
+    }
     if (next.failed > 0) {
       const firstFailed = next.items.find((item) => item.state.phase === "failed");
       setUploadError(firstFailed?.state.error ?? "Envoi impossible.");
@@ -747,7 +758,8 @@ export function ObjectsPage() {
           ...current,
           ...loose.map((entry) => entry.file),
         ]);
-        setNotice(
+        notify(
+          "info",
           `Transfert en cours — ${loose.length} fichier(s) ajouté(s) à la file d'attente.` +
             (hasFolders ? " Les dossiers attendront la fin du transfert." : ""),
         );
@@ -775,7 +787,6 @@ export function ObjectsPage() {
 
   async function handleDownload(item: ObjectItem) {
     setActionError(null);
-    setDownloadStatus(null);
     if (!csrf) {
       setActionError("Session expirée. Reconnectez-vous.");
       return;
@@ -785,7 +796,8 @@ export function ObjectsPage() {
       const intent = await api.createDownloadIntent(item.id, csrf);
       // The browser performs the direct S3 GET; it manages its own progress.
       window.open(intent.download_url, "_blank", "noopener");
-      setDownloadStatus(
+      notify(
+        "ok",
         `Téléchargement de « ${intent.display_name} » lancé (${formatBytes(
           intent.size_bytes,
         )}).`,
@@ -1436,7 +1448,19 @@ export function ObjectsPage() {
             </button>
           </p>
         ) : objectsQuery.isPending ? (
-          <p className="muted">Chargement du catalogue…</p>
+          <div className="ledger skeleton" role="status" aria-label="Chargement du catalogue">
+            <span className="visually-hidden">Chargement du catalogue…</span>
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div className="skeleton-row" key={index} aria-hidden="true">
+                <div className="skeleton-bar" />
+                <div className="skeleton-bar" />
+                <div className="skeleton-bar" />
+                <div className="skeleton-bar" />
+                <div className="skeleton-bar" />
+                <div className="skeleton-bar" />
+              </div>
+            ))}
+          </div>
         ) : items.length === 0 ? (
           <p className="empty">
             {hasActiveFilters
@@ -1674,11 +1698,6 @@ export function ObjectsPage() {
               {objectsQuery.isFetchingNextPage ? "Chargement…" : "Charger plus"}
             </button>
           </div>
-        ) : null}
-        {downloadStatus ? (
-          <p role="status" className="alert alert-ok">
-            {downloadStatus}
-          </p>
         ) : null}
       </section>
 
@@ -2039,6 +2058,7 @@ export function ObjectsPage() {
           </button>
         </div>
       </Dialog>
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
