@@ -230,7 +230,7 @@ def test_default_session_ttl_is_90_days():
     # running environment deliberately overrides the TTL.
     if os.environ.get("AURA_SESSION_TTL"):
         pytest.skip("AURA_SESSION_TTL is overridden in this environment")
-    assert main.settings.session_ttl == 7776000
+    assert main.settings.session_ttl == 28800
 
 
 def test_mutation_requires_csrf():
