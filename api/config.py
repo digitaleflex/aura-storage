@@ -41,7 +41,12 @@ class Settings:
     # Only used when backend is 'postgres'. Never logged.
     db_dsn: str = os.environ.get("AURA_API_DSN", "")
     # Lifetimes (seconds).
-    session_ttl: int = _int("AURA_SESSION_TTL", 28800)
+    # Human session cookie lifetime: 90 days by default. A long session widens the
+    # window during which a stolen cookie stays valid; that is compensated by the
+    # HttpOnly + Secure + SameSite=Strict cookie and the CSRF double-submit enforced
+    # in api/main.py. The expiry is fixed at login (no rolling renewal), so logout
+    # or TTL expiry truly ends the session. Shorten via AURA_SESSION_TTL if needed.
+    session_ttl: int = _int("AURA_SESSION_TTL", 7776000)
     intent_ttl: int = _int("AURA_INTENT_TTL", 900)
     # Grace period after intent_ttl during which a commit is still accepted
     # (upload may finish just before expiry; #37).
