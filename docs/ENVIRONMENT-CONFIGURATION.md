@@ -54,7 +54,7 @@ The API container reads its own settings from Compose/environment (see `docker-c
 
 - `AURA_API_ADMIN_USER` / `AURA_API_ADMIN_PASSWORD`: bootstrap administrator, created on first boot with an argon2-hashed password.
 - `AURA_API_BACKEND` / `AURA_API_DSN`: catalogue backend; the Compose stack uses PostgreSQL.
-- `AURA_SESSION_TTL`: human session cookie lifetime in seconds. Default `7776000` (90 days); the expiry is fixed at login and the cookie is HttpOnly, `Secure` and `SameSite=Strict`. Shorten it for higher-value deployments.
+- `AURA_SESSION_TTL`: human session cookie lifetime in seconds. Default `28800` (8 hours) in the Docker Compose stack (explicitly pinned in the `api` service) and in the runtime configuration; the expiry is fixed at login and the cookie is HttpOnly, `Secure` and `SameSite=Strict`. Lengthen it in `.env` for lower-value deployments if necessary.
 - Optional guard rails (sensible defaults in `api/config.py`; uncomment in `.env` to override): `AURA_SESSION_TTL`, `AURA_INTENT_TTL`, `AURA_INTENT_GRACE_SECONDS`, `AURA_MAX_OBJECT_BYTES`, `AURA_COMMIT_CHUNK_BYTES`, `AURA_MAX_PENDING_INTENTS`, `AURA_M2M_RATE_LIMIT`, `AURA_M2M_RATE_WINDOW`, `AURA_LOGIN_RATE_LIMIT`, `AURA_LOGIN_RATE_WINDOW`.
 - `AURA_TRUSTED_PROXIES`: comma-separated IPs/CIDRs whose `X-Forwarded-For` is trusted when resolving the client IP for the rate limiters. Defaults to loopback + RFC1918 (the internal Docker network). The API is only reachable through Traefik and nginx; a client-supplied `X-Forwarded-For` is ignored unless the immediate peer is trusted. The API container runs uvicorn with `--no-proxy-headers` so this in-app resolution owns the client IP; do not enable `--forwarded-allow-ips=*`.
 
