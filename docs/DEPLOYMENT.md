@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This runbook describes the planned initial single-VPS deployment. The InterServer pilot VPS is provisioned. See [Server Profile](SERVER-PROFILE.md) for observed host details and [Host Bootstrap Checklist](HOST-BOOTSTRAP-CHECKLIST.md) for the phased setup sequence. The OS update reported that a reboot was required; verify the live kernel and SSH access before installing Docker. Verify the actual disk allocation, network quota and supported image releases before executing commands. A successful Compose parse is not production certification.
+This runbook describes the initial single-VPS deployment. The InterServer pilot VPS is provisioned and was rebooted into kernel 7.0.0-38-generic (verified live 2026-10-14, see [Server Profile](SERVER-PROFILE.md)). See [Server Profile](SERVER-PROFILE.md) for observed host details and [Host Bootstrap Checklist](HOST-BOOTSTRAP-CHECKLIST.md) for the phased setup sequence. Re-verify the live kernel and SSH access before installing Docker. Verify the actual disk allocation, network quota and supported image releases before executing commands. A successful Compose parse is not production certification.
 
 ## Target topology
 
@@ -10,7 +10,7 @@ This runbook describes the planned initial single-VPS deployment. The InterServe
 - Traefik publishes TCP 80/443 and routes the S3 hostname to the SeaweedFS S3 gateway.
 - SeaweedFS master, volume and filer/S3 gateway are separate containers on a private storage network.
 - Persistent host directories hold SeaweedFS state/data.
-- AURA Management API and PostgreSQL catalogue are future work; they are not in the current Compose stack.
+- AURA Management API and PostgreSQL catalogue are implemented and present in the Compose stack (services `api` and `postgres`); they have not yet passed acceptance on the pilot VPS.
 - A separate backup target is required before important data is imported.
 
 ## 1. Provider and OS checklist
@@ -33,8 +33,8 @@ This runbook describes the planned initial single-VPS deployment. The InterServe
 3. Create an A record pointing to the VPS public IPv4. Add AAAA only if IPv6 is correctly configured end-to-end.
 4. Ensure inbound TCP 80 and 443 reach Traefik directly or through a correctly configured upstream proxy.
 5. The Compose baseline uses Let's Encrypt HTTP-01. Certificate issuance fails if DNS is wrong, port 80 is blocked, or another service intercepts the challenge.
-6. Never publish the Traefik dashboard publicly without explicit authentication and network restrictions. The current baseline defines no public dashboard route.
-7. Opening `https://<S3_DOMAIN>/` in a browser returns XML `AccessDenied` by design; the Compose baseline answers that single unsigned root request with a static page pointing to the app (`docs/S3-ROOT-LANDING.md`).
+6. The Traefik dashboard is routed publicly on `DASHBOARD_DOMAIN` (HTTPS + Let's Encrypt) and protected by the `dash-auth` BasicAuth middleware (bcrypt value in `DASHBOARD_AUTH`, controlled via `.env`); port 8080 is never published. Keep the dashboard off every other hostname and never add a dashboard route without authentication.
+7. An unsigned `GET https://<S3_DOMAIN>/` returns a static landing page pointing to the app (`docs/S3-ROOT-LANDING.md`); every other request (signed, non-root, or non-GET) is handled by SeaweedFS, and an unauthenticated one returns XML `AccessDenied`.
 
 **DNS provider and zone notes (pilot).** The `eurinhash.com` zone is hosted on Cloudflare. The
 pilot relies on a wildcard `*.aura-storage.eurinhash.com` A record pointing to the VPS, so new

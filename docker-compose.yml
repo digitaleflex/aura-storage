@@ -44,7 +44,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    # The Traefik dashboard is enabled internally but is NOT routed publicly by this baseline.
+    # The Traefik dashboard (api@internal) IS routed on DASHBOARD_DOMAIN over
+    # HTTPS, protected by the `dash-auth` BasicAuth middleware (bcrypt). Port
+    # 8080 is never published; access requires the DASHBOARD_AUTH credentials.
     labels:
       - traefik.enable=true
       - traefik.docker.network=aura-edge
@@ -164,6 +166,12 @@ services:
     image: aura-api:local
     container_name: ${AURA_INSTANCE_ID:-aura-001}-api
     restart: unless-stopped
+    # Load the operator's .env into the container too, so every AURA_* override
+    # documented in .env.example / api/config.py (session TTL, upload ceilings,
+    # rate limits, trusted proxies, ...) reaches the process without editing this
+    # file. Explicit `environment:` entries below still win over env_file.
+    env_file:
+      - .env
     environment:
       TZ: ${TZ:-Africa/Porto-Novo}
       AURA_API_ADMIN_USER: ${AURA_API_ADMIN_USER:-admin}
@@ -175,14 +183,20 @@ services:
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
       AURA_COOKIE_SECURE: "1"
-      # Human session cookie lifetime (seconds): 90 days. Pinned here so the
-      # deployed stack matches the documented default (api/config.py). Override
-      # in .env only deliberately; the expiry is fixed at login (no renewal).
-      AURA_SESSION_TTL: "7776000"
+      # Human session cookie lifetime (seconds): 8h. Deliberately tighter than the
+      # 90-day value previously pinned on main (deploy/session-90d): a long-lived
+      # cookie widens the theft window for an Internet-facing app. Operators can
+      # still raise it in .env (e.g. 7776000) if a longer session is required.
+      AURA_SESSION_TTL: ${AURA_SESSION_TTL:-28800}
+      # Persistent audit log (JSONL) stored in the api-audit volume, so the
+      # 90-day retention promise survives container recreation/upgrade.
+      AURA_AUDIT_LOG: /var/lib/aura/audit/aura-audit.jsonl
       # No origin/CORS allow-list here on purpose: the api has no Traefik route
       # and is reached same-origin through the app proxy (app/nginx.conf proxies
       # /api/ to this service). Browser uploads go straight to SeaweedFS via
       # presigned URLs, so any CORS belongs to the SeaweedFS S3 gateway.
+    volumes:
+      - api-audit:/var/lib/aura/audit
     networks:
       - storage
     depends_on:
@@ -273,3 +287,4 @@ networks:
 volumes:
   traefik-acme:
   pgdata:
+  api-audit:

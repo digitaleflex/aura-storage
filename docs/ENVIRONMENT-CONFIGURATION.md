@@ -8,12 +8,20 @@ Environment-specific values belong in the local `.env`. Keep service topology an
 
 - `AURA_INSTANCE_ID`: local container name prefix, e.g. `aura-001`.
 - `TZ`: container timezone.
-- `TRAEFIK_IMAGE`, `SEAWEEDFS_IMAGE`: reviewed image references.
+- `TRAEFIK_IMAGE`, `SEAWEEDFS_IMAGE`, `POSTGRES_IMAGE`: reviewed image references.
 - `S3_DOMAIN`: public hostname routed to the S3 gateway.
 - `ACME_EMAIL`: certificate notifications.
 - `AURA_DATA_DIR`: persistent data root. Prefer an absolute path on the intended filesystem.
 - `SEAWEED_VOLUME_SIZE_LIMIT_MB`, `SEAWEED_VOLUME_MAX`: SeaweedFS capacity controls.
 - `S3_ACCESS_KEY`, `S3_SECRET_KEY`: initial S3 credentials injected into generated local config.
+- `APP_DOMAIN`: public hostname serving the app (nginx) at the domain root; nginx proxies `/api/` to the API service.
+- `DASHBOARD_DOMAIN`: public hostname routing the Traefik dashboard.
+- `DASHBOARD_AUTH`: dashboard BasicAuth entry in `user:bcrypt-hash` format; generate locally with an htpasswd-style tool and never commit it.
+- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`: catalogue database name, user and password (internal network only, no published ports).
+- `AURA_API_ADMIN_USER`, `AURA_API_ADMIN_PASSWORD`: bootstrap API administrator; the password is hashed with argon2 on first boot.
+- `WEED_S3_SSE_KEK`: 64-hex-character SSE-S3 key. Critical gate: loss may make encrypted objects unrecoverable; keep an offline copy (see the SSE-S3 section below).
+
+The `api` service also receives the local `.env` as its `env_file`, so the `AURA_*` tuning variables can be set there; explicit values in the Compose `environment:` block still take precedence over `env_file`.
 
 ## First setup
 
@@ -29,6 +37,16 @@ docker compose config --quiet
 The generator creates `config/seaweedfs/s3.json` from the tracked example and local environment values. The generated file is ignored by Git. It does not change or erase storage data.
 
 The generator currently injects the configured credentials into the placeholder credential fields in the example identity. Review the example's permissions and confirm policy/action syntax for the exact SeaweedFS release. Do not use a broad Admin identity for routine application access; create least-privilege identities as the service evolves.
+
+### Restricted S3 identity (not activated)
+
+`config/seaweedfs/s3-restricted.json.example` sketches a bucket/prefix-scoped
+identity (e.g. `Read/Write/List:aura-api-test`) for the least-privilege runtime
+identity promised above. It is **example only and not wired**: it is referenced
+by no script or Compose service, and `scripts/generate-config.sh` still generates
+a single Admin identity from `config/seaweedfs/s3.json.example`. Treat it as
+specified-but-not-implemented and validate the action/bucket scoping syntax
+against the exact SeaweedFS release before any use.
 
 ## Management API configuration
 

@@ -5,8 +5,11 @@
 `web/src/pages/ObjectsPage.tsx`) and covered by offline tests
 (`tests/test_transfer_engine.py`) and browser tests
 (`web/e2e/transfer-engine.spec.ts`, `web/e2e/upload-flow.spec.ts`).
-Validated on SQLite and an in-process S3 stub. **Not yet validated against
-PostgreSQL or the pinned SeaweedFS release** — see *Test matrix*.
+Validated on SQLite and an in-process S3 stub. The transfer-engine-specific
+matrix rows for PostgreSQL parity and live multipart/Range remain open (*Test
+matrix*); the pilot has partial dated live evidence — the API runs on the pilot
+PostgreSQL and an SSE-S3 smoke test PASSed on the pinned SeaweedFS 4.48
+(2026-10-15 and 2026-10-16 logs linked from `README.md`).
 
 This document is the transfer-engine companion to the contract in
 [File Transfer Contract](FILE-TRANSFER.md) and the plan in

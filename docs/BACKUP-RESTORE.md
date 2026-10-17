@@ -13,3 +13,9 @@ Before production:
 - Document recovery order, integrity validation, endpoint/DNS cutover and rollback.
 
 Restore acceptance: expected objects and metadata present; sampled checksums pass; authenticated S3 works; recovery time and data-loss window are recorded. Implement a backup script only after the exact supported SeaweedFS consistency mechanism is confirmed.
+
+The Compose stack holds state beyond SeaweedFS object data. The PostgreSQL
+catalogue (`pgdata` volume) and the management API audit trail (the `api-audit`
+volume mounted at `/var/lib/aura/audit`, `AURA_AUDIT_LOG=/var/lib/aura/audit/aura-audit.jsonl`)
+**must** be covered by the future backup design. No backup script exists yet;
+this is a requirement, not an implemented feature.

@@ -22,7 +22,7 @@ from .audit import (
     recent_error_events,
     reset_request_context,
 )
-from .auth import hash_password, new_token, verify_password
+from .auth import hash_password, new_token, verify_dummy, verify_password
 from .authz import (
     ADMIN_READ,
     ADMIN_WRITE,
@@ -39,6 +39,8 @@ from .config import settings
 from .identity import fingerprint, format_token, new_secret
 from .lifecycle import purge_object, reconcile_pending
 from .s3 import (
+    SSE_ALGORITHM,
+    SSE_HEADER,
     ObjectTooLarge,
     is_valid_bucket_name,
     make_clients,
@@ -167,6 +169,17 @@ def _as_dict(row) -> dict:
     return dict(row) if not isinstance(row, dict) else row
 
 
+def _upload_headers(content_type: str) -> dict:
+    """Headers the client must echo on a presigned PUT.
+
+    ``Content-Type`` and the SSE-S3 header are both part of the signed request
+    (see ``api/s3.presigned_put``); the browser has to resend them exactly or the
+    gateway rejects the upload. Returning them here keeps the value the API
+    signed and the value the client sends in lock-step.
+    """
+    return {"Content-Type": content_type, SSE_HEADER: SSE_ALGORITHM}
+
+
 def _canonical_id(value: str, field: str) -> str:
     """Return ``value`` as a canonical UUID v4, or raise 422.
 
@@ -194,7 +207,9 @@ Uuid4 = Annotated[str, AfterValidator(_canonical_uuid)]
 
 # Object list query vocabulary (M02). Literals make FastAPI return 422 for any
 # unsupported value and let the OpenAPI document describe the accepted set.
-ObjectStatus = Literal["pending", "available", "deleted", "expired", "failed"]
+ObjectStatus = Literal[
+    "pending", "available", "deleted", "expired", "failed", "aborted"
+]
 ObjectSort = Literal["created_at", "display_name", "size_bytes"]
 SortOrder = Literal["asc", "desc"]
 
@@ -456,7 +471,15 @@ def login(body: LoginIn, request: Request, response: Response):
         raise HTTPException(status_code=429, detail="too many login attempts",
                             headers={"Retry-After": str(settings.login_rate_window)})
     row = repo.get_user_by_name(body.username)
-    if row is None or not verify_password(row["pass_hash"], body.password):
+    if row is None:
+        # Unknown username: still perform one hash verification against a
+        # throwaway hash so the response time cannot reveal whether the user
+        # exists (no enumeration oracle).
+        verify_dummy()
+        valid = False
+    else:
+        valid = verify_password(row["pass_hash"], body.password)
+    if not valid:
         _login_record_failure(client_ip)
         audit_event("login", body.username, "failure")
         raise HTTPException(status_code=401, detail="invalid credentials")
@@ -572,7 +595,7 @@ def upload_intent(
                 return {
                     "id": existing["id"], "status": PENDING, "method": "PUT",
                     "upload_url": url,
-                    "headers": {"Content-Type": existing["content_type"]},
+                    "headers": _upload_headers(existing["content_type"]),
                     "content_type": existing["content_type"],
                     "size_bytes": expected, "expires_in": settings.intent_ttl,
                     "expires_at": expires_at, "idempotent_replay": True,
@@ -612,7 +635,7 @@ def upload_intent(
     })
     return {
         "id": oid, "status": PENDING, "method": "PUT", "upload_url": url,
-        "headers": {"Content-Type": content_type},
+        "headers": _upload_headers(content_type),
         "content_type": content_type, "size_bytes": body.size_bytes,
         "expires_in": settings.intent_ttl, "expires_at": intent_expires_at,
         "idempotent_replay": False,
@@ -1006,7 +1029,12 @@ def reconcile(limit: int = 500,
     # Bounded sweep (#87): at most `limit` stale intents per run so a huge
     # backlog cannot monopolize the API; repeat until expired is 0.
     limit = max(1, min(limit, 5000))
-    out = reconcile_pending(repo, s3ops, limit=limit)
+    # Derive the staleness window from the same settings that govern intent
+    # death (commit is accepted until intent_ttl + intent_grace_s), instead of
+    # relying on reconcile_pending's own default: an intent must never be swept
+    # while its grace window could still accept a legitimate commit.
+    expire_after_s = settings.intent_ttl + settings.intent_grace_s
+    out = reconcile_pending(repo, s3ops, expire_after_s=expire_after_s, limit=limit)
     audit_event("admin.reconcile", principal["id"], "success", out)
     return out
 

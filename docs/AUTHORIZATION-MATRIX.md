@@ -167,7 +167,9 @@ Never place a token in logs, tickets, chat, the frontend bundle, or this reposit
   `limit` 1..500 + `offset`; `truncated` warns of older history beyond the
   window. Retention (`POST /api/v1/admin/audit/prune`, `admin:write`)
   enforces `AURA_AUDIT_RETENTION_DAYS` (default 90) and keeps
-  timestamp-less lines.
+  timestamp-less lines. The trail is written to `AURA_AUDIT_LOG`
+  (`/var/lib/aura/audit/aura-audit.jsonl` in the Compose stack) on the
+  persistent `api-audit` volume, so it survives container recreation.
 - Usage (`GET /api/v1/admin/usage`, `admin:read`) reports live catalogue
   values only — verified available bytes, counts, configured ceilings — with
   `measured_at` as the freshness marker. See `docs/OBSERVABILITY.md` for the

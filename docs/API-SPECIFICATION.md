@@ -12,11 +12,11 @@ The management API provides a stable control interface for AURA's catalogue and 
 
 **Transfer decision:** normal file transfer uses the API as a control plane and short-lived S3-compatible presigned URLs as the data plane. The API must not proxy large file bodies by default. FTPS is an optional future migration/legacy adapter only when a concrete integration requires it. See [File Transfer Contract](FILE-TRANSFER.md) for the full sequence and acceptance criteria.
 
-## Proposed base path
+## Base path
 
 `/api/v1`
 
-The API should be exposed under a distinct hostname (for example `api-storage.example.com`) or an explicitly versioned route once the service exists. Do not point this route at SeaweedFS directly.
+As implemented, the API is reached **same-origin through the app proxy**: the `app` nginx container proxies `/api/` to the API service, so clients call `https://<APP_DOMAIN>/api/v1/...`. The API has no Traefik route and no host ports of its own (`docs/ARCHITECTURE.md`, `docs/openapi.yaml`). Evolving to a distinct hostname (for example `api-storage.example.com`) once demand requires it remains possible; either way, do not point this route at SeaweedFS directly.
 
 ## Core resources
 
