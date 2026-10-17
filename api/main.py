@@ -729,8 +729,12 @@ def abort_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
     try:
         s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
     except Exception:
-        # A transient storage error must not block the catalogue transition; the
-        # reconciliation sweep retries orphan cleanup after its grace period.
+        # A transient storage error must not block the catalogue transition, but
+        # this cleanup is best-effort only: once the row is marked ``aborted`` the
+        # reconciliation sweep no longer selects it (api/lifecycle.py::
+        # reconcile_pending only scans status='pending'), so the partial bytes are
+        # orphaned and are NOT retried automatically. They are detected read-only
+        # by GET /admin/orphans and must be cleaned operationally.
         pass
     repo.set_status(oid, ABORTED)
     audit_event("abort", principal["id"], "success", {"object_id": oid})

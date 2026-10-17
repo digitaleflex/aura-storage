@@ -325,12 +325,11 @@ def test_invalid_query_values_are_refused(params):
 
 
 def test_query_vocabulary_matches_the_repository():
-    # The Literal sets in the route and the SQL builder must not drift. ``aborted``
-    # is written by the abort endpoint (api/main.py) and defined by api/transfer.py,
-    # so both the route vocabulary and this set must carry it.
-    assert set(OBJECT_STATUSES) == {
-        "pending", "available", "deleted", "expired", "failed", "aborted"
-    }
+    # The route's ``ObjectStatus`` Literal and the SQL builder's vocabulary must not
+    # drift. ``aborted`` is written by the abort endpoint (api/main.py) and defined by
+    # api/transfer.py, so both must carry it. Comparing against the route Literal
+    # itself (not a hard-coded set) makes a route↔builder divergence actually fail.
+    assert set(OBJECT_STATUSES) == set(main.ObjectStatus.__args__)
     assert set(SORT_COLUMNS) == {"created_at", "display_name", "size_bytes"}
 
 

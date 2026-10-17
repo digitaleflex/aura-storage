@@ -112,6 +112,10 @@ services:
       - -s3
       - -s3.port=8333
       - -s3.config=/etc/seaweedfs/s3.json
+      # Restrict the CORS fallback rule to the app origin instead of the
+      # SeaweedFS default "*". AllowedHeaders stays "*" so the preflight for the
+      # signed `x-amz-server-side-encryption` header on presigned PUTs is echoed.
+      - -s3.allowedOrigins=https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
     environment:
       TZ: ${TZ:-Africa/Porto-Novo}
       # SeaweedFS SSE-S3 envelope-encryption key. Keep identical across all S3 gateways.
@@ -166,12 +170,12 @@ services:
     image: aura-api:local
     container_name: ${AURA_INSTANCE_ID:-aura-001}-api
     restart: unless-stopped
-    # Load the operator's .env into the container too, so every AURA_* override
-    # documented in .env.example / api/config.py (session TTL, upload ceilings,
-    # rate limits, trusted proxies, ...) reaches the process without editing this
-    # file. Explicit `environment:` entries below still win over env_file.
-    env_file:
-      - .env
+    # Least privilege: pass only the variables the API actually reads
+    # (api/config.py), instead of `env_file: .env` which injected every .env
+    # value — including WEED_S3_SSE_KEK, CLOUDFLARE_API_TOKEN, DASHBOARD_AUTH and
+    # POSTGRES_PASSWORD — into this network-exposed container. Each entry stays
+    # overridable from the operator's .env; the defaults below mirror
+    # api/config.py exactly, so an unset .env keeps today's behaviour identical.
     environment:
       TZ: ${TZ:-Africa/Porto-Novo}
       AURA_API_ADMIN_USER: ${AURA_API_ADMIN_USER:-admin}
@@ -180,6 +184,7 @@ services:
       AURA_S3_INTERNAL_ENDPOINT: http://seaweed-filer:8333
       AURA_S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}
       AURA_S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
+      AURA_S3_REGION: ${AURA_S3_REGION:-us-east-1}
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
       AURA_COOKIE_SECURE: "1"
@@ -191,6 +196,26 @@ services:
       # Persistent audit log (JSONL) stored in the api-audit volume, so the
       # 90-day retention promise survives container recreation/upgrade.
       AURA_AUDIT_LOG: /var/lib/aura/audit/aura-audit.jsonl
+      # Remaining tunables read by api/config.py (defaults are its exact
+      # defaults). Uncomment/override any of them in .env as needed.
+      AURA_API_DB: ${AURA_API_DB:-aura-catalogue.db}
+      AURA_INTENT_TTL: ${AURA_INTENT_TTL:-900}
+      AURA_INTENT_GRACE_SECONDS: ${AURA_INTENT_GRACE_SECONDS:-300}
+      AURA_AUDIT_RETENTION_DAYS: ${AURA_AUDIT_RETENTION_DAYS:-90}
+      AURA_AUDIT_MAX_SCAN_LINES: ${AURA_AUDIT_MAX_SCAN_LINES:-20000}
+      AURA_AUDIT_ERROR_SCAN_LINES: ${AURA_AUDIT_ERROR_SCAN_LINES:-5000}
+      AURA_AUDIT_ERROR_WINDOW_S: ${AURA_AUDIT_ERROR_WINDOW_S:-3600}
+      AURA_LOGIN_RATE_LIMIT: ${AURA_LOGIN_RATE_LIMIT:-10}
+      AURA_LOGIN_RATE_WINDOW: ${AURA_LOGIN_RATE_WINDOW:-60}
+      AURA_M2M_RATE_LIMIT: ${AURA_M2M_RATE_LIMIT:-60}
+      AURA_M2M_RATE_WINDOW: ${AURA_M2M_RATE_WINDOW:-60}
+      AURA_TRUSTED_PROXIES: ${AURA_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      AURA_MAX_OBJECT_BYTES: ${AURA_MAX_OBJECT_BYTES:-5368709120}
+      AURA_COMMIT_CHUNK_BYTES: ${AURA_COMMIT_CHUNK_BYTES:-1048576}
+      AURA_MAX_PENDING_INTENTS: ${AURA_MAX_PENDING_INTENTS:-100}
+      AURA_ALLOW_EMPTY_OBJECTS: ${AURA_ALLOW_EMPTY_OBJECTS:-0}
+      AURA_ALLOWED_CONTENT_TYPES: "${AURA_ALLOWED_CONTENT_TYPES:-}"
+      AURA_IDEMPOTENCY_KEY_MAX: ${AURA_IDEMPOTENCY_KEY_MAX:-200}
       # No origin/CORS allow-list here on purpose: the api has no Traefik route
       # and is reached same-origin through the app proxy (app/nginx.conf proxies
       # /api/ to this service). Browser uploads go straight to SeaweedFS via

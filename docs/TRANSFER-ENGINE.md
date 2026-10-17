@@ -25,7 +25,7 @@ The mission's six-step flow maps onto existing AURA routes one-to-one:
 |---|---|---|
 | 1. Frontend asks for a transfer intention | `POST /api/v1/objects/upload-intents` | `web/src/lib/api.ts` |
 | 2. API authenticates + authorizes | `api/authz.py` (`authorize(OBJECTS_WRITE)`) | session cookie + CSRF, or Bearer service identity |
-| 3. API issues a short-lived URL | `api/s3.py::presigned_put` | SigV4, exact bucket/key, signed `Content-Length` + `Content-Type` |
+| 3. API issues a short-lived URL | `api/s3.py::presigned_put` | SigV4, exact bucket/key, signed `Content-Length` + `Content-Type` + `x-amz-server-side-encryption: AES256` |
 | 4. Browser moves bytes directly to S3 | `putToPresignedUrl` (XHR) in `web/src/lib/api.ts` | bytes never traverse FastAPI |
 | 5. Frontend finalizes | `POST /api/v1/objects/{oid}/commit` | idempotent |
 | 6. Backend verifies size + integrity | `commit_object` + `stream_sha256` | object only becomes `available` here |
