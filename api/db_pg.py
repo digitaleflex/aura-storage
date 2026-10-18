@@ -8,6 +8,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from . import ids
+from .auth import new_token, session_key
 from .dblock import synchronized
 from .migrations import (
     DEFAULT_APPLICATION_NAME,
@@ -115,20 +116,29 @@ class Repository:
 
     # -- sessions ---------------------------------------------------------
     def create_session(self, user_id: str, csrf: str, expires_at: int) -> str:
-        sid = self.new_id()
+        """Create a session and return its opaque cookie token.
+
+        Only ``session_key(token)`` is stored (row ``id``); the clear token
+        exists solely in the returned value and the client cookie. Expired rows
+        are pruned here so the table cannot grow without bound.
+        """
+        token = new_token(32)
+        self._run("DELETE FROM sessions WHERE expires_at <= %s", (self.now(),))
         self._run(
             "INSERT INTO sessions (id, user_id, csrf, expires_at) VALUES (%s, %s, %s, %s)",
-            (sid, user_id, csrf, expires_at),
+            (session_key(token), user_id, csrf, expires_at),
         )
-        return sid
+        return token
 
-    def get_session(self, sid: str) -> Optional[dict]:
+    def get_session(self, token: str) -> Optional[dict]:
+        """Look a session up by its cookie token (hashed before the query)."""
         return self._one(
             "SELECT * FROM sessions WHERE id = %s AND expires_at > %s",
-            (sid, self.now()),
+            (session_key(token), self.now()),
         )
 
     def delete_session(self, sid: str) -> None:
+        """Delete by stored row id (``session["id"]``, i.e. the digest)."""
         self._run("DELETE FROM sessions WHERE id = %s", (sid,))
 
     # -- applications / spaces / buckets (#35) ----------------------------

@@ -7,7 +7,9 @@
 - Use default-deny inbound firewall rules and allow only required ports.
 - Keep SeaweedFS master, volume, filer UI/admin, metrics and other internal interfaces private.
 - Expose S3 only through HTTPS.
-- Never publish the Traefik dashboard without explicit authentication and network restrictions.
+- Never publish the Traefik dashboard without explicit authentication and network restrictions. The Compose router applies a source allow-list (`DASHBOARD_ALLOWED_IPS`, loopback-only by default) before BasicAuth.
+- Session cookies carry a random token; the catalogue stores only its SHA-256 digest (`api/auth.py:session_key`). Deploying this change signs every user out once.
+- The app shell sends a Content-Security-Policy (`app/nginx.conf`); Traefik adds HSTS on every public router.
 - Restrict Docker socket access; Docker group membership is effectively root-equivalent.
 
 ## S3 access and object encryption

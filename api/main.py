@@ -162,6 +162,9 @@ def _ensure_bootstrap_admin() -> None:
 
 _ensure_bootstrap_admin()
 
+# Verified against when the username is unknown (timing equalisation in login).
+_DUMMY_PASS_HASH = hash_password(new_token(32))
+
 
 def _as_dict(row) -> dict:
     return dict(row) if not isinstance(row, dict) else row
@@ -456,7 +459,10 @@ def login(body: LoginIn, request: Request, response: Response):
         raise HTTPException(status_code=429, detail="too many login attempts",
                             headers={"Retry-After": str(settings.login_rate_window)})
     row = repo.get_user_by_name(body.username)
-    if row is None or not verify_password(row["pass_hash"], body.password):
+    # An unknown username still pays one argon2 verification, so response time
+    # does not reveal which usernames exist.
+    stored_hash = row["pass_hash"] if row is not None else _DUMMY_PASS_HASH
+    if not verify_password(stored_hash, body.password) or row is None:
         _login_record_failure(client_ip)
         audit_event("login", body.username, "failure")
         raise HTTPException(status_code=401, detail="invalid credentials")
