@@ -182,7 +182,10 @@ test("a server validation error is surfaced and never shown as success", async (
   await chooseFile(page);
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
-  await expect(page.getByRole("alert")).toContainText("does not match");
+  // Scoped to the import panel: the page can show other alerts (e.g. storage usage).
+  await expect(
+    page.getByRole("region", { name: "Importer" }).getByRole("alert"),
+  ).toContainText("does not match");
   await expect(page.getByText("Import validé et vérifié par le backend.")).toHaveCount(0);
   expect(mocks.calls).toContain("commit");
 });
