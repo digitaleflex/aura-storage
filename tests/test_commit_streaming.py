@@ -46,7 +46,8 @@ class DummyS3:
         self.deleted = []
 
     def head_object(self, Bucket, Key):
-        return {"ContentLength": self.declared_size, "ContentType": "application/octet-stream"}
+        return {"ContentLength": self.declared_size, "ContentType": "application/octet-stream",
+                "ServerSideEncryption": "AES256"}
 
     def get_object(self, Bucket, Key):
         return {"Body": self.body}
