@@ -23,6 +23,7 @@ os.environ.setdefault("AURA_M2M_RATE_LIMIT", "100000")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import api.main as main  # noqa: E402
+from tests import catalogue_sql  # noqa: E402
 from api import authz  # noqa: E402
 from api.auth import hash_password  # noqa: E402
 from api.config import settings  # noqa: E402
@@ -600,11 +601,10 @@ def test_m07_reconcile_sweep_is_bounded(monkeypatch):
                    json={"display_name": f"stale-{i}.bin", "size_bytes": 1},
                    headers=_svc(token)).json()["id"] for i in range(3)]
     for oid in oids:
-        main.repo.conn.execute(
+        catalogue_sql.execute(
             "UPDATE objects SET created_at = ? WHERE id = ?",
             (main.repo.now() - 7200, oid),
         )
-    main.repo.conn.commit()
 
     class HealthyS3:
         def delete_object(self, Bucket, Key):

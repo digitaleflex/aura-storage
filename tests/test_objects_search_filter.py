@@ -26,6 +26,7 @@ os.environ.setdefault("AURA_M2M_RATE_LIMIT", "100000")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import api.main as main  # noqa: E402
+from tests import catalogue_sql  # noqa: E402
 from api import authz  # noqa: E402
 from api.auth import hash_password  # noqa: E402
 from api.object_query import OBJECT_STATUSES, SORT_COLUMNS  # noqa: E402
@@ -77,10 +78,9 @@ def _make_available(oid, size, name="digest"):
 
 
 def _set_created_at(oid, value):
-    main.repo.conn.execute(
+    catalogue_sql.execute(
         "UPDATE objects SET created_at = ? WHERE id = ?", (value, oid)
     )
-    main.repo.conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +151,9 @@ def test_search_treats_wildcards_literally():
 def test_search_never_matches_the_internal_object_key():
     c, headers = _admin()
     oid = _upload(c, headers, f"opaque-{uuid.uuid4().hex[:8]}.txt")
-    row = main.repo.conn.execute(
+    row = catalogue_sql.fetch_one(
         "SELECT object_key FROM objects WHERE id = ?", (oid,)
-    ).fetchone()
+    )
     key_fragment = row["object_key"].split("/")[-1]
     r = c.get("/api/v1/objects", params={"q": key_fragment}, headers=headers)
     assert r.status_code == 200

@@ -54,3 +54,33 @@ jobs:
         run: docker compose config --quiet
       - name: Confirm secrets are ignored
         run: git check-ignore .env config/seaweedfs/s3.json
+
+  api-postgres:
+    # The default job runs the API suite on SQLite; production uses PostgreSQL.
+    # Run the same suite against the pinned PostgreSQL major, plus the PG-only
+    # parity tests (AURA_TEST_PG_DSN).
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.9
+        env:
+          POSTGRES_USER: aura
+          POSTGRES_PASSWORD: ci-dummy-pg-password
+          POSTGRES_DB: aura
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aura -d aura" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the parity-test database
+        run: PGPASSWORD=ci-dummy-pg-password psql -h 127.0.0.1 -U aura -d aura -c "CREATE DATABASE aura_parity"
+      - name: Run API tests on PostgreSQL
+        run: |
+          python3 -m pip install -r api/requirements.txt
+          AURA_API_BACKEND=postgres \
+          AURA_API_DSN=postgresql://aura:ci-dummy-pg-password@127.0.0.1:5432/aura \
+          AURA_TEST_PG_DSN=postgresql://aura:ci-dummy-pg-password@127.0.0.1:5432/aura_parity \
+          AURA_API_ADMIN_PASSWORD=ci-dummy-password AURA_S3_ACCESS_KEY=ci-dummy-access-key-1234 \
+          AURA_S3_SECRET_KEY=ci-dummy-secret-12345678901234567890 AURA_S3_ENDPOINT=https://127.0.0.1:9 \
+          AURA_COOKIE_SECURE=0 python3 -m pytest tests/ -q

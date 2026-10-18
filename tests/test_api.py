@@ -348,18 +348,17 @@ def test_reconcile_expires_stale_pending():
     ).json()["id"]
     # backdate the pending row past the grace period
     old = 7200
-    if hasattr(main.repo, "conn") and "sqlite3" in type(main.repo.conn).__module__:
+    if main.repo.dialect == "sqlite":
         main.repo.conn.execute(
             "UPDATE objects SET created_at = ? WHERE id = ?",
             (main.repo.now() - old, oid),
         )
         main.repo.conn.commit()
-    else:
-        with main.repo.conn.cursor() as cur:
-            cur.execute(
-                "UPDATE objects SET created_at = %s WHERE id = %s",
-                (main.repo.now() - old, oid),
-            )
+    else:  # psycopg connection: go through the repository helper
+        main.repo._run(
+            "UPDATE objects SET created_at = %s WHERE id = %s",
+            (main.repo.now() - old, oid),
+        )
     # fresh pending objects are untouched; only the stale one expires
     fresh = c.post(
         "/api/v1/objects/upload-intents",
