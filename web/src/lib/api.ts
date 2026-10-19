@@ -591,6 +591,14 @@ export const api = {
     );
   },
 
+  /** Undo a soft delete (objects:delete); 409 if it is not in the trash. */
+  restoreObject(id: string, csrf: string): Promise<ObjectItem> {
+    return request<ObjectItem>(
+      `/api/v1/objects/${encodeURIComponent(id)}/restore`,
+      { method: "POST", csrf },
+    );
+  },
+
   /** Permanently delete an object (objects:purge; operator/admin only). */
   purgeObject(id: string, csrf: string): Promise<{ id: string; status: string }> {
     return request<{ id: string; status: string }>(

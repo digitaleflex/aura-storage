@@ -65,7 +65,7 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "Tous les états" },
   { value: "available", label: "Disponible" },
   { value: "pending", label: "En cours" },
-  { value: "deleted", label: "Supprimé" },
+  { value: "deleted", label: "Corbeille" },
   { value: "expired", label: "Expiré" },
   { value: "failed", label: "Échec" },
   { value: "aborted", label: "Abandonné" },
@@ -187,6 +187,11 @@ function StatusLabel({ status }: { status: string }) {
 /** Server-side soft delete accepts only `available` or `pending` rows; anything
  * else is refused with 409. The bulk selection and the per-row "Supprimer"
  * action share this predicate so they never diverge. */
+/** In the trash and fully uploaded: the server refuses to restore anything else. */
+function isRestorable(item: ObjectItem): boolean {
+  return item.status === "deleted" && item.size_bytes >= 0;
+}
+
 function isDeletable(item: ObjectItem): boolean {
   return item.status === "available" || item.status === "pending";
 }
@@ -787,6 +792,19 @@ export function ObjectsPage() {
     onError: (err) => reportError(err, "Suppression en masse impossible."),
   });
 
+  const restoreMutation = useMutation({
+    mutationFn: (id: string) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.restoreObject(id, csrf);
+    },
+    onSuccess: () => {
+      setDetails(null);
+      notify("ok", "Fichier restauré depuis la corbeille.");
+      invalidateLibrary();
+    },
+    onError: (err) => reportError(err, "Restauration impossible."),
+  });
+
   const purgeMutation = useMutation({
     mutationFn: (id: string) => {
       if (!csrf) throw new Error("Session expirée.");
@@ -1183,6 +1201,7 @@ export function ObjectsPage() {
   const objectBusy =
     deleteObjectMutation.isPending ||
     purgeMutation.isPending ||
+    restoreMutation.isPending ||
     abortUploadMutation.isPending ||
     moveObjectMutation.isPending ||
     downloadingId !== null;
@@ -2178,6 +2197,15 @@ export function ObjectsPage() {
                               },
                             ]
                           : []),
+                        ...(isRestorable(item)
+                          ? [
+                              {
+                                label: "Restaurer",
+                                disabled: objectBusy,
+                                onSelect: () => restoreMutation.mutate(item.id),
+                              },
+                            ]
+                          : []),
                         {
                           label: "Supprimer",
                           danger: true,
@@ -2318,6 +2346,16 @@ export function ObjectsPage() {
             >
               {downloadingId === details.id ? "…" : "Télécharger"}
             </button>
+            {isRestorable(details) ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={objectBusy}
+                onClick={() => restoreMutation.mutate(details.id)}
+              >
+                Restaurer
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn"
