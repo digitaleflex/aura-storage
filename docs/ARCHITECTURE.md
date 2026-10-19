@@ -6,7 +6,7 @@ AURA is an independently operated storage service. Its initial deployment is a s
 
 ## Components
 
-1. **Traefik Proxy** — HTTPS routing, automatic TLS certificate management, access logs and metrics. Protect its dashboard; it is not the file-management UI.
+1. **Traefik Proxy** — HTTPS routing, automatic TLS certificate management and access logging (metrics are **not** enabled). Its dashboard is routed on `DASHBOARD_DOMAIN` behind BasicAuth; it is not the file-management UI.
 2. **SeaweedFS Filer + S3 API** — object operations for authorized clients and direct transfer of file bytes.
 3. **Persistent host volumes** — files and required metadata must survive container recreation.
 4. **AURA Management API** — implemented service for object inventory, virtual folders, search, metadata, access policy, upload/download intents and audit events. It is not yet validated on the pilot VPS.

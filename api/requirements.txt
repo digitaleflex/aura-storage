@@ -5,7 +5,3 @@ boto3==1.43.113
 argon2-cffi==25.1.0
 psycopg==3.3.6
 psycopg-binary==3.3.6
-pytest==9.1.1
-httpx==0.28.1
-# Test-only: parse docs/openapi.yaml in tests/test_openapi_contract.py (#41).
-pyyaml==6.0.3
