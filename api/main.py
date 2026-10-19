@@ -199,7 +199,9 @@ Uuid4 = Annotated[str, AfterValidator(_canonical_uuid)]
 
 # Object list query vocabulary (M02). Literals make FastAPI return 422 for any
 # unsupported value and let the OpenAPI document describe the accepted set.
-ObjectStatus = Literal["pending", "available", "deleted", "expired", "failed"]
+ObjectStatus = Literal[
+    "pending", "available", "deleted", "expired", "failed", "aborted"
+]
 ObjectSort = Literal["created_at", "display_name", "size_bytes"]
 SortOrder = Literal["asc", "desc"]
 
@@ -732,8 +734,12 @@ def abort_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
     try:
         s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
     except Exception:
-        # A transient storage error must not block the catalogue transition; the
-        # reconciliation sweep retries orphan cleanup after its grace period.
+        # A transient storage error must not block the catalogue transition, but
+        # this cleanup is best-effort only: once the row is marked ``aborted`` the
+        # reconciliation sweep no longer selects it (api/lifecycle.py::
+        # reconcile_pending only scans status='pending'), so the partial bytes are
+        # orphaned and are NOT retried automatically. They are detected read-only
+        # by GET /admin/orphans and must be cleaned operationally.
         pass
     repo.set_status(oid, ABORTED)
     audit_event("abort", principal["id"], "success", {"object_id": oid})
@@ -1032,7 +1038,12 @@ def reconcile(limit: int = 500,
     # Bounded sweep (#87): at most `limit` stale intents per run so a huge
     # backlog cannot monopolize the API; repeat until expired is 0.
     limit = max(1, min(limit, 5000))
-    out = reconcile_pending(repo, s3ops, limit=limit)
+    # Derive the staleness window from the same settings that govern intent
+    # death (commit is accepted until intent_ttl + intent_grace_s), instead of
+    # relying on reconcile_pending's own default: an intent must never be swept
+    # while its grace window could still accept a legitimate commit.
+    expire_after_s = settings.intent_ttl + settings.intent_grace_s
+    out = reconcile_pending(repo, s3ops, expire_after_s=expire_after_s, limit=limit)
     audit_event("admin.reconcile", principal["id"], "success", out)
     return out
 
