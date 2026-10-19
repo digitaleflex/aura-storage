@@ -130,7 +130,7 @@ async function login(page: Page): Promise<void> {
   await page.getByLabel("Identifiant").fill("admin");
   await page.getByLabel("Mot de passe").fill("pw");
   await page.getByRole("button", { name: "Se connecter" }).click();
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
 }
 
 async function chooseFile(page: Page, name = "rapport.pdf"): Promise<void> {

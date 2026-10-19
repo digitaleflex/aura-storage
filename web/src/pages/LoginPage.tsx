@@ -5,11 +5,18 @@ import { ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { VaultMark } from "../components/VaultMark";
 
+const GUARANTEES = [
+  "Chiffrement au repos, appliqué à chaque fichier",
+  "Taille et empreinte SHA-256 contrôlées à chaque import",
+  "Journal d'audit de toutes les actions",
+];
+
 export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,12 +42,32 @@ export function LoginPage() {
 
   return (
     <div className="login-wrap">
-      <section className="login-card" aria-labelledby="login-title">
-        <div className="login-mark">
-          <VaultMark size={34} />
+      <section className="login-intro" aria-label="Présentation">
+        <div className="login-brand">
+          <VaultMark size={30} />
+          <span>AURA Vault</span>
         </div>
-        <h1 id="login-title">AURA Vault</h1>
-        <p className="muted">Stockage objet chiffré. Connectez-vous pour gérer vos fichiers.</p>
+        <div className="login-pitch">
+          <h2>Vos fichiers, chiffrés et vérifiés.</h2>
+          <p>
+            Un fichier n'est déclaré disponible qu'une fois sa taille et son empreinte
+            contrôlées par le serveur.
+          </p>
+        </div>
+        <ul className="login-points">
+          {GUARANTEES.map((text) => (
+            <li key={text}>{text}</li>
+          ))}
+        </ul>
+      </section>
+      <section className="login-card" aria-labelledby="login-title">
+        <h1 id="login-title">Connexion</h1>
+        <p className="muted">Identifiez-vous pour accéder au coffre.</p>
+        {error ? (
+          <p role="alert" className="alert alert-error">
+            {error}
+          </p>
+        ) : null}
         <form onSubmit={(e) => void handleSubmit(e)} className="form">
           <label className="field">
             <span>Identifiant</span>
@@ -53,26 +80,36 @@ export function LoginPage() {
               required
             />
           </label>
-          <label className="field">
-            <span>Mot de passe</span>
-            <input
-              type="password"
-              name="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </label>
-          <button type="submit" className="btn btn-primary" disabled={pending}>
+          <div className="field">
+            <label htmlFor="login-password">Mot de passe</label>
+            <div className="password-row">
+              <input
+                id="login-password"
+                type={showPassword ? "text" : "password"}
+                name="password"
+                autoComplete="current-password"
+                aria-invalid={error ? true : undefined}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                aria-pressed={showPassword}
+                onClick={() => setShowPassword((value) => !value)}
+              >
+                {showPassword ? "Masquer" : "Afficher"}
+              </button>
+            </div>
+          </div>
+          <button type="submit" className="btn btn-primary btn-block" disabled={pending}>
             {pending ? "Connexion…" : "Se connecter"}
           </button>
         </form>
-        {error ? (
-          <p role="alert" className="alert alert-error">
-            {error}
-          </p>
-        ) : null}
+        <p className="muted login-note">
+          Après plusieurs essais infructueux, la connexion est temporairement suspendue.
+        </p>
       </section>
     </div>
   );

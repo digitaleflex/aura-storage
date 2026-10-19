@@ -192,7 +192,7 @@ async function login(page: Page, role = "admin"): Promise<void> {
   await page.getByLabel("Identifiant").fill(role);
   await page.getByLabel("Mot de passe").fill("pw");
   await page.getByRole("button", { name: "Se connecter", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
 }
 
 async function chooseFile(page: Page, name = "rapport.pdf"): Promise<void> {
@@ -296,7 +296,7 @@ test("storage usage is never fetched nor shown for a plain user", async ({ page 
   await login(page, "user");
 
   // No admin:read -> the admin usage query must stay disabled.
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
   expect(mocks.usageRequests()).toBe(0);
   await expect(page.getByText("Espace utilisé")).toHaveCount(0);
   await expect(page.getByText(/Usage réel \(admin\)/)).toHaveCount(0);
