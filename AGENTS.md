@@ -58,11 +58,15 @@ and AWS CLI — do not run them against production without explicit approval.
 
 - Never commit `.env`, `config/seaweedfs/s3.json`, keys, certificates, user files,
   backups, or customer data. Check with `git check-ignore` and review the full diff.
+  Exception: `.env.example` may be committed with clearly marked placeholder values
+  (e.g. `AURA_API_ADMIN_PASSWORD=CHANGEME`), provided no real secrets are exposed.
 - Never print secrets, tokens, private keys, or the SSE-S3 key into logs, issues, or chat.
-- No deployments, no Docker/host changes, no SSH/firewall/network/service changes,
-  no `sudo`, no reboots without explicit human authorization.
-- Never work directly on `main`; use a dedicated branch. Never push or merge without
-  approval after green local tests and confirmed remote access.
+- Deployments and Docker/host changes require explicit human authorization per
+  `docs/DEPLOYMENT.md`. In emergencies, a hotfix may be approved by a second
+  reviewer via a dedicated hotfix branch off `main`, with an immediate follow-up PR
+  for code review and rollback plan.
+- Never work directly on `main` without a branch. Use dedicated feature/hotfix branches;
+  hotfixes require a PR with at least one reviewer and a documented rollback plan.
 
 ## Change discipline
 
@@ -75,8 +79,12 @@ and AWS CLI — do not run them against production without explicit approval.
 ## Critical gates (do not bypass)
 
 - **SSE-S3 key (`WEED_S3_SSE_KEK`)**: 64 hex chars, offline backup outside VPS and repo.
-  Loss may make encrypted objects **unrecoverable**; rotation is a migration, not an edit.
+  Loss may make encrypted objects **unrecoverable**. Rotation is a deliberate migration
+  that requires: (a) offline backup preservation, (b) updated config referencing new key,
+  (c) re-encryption of all objects, and (d) verification that decryption works with new key.
+  Rotation is NOT a simple edit — it is a migration with full rollback test.
 - **No original PDF/audio imports** until HTTPS, auth, SSE-S3 (`ServerSideEncryption=AES256`
   + matching SHA-256), persistence, and an **independent backup restore test** all pass.
   Keep local originals until then. See `docs/SECURITY.md`, `docs/BACKUP-RESTORE.md`,
-  `docs/verification-log-template.md`.
+  `docs/verification-log-template.md`. This gate applies to the pilot VPS; once acceptance
+  is passed on the real VPS, the gate may be re-evaluated.
