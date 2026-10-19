@@ -13,6 +13,7 @@ route that is not classified stays closed because no dependency grants access.
 Unauthenticated calls yield 401, insufficient rights yield 403, and neither
 reveals whether an object exists.
 """
+import secrets
 import time
 
 from fastapi import Header, HTTPException, Request
@@ -184,7 +185,9 @@ def authorize(scope: str | None = None, human: bool = False):
             raise HTTPException(status_code=403, detail="forbidden")
         if principal["kind"] == "user":
             if request.method not in SAFE_METHODS:
-                if not x_csrf_token or x_csrf_token != principal["csrf"]:
+                if not x_csrf_token or not secrets.compare_digest(
+                    x_csrf_token, principal["csrf"]
+                ):
                     raise HTTPException(status_code=403, detail="csrf validation failed")
         if scope is not None and not has_scope(principal, scope):
             raise HTTPException(status_code=403, detail="forbidden")

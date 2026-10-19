@@ -12,11 +12,16 @@ flowchart TB
 
     subgraph AURA["AURA-001 · VPS de stockage"]
         HOST["Ubuntu Server LTS<br/>Docker Engine + Compose"]
-        TRAEFIK["Traefik Proxy<br/>HTTPS · Let's Encrypt<br/>Dashboard protégé"]
+        TRAEFIK["Traefik Proxy<br/>HTTPS · Let's Encrypt<br/>Dashboard protégé (BasicAuth)"]
+        APP["app (nginx)<br/>UI web · proxy /api/"]
+        LANDING["Landing S3<br/>racine non signée"]
         S3["SeaweedFS Filer + API S3<br/>réseau Docker privé"]
+        POSTGRES[("PostgreSQL<br/>catalogue")]
         DATA[("Volumes persistants<br/>fichiers + métadonnées")]
         HOST --> TRAEFIK
         TRAEFIK --> S3
+        TRAEFIK --> APP
+        TRAEFIK --> LANDING
         S3 --> DATA
     end
 
@@ -41,7 +46,9 @@ flowchart TB
     ADMIN -->|"Import / récupération"| TRAEFIK
     APPS -->|"HTTPS + API S3"| TRAEFIK
     USERS -->|"Via les applications"| APPS
+    APP -->|"proxy /api/"| API
     API -->|"Opérations contrôlées"| DATA
+    API --> POSTGRES
     API -.-> AUTH
     MON -.-> HOST
     DATA --> BACKUP
@@ -53,7 +60,7 @@ flowchart TB
 
 ## Règles d'architecture
 
-- **Traefik** : routage HTTP/HTTPS, certificats TLS automatisés, journaux et métriques. Son dashboard est une interface d'observation, pas une console de gestion des fichiers ; il doit rester protégé.
+- **Traefik** : routage HTTP/HTTPS, certificats TLS automatisés, journaux d'accès (métriques non activées). Son dashboard, routé sur `DASHBOARD_DOMAIN` derrière BasicAuth, est une interface d'observation, pas une console de gestion des fichiers ; il doit rester protégé.
 - **SeaweedFS** : stockage des objets et interface S3. Les ports internes et les interfaces d'administration ne sont pas publiés directement sur Internet.
 - **API AURA** : couche à développer pour cartographier les objets, maintenir les métadonnées, exposer une arborescence logique, rechercher et appliquer les permissions. Elle ne doit pas dépendre de l'interface Traefik.
 - **Volumes persistants** : les données survivent au remplacement des conteneurs. Ils ne remplacent pas une sauvegarde indépendante.

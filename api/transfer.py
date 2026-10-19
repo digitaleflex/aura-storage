@@ -10,7 +10,6 @@ import re
 # state an upload intent creates; the object only becomes ``available`` after the
 # commit endpoint verifies size and SHA-256. See docs/TRANSFER-ENGINE.md.
 PENDING = "pending"
-VERIFYING = "verifying"
 AVAILABLE = "available"
 FAILED = "failed"
 EXPIRED = "expired"

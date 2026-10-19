@@ -18,11 +18,16 @@ flowchart TB
     subgraph AURA["AURA-001 · VPS de stockage"]
         direction TB
         HOST["Ubuntu Server LTS<br/>Docker Engine + Compose"]
-        TRAEFIK["Traefik Proxy<br/>HTTPS · certificats Let's Encrypt<br/>Dashboard protégé"]
+        TRAEFIK["Traefik Proxy<br/>HTTPS · certificats Let's Encrypt<br/>Dashboard protégé (BasicAuth)"]
+        APP["app (nginx)<br/>UI web · racine du domaine · proxy /api/"]
+        LANDING["Landing S3<br/>racine non signée"]
         S3["SeaweedFS Filer + API S3<br/>port interne 8333"]
+        POSTGRES[("PostgreSQL<br/>catalogue · volume pgdata")]
         DATA[("Volumes persistants<br/>fichiers + métadonnées")]
         HOST --> TRAEFIK
         TRAEFIK -->|"Route HTTPS vers le réseau Docker privé"| S3
+        TRAEFIK --> APP
+        TRAEFIK --> LANDING
         S3 --> DATA
     end
 
@@ -48,7 +53,9 @@ flowchart TB
     ADMIN -->|"Import / récupération"| TRAEFIK
     APPS -->|"HTTPS + API S3<br/>identifiants dédiés / URL signées"| TRAEFIK
     USERS -->|"Via les applications"| APPS
+    APP -->|"proxy /api/"| API
     API -->|"Accès contrôlé aux métadonnées"| DATA
+    API --> POSTGRES
     API -. "authentification / autorisation" .-> AUTH
     MON -. "métriques et journaux" .-> HOST
     DATA -->|"Sauvegarde planifiée"| BACKUP
@@ -59,8 +66,8 @@ flowchart TB
 
     class ADMIN,APPS,USERS client
     class TRAEFIK edge
-    class S3 api
-    class HOST,DATA storage
+    class S3,APP,LANDING api
+    class HOST,DATA,POSTGRES storage
     class API,AUTH,MON,SSH ops
     class BACKUP,RESTORE backup
     class AXIOM,OPENBOOKS,AURA2 future

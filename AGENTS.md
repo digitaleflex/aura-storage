@@ -21,10 +21,12 @@ real VPS. Do not treat a passing CI check or `docker compose config` as producti
   authorization and machine-to-machine identities. See `docs/AUTHORIZATION-MATRIX.md`.
 - Catalogue backends: SQLite (dev/test) and PostgreSQL (`api/db.py`, `api/db_pg.py`),
   with additive migrations in `api/migrations.py`.
-- Offline test suite under `tests/` (run with `pytest tests/`).
+- Offline test suite under `tests/` (run with `.venv/bin/python -m pytest tests/`).
 
-Implemented in code is **not** the same as validated on the pilot: no end-to-end
-run on the real VPS has happened yet.
+Implemented in code is **not** the same as validated on the pilot: the stack is
+deployed there with partial dated evidence (bootstrap OK, live PostgreSQL
+migration, SSE-S3 smoke PASS — see the `docs/verification-log-2026-10-1*.md`
+logs) but has **not** passed acceptance.
 
 ## Specified only (NOT implemented)
 
@@ -41,10 +43,13 @@ bash tests/test-s3-smoke-validation.sh
 python3 -m json.tool config/seaweedfs/s3.json.example > /dev/null
 AURA_API_ADMIN_PASSWORD=ci AURA_S3_ACCESS_KEY=ci-1234567890 \
   AURA_S3_SECRET_KEY=ci-12345678901234567890 AURA_S3_ENDPOINT=https://127.0.0.1:9 \
-  AURA_API_DB=:memory: AURA_COOKIE_SECURE=0 python3 -m pytest tests/ -q
+  AURA_API_DB=:memory: AURA_COOKIE_SECURE=0 .venv/bin/python -m pytest tests/ -q
 git diff --check
 ```
 
+On this host the system `python3` has no `pytest`; run the suite with the project
+virtualenv interpreter (`.venv/bin/python`). If `.venv` is missing, create it with
+`python3 -m venv .venv` and install `api/requirements.txt` into it first.
 `docker compose config --quiet` requires a local `.env`; never commit it.
 `tests/sse-s3-smoke-test.sh` and `tests/s3-smoke-test.sh` require a real endpoint
 and AWS CLI — do not run them against production without explicit approval.

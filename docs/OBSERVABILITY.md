@@ -38,6 +38,10 @@ live catalogue queries.
   older than `AURA_AUDIT_RETENTION_DAYS` (default 90) via an atomic rewrite
   and returns `{kept, dropped, cutoff, retention_days}`. Lines without a
   valid timestamp are **kept**: audit data is never deleted silently.
+- **Storage location:** the API appends to `AURA_AUDIT_LOG`
+  (`/var/lib/aura/audit/aura-audit.jsonl` in the Compose stack), backed by the
+  dedicated `api-audit` volume so the trail survives container recreation and
+  redeploys. `prune` rewrites that same file.
 
 ## Usage / quotas (real values only)
 

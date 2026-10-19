@@ -5,7 +5,6 @@ import re
 import boto3
 from botocore.client import Config
 
-
 def make_client(endpoint: str, access_key: str, secret_key: str, region: str):
     return boto3.client(
         "s3",

@@ -2,7 +2,7 @@
 
 **AURA** is an independently operated storage service for private files. The initial deployment target is one Ubuntu Server LTS VPS with Docker Compose, Traefik, and SeaweedFS exposing an S3-compatible endpoint.
 
-> **Status:** VPS provisioned; initial OS maintenance and access hardening are in progress. The host profile and bootstrap checklist are documented in [Server Profile](docs/SERVER-PROFILE.md) and [Host Bootstrap Checklist](docs/HOST-BOOTSTRAP-CHECKLIST.md). The AURA stack has not yet been validated on the real provider VPS.
+> **Status:** the AURA stack is deployed on the real pilot VPS with dated, partial verification evidence ([2026-10-15 canonical-ids](docs/verification-log-2026-10-15-canonical-ids.md), [2026-10-16 S16 deploy](docs/verification-log-2026-10-16-s16-deploy.md): bootstrap OK, live PostgreSQL migration, SSE-S3 smoke PASS). It is **not accepted** for production: external HTTPS validation, non-publication of internal ports, persistence across a host reboot and an independent backup/restore test remain open gates. Host details are in [Server Profile](docs/SERVER-PROFILE.md) and [Host Bootstrap Checklist](docs/HOST-BOOTSTRAP-CHECKLIST.md).
 
 ## Architecture and documentation
 
@@ -25,9 +25,9 @@
 - [Environment configuration and domain migration](docs/ENVIRONMENT-CONFIGURATION.md)
 - [Security baseline](docs/SECURITY.md)
 - [Authorization matrix and identity model](docs/AUTHORIZATION-MATRIX.md)
-- [API specification (proposal, not implemented)](docs/API-SPECIFICATION.md)
+- [API specification (partially implemented — object/folder routes shipped, import-jobs and multipart proposed)](docs/API-SPECIFICATION.md)
 - [OpenAPI contract draft](docs/openapi.yaml)
-- [Proposed catalogue data model](docs/DATA-MODEL.md)
+- [Catalogue data model (partially implemented; proposals marked inline)](docs/DATA-MODEL.md)
 - [Operations playbook](docs/OPERATIONS-PLAYBOOK.md)
 - [Backup and restore](docs/BACKUP-RESTORE.md)
 - [Traefik configuration notes](config/traefik/README.md)
@@ -36,9 +36,9 @@
 
 - **Traefik** publishes ports 80/443, routes HTTPS, and manages Let's Encrypt certificates through the HTTP-01 challenge.
 - **SeaweedFS master, volume and filer/S3 gateway** run as separate containers on a private storage network.
-- Only the S3 hostname is routed by the initial Traefik configuration. SeaweedFS administrative endpoints are not published on host ports.
+- Traefik routes the S3 hostname, the app hostname (`APP_DOMAIN`), the dashboard (`DASHBOARD_DOMAIN`, behind BasicAuth) and the S3 root landing page. SeaweedFS administrative endpoints are not published on host ports.
 - Persistent data is mounted from the host filesystem.
-- **AURA Management API + PostgreSQL catalogue** are implemented and included in the Compose stack (the API is reachable only through the app proxy, with no host ports). They have not yet been validated on the pilot VPS.
+- **AURA Management API + PostgreSQL catalogue** are implemented, included in the Compose stack (the API is reachable only through the app proxy, with no host ports) and running on the pilot with partial dated evidence; they have not passed acceptance on the pilot VPS.
 - **Authorization and machine-to-machine identities** are enforced server-side; see [Authorization matrix](docs/AUTHORIZATION-MATRIX.md).
 - Independent backups and a successful restore test are mandatory before production imports.
 
@@ -69,7 +69,7 @@ Changing `S3_DOMAIN` changes the hostname Traefik routes; it does not automatica
 - Never commit `.env`, `config/seaweedfs/s3.json`, keys, certificates, user files, or backups.
 - Only Traefik publishes ports 80 and 443 in the baseline.
 - Keep SeaweedFS master, volume, filer UI/admin, metrics, and other internal ports private.
-- Traefik's dashboard is not a file-management interface and has no public router by default.
+- Traefik's dashboard is not a file-management interface. It is routed on `DASHBOARD_DOMAIN` (HTTPS) behind BasicAuth (`dash-auth`); keep it protected and never publish port 8080 or add an unauthenticated route.
 - Use separate least-privilege credentials per application.
 - The VPS is not a backup; use a separate destination and test restoration.
 - Validate S3 policy syntax/actions and image flags against the exact selected SeaweedFS release.
@@ -80,4 +80,4 @@ No repository license has been selected. Do not assume reuse rights until a lice
 
 The sample passes a 256-bit key through WEED_S3_SSE_KEK for SeaweedFS SSE-S3 object encryption. Generate it locally with `openssl rand -hex 32` and keep a protected offline copy outside the VPS and Git repository. Losing this key may make encrypted objects unrecoverable.
 
-Before transferring actual PDF/audio files, deploy the reviewed image and run `bash tests/sse-s3-smoke-test.sh`. Confirm the S3 response reports `ServerSideEncryption=AES256` and the downloaded bytes match. The repository has not been tested against a real VPS yet; this smoke test, HTTPS, access control, persistence, and backup/restore remain acceptance gates. Keep the local originals until an independent backup has been restored successfully.
+Before transferring actual PDF/audio files, run `bash tests/sse-s3-smoke-test.sh` against the deployed stack. Confirm the S3 response reports `ServerSideEncryption=AES256` and the downloaded bytes match. This smoke test PASSed on the pilot on 2026-10-15 and 2026-10-16 (see the dated verification logs) and the API runs on live PostgreSQL there. The deployment is still **not accepted**: external HTTPS validation (partially recorded), non-publication of internal ports, persistence across a host reboot, and an independent backup/restore test remain open gates. Keep the local originals until an independent backup has been restored successfully.

@@ -81,6 +81,11 @@
   the API authorised and fill the volume before commit. Declared sizes above the
   configured maximum are refused up front (422), and the commit-time size check remains
   as defence in depth (#40). Enforcement of the signed header is validated on the pilot.
+- The presigned PUT also signs the SSE-S3 request header
+  **`x-amz-server-side-encryption: AES256`** (`api/s3.py`), so the client must send it
+  for the gateway to encrypt the object at rest; the commit step can then require
+  AES256 at the object level. Like `Content-Length`, the signed-header enforcement is
+  validated on the pilot, not in the offline suite.
 - Default bucket names (derived from the space name/environment, or supplied) are
   validated against the S3 naming rules before the bucket is registered, so a space can
   never point at a bucket name S3 would reject (`api/s3.py:is_valid_bucket_name`, #41).
