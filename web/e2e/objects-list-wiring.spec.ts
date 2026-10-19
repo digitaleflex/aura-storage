@@ -18,7 +18,7 @@ async function login(page: import("@playwright/test").Page) {
   await page.getByLabel("Identifiant").fill("admin");
   await page.getByLabel("Mot de passe").fill("local-smoke-test-password");
   await page.getByRole("button", { name: "Se connecter", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
 }
 
 test("folder tree is fetched flat in one request and objects are paged", async ({

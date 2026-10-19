@@ -625,8 +625,17 @@ select:focus-visible {
 /* Keeps folder names aligned with file names (which follow a checkbox). */
 .check-spacer {
   display: inline-block;
-  width: 13px;
-  margin-right: 4px;
+  width: 18px;
+  margin-right: 6px;
+}
+
+/* The browser default (13px) is far below any tap-target guidance. */
+.ledger input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+  accent-color: var(--signal);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1522,43 +1531,173 @@ p .chip {
 }
 
 /* ------------------------------------------------------------------ */
-/* Login: a steel plate on a graphite wall.                           */
+/* Login: a dark presentation panel beside the form.                   */
 /* ------------------------------------------------------------------ */
 .login-wrap {
   min-height: 100vh;
   display: flex;
+  flex-wrap: wrap;
+  background: var(--steel-0);
+}
+
+.login-intro {
+  flex: 1 1 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 48px 56px;
+  background: var(--side);
+  color: var(--side-ink);
+}
+
+.login-brand {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--graphite);
-  /* Faint plate grid — the room's tiling, not a decorative glow. */
-  background-image: linear-gradient(var(--graphite-2) 1px, transparent 1px),
-    linear-gradient(90deg, var(--graphite-2) 1px, transparent 1px);
-  background-size: 48px 48px;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.login-brand svg {
+  color: var(--side-muted);
+}
+
+.login-pitch {
+  margin-top: auto;
+  max-width: 460px;
+}
+
+.login-pitch h2 {
+  margin: 0 0 14px;
+  font-size: 34px;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+}
+
+.login-pitch p {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #b8c1cd;
+}
+
+.login-points {
+  margin: 0 0 auto;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.login-points li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.login-points li::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7fc8a0;
 }
 
 .login-card {
-  background: var(--steel-1);
-  border: 1px solid var(--graphite-3);
-  border-radius: var(--radius);
-  padding: 30px 32px 32px;
-  width: 100%;
-  max-width: 396px;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
-  border-top: 3px solid var(--signal);
+  flex: 1 1 420px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 48px clamp(24px, 8vw, 120px);
 }
 
-.login-mark {
-  margin-bottom: 12px;
-  color: var(--ink-2);
+.login-card > * {
+  width: 100%;
+  max-width: 400px;
 }
 
 .login-card h1 {
-  font-size: 24px;
+  font-size: 26px;
 }
 
 .login-card .muted {
   margin: 6px 0 0;
+}
+
+.login-card .alert {
+  margin: 16px 0 0;
+}
+
+.login-card .form {
+  margin-top: 18px;
+}
+
+.login-card .field input {
+  max-width: none;
+  width: 100%;
+  padding: 11px 12px;
+}
+
+.login-card .field input[aria-invalid="true"] {
+  border-color: var(--danger);
+  border-width: 2px;
+}
+
+.password-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.password-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn-block {
+  width: 100%;
+  padding: 12px 14px;
+}
+
+.login-note {
+  font-size: 13px;
+  margin-top: 16px;
+}
+
+@media (max-width: 760px) {
+  .login-wrap {
+    align-content: flex-start;
+  }
+
+  .login-intro {
+    flex: 1 1 100%;
+    gap: 14px;
+    padding: 20px 20px 24px;
+  }
+
+  .login-pitch {
+    margin-top: 0;
+  }
+
+  .login-pitch h2 {
+    font-size: 22px;
+    margin-bottom: 8px;
+  }
+
+  .login-pitch p,
+  .login-points {
+    display: none;
+  }
+
+  .login-card {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    padding: 28px 20px 40px;
+  }
 }
 
 /* ------------------------------------------------------------------ */
