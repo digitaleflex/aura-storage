@@ -89,14 +89,13 @@ def _intent(c, headers, name="stream.bin", size_bytes=1):
 
 
 def _backdate_intent(oid, seconds):
-    conn = main.repo.conn
     expired = int(time.time()) - seconds
-    if "sqlite3" in type(conn).__module__:
+    if main.repo.dialect == "sqlite":
+        conn = main.repo.conn
         conn.execute("UPDATE objects SET intent_expires_at = ? WHERE id = ?", (expired, oid))
         conn.commit()
     else:  # pragma: no cover - offline tests run on SQLite
-        with conn.cursor() as cur:
-            cur.execute("UPDATE objects SET intent_expires_at = %s WHERE id = %s", (expired, oid))
+        main.repo._run("UPDATE objects SET intent_expires_at = %s WHERE id = %s", (expired, oid))
 
 
 def test_commit_streams_large_object_with_bounded_chunks(monkeypatch):
