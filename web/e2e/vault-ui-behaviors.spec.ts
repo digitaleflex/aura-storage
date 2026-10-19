@@ -14,7 +14,7 @@ import type { Page, Route } from "@playwright/test";
  *     `user` never calls `GET /api/v1/admin/usage` and never sees usage;
  *  4. the "SHA-256 vérifié" chip appears only once a queue item reaches the
  *     `available` phase, never while it is still moving;
- *  5. the accepted import categories are informative text, not controls.
+ *  5. the import panel opens on demand and states the server-side check.
  *
  * The mock mirrors e2e/upload-flow.spec.ts: `page.route` answers every /api/v1
  * call and the presigned PUT, so no uvicorn/Vite backend data is needed beyond
@@ -332,32 +332,28 @@ test("the SHA-256 chip only appears once a file is available", async ({ page }) 
   await expect(page.getByText("SHA-256 vérifié", { exact: true })).toBeVisible();
 });
 
-// -- 5. informational (non-interactive) category badges ---------------------
+// -- 5. on-demand import panel ----------------------------------------------
 
-test("accepted import categories are informative, not interactive", async ({ page }) => {
+test("the import panel opens on demand and states the server-side check", async ({
+  page,
+}) => {
   await installMocks(page);
   await login(page);
 
-  const categories = page.getByRole("list", {
-    name: "Catégories de fichiers acceptées",
-  });
-  await expect(categories).toBeVisible();
+  const intake = page.getByRole("region", { name: "Importer" });
+  // Closed by default: the register is the first thing on the page.
+  await expect(intake).toBeHidden();
 
-  for (const label of [
-    "Documents",
-    "Images",
-    "Vidéos",
-    "Audio",
-    "Archives",
-    "Autres",
-  ]) {
-    await expect(categories.getByText(label, { exact: true })).toBeVisible();
-  }
+  await page.getByRole("button", { name: "Importer", exact: true }).click();
+  await expect(intake).toBeVisible();
+  await expect(intake).toContainText("SHA-256");
+  await expect(
+    intake.getByRole("button", { name: "Importer et valider" }),
+  ).toBeDisabled();
 
-  // They carry no control: no buttons, no links inside the badge list.
-  await expect(categories.getByRole("button")).toHaveCount(0);
-  await expect(categories.getByRole("link")).toHaveCount(0);
-  await expect(categories.getByRole("listitem")).toHaveCount(6);
+  // Closing it (nothing pending) hides it again.
+  await intake.getByRole("button", { name: "Fermer" }).click();
+  await expect(intake).toBeHidden();
 });
 
 // -- 6. recursive (cascade) folder deletion ---------------------------------

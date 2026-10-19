@@ -78,16 +78,6 @@ const SORT_OPTIONS: {
   { value: "size_bytes", label: "Taille" },
 ];
 
-/** Accepted import categories, shown as informative (non-clickable) badges. */
-const IMPORT_CATEGORIES = [
-  "Documents",
-  "Images",
-  "Vidéos",
-  "Audio",
-  "Archives",
-  "Autres",
-];
-
 /** Common media types offered as suggestions; the field stays free text. */
 const CONTENT_TYPE_SUGGESTIONS = [
   "application/pdf",
@@ -184,9 +174,8 @@ function StatusLabel({ status }: { status: string }) {
         : status === "failed"
           ? "status status-error"
           : status === "deleted"
-            ? // Vault token: the deleted pastille stays neutral grey (never the
-              // mock's green, so deletion never borrows the activity colour).
-              "status vault-dot-deleted-neutre"
+            ? // Deletion stays neutral grey: it never borrows the activity colour.
+              "status status-muted"
             : "status";
   return <span className={variant}>{STATUS_LABELS[status] ?? status}</span>;
 }
@@ -447,6 +436,9 @@ export function ObjectsPage() {
   const [details, setDetails] = useState<ObjectItem | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  // The import panel opens on demand (header button) and stays open while it
+  // holds pending files, a queue or an error; a drop anywhere also opens it.
+  const [intakeOpen, setIntakeOpen] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
     message: ReactNode;
@@ -1172,12 +1164,6 @@ export function ObjectsPage() {
   const selectableItems = items.filter(isDeletable);
   const selectableIds = new Set(selectableItems.map((item) => item.id));
 
-  // Real weight of what is currently loaded — shown as a rail readout, so the
-  // casiers column carries information instead of empty graphite.
-  const loadedBytes = items.reduce(
-    (sum, item) => sum + (item.size_bytes > 0 ? item.size_bytes : 0),
-    0,
-  );
   const currentName = currentFolderId ? byId.get(currentFolderId)?.name : null;
 
   const moveBlocked = moveTarget ? forbiddenTargets(moveTarget.id) : new Set<string>();
@@ -1386,6 +1372,69 @@ export function ObjectsPage() {
     }
   }, [cascade]);
 
+  // Details drawer: focus its close button on open and close it on Escape
+  // from anywhere (focus may still be on the row that opened it). A modal
+  // dialog stacked on top handles its own Escape first.
+  const detailsCloseRef = useRef<HTMLButtonElement | null>(null);
+  const detailsId = details?.id ?? null;
+  useEffect(() => {
+    if (!detailsId) return;
+    detailsCloseRef.current?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || document.querySelector("dialog[open]")) return;
+      setDetails(null);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [detailsId]);
+
+  const intakeVisible =
+    intakeOpen || pendingFiles.length > 0 || queue.items.length > 0 || uploadError !== null;
+
+  // Subfolders are listed first in the register, like any file browser; a
+  // search or filter narrows files only, so folders step aside meanwhile.
+  const visibleFolders = hasActiveFilters ? [] : subfolders;
+
+  function folderMenuItems(folder: FolderItem) {
+    return [
+      {
+        label: "Renommer",
+        onSelect: () => {
+          setRenameName(folder.name);
+          setRenameTarget(folder);
+        },
+      },
+      { label: "Déplacer", onSelect: () => setMoveTarget(folder) },
+      {
+        label: "Supprimer",
+        danger: true,
+        onSelect: () => {
+          setFolderDeleteWithContent(false);
+          setCascadeConfirmText("");
+          setPendingConfirm({
+            title: "Supprimer le dossier",
+            message: (
+              <>
+                Supprimer <strong>{folder.name}</strong> ? Un dossier contenant
+                encore des fichiers ou sous-dossiers sera refusé.
+              </>
+            ),
+            confirmLabel: "Supprimer",
+            danger: true,
+            folderCascade: canCascadeDelete,
+            onConfirm: (withContent: boolean) => {
+              if (withContent) {
+                openCascade({ id: folder.id, name: folder.name });
+              } else {
+                deleteFolderMutation.mutate({ id: folder.id, name: folder.name });
+              }
+            },
+          });
+        },
+      },
+    ];
+  }
+
   const cascadeConfirmed =
     cascade !== null &&
     cascade.plan !== null &&
@@ -1393,44 +1442,31 @@ export function ObjectsPage() {
     cascadeConfirmText.trim() === cascade.rootName.trim();
 
   return (
-    <div className="stack vault-workspace">
-      <div className="page-head">
-        <h1>Fichiers</h1>
-        <div className="head-actions">
-          <button
-            type="button"
-            className="btn"
-            disabled={objectsQuery.isFetching || treeQuery.isFetching}
-            onClick={() => {
-              setActionError(null);
-              void queryClient.invalidateQueries({ queryKey: ["objects"] });
-              void queryClient.invalidateQueries({ queryKey: ["folders"] });
-            }}
-          >
-            {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
-          </button>
-          <button
-            type="button"
-            className="btn vault-btn-primary"
-            onClick={() => {
-              setNewFolderName("");
-              setNewFolderOpen(true);
-            }}
-          >
-            + Nouveau dossier
-          </button>
-        </div>
-      </div>
-
-      {currentFolderId !== null ? (
-        <nav className="breadcrumb" aria-label="Fil d'Ariane">
+    <div
+      className="stack vault-workspace"
+      onDragEnter={(e) => {
+        e.preventDefault();
+        setDragDepth((depth) => depth + 1);
+      }}
+      onDragLeave={() => {
+        setDragDepth((depth) => Math.max(0, depth - 1));
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(e) => {
+        void handleDrop(e);
+      }}
+    >
+      <nav className="breadcrumb" aria-label="Fil d'Ariane">
         <button
           type="button"
           className={currentFolderId === null ? "crumb crumb-current" : "crumb"}
           aria-current={currentFolderId === null ? "page" : undefined}
           onClick={() => setCurrentFolderId(null)}
         >
-          Racine
+          Mes fichiers
         </button>
         {breadcrumb.map((folder, index) => (
           <span key={folder.id} className="crumb-item">
@@ -1449,8 +1485,64 @@ export function ObjectsPage() {
             </button>
           </span>
         ))}
-        </nav>
-      ) : null}
+      </nav>
+
+      <div className="page-head">
+        <div className="page-title">
+          <h1>{currentName ?? "Mes fichiers"}</h1>
+          <p className="muted page-sub">
+            {subfolders.length} dossier{subfolders.length > 1 ? "s" : ""} ·{" "}
+            {items.length} fichier{items.length > 1 ? "s" : ""}
+            {objectsQuery.hasNextPage ? " (d'autres restent à charger)" : ""}
+            {usageQuery.data ? (
+              <>
+                {" · "}
+                <span>
+                  Espace utilisé : {formatBytes(usageQuery.data.totals.stored_bytes)}
+                </span>
+                <span className="visually-hidden">
+                  {" "}
+                  — Usage réel (admin), mesuré le{" "}
+                  {formatDateTime(usageQuery.data.measured_at)}.
+                </span>
+              </>
+            ) : null}
+          </p>
+        </div>
+        <div className="head-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={objectsQuery.isFetching || treeQuery.isFetching}
+            onClick={() => {
+              setActionError(null);
+              void queryClient.invalidateQueries({ queryKey: ["objects"] });
+              void queryClient.invalidateQueries({ queryKey: ["folders"] });
+            }}
+          >
+            {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setNewFolderName("");
+              setNewFolderOpen(true);
+            }}
+          >
+            Nouveau dossier
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            aria-expanded={intakeVisible}
+            aria-controls="intake"
+            onClick={() => setIntakeOpen(true)}
+          >
+            Importer
+          </button>
+        </div>
+      </div>
 
       {actionError ? (
         <p role="alert" className="alert alert-error">
@@ -1509,182 +1601,72 @@ export function ObjectsPage() {
         </p>
       ) : null}
 
-      <aside className="casiers" aria-labelledby="folders-title">
-        <h2 id="folders-title">Dossiers</h2>
-        <ul className="casier-list">
-          <li
-            className={
-              currentFolderId === null ? "casier casier-current" : "casier"
-            }
+      {treeQuery.isError ? (
+        <p role="alert" className="alert alert-error">
+          Dossiers indisponibles.
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => void treeQuery.refetch()}
           >
-            <button
-              type="button"
-              className="folder-open"
-              aria-current={currentFolderId === null ? "true" : undefined}
-              onClick={() => setCurrentFolderId(null)}
-            >
-              <span className="folder-icon" aria-hidden="true">
-                <FolderMark />
-              </span>
-              <span className="folder-name">Racine</span>
-            </button>
-          </li>
-        </ul>
-        {treeQuery.isError ? (
-          <p role="alert" className="alert alert-error">
-            Dossiers indisponibles.
+            Réessayer
+          </button>
+        </p>
+      ) : null}
+
+      {/* Admin-only query: surface a real failure instead of leaving the
+          readout blank (non-admins are silently skipped — no error). */}
+      {hasAdminAccess(session.data?.role) && usageQuery.isError ? (
+        <p role="alert" className="alert alert-error">
+          Espace utilisé indisponible.
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => void usageQuery.refetch()}
+          >
+            Réessayer
+          </button>
+        </p>
+      ) : null}
+
+      {dragDepth > 0 ? (
+        <div className="drop-overlay" role="status">
+          <p className="drop-hint">
+            Relâchez pour importer{currentName ? ` dans « ${currentName} »` : ""} —
+            dossiers acceptés.
+          </p>
+        </div>
+      ) : null}
+
+      <section
+        id="intake"
+        className="card intake"
+        aria-labelledby="upload-title"
+        hidden={!intakeVisible}
+      >
+        <div className="intake-head">
+          <h2 id="upload-title">
+            Importer{currentName ? ` dans « ${currentName} »` : ""}
+          </h2>
+          {!transferActive && pendingFiles.length === 0 ? (
             <button
               type="button"
               className="btn btn-ghost btn-small"
-              onClick={() => void treeQuery.refetch()}
+              onClick={() => {
+                setIntakeOpen(false);
+                setUploadError(null);
+                if (queue.finished) setQueue(emptyQueue());
+              }}
             >
-              Réessayer
+              Fermer
             </button>
-          </p>
-        ) : treeQuery.isPending ? (
-          <p className="muted">Chargement…</p>
-        ) : subfolders.length === 0 ? (
-          <p className="empty">Aucun sous-dossier ici.</p>
-        ) : (
-          <ul className="casier-list">
-            {subfolders.map((folder) => (
-              <li key={folder.id} className="casier">
-                <button
-                  type="button"
-                  className="folder-open"
-                  onClick={() => setCurrentFolderId(folder.id)}
-                >
-                  <span className="folder-icon" aria-hidden="true">
-                    <FolderMark />
-                  </span>
-                  <span className="folder-name">{folder.name}</span>
-                </button>
-                <RowMenu
-                  label={`Actions pour le dossier ${folder.name}`}
-                  items={[
-                    {
-                      label: "Renommer",
-                      onSelect: () => {
-                        setRenameName(folder.name);
-                        setRenameTarget(folder);
-                      },
-                    },
-                    { label: "Déplacer", onSelect: () => setMoveTarget(folder) },
-                    {
-                      label: "Supprimer",
-                      danger: true,
-                      onSelect: () => {
-                        setFolderDeleteWithContent(false);
-                        setCascadeConfirmText("");
-                        setPendingConfirm({
-                          title: "Supprimer le dossier",
-                          message: (
-                            <>
-                              Supprimer <strong>{folder.name}</strong> ? Un dossier
-                              contenant encore des fichiers ou sous-dossiers sera
-                              refusé.
-                            </>
-                          ),
-                          confirmLabel: "Supprimer",
-                          danger: true,
-                          folderCascade: canCascadeDelete,
-                          onConfirm: (withContent) => {
-                            if (withContent) {
-                              openCascade({ id: folder.id, name: folder.name });
-                            } else {
-                              deleteFolderMutation.mutate({
-                                id: folder.id,
-                                name: folder.name,
-                              });
-                            }
-                          },
-                        });
-                      },
-                    },
-                  ]}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="casiers-foot">
-          <dl>
-            <dt>Position</dt>
-            <dd>{currentName ?? "Racine"}</dd>
-            <dt>Poids affiché</dt>
-            <dd className="num">{formatBytes(loadedBytes)}</dd>
-            {usageQuery.data ? (
-              <>
-                <dt>Espace utilisé</dt>
-                <dd className="num">
-                  {formatBytes(usageQuery.data.totals.stored_bytes)}
-                </dd>
-              </>
-            ) : null}
-          </dl>
-          {usageQuery.data ? (
-            <p className="muted casiers-usage-note">
-              Usage réel (admin), mesuré le{" "}
-              {formatDateTime(usageQuery.data.measured_at)}.
-            </p>
-          ) : null}
-          {/* Admin-only query: surface a real failure instead of leaving the
-              readout blank (non-admins are silently skipped — no error). */}
-          {hasAdminAccess(session.data?.role) && usageQuery.isError ? (
-            <p role="alert" className="alert alert-error">
-              Espace utilisé indisponible.
-              <button
-                type="button"
-                className="btn btn-ghost btn-small"
-                onClick={() => void usageQuery.refetch()}
-              >
-                Réessayer
-              </button>
-            </p>
           ) : null}
         </div>
-      </aside>
-
-      <section
-        className={`card intake${dragDepth > 0 ? " drop-active" : ""}`}
-        aria-labelledby="upload-title"
-        onDragEnter={(e) => {
-          e.preventDefault();
-          setDragDepth((depth) => depth + 1);
-        }}
-        onDragLeave={() => {
-          setDragDepth((depth) => Math.max(0, depth - 1));
-        }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "copy";
-        }}
-        onDrop={(e) => {
-          void handleDrop(e);
-        }}
-      >
-        <h2 id="upload-title">
-          Importer{currentName ? ` dans « ${currentName} »` : ""}
-        </h2>
-        {dragDepth > 0 ? (
-          <p role="status" className="drop-hint">
-            Relâchez pour importer — dossiers acceptés.
-          </p>
-        ) : null}
         <p className="muted">
-          Déposez des fichiers ici ou choisissez-les. Un fichier n'est déclaré
-          disponible qu'une fois sa taille et son empreinte SHA-256 vérifiées
-          par le backend, au moment du commit.
+          Déposez des fichiers ou des dossiers n'importe où sur la page, ou
+          choisissez-les. Un fichier n'est déclaré disponible qu'une fois sa
+          taille et son empreinte SHA-256 vérifiées par le serveur.
         </p>
-        {/* Informative only: these categories describe what the intake accepts;
-            they are not controls, so they stay non-interactive text. */}
-        <ul className="intake-cats" aria-label="Catégories de fichiers acceptées">
-          {IMPORT_CATEGORIES.map((category) => (
-            <li key={category} className="intake-cat">
-              {category}
-            </li>
-          ))}
-        </ul>
         <form onSubmit={handleUpload} className="form form-inline">
           <div className="field file-field">
             <span>Fichiers</span>
@@ -1701,7 +1683,7 @@ export function ObjectsPage() {
                   e.target.value = "";
                 }}
               />
-              <span className="btn vault-btn-blue">Choisir des fichiers…</span>
+              <span className="btn">Choisir des fichiers…</span>
               <span className="file-picker-name">
                 {pendingFiles.length === 0
                   ? "Aucun fichier sélectionné"
@@ -1900,13 +1882,12 @@ export function ObjectsPage() {
 
       <section className="section" aria-labelledby="objects-title">
         <div className="section-head">
-          <h2 id="objects-title">
-            Objets{currentName ? ` — ${currentName}` : " — racine"}
+          <h2 id="objects-title" className="visually-hidden">
+            Contenu — {currentName ?? "racine"}
           </h2>
-          <span className="muted" aria-live="polite">
-            {items.length} objet{items.length > 1 ? "s" : ""} affiché
+          <span className="visually-hidden" aria-live="polite">
+            {items.length} fichier{items.length > 1 ? "s" : ""} affiché
             {items.length > 1 ? "s" : ""}
-            {objectsQuery.hasNextPage ? " (d'autres restent à charger)" : ""}
           </span>
         </div>
 
@@ -2076,7 +2057,7 @@ export function ObjectsPage() {
               </div>
             ))}
           </div>
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && visibleFolders.length === 0 ? (
           <p className="empty">
             {hasActiveFilters
               ? "Aucun fichier ne correspond à ces critères."
@@ -2150,6 +2131,37 @@ export function ObjectsPage() {
               <span aria-hidden="true">Modifié</span>
               <span aria-hidden="true" />
             </div>
+            {visibleFolders.map((folder) => (
+              <div className="ledger-row folder-row" role="listitem" key={folder.id}>
+                <div className="ledger-name">
+                  <span className="check-spacer" aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="folder-open"
+                    onClick={() => setCurrentFolderId(folder.id)}
+                  >
+                    <span className="folder-icon" aria-hidden="true">
+                      <FolderMark />
+                    </span>
+                    <span className="folder-name">{folder.name}</span>
+                  </button>
+                </div>
+                <div className="ledger-meta">
+                  <span className="ledger-type">Dossier</span>
+                  <span className="ledger-size num">—</span>
+                  <span className="ledger-status" />
+                  <span className="ledger-date num">
+                    {formatDateTime(folder.created_at)}
+                  </span>
+                </div>
+                <div className="ledger-menu">
+                  <RowMenu
+                    label={`Actions pour le dossier ${folder.name}`}
+                    items={folderMenuItems(folder)}
+                  />
+                </div>
+              </div>
+            ))}
             {items.map((item) => {
               const rowBusy =
                 deletePendingId === item.id ||
@@ -2189,14 +2201,7 @@ export function ObjectsPage() {
                     </button>
                   </div>
                   <div className="ledger-meta">
-                    <span
-                      className={`ledger-type${
-                        typeLabel(item.content_type) === "Image"
-                          ? " vault-badge-image"
-                          : ""
-                      }`}
-                      title={item.content_type}
-                    >
+                    <span className="ledger-type" title={item.content_type}>
                       {typeLabel(item.content_type)}
                     </span>
                     <span className="ledger-size num">
@@ -2339,13 +2344,11 @@ export function ObjectsPage() {
             role="dialog"
             aria-modal="false"
             aria-labelledby="details-title"
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setDetails(null);
-          }}
-        >
+          >
           <div className="drawer-head">
             <h2 id="details-title">{details.display_name}</h2>
             <button
+              ref={detailsCloseRef}
               type="button"
               className="btn btn-ghost btn-small"
               onClick={() => setDetails(null)}

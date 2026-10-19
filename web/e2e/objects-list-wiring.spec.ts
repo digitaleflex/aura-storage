@@ -56,14 +56,17 @@ test("folder tree is fetched flat in one request and objects are paged", async (
 test("the folders tab shows the empty state rather than fake data", async ({
   page,
 }) => {
+  // The API drives the view: an empty catalogue renders the explicit empty
+  // state. Both lists are answered empty here, because other suites create
+  // folders at the shared root while this one runs.
+  await page.route(/\/api\/v1\/(folders|objects)(\?|$)/, (route) =>
+    route.fulfill({ json: { items: [] } }),
+  );
   await login(page);
-  // The API drives the view: whatever it returns is rendered as-is.
   await expect(
-    page.getByRole("heading", { name: /^Objets — / }),
+    page.getByRole("heading", { name: /^Contenu — / }),
   ).toBeVisible();
-  await expect(
-    page.getByText(/Aucun sous-dossier ici\.|Aucun fichier dans ce dossier\./).first(),
-  ).toBeVisible();
+  await expect(page.getByText("Aucun fichier dans ce dossier.")).toBeVisible();
 });
 
 test("the name filter is applied server-side (not over loaded pages)", async ({
