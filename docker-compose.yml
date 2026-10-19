@@ -68,6 +68,49 @@ services:
       # Port 8080 is never published to the host; the dashboard is reachable only
       # through this HTTPS router with BasicAuth (bcrypt).
 
+      # --- Shared API middlewares -------------------------------------------
+      # Definitions only; a router opts in by listing them in
+      # `traefik.http.routers.<name>.middlewares`. They are declared here (like
+      # `dash-auth` above) so several routers can reuse one definition.
+      #
+      # `api-ratelimit`: 30 requests/s per client IP with a burst of 60. This is
+      # a coarse abuse guard for documentation/API routers, not a substitute for
+      # the in-app login/M2M limiters (api/main.py, api/authz.py). Keyed on the
+      # client IP as resolved by the entrypoint (X-Forwarded-For).
+      - traefik.http.middlewares.api-ratelimit.ratelimit.average=30
+      - traefik.http.middlewares.api-ratelimit.ratelimit.burst=60
+      # `api-secure-headers`: baseline hardening for HTML/JSON responses served
+      # through Traefik (HSTS already implied by the TLS routers; set explicitly).
+      - traefik.http.middlewares.api-secure-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.api-secure-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.api-secure-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.api-secure-headers.headers.frameDeny=true
+      - traefik.http.middlewares.api-secure-headers.headers.referrerPolicy=no-referrer
+      # `api-docs-allowlist`: restriction choix utilisateur (2026-10-16) — docs internes
+      # derrière firewall/VPN. Plages privées par défaut; ajoute ton IP publique opérateur
+      # via `SWAGGER_ADMIN_IP` dans .env (ex: 203.0.113.10/32) avant go-live si accès distant.
+      - traefik.http.middlewares.api-docs-allowlist.ipallowlist.sourcerange=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${SWAGGER_ADMIN_IP:-127.0.0.2/32}
+
+      # --- forwardAuth example: DISABLED (no verify endpoint exists today) ---
+      # api/main.py exposes /api/v1/login, /api/v1/logout and /api/v1/me, and
+      # api/authz.py authorizes in-process; there is NO /auth/verify route, so
+      # nothing here is enabled. Do not uncomment before the prerequisites hold:
+      #
+      #   1. Add a dedicated verification endpoint that validates the
+      #      `aura_session` cookie (or a Bearer service token) and answers 200 —
+      #      optionally copying identity headers — or 401. `/api/v1/me` shows the
+      #      session-validation behaviour but is a JSON API, not a forwardAuth
+      #      target; a thin `/api/v1/auth/verify` is preferred.
+      #   2. Make that endpoint reachable from Traefik. Today `api` is on the
+      #      `storage` network only while Traefik is on `edge`, so Traefik cannot
+      #      dial it; add `api` to `edge` (or expose a dedicated route) first.
+      #   3. Then uncomment the three labels below and prepend `api-auth-forward`
+      #      to the `aura-swagger` router middlewares.
+      #
+      # - traefik.http.middlewares.api-auth-forward.forwardauth.address=http://api:8000/api/v1/auth/verify
+      # - traefik.http.middlewares.api-auth-forward.forwardauth.authResponseHeaders=X-Aura-User,X-Aura-Role
+      # - traefik.http.middlewares.api-auth-forward.forwardauth.trustForwardHeader=true
+
   seaweed-master:
     image: ${SEAWEEDFS_IMAGE:?Set SEAWEEDFS_IMAGE in .env}
     container_name: ${AURA_INSTANCE_ID:-aura-001}-master
@@ -197,19 +240,46 @@ services:
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
       AURA_COOKIE_SECURE: "1"
-      # Human session cookie lifetime (seconds): 90 days. Pinned here so the
-      # deployed stack matches the documented default (api/config.py). Override
-      # in .env only deliberately; the expiry is fixed at login (no renewal).
-      AURA_SESSION_TTL: "7776000"
-      # Audit trail on a named volume: it must survive image rebuilds and
-      # container recreation (the default path is inside the container).
+      # Human session cookie lifetime (seconds): 8h. Deliberately tighter than the
+      # 90-day value previously pinned on main (deploy/session-90d): a long-lived
+      # cookie widens the theft window for an Internet-facing app. Operators can
+      # still raise it in .env (e.g. 2592000 = 30 days) if a longer session is
+      # required; the expiry is fixed at login (no renewal).
+      AURA_SESSION_TTL: ${AURA_SESSION_TTL:-28800}
+      # Persistent audit log (JSONL) stored on the api-audit volume below, so the
+      # trail survives container recreation and the 90-day retention promise
+      # holds. `api/config.py` defaults to a relative path for dev runs; the
+      # Compose stack pins this absolute one.
       AURA_AUDIT_LOG: /var/lib/aura/audit/aura-audit.jsonl
+      # Remaining tunables read by api/config.py (defaults are its exact
+      # defaults). Uncomment/override any of them in .env as needed.
+      AURA_API_DB: ${AURA_API_DB:-aura-catalogue.db}
+      AURA_INTENT_TTL: ${AURA_INTENT_TTL:-900}
+      AURA_INTENT_GRACE_SECONDS: ${AURA_INTENT_GRACE_SECONDS:-300}
+      AURA_AUDIT_RETENTION_DAYS: ${AURA_AUDIT_RETENTION_DAYS:-90}
+      AURA_AUDIT_MAX_SCAN_LINES: ${AURA_AUDIT_MAX_SCAN_LINES:-20000}
+      AURA_AUDIT_ERROR_SCAN_LINES: ${AURA_AUDIT_ERROR_SCAN_LINES:-5000}
+      AURA_AUDIT_ERROR_WINDOW_S: ${AURA_AUDIT_ERROR_WINDOW_S:-3600}
+      AURA_LOGIN_RATE_LIMIT: ${AURA_LOGIN_RATE_LIMIT:-10}
+      AURA_LOGIN_RATE_WINDOW: ${AURA_LOGIN_RATE_WINDOW:-60}
+      AURA_M2M_RATE_LIMIT: ${AURA_M2M_RATE_LIMIT:-60}
+      AURA_M2M_RATE_WINDOW: ${AURA_M2M_RATE_WINDOW:-60}
+      AURA_TRUSTED_PROXIES: ${AURA_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      AURA_MAX_OBJECT_BYTES: ${AURA_MAX_OBJECT_BYTES:-5368709120}
+      AURA_COMMIT_CHUNK_BYTES: ${AURA_COMMIT_CHUNK_BYTES:-1048576}
+      AURA_MAX_PENDING_INTENTS: ${AURA_MAX_PENDING_INTENTS:-100}
+      AURA_ALLOW_EMPTY_OBJECTS: ${AURA_ALLOW_EMPTY_OBJECTS:-0}
+      AURA_ALLOWED_CONTENT_TYPES: "${AURA_ALLOWED_CONTENT_TYPES:-}"
+      AURA_IDEMPOTENCY_KEY_MAX: ${AURA_IDEMPOTENCY_KEY_MAX:-200}
       # No origin/CORS allow-list here on purpose: the api has no Traefik route
       # and is reached same-origin through the app proxy (app/nginx.conf proxies
       # /api/ to this service). Browser uploads go straight to SeaweedFS via
       # presigned URLs, so any CORS belongs to the SeaweedFS S3 gateway.
     volumes:
-      - audit-log:/var/lib/aura/audit
+      # The audit trail lives outside the container layer (named volume), so it
+      # survives recreation and upgrades. Bounded by AURA_AUDIT_RETENTION_DAYS;
+      # never mount this into another service.
+      - api-audit:/var/lib/aura/audit
     networks:
       - storage
     depends_on:
@@ -296,6 +366,46 @@ services:
       - no-new-privileges:true
     # No host ports, no access to the internal storage network.
 
+  # API documentation browser (Swagger UI) rendering the committed contract
+  # docs/openapi.yaml. It has NO host port: it is reachable only through the
+  # dedicated Traefik router below and sits on the `edge` network only, so it can
+  # never reach the storage/api containers.
+  #
+  # The spec targets an INTERNAL audience (session cookie + CSRF for humans,
+  # Bearer tokens for machines; see docs/openapi.yaml and
+  # docs/AUTHORIZATION-MATRIX.md). It is currently protected by a shared rate
+  # limit and security headers. Authentication via forwardAuth is NOT enabled:
+  # no verify endpoint exists yet (see the commented `api-auth-forward`
+  # middleware on the `traefik` service for the pattern to add later). Until
+  # then, keep the `SWAGGER_DOMAIN` DNS record off untrusted networks.
+  swagger-ui:
+    image: ${SWAGGER_UI_IMAGE:-swaggerapi/swagger-ui:v5.17.14}
+    container_name: ${AURA_INSTANCE_ID:-aura-001}-swagger-ui
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Africa/Porto-Novo}
+      # Serve the mounted file as the spec; BASE_URL stays "/" so relative asset
+      # paths resolve identically at the domain root.
+      SWAGGER_JSON: /spec/openapi.yaml
+      BASE_URL: /
+    volumes:
+      - ./docs/openapi.yaml:/spec/openapi.yaml:ro
+    networks:
+      - edge
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aura-edge
+      - traefik.http.routers.aura-swagger.rule=Host(`${SWAGGER_DOMAIN:-docs.aura-storage.eurinhash.com}`)
+      - traefik.http.routers.aura-swagger.entrypoints=websecure
+      - traefik.http.routers.aura-swagger.tls=true
+      - traefik.http.routers.aura-swagger.tls.certresolver=le
+      # Prepend `api-auth-forward` here once it is defined (see `traefik` labels).
+      - traefik.http.routers.aura-swagger.middlewares=api-docs-allowlist,api-ratelimit,api-secure-headers
+      - traefik.http.services.aura-swagger.loadbalancer.server.port=8080
+    # No host port, no storage network: the docs never bind a local port.
+
 networks:
   edge:
     name: aura-edge
@@ -306,4 +416,4 @@ networks:
 volumes:
   traefik-acme:
   pgdata:
-  audit-log:
+  api-audit:

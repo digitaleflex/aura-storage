@@ -519,6 +519,47 @@ def test_download_intent_reports_size_type_and_checksum(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Preview intent: same scope/status rules as download, but the presigned GET
+# is bound to Content-Disposition: inline for in-browser rendering.
+# ---------------------------------------------------------------------------
+def test_preview_intent_renders_inline_with_object_type(monkeypatch):
+    data = b"%PDF-1.4 preview-bytes"
+    monkeypatch.setattr(main, "s3ops", DummyS3(data))
+    c, headers = _admin()
+    oid = _intent(c, headers, name="preview.pdf", size_bytes=len(data),
+                  content_type="application/pdf").json()["id"]
+    c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
+    r = c.post(f"/api/v1/objects/{oid}/preview-intent", headers=headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["method"] == "GET"
+    assert body["display_name"] == "preview.pdf"
+    assert body["content_type"] == "application/pdf"
+    assert body["size_bytes"] == len(data)
+    # The presigned GET forces an in-browser render of the object's own type.
+    assert "X-Amz-Signature=" in body["preview_url"]
+    assert "response-content-disposition=inline" in body["preview_url"]
+    assert "response-content-type=application%2Fpdf" in body["preview_url"]
+
+
+def test_preview_intent_matches_download_scoping(monkeypatch):
+    monkeypatch.setattr(main, "s3ops", DummyS3(b"x"))
+    c, headers = _admin()
+    _, token_b = _make_identity(c, headers, ["objects:read"])
+    oid = _intent(c, headers, name="scoped.bin").json()["id"]
+
+    # Pending -> 409 (only an available object is previewable).
+    assert c.post(f"/api/v1/objects/{oid}/preview-intent",
+                  headers=headers).status_code == 409
+    # Cross-space -> 404, indistinguishable from a missing object.
+    assert c.post(f"/api/v1/objects/{oid}/preview-intent",
+                  headers=token_b).status_code == 404
+    # Anonymous -> 401.
+    assert client.post(f"/api/v1/objects/{oid}/preview-intent",
+                       json={}).status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # Secret hygiene: presigned URLs and keys never reach the audit log
 # ---------------------------------------------------------------------------
 def test_audit_log_never_records_presigned_urls(monkeypatch, tmp_path):

@@ -4,6 +4,7 @@ Catalogue metadata lives here; object bytes travel directly between the client
 and S3 through short-lived presigned URLs. The API never stores a browser session
 token in the response body and never puts S3 credentials in the frontend.
 """
+import os
 import shutil
 import time
 from typing import Annotated, Literal
@@ -22,7 +23,7 @@ from .audit import (
     recent_error_events,
     reset_request_context,
 )
-from .auth import hash_password, new_token, verify_password
+from .auth import hash_password, new_token, verify_dummy, verify_password
 from .authz import (
     ADMIN_READ,
     ADMIN_WRITE,
@@ -164,12 +165,20 @@ def _ensure_bootstrap_admin() -> None:
 
 _ensure_bootstrap_admin()
 
-# Verified against when the username is unknown (timing equalisation in login).
-_DUMMY_PASS_HASH = hash_password(new_token(32))
-
 
 def _as_dict(row) -> dict:
     return dict(row) if not isinstance(row, dict) else row
+
+
+def _upload_headers(content_type: str) -> dict:
+    """Headers the client must echo on a presigned PUT.
+
+    ``Content-Type`` and the SSE-S3 header are both part of the signed request
+    (see ``api/s3.presigned_put``); the browser has to resend them exactly or the
+    gateway rejects the upload. Returning them here keeps the value the API
+    signed and the value the client sends in lock-step.
+    """
+    return {"Content-Type": content_type, SSE_HEADER: SSE_ALGORITHM}
 
 
 def _canonical_id(value: str, field: str) -> str:
@@ -463,10 +472,15 @@ def login(body: LoginIn, request: Request, response: Response):
         raise HTTPException(status_code=429, detail="too many login attempts",
                             headers={"Retry-After": str(settings.login_rate_window)})
     row = repo.get_user_by_name(body.username)
-    # An unknown username still pays one argon2 verification, so response time
-    # does not reveal which usernames exist.
-    stored_hash = row["pass_hash"] if row is not None else _DUMMY_PASS_HASH
-    if not verify_password(stored_hash, body.password) or row is None:
+    if row is None:
+        # Unknown username: still perform one hash verification against a
+        # throwaway hash so the response time cannot reveal whether the user
+        # exists (no enumeration oracle).
+        verify_dummy()
+        valid = False
+    else:
+        valid = verify_password(row["pass_hash"], body.password)
+    if not valid:
         _login_record_failure(client_ip)
         audit_event("login", body.username, "failure")
         raise HTTPException(status_code=401, detail="invalid credentials")
@@ -870,6 +884,35 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
     }
 
 
+@app.post("/api/v1/objects/{oid}/preview-intent")
+def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    # Mirror of download-intent: same scope, same 404 (foreign/unknown id is not
+    # an existence oracle) and same 409 (only available objects are previewable).
+    # The difference is the presigned GET is bound to ``Content-Disposition:
+    # inline`` and the object's own content type, so the browser renders PDFs,
+    # images and audio in place; the frontend falls back to a download when the
+    # type is not renderable. No storage coordinates are echoed back.
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != "available":
+        raise HTTPException(status_code=409, detail="object not available")
+    url = presigned_get(
+        s3, row["bucket"], row["object_key"], settings.intent_ttl,
+        content_disposition="inline", content_type=row["content_type"],
+    )
+    audit_event("preview-intent", principal["id"], "success", {"object_id": oid})
+    return {
+        "id": oid, "preview_url": url, "method": "GET",
+        "expires_in": settings.intent_ttl,
+        "expires_at": int(time.time()) + settings.intent_ttl,
+        "display_name": row["display_name"], "content_type": row["content_type"],
+        "size_bytes": row["size_bytes"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Logical folders (#61). Human-owned catalogue metadata: no bytes, no host
 # directories. A folder is addressed by its id and scoped to its owner, so one
@@ -1024,6 +1067,12 @@ def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, 
         raise HTTPException(status_code=409, detail="folder is not empty")
     if repo.folder_object_count(fid, owner_id=owner_id) > 0:
         raise HTTPException(status_code=409, detail="folder is not empty")
+    # Soft-deleted objects no longer block the delete (they are hidden from
+    # every listing); detach their folder reference before removing the folder
+    # so ``objects.folder_id`` is never left dangling on PostgreSQL. This is what
+    # lets the explorer's cascade flow finish: it soft-deletes the files first,
+    # then removes the now-empty folders from the leaves up.
+    repo.detach_soft_deleted_objects(fid, owner_id=owner_id)
     repo.delete_folder(fid, owner_id=owner_id)
     audit_event("folder.delete", principal["id"], "success", {"folder_id": fid})
     return {"id": fid, "status": "deleted"}
@@ -1235,7 +1284,11 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
     except Exception:
         components["storage"] = {"status": "down", "error": "unreachable"}
     try:
-        disk = shutil.disk_usage(audit_path())
+        # Measure the volume that HOLDS the audit log, not the file itself:
+        # ``shutil.disk_usage`` stats the exact path, so a log not written yet
+        # (fresh container, no request audited) would wrongly report the disk as
+        # unreadable. ``audit_path()`` may be relative (dev), hence the "." fallback.
+        disk = shutil.disk_usage(os.path.dirname(audit_path()) or ".")
         components["disk"] = {
             "status": "ok", "total_bytes": disk.total,
             "used_bytes": disk.used, "free_bytes": disk.free,

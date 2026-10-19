@@ -5,6 +5,19 @@ import re
 import boto3
 from botocore.client import Config
 
+# SSE-S3: every presigned upload must be encrypted at rest with the server key.
+# The algorithm is bound into the PUT signature; the header name is what the
+# client has to send for the signature to validate.
+SSE_ALGORITHM = "AES256"
+SSE_HEADER = "x-amz-server-side-encryption"
+
+# SSE-S3: every presigned upload must be encrypted at rest with the server key.
+# The algorithm is bound into the PUT signature; the header name is what the
+# client has to send for the signature to validate.
+SSE_ALGORITHM = "AES256"
+SSE_HEADER = "x-amz-server-side-encryption"
+
+
 def make_client(endpoint: str, access_key: str, secret_key: str, region: str):
     return boto3.client(
         "s3",
@@ -42,16 +55,23 @@ def presigned_put(client, bucket: str, key: str, content_type: str, expires: int
     API approved. The caller (upload-intent handler) enforces the upper bound
     (``settings.max_object_bytes``) before presigning.
 
-    ``x-amz-server-side-encryption: AES256`` is signed too: the object is
-    encrypted at rest by SeaweedFS (SSE-S3), and a PUT that omits the header
-    fails the signature check (403). The caller must forward it, which the
-    upload-intent response does through its ``headers`` map.
+    Server-side encryption with an SSE-S3 (AES256) key is *signed into* the
+    request too: ``ServerSideEncryption`` becomes the signed header
+    ``x-amz-server-side-encryption``. The caller (upload-intent handler) must
+    therefore return that header to the client so it sends it on the PUT; a PUT
+    that omits the header fails the signature check (403), and the commit step
+    can require ``Object``-level AES256 encryption at rest (docs/SECURITY.md).
+    The GET path is untouched: a download never re-encrypts.
 
     Note: enforcement relies on the gateway validating signed headers; this is
     exercised live on the pilot, not in the offline suite.
     """
-    params = {"Bucket": bucket, "Key": key, "ContentType": content_type,
-              "ServerSideEncryption": SSE_ALGORITHM}
+    params = {
+        "Bucket": bucket,
+        "Key": key,
+        "ContentType": content_type,
+        "ServerSideEncryption": SSE_ALGORITHM,
+    }
     if content_length is not None:
         params["ContentLength"] = content_length
     return client.generate_presigned_url(
@@ -86,9 +106,25 @@ def is_valid_bucket_name(name: str) -> bool:
     return True
 
 
-def presigned_get(client, bucket: str, key: str, expires: int) -> str:
+def presigned_get(client, bucket: str, key: str, expires: int,
+                  content_disposition: str | None = None,
+                  content_type: str | None = None) -> str:
+    """Presign a GET, optionally overriding the response headers.
+
+    ``content_disposition`` (``inline`` to render in the browser, ``attachment``
+    to force a download) and ``content_type`` map to the get_object
+    ``ResponseContentDisposition`` / ``ResponseContentType`` parameters, which
+    S3 echoes as response headers on the presigned request. Both default to
+    ``None`` so an existing caller (download-intent) produces exactly the URL it
+    did before — no response override is added unless one is requested.
+    """
+    params = {"Bucket": bucket, "Key": key}
+    if content_disposition is not None:
+        params["ResponseContentDisposition"] = content_disposition
+    if content_type is not None:
+        params["ResponseContentType"] = content_type
     return client.generate_presigned_url(
-        "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires
+        "get_object", Params=params, ExpiresIn=expires
     )
 
 

@@ -231,12 +231,12 @@ def test_me_csrf_token_is_null_for_service_principal():
     assert me.json()["csrf_token"] is None
 
 
-def test_default_session_ttl_is_90_days():
-    # The shipped default (no override) is 7776000s = 90 days. Skip if the
-    # running environment deliberately overrides the TTL.
+def test_default_session_ttl_is_8_hours():
+    # The shipped default (no override) is 28800s = 8 hours (audit H6). Skip if
+    # the running environment deliberately overrides the TTL.
     if os.environ.get("AURA_SESSION_TTL"):
         pytest.skip("AURA_SESSION_TTL is overridden in this environment")
-    assert main.settings.session_ttl == 7776000
+    assert main.settings.session_ttl == 28800
 
 
 def test_mutation_requires_csrf():
@@ -426,7 +426,7 @@ def test_live_round_trip_with_integrity():
     ).json()
     put = httpx.put(
         intent["upload_url"], content=payload,
-        headers={"Content-Type": "application/octet-stream"}, timeout=30,
+        headers=intent["headers"], timeout=30,
     )
     assert put.status_code == 200, put.text
     committed = c.post(
@@ -454,7 +454,11 @@ def test_live_round_trip_with_integrity():
     from api.s3 import presigned_put as _presign
     short_url = _presign(main.s3, bucket, "expiry-probe", "text/plain", 2, 1)
     _time.sleep(4)
-    expired = httpx.put(short_url, content=b"x", headers={"Content-Type": "text/plain"}, timeout=30)
+    expired = httpx.put(
+        short_url, content=b"x",
+        headers={"Content-Type": "text/plain", "x-amz-server-side-encryption": "AES256"},
+        timeout=30,
+    )
     assert expired.status_code == 403, expired.text
 
 

@@ -289,6 +289,13 @@ export async function runTransfer(
 // A bounded queue of independent single-file transfers. Each file keeps its own
 // state, idempotency key and AbortController, so one failure never stops the
 // others, a single file can be cancelled, and only the failed files are retried.
+//
+// The queue also owns the browser-lifecycle concerns so a tab switch or an SPA
+// navigation cannot silently strand a transfer: progress is driven by XHR
+// progress events (never a polling interval), a `beforeunload` guard warns while
+// files are in flight, and losing connectivity suspends scheduling (paused)
+// instead of failing the remaining files (offline). Pausing never aborts an
+// in-flight PUT: the current connection finishes and only new starts are held.
 // ---------------------------------------------------------------------------
 
 export interface QueueItem {
@@ -296,6 +303,13 @@ export interface QueueItem {
   fileName: string;
   sizeBytes: number;
   state: TransferState;
+  /**
+   * Suspended by the queue (explicit pause or a connectivity loss). Distinct
+   * from a failed item: it is not terminal, carries no error, and keeps its
+   * bytes untouched. `state.phase` stays `idle` while it waits, so a paused
+   * file reads as "en attente", never as "échec".
+   */
+  paused: boolean;
 }
 
 export interface QueueState {
@@ -310,6 +324,10 @@ export interface QueueState {
   done: number;
   failed: number;
   cancelled: number;
+  /** Files suspended by an explicit pause or a connectivity loss. */
+  paused: number;
+  /** True while the scheduler is held (queue-wide pause or offline). */
+  schedulerPaused: boolean;
   /** True once every file reached a terminal state. */
   finished: boolean;
 }
@@ -318,18 +336,33 @@ export interface UploadQueue {
   /** Cancel a single file (aborts its transfer and its backend intent). */
   cancelItem(id: string): void;
   cancelAll(): void;
+  /**
+   * Suspend one file that has not started yet. An in-flight PUT is never
+   * aborted (no resumable multipart yet), so pausing only holds scheduling.
+   */
+  pauseItem(id: string): void;
+  /** Un-suspend one paused file and let the scheduler pick it up again. */
+  resumeItem(id: string): void;
+  /** Suspend the scheduler and every file that has not started (no abort). */
+  pauseAll(): void;
+  /** Resume the scheduler and every suspended file. */
+  resumeAll(): void;
   /** Re-queue the failed and cancelled files, keeping the success ones. */
   retryFailed(): void;
   /** Re-queue one failed or cancelled file as a fresh submission. */
   retryItem(id: string): void;
+  /** Detach the window listeners; safe to call on unmount (idempotent). */
+  dispose(): void;
   /** Resolves with the final queue state once every file has settled. */
   done: Promise<QueueState>;
 }
 
 export interface QueueOptions {
   folderId: string | null;
-  /** How many files transfer at once (default 3). */
+  /** How many files transfer at once (default 10). */
   concurrency?: number;
+  /** Alias of `concurrency`; wins when both are provided. Default 10. */
+  maxConcurrency?: number;
   /**
    * Delay between the start of two parallel files, in milliseconds.
    * Paces connection bursts against the storage gateway instead of firing
@@ -344,19 +377,62 @@ export interface QueueOptions {
    * no congestion signal. Default true.
    */
   adaptiveConcurrency?: boolean;
-  /** Consecutive congestion failures that cost one parallel slot. Default 2. */
+  /** Consecutive congestion failures that cost one parallel slot (scaled by ceiling). */
   congestionThreshold?: number;
-  /** Consecutive successes that restore one parallel slot. Default 3. */
+  /** Consecutive successes that restore one parallel slot (scaled by ceiling). */
   recoveryThreshold?: number;
+  /**
+   * When true (default) the queue suspends itself while the browser reports
+   * offline and resumes on the `online` event. In-flight PUTs are never
+   * aborted; only new scheduling is held. Set false to manage it manually.
+   */
+  autoPauseOnOffline?: boolean;
   signal?: AbortSignal;
   onUpdate?: (queue: QueueState) => void;
   config?: Partial<TransferConfig>;
 }
 
-export const DEFAULT_QUEUE_CONCURRENCY = 3;
+/**
+ * Default parallelism. Raised from 3 to 10 for the MVP so a batch import is not
+ * serialized behind a three-wide window. The global semaphore (slots are shared
+ * by actives and staggered reservations) plus the 250 ms stagger still bound how
+ * fast connections are opened, so a wider window does not become a burst.
+ */
+export const DEFAULT_QUEUE_CONCURRENCY = 10;
 export const DEFAULT_START_STAGGER_MS = 250;
+/** Base congestion tolerance, tuned for the historical cap of 3 concurrent files. */
 export const DEFAULT_CONGESTION_THRESHOLD = 2;
+/** Base recovery target, tuned for the historical cap of 3 concurrent files. */
 export const DEFAULT_RECOVERY_THRESHOLD = 3;
+
+/**
+ * Scale the adaptive thresholds with the configured ceiling.
+ *
+ * Narrow queues keep the historical, already-tuned values. A wide queue (10)
+ * must not lose a slot after every couple of transient blips, so the shrink
+ * tolerance grows (less aggressive reduction) while the restore target shrinks
+ * (faster recovery). Both trends are monotonic in the ceiling.
+ */
+export function adaptiveThresholds(maxConcurrency: number): {
+  congestionThreshold: number;
+  recoveryThreshold: number;
+} {
+  if (maxConcurrency <= 3) {
+    return {
+      congestionThreshold: DEFAULT_CONGESTION_THRESHOLD,
+      recoveryThreshold: DEFAULT_RECOVERY_THRESHOLD,
+    };
+  }
+  return {
+    // 10 -> 4 consecutive losses per slot lost (instead of 2).
+    congestionThreshold: Math.max(
+      DEFAULT_CONGESTION_THRESHOLD,
+      Math.ceil(maxConcurrency / 3),
+    ),
+    // 10 -> 2 consecutive wins per slot regained (instead of 3).
+    recoveryThreshold: Math.max(2, Math.ceil(6 / maxConcurrency)),
+  };
+}
 
 export function emptyQueue(concurrency = DEFAULT_QUEUE_CONCURRENCY): QueueState {
   return {
@@ -367,6 +443,8 @@ export function emptyQueue(concurrency = DEFAULT_QUEUE_CONCURRENCY): QueueState 
     done: 0,
     failed: 0,
     cancelled: 0,
+    paused: 0,
+    schedulerPaused: false,
     finished: false,
   };
 }
@@ -389,11 +467,22 @@ export function startUploadQueue(
   deps: TransferDeps,
   options: QueueOptions,
 ): UploadQueue {
-  const maxConcurrency = Math.max(1, options.concurrency ?? DEFAULT_QUEUE_CONCURRENCY);
+  const maxConcurrency = Math.max(
+    1,
+    options.maxConcurrency ?? options.concurrency ?? DEFAULT_QUEUE_CONCURRENCY,
+  );
   const startStaggerMs = Math.max(0, options.startStaggerMs ?? DEFAULT_START_STAGGER_MS);
   const adaptive = options.adaptiveConcurrency ?? true;
-  const congestionThreshold = Math.max(1, options.congestionThreshold ?? DEFAULT_CONGESTION_THRESHOLD);
-  const recoveryThreshold = Math.max(1, options.recoveryThreshold ?? DEFAULT_RECOVERY_THRESHOLD);
+  const scaled = adaptiveThresholds(maxConcurrency);
+  const congestionThreshold = Math.max(
+    1,
+    options.congestionThreshold ?? scaled.congestionThreshold,
+  );
+  const recoveryThreshold = Math.max(
+    1,
+    options.recoveryThreshold ?? scaled.recoveryThreshold,
+  );
+  const autoPauseOnOffline = options.autoPauseOnOffline ?? true;
   const defaultFolder = options.folderId ?? null;
 
   // Effective parallelism, adapted at runtime (see adaptToOutcome). It never
@@ -413,6 +502,8 @@ export function startUploadQueue(
     settled: boolean;
     /** A staggered start is scheduled but not running yet. */
     reserved: boolean;
+    /** Suspended: the scheduler must not start (nor restart) this file. */
+    paused: boolean;
   }
 
   const items: Internal[] = entries.map((entry) => {
@@ -425,11 +516,14 @@ export function startUploadQueue(
       controller: null,
       settled: false,
       reserved: false,
+      paused: false,
     };
   });
 
   let active = 0;
   let finished = false;
+  // Held while the scheduler must not start new files (explicit pause/offline).
+  let schedulerPaused = false;
   let resolveDone: (state: QueueState) => void = () => undefined;
   const done = new Promise<QueueState>((resolve) => {
     resolveDone = resolve;
@@ -441,6 +535,7 @@ export function startUploadQueue(
       fileName: item.file.name,
       sizeBytes: item.file.size,
       state: item.state,
+      paused: item.paused,
     })),
     concurrency: effectiveConcurrency,
     maxConcurrency,
@@ -448,6 +543,8 @@ export function startUploadQueue(
     done: items.filter((item) => item.state.phase === "available").length,
     failed: items.filter((item) => item.state.phase === "failed").length,
     cancelled: items.filter((item) => item.state.phase === "cancelled").length,
+    paused: items.filter((item) => !item.settled && item.paused).length,
+    schedulerPaused,
     finished: finished || (active === 0 && items.every((item) => item.settled)),
   });
 
@@ -456,6 +553,7 @@ export function startUploadQueue(
   const maybeFinish = () => {
     if (!finished && active === 0 && items.every((item) => item.settled)) {
       finished = true;
+      detachListeners();
       emit();
       resolveDone(snapshot());
     }
@@ -496,6 +594,13 @@ export function startUploadQueue(
     // or picked up by another pump pass: starting twice is never allowed.
     if (item.settled || item.controller !== null || item.state.phase !== "idle") {
       item.reserved = false;
+      return;
+    }
+    // Paused between reservation and its staggered release: hold it (do not
+    // abort anything) and surface the suspended queue state.
+    if (item.paused) {
+      item.reserved = false;
+      emit();
       return;
     }
     item.reserved = false;
@@ -566,30 +671,39 @@ export function startUploadQueue(
         !item.settled &&
         item.controller === null &&
         !item.reserved &&
+        !item.paused &&
         item.state.phase === "idle",
     );
 
   const pump = () => {
-    let slot = effectiveConcurrency - active - pendingStarts;
+    if (schedulerPaused) {
+      maybeFinish();
+      return;
+    }
+    // Global semaphore: at most `effectiveConcurrency` files hold a slot, and
+    // actives and staggered reservations share the same budget, so ten parallel
+    // uploads never become ten simultaneous connection bursts.
     let immediateStarted = false;
-    while (slot > 0) {
+    while (active + pendingStarts < effectiveConcurrency) {
       const item = nextQueued();
       if (!item) break;
-      slot -= 1;
       if (!immediateStarted || startStaggerMs <= 0) {
         immediateStarted = true;
         runItem(item);
         continue;
       }
       // Reserve the slot and start after a short delay, re-validating: the
-      // item may have been cancelled or retried in the meantime. The release
-      // runs on sleep success and failure alike so a throwing sleep cannot
-      // leak the reserved slot.
+      // item may have been cancelled, paused or retried in the meantime. The
+      // release runs on sleep success and failure alike so a throwing sleep
+      // cannot leak the reserved slot.
       item.reserved = true;
       pendingStarts += 1;
       const release = () => {
         pendingStarts -= 1;
         runItem(item);
+        // runItem may have bailed (paused/settled): re-pump so the freed slot
+        // is not wasted on a file that will never start.
+        pump();
       };
       void Promise.resolve()
         .then(() => deps.sleep(startStaggerMs))
@@ -597,6 +711,83 @@ export function startUploadQueue(
     }
     maybeFinish();
   };
+
+  // --- pause / resume -----------------------------------------------------
+  // Pausing is a scheduling concern: an in-flight PUT is never aborted (there
+  // is no resumable multipart yet), so suspending only prevents files that have
+  // not started from starting. A paused file keeps `state.phase === "idle"` and
+  // is reported through the distinct `paused` queue fields, never as `failed`.
+  const markPaused = (item: Internal): void => {
+    if (item.settled || item.controller !== null) return;
+    item.paused = true;
+  };
+
+  const markResumed = (item: Internal): void => {
+    // A reserved file is restarted by its own staggered release once the flag
+    // is cleared; a held one is picked up by the next pump pass.
+    item.paused = false;
+  };
+
+  const pauseAll = (): void => {
+    schedulerPaused = true;
+    for (const item of items) markPaused(item);
+    emit();
+    maybeFinish();
+  };
+
+  const resumeAll = (): void => {
+    schedulerPaused = false;
+    for (const item of items) markResumed(item);
+    emit();
+    pump();
+  };
+
+  // --- browser-lifecycle wiring (no setInterval anywhere) ------------------
+  // Progress comes from XHR `upload.onprogress` events and the queue is driven
+  // by promise continuations, so a background tab keeps making progress and
+  // never depends on a polling timer. A hard navigation/reload is guarded while
+  // files are in flight, and a connectivity loss suspends (not fails) the queue.
+  const hasWindow = typeof window !== "undefined";
+  let listenersAttached = false;
+
+  const onBeforeUnload = (event: BeforeUnloadEvent): void => {
+    if (active > 0) {
+      event.preventDefault();
+      // Legacy contract: a truthy returnValue triggers the browser prompt.
+      event.returnValue = "";
+    }
+  };
+  const onOffline = (): void => pauseAll();
+  const onOnline = (): void => resumeAll();
+
+  const attachListeners = (): void => {
+    if (!hasWindow || listenersAttached) return;
+    listenersAttached = true;
+    window.addEventListener("beforeunload", onBeforeUnload);
+    if (autoPauseOnOffline) {
+      window.addEventListener("offline", onOffline);
+      window.addEventListener("online", onOnline);
+    }
+  };
+
+  const detachListeners = (): void => {
+    if (!hasWindow || !listenersAttached) return;
+    listenersAttached = false;
+    window.removeEventListener("beforeunload", onBeforeUnload);
+    window.removeEventListener("offline", onOffline);
+    window.removeEventListener("online", onOnline);
+  };
+
+  attachListeners();
+  if (
+    hasWindow &&
+    autoPauseOnOffline &&
+    typeof navigator !== "undefined" &&
+    navigator.onLine === false
+  ) {
+    // Opened while already offline: start suspended instead of racing failures.
+    pauseAll();
+  }
 
   // Start as soon as the queue is created (unless there is nothing to do).
   pump();
@@ -627,6 +818,22 @@ export function startUploadQueue(
       emit();
       maybeFinish();
     },
+    pauseItem(id: string) {
+      const item = items.find((candidate) => candidate.id === id);
+      if (!item || item.settled) return;
+      markPaused(item);
+      emit();
+      maybeFinish();
+    },
+    resumeItem(id: string) {
+      const item = items.find((candidate) => candidate.id === id);
+      if (!item || item.settled) return;
+      markResumed(item);
+      emit();
+      pump();
+    },
+    pauseAll,
+    resumeAll,
     retryFailed() {
       let requeued = false;
       for (const item of items) {
@@ -634,6 +841,7 @@ export function startUploadQueue(
           item.state = idleTransfer(item.file);
           item.settled = false;
           item.reserved = false;
+          item.paused = false;
           requeued = true;
         }
       }
@@ -652,9 +860,13 @@ export function startUploadQueue(
       item.state = idleTransfer(item.file);
       item.settled = false;
       item.reserved = false;
+      item.paused = false;
       finished = false;
       emit();
       pump();
+    },
+    dispose() {
+      detachListeners();
     },
     done,
   };

@@ -24,6 +24,9 @@ jobs:
           bash -n tests/sse-s3-smoke-test.sh
           bash -n tests/s3-smoke-test.sh
           bash -n tests/test-s3-smoke-validation.sh
+          bash -n scripts/host-preflight.sh
+          bash -n scripts/install-admin-key.sh
+          bash -n tests/test-landing-routing.sh
           bash -n scripts/backup-lib.sh scripts/backup.sh scripts/restore-check.sh scripts/restore.sh
           bash -n tests/test-backup-scripts.sh
           bash -n scripts/host-preflight.sh scripts/install-admin-key.sh tests/test-landing-routing.sh
