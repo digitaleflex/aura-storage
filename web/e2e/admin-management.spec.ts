@@ -35,6 +35,8 @@ test("create, rename, deactivate and configure applications, spaces and buckets"
     has: page.getByRole("heading", { name: "Buckets" }),
   });
 
+  await page.getByRole("tab", { name: "Applications et espaces" }).click();
+
   // 1. Application: create, rename, deactivate, reactivate.
   await appsSection.getByLabel("Nouvelle application").fill(appName);
   await appsSection.getByRole("button", { name: "Créer", exact: true }).click();
@@ -72,6 +74,8 @@ test("create, rename, deactivate and configure applications, spaces and buckets"
   await spaceDialog.getByLabel("Environnement").fill("staging");
   await spaceDialog.getByRole("button", { name: "Enregistrer" }).click();
   await expect(spaceRow.getByText("staging")).toBeVisible();
+
+  await page.getByRole("tab", { name: "Buckets" }).click();
 
   // 3. Buckets: register an extra bucket and make it the default.
   await bucketsSection

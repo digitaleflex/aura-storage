@@ -86,13 +86,15 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "aborted", label: "Abandonné" },
 ];
 
-const SORT_OPTIONS: {
-  value: NonNullable<ObjectQuery["sort"]>;
+/** Sortable columns: the API field, its label and the order a first click uses. */
+const SORT_COLUMNS: {
+  field: NonNullable<ObjectQuery["sort"]>;
   label: string;
+  firstOrder: NonNullable<ObjectQuery["order"]>;
 }[] = [
-  { value: "created_at", label: "Date" },
-  { value: "display_name", label: "Nom" },
-  { value: "size_bytes", label: "Taille" },
+  { field: "display_name", label: "Nom", firstOrder: "asc" },
+  { field: "size_bytes", label: "Taille", firstOrder: "desc" },
+  { field: "created_at", label: "Ajouté", firstOrder: "desc" },
 ];
 
 /** Common media types offered as suggestions; the field stays free text. */
@@ -475,6 +477,7 @@ export function ObjectsPage() {
   // The import panel opens on demand (header button) and stays open while it
   // holds pending files, a queue or an error; a drop anywhere also opens it.
   const [intakeOpen, setIntakeOpen] = useState(false);
+  const [trayCollapsed, setTrayCollapsed] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
     message: ReactNode;
@@ -1199,7 +1202,7 @@ export function ObjectsPage() {
     setActionError(null);
     try {
       await navigator.clipboard.writeText(item.id);
-      setNotice(`Référence copiée : ${item.id}`);
+      notify("ok", `Référence copiée : ${item.id}`);
     } catch {
       setActionError("Copie impossible dans ce navigateur.");
     }
@@ -1497,6 +1500,39 @@ export function ObjectsPage() {
         },
       },
     ];
+  }
+
+  /** A column header that sorts server-side: same column toggles the order. */
+  function sortHeader(field: NonNullable<ObjectQuery["sort"]>) {
+    const column = SORT_COLUMNS.find((entry) => entry.field === field);
+    if (!column) return null;
+    const active = sortField === field;
+    return (
+      <button
+        type="button"
+        className={active ? "sort-head sort-head-active" : "sort-head"}
+        onClick={() => {
+          if (active) {
+            setSortOrder(sortOrder === "asc" ? "desc" : "asc");
+          } else {
+            setSortField(field);
+            setSortOrder(column.firstOrder);
+          }
+        }}
+      >
+        {column.label}
+        {active ? (
+          <>
+            <span aria-hidden="true" className="sort-arrow">
+              {sortOrder === "asc" ? "▲" : "▼"}
+            </span>
+            <span className="visually-hidden">
+              {sortOrder === "asc" ? " (tri croissant)" : " (tri décroissant)"}
+            </span>
+          </>
+        ) : null}
+      </button>
+    );
   }
 
   const cascadeConfirmed =
@@ -2042,35 +2078,6 @@ export function ObjectsPage() {
               ))}
             </select>
           </label>
-          <label className="field">
-            <span>Trier par</span>
-            <select
-              name="sort"
-              value={sortField}
-              onChange={(e) =>
-                setSortField(e.target.value as NonNullable<ObjectQuery["sort"]>)
-              }
-            >
-              {SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Ordre</span>
-            <select
-              name="order"
-              value={sortOrder}
-              onChange={(e) =>
-                setSortOrder(e.target.value as NonNullable<ObjectQuery["order"]>)
-              }
-            >
-              <option value="desc">Décroissant</option>
-              <option value="asc">Croissant</option>
-            </select>
-          </label>
           <button
             type="button"
             className="btn filters-toggle"
@@ -2244,12 +2251,12 @@ export function ObjectsPage() {
                     }
                   }}
                 />{" "}
-                <span aria-hidden="true">Nom</span>
+                {sortHeader("display_name")}
               </span>
               <span aria-hidden="true">Type</span>
-              <span aria-hidden="true">Taille</span>
+              {sortHeader("size_bytes")}
               <span aria-hidden="true">État</span>
-              <span aria-hidden="true">Modifié</span>
+              {sortHeader("created_at")}
               <span aria-hidden="true" />
             </div>
             {visibleFolders.map((folder) => (
@@ -2336,7 +2343,7 @@ export function ObjectsPage() {
                       <StatusLabel status={item.status} />
                     </span>
                     <span className="ledger-date num">
-                      {formatDateTime(item.updated_at)}
+                      {formatDateTime(item.created_at)}
                     </span>
                   </div>
                   <div className="ledger-menu">
@@ -2472,7 +2479,10 @@ export function ObjectsPage() {
             aria-labelledby="details-title"
           >
           <div className="drawer-head">
-            <h2 id="details-title">{details.display_name}</h2>
+            <div className="drawer-title">
+              <span className="muted">{typeLabel(details.content_type)}</span>
+              <h2 id="details-title">{details.display_name}</h2>
+            </div>
             <button
               ref={detailsCloseRef}
               type="button"
@@ -2483,56 +2493,32 @@ export function ObjectsPage() {
               Fermer
             </button>
           </div>
-          <dl className="detail-list">
-            <dt>Nom</dt>
-            <dd>{details.display_name}</dd>
-            <dt>Identifiant</dt>
-            <dd className="mono">{details.id}</dd>
-            <dt>Type MIME</dt>
-            <dd>{details.content_type}</dd>
-            <dt>Taille</dt>
-            <dd>
-              {formatBytes(details.size_bytes)}
-              <span className="muted"> ({details.size_bytes} octets)</span>
-            </dd>
-            <dt>État</dt>
-            <dd>
-              <StatusLabel status={details.status} />
-            </dd>
-            <dt>Dossier</dt>
-            <dd>{folderPath(details.folder_id)}</dd>
-            <dt>Créé le</dt>
-            <dd>{formatDateTime(details.created_at)}</dd>
-            <dt>Modifié le</dt>
-            <dd>{formatDateTime(details.updated_at)}</dd>
-            <dt>Empreinte SHA-256</dt>
-            <dd className="detail-hash">
-              {details.checksum_sha256 ? (
-                <>
-                  <code className="mono">{details.checksum_sha256}</code>
-                  <button
-                    type="button"
-                    className="btn btn-small"
-                    onClick={() => {
-                      const value = details.checksum_sha256;
-                      if (!navigator.clipboard) {
-                        setNotice("Copie impossible : contexte non sécurisé.");
-                        return;
-                      }
-                      void navigator.clipboard.writeText(value).then(
-                        () => setNotice("Empreinte SHA-256 copiée."),
-                        () => setNotice("Copie refusée par le navigateur."),
-                      );
-                    }}
-                  >
-                    Copier
-                  </button>
-                </>
-              ) : (
-                "non disponible"
-              )}
-            </dd>
-          </dl>
+          <div
+            className={`drawer-banner drawer-banner-${
+              details.status === "available"
+                ? "ok"
+                : details.status === "pending"
+                  ? "run"
+                  : details.status === "failed"
+                    ? "error"
+                    : "muted"
+            }`}
+          >
+            <strong>
+              {details.status === "available"
+                ? "Disponible et vérifié"
+                : (STATUS_LABELS[details.status] ?? details.status)}
+            </strong>
+            <span>
+              {details.status === "available"
+                ? "Taille et SHA-256 contrôlés à l'import."
+                : details.status === "pending"
+                  ? "L'envoi n'est pas terminé : rien n'est téléchargeable."
+                  : details.status === "deleted"
+                    ? "Les octets restent jusqu'à une purge."
+                    : "Ce fichier n'est pas utilisable en l'état."}
+            </span>
+          </div>
           <div className="drawer-actions">
             <button
               type="button"
@@ -2565,40 +2551,101 @@ export function ObjectsPage() {
             >
               Déplacer
             </button>
-            <ConfirmAction
-              label="Supprimer"
-              title="Supprimer l'objet"
-              message={
+          </div>
+          <dl className="detail-list">
+            <dt>Taille</dt>
+            <dd>
+              {formatBytes(details.size_bytes)}
+              <span className="muted"> ({details.size_bytes} octets)</span>
+            </dd>
+            <dt>Dossier</dt>
+            <dd>{folderPath(details.folder_id)}</dd>
+            <dt>Ajouté le</dt>
+            <dd>{formatDateTime(details.created_at)}</dd>
+            <dt>Modifié le</dt>
+            <dd>{formatDateTime(details.updated_at)}</dd>
+            <dt>Type MIME</dt>
+            <dd className="mono">{details.content_type}</dd>
+            <dt>Empreinte SHA-256</dt>
+            <dd className="detail-hash">
+              {details.checksum_sha256 ? (
                 <>
-                  Marquer <strong>{details.display_name}</strong> comme supprimé ?
-                  Les octets restent jusqu'à une purge.
+                  <code className="mono">{details.checksum_sha256}</code>
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={() => {
+                      const value = details.checksum_sha256;
+                      if (!navigator.clipboard) {
+                        notify("error", "Copie impossible : contexte non sécurisé.");
+                        return;
+                      }
+                      void navigator.clipboard.writeText(value).then(
+                        () => notify("ok", "Empreinte SHA-256 copiée."),
+                        () => notify("error", "Copie refusée par le navigateur."),
+                      );
+                    }}
+                  >
+                    Copier
+                  </button>
                 </>
-              }
-              confirmLabel="Supprimer"
-              danger
-              className="btn drawer-actions-danger"
-              disabled={objectBusy}
-              pending={deletePendingId === details.id}
-              onConfirm={() => deleteObjectMutation.mutate(details.id)}
-            />
-            {canPurge ? (
+              ) : (
+                "non disponible"
+              )}
+            </dd>
+            <dt>Référence</dt>
+            <dd className="detail-hash">
+              <code className="mono">{details.id}</code>
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={() => void handleCopyReference(details)}
+              >
+                Copier la référence
+              </button>
+            </dd>
+          </dl>
+          <div className="drawer-danger">
+            <h3>Zone sensible</h3>
+            <div className="drawer-actions">
               <ConfirmAction
-                label="Purger définitivement"
-                title="Purger définitivement"
+                label="Supprimer"
+                title="Supprimer l'objet"
                 message={
                   <>
-                    Supprimer définitivement <strong>{details.display_name}</strong>{" "}
-                    et ses octets ? Action irréversible.
+                    Marquer <strong>{details.display_name}</strong> comme supprimé ?
+                    Les octets restent jusqu'à une purge.
                   </>
                 }
-                confirmLabel="Purger"
+                confirmLabel="Supprimer"
                 danger
-                className="btn btn-danger-text"
+                className="btn btn-danger-outline"
                 disabled={objectBusy}
-                pending={purgePendingId === details.id}
-                onConfirm={() => purgeMutation.mutate(details.id)}
+                pending={deletePendingId === details.id}
+                onConfirm={() => deleteObjectMutation.mutate(details.id)}
               />
-            ) : null}
+              {canPurge ? (
+                <ConfirmAction
+                  label="Purger définitivement"
+                  title="Purger définitivement"
+                  message={
+                    <>
+                      Supprimer définitivement <strong>{details.display_name}</strong>{" "}
+                      et ses octets ? Action irréversible.
+                    </>
+                  }
+                  confirmLabel="Purger"
+                  danger
+                  className="btn btn-danger-text"
+                  disabled={objectBusy}
+                  pending={purgePendingId === details.id}
+                  onConfirm={() => purgeMutation.mutate(details.id)}
+                />
+              ) : null}
+            </div>
+            <p className="muted">
+              La purge efface les octets et ne peut pas être annulée.
+            </p>
           </div>
           </aside>
         </>
@@ -2843,6 +2890,135 @@ export function ObjectsPage() {
           </button>
         </div>
       </Dialog>
+      {queue.items.length > 0 ? (
+        <section className="tray" aria-labelledby="tray-title">
+          <div className="tray-head">
+            <h2 id="tray-title">
+              Import · {queue.done} sur {queue.items.length} terminé
+              {queue.done > 1 ? "s" : ""}
+            </h2>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              aria-expanded={!trayCollapsed}
+              onClick={() => setTrayCollapsed((value) => !value)}
+            >
+              {trayCollapsed ? "Agrandir" : "Réduire"}
+            </button>
+            {queue.finished ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => setQueue(emptyQueue())}
+              >
+                Effacer
+              </button>
+            ) : null}
+          </div>
+        <div
+          className="transfer"
+          data-testid="transfer-status"
+          aria-live="polite"
+          hidden={trayCollapsed}
+        >
+          <div className="queue-head">
+            <span className="muted">
+              {queue.done}/{queue.items.length} transféré
+              {queue.items.length > 1 ? "s" : ""}
+              {queue.failed > 0 ? ` · ${queue.failed} en échec` : ""}
+              {queue.cancelled > 0
+                ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
+                : ""}
+            </span>
+            {transferActive ? (
+              <span className="muted">
+                jusqu'à {queue.concurrency} en parallèle
+              </span>
+            ) : null}
+          </div>
+          {transferActive &&
+          queue.maxConcurrency > 1 &&
+          queue.concurrency < queue.maxConcurrency ? (
+            <p className="muted" role="status">
+              Connexion difficile : envois limités à {queue.concurrency} à la
+              fois — retour à {queue.maxConcurrency} dès que ça passe.
+            </p>
+          ) : null}
+          <ul className="queue">
+            {queue.items.map((item) => (
+              <li key={item.id} className="queue-item">
+                <div className="queue-line">
+                  <span className="transfer-name">{item.fileName}</span>
+                  <span className="muted">{formatBytes(item.sizeBytes)}</span>
+                  <span className={queuePhaseClass(item.state.phase)}>
+                    {PHASE_LABEL[item.state.phase]}
+                  </span>
+                  {item.state.phase === "available" ? (
+                    <span className="chip chip-muted">SHA-256 vérifié</span>
+                  ) : null}
+                  {ACTIVE_PHASES.includes(item.state.phase) ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-small"
+                      aria-label={`Interrompre ${item.fileName}`}
+                      onClick={() => queueRef.current?.cancelItem(item.id)}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                  {item.state.phase === "failed" ||
+                  item.state.phase === "cancelled" ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-small"
+                      aria-label={`Relancer ${item.fileName}`}
+                      onClick={() => {
+                        setUploadError(null);
+                        queueRef.current?.retryItem(item.id);
+                      }}
+                    >
+                      Relancer
+                    </button>
+                  ) : null}
+                </div>
+                {item.state.phase === "uploading" ? (
+                  <div
+                    className="progress"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(item.state.progress * 100)}
+                    aria-label={`Progression de ${item.fileName}`}
+                  >
+                    <span
+                      className="progress-bar"
+                      style={{ width: `${Math.round(item.state.progress * 100)}%` }}
+                    />
+                  </div>
+                ) : null}
+                {item.state.phase === "uploading" ? (
+                  <p className="muted">
+                    {formatBytes(item.state.transferredBytes)} /{" "}
+                    {formatBytes(item.state.sizeBytes)} (
+                    {Math.round(item.state.progress * 100)} %)
+                  </p>
+                ) : null}
+                {item.state.attempts > 0 &&
+                ACTIVE_PHASES.includes(item.state.phase) ? (
+                  <p className="muted">
+                    Nouvelle tentative ({item.state.attempts})…
+                  </p>
+                ) : null}
+                {item.state.error && item.state.phase === "failed" ? (
+                  <p className="muted">{item.state.error}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+        </section>
+      ) : null}
+
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {/* Recursive (cascade) folder deletion: real listing, typed confirmation,

@@ -625,8 +625,17 @@ select:focus-visible {
 /* Keeps folder names aligned with file names (which follow a checkbox). */
 .check-spacer {
   display: inline-block;
-  width: 13px;
-  margin-right: 4px;
+  width: 18px;
+  margin-right: 6px;
+}
+
+/* The browser default (13px) is far below any tap-target guidance. */
+.ledger input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+  accent-color: var(--signal);
 }
 
 /* ------------------------------------------------------------------ */
@@ -954,12 +963,19 @@ select:focus-visible {
 .toasts {
   position: fixed;
   right: 16px;
-  bottom: 16px;
+  /* Top right, under the top bar: the bottom right belongs to the upload tray. */
+  top: calc(var(--band-h) + 12px);
   display: flex;
   flex-direction: column;
   gap: 8px;
   max-width: min(380px, calc(100vw - 32px));
   z-index: 60;
+  /* The stack itself never takes clicks; only the toasts inside do. */
+  pointer-events: none;
+}
+
+.toasts > * {
+  pointer-events: auto;
 }
 
 .toast {
@@ -1047,7 +1063,6 @@ select:focus-visible {
   .toasts {
     right: 8px;
     left: 8px;
-    bottom: 8px;
     max-width: none;
   }
 }
@@ -1060,11 +1075,85 @@ select:focus-visible {
 }
 
 .transfer {
-  margin-top: 12px;
-  padding: 10px 12px;
+  padding: 4px 16px 12px;
+  max-height: min(46vh, 380px);
+  overflow-y: auto;
+}
+
+.transfer[hidden] {
+  display: none;
+}
+
+/* Floating upload tray, bottom right: it stays in view while the user browses. */
+.tray {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 50;
+  width: min(420px, calc(100vw - 40px));
+  background: var(--steel-1);
   border: 1px solid var(--line);
-  border-radius: var(--radius-small);
-  background: var(--steel-2);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(15, 21, 29, 0.18);
+  overflow: hidden;
+}
+
+.tray-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 10px 16px;
+  background: var(--side);
+  color: #ffffff;
+}
+
+.tray-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  color: inherit;
+}
+
+.tray-head .btn-ghost {
+  color: var(--side-ink);
+}
+
+.tray-head .btn-ghost:hover {
+  background: var(--side-3);
+  color: #ffffff;
+}
+
+.sort-head {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sort-head:hover,
+.sort-head-active {
+  color: var(--ink);
+}
+
+.sort-head-active {
+  font-weight: 600;
+}
+
+.sort-arrow {
+  font-size: 9px;
+}
+
+/* Right-aligned numeric column keeps its header on the same edge. */
+.ledger-head > .sort-head:nth-child(3) {
+  justify-self: end;
 }
 
 .transfer-head {
@@ -1156,13 +1245,10 @@ select:focus-visible {
 
 .chip {
   display: inline-block;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  border-radius: var(--radius-small);
-  padding: 2px 7px;
+  border-radius: 999px;
+  padding: 2px 10px;
   white-space: nowrap;
 }
 
@@ -1374,8 +1460,74 @@ p .chip {
 }
 
 .drawer-head h2 {
-  margin: 0;
-  font-size: 15px;
+  margin: 2px 0 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.drawer-title {
+  min-width: 0;
+}
+
+.drawer-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 14px;
+  padding: 11px 14px;
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.drawer-banner strong {
+  font-size: 14px;
+}
+
+.drawer-banner-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.drawer-banner-run {
+  background: var(--run-bg);
+  color: var(--run);
+}
+
+.drawer-banner-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.drawer-banner-muted {
+  background: var(--steel-2);
+  color: var(--ink-2);
+}
+
+.drawer-danger {
+  margin-top: 26px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.drawer-danger h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.drawer-danger .muted {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.btn-danger-outline {
+  color: var(--danger);
+  border-color: var(--line-2);
+}
+
+.btn-danger-outline:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .detail-list {
@@ -1383,13 +1535,10 @@ p .chip {
 }
 
 .detail-list dt {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
   color: var(--muted);
-  margin-top: 15px;
+  margin-top: 14px;
 }
 
 .detail-list dd {
@@ -1422,52 +1571,177 @@ p .chip {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 22px;
-}
-
-/* Keep the irreversible actions apart from the ordinary ones. */
-.drawer-actions-danger {
-  margin-left: auto;
+  margin-top: 14px;
 }
 
 /* ------------------------------------------------------------------ */
-/* Login: a steel plate on a graphite wall.                           */
+/* Login: a dark presentation panel beside the form.                   */
 /* ------------------------------------------------------------------ */
 .login-wrap {
   min-height: 100vh;
   display: flex;
+  flex-wrap: wrap;
+  background: var(--steel-0);
+}
+
+.login-intro {
+  flex: 1 1 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 48px 56px;
+  background: var(--side);
+  color: var(--side-ink);
+}
+
+.login-brand {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--graphite);
-  /* Faint plate grid — the room's tiling, not a decorative glow. */
-  background-image: linear-gradient(var(--graphite-2) 1px, transparent 1px),
-    linear-gradient(90deg, var(--graphite-2) 1px, transparent 1px);
-  background-size: 48px 48px;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.login-brand svg {
+  color: var(--side-muted);
+}
+
+.login-pitch {
+  margin-top: auto;
+  max-width: 460px;
+}
+
+.login-pitch h2 {
+  margin: 0 0 14px;
+  font-size: 34px;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+}
+
+.login-pitch p {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #b8c1cd;
+}
+
+.login-points {
+  margin: 0 0 auto;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.login-points li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.login-points li::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7fc8a0;
 }
 
 .login-card {
-  background: var(--steel-1);
-  border: 1px solid var(--graphite-3);
-  border-radius: var(--radius);
-  padding: 30px 32px 32px;
-  width: 100%;
-  max-width: 396px;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
-  border-top: 3px solid var(--signal);
+  flex: 1 1 420px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 48px clamp(24px, 8vw, 120px);
 }
 
-.login-mark {
-  margin-bottom: 12px;
-  color: var(--ink-2);
+.login-card > * {
+  width: 100%;
+  max-width: 400px;
 }
 
 .login-card h1 {
-  font-size: 24px;
+  font-size: 26px;
 }
 
 .login-card .muted {
   margin: 6px 0 0;
+}
+
+.login-card .alert {
+  margin: 16px 0 0;
+}
+
+.login-card .form {
+  margin-top: 18px;
+}
+
+.login-card .field input {
+  max-width: none;
+  width: 100%;
+  padding: 11px 12px;
+}
+
+.login-card .field input[aria-invalid="true"] {
+  border-color: var(--danger);
+  border-width: 2px;
+}
+
+.password-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.password-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn-block {
+  width: 100%;
+  padding: 12px 14px;
+}
+
+.login-note {
+  font-size: 13px;
+  margin-top: 16px;
+}
+
+@media (max-width: 760px) {
+  .login-wrap {
+    align-content: flex-start;
+  }
+
+  .login-intro {
+    flex: 1 1 100%;
+    gap: 14px;
+    padding: 20px 20px 24px;
+  }
+
+  .login-pitch {
+    margin-top: 0;
+  }
+
+  .login-pitch h2 {
+    font-size: 22px;
+    margin-bottom: 8px;
+  }
+
+  .login-pitch p,
+  .login-points {
+    display: none;
+  }
+
+  .login-card {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    padding: 28px 20px 40px;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1489,27 +1763,25 @@ p .chip {
 }
 
 .stat {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 4px;
   background: var(--steel-1);
   border: 1px solid var(--line);
-  border-left: 3px solid var(--line-2);
-  border-radius: var(--radius-small);
-  padding: 12px 14px;
+  border-radius: var(--radius-card);
+  padding: 16px 18px;
 }
 
 .stat .value {
-  font-family: var(--font-mono);
-  font-size: 24px;
-  font-weight: 500;
+  font-size: 26px;
+  font-weight: 600;
   line-height: 1.15;
   font-variant-numeric: tabular-nums;
 }
 
 .stat .label {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 400;
   color: var(--muted);
 }
 
@@ -1522,14 +1794,11 @@ p .chip {
 
 .table th {
   text-align: left;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
   color: var(--muted);
-  padding: 7px 9px;
-  border-bottom: 1px solid var(--line-2);
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--line);
 }
 
 .table td {
@@ -1550,6 +1819,41 @@ p .chip {
 .table-wrap {
   overflow-x: auto;
   margin-top: 4px;
+}
+
+/* Administration: one tab per section instead of one very long page. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 500;
+  padding: 11px 14px;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab[aria-selected="true"] {
+  color: var(--ink);
+  font-weight: 600;
+  border-bottom-color: var(--signal);
+}
+
+.section[hidden] {
+  display: none;
 }
 
 .token-panel {

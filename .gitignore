@@ -52,3 +52,6 @@ aura-audit.jsonl
 
 # Local build backups (never commit)
 web/dist.bak-*/
+
+# Off-site backup destination and crypt keys
+/config/backup.env

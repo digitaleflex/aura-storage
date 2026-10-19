@@ -18,7 +18,7 @@ async function login(page: import("@playwright/test").Page) {
   await page.getByLabel("Identifiant").fill("admin");
   await page.getByLabel("Mot de passe").fill("local-smoke-test-password");
   await page.getByRole("button", { name: "Se connecter", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
 }
 
 test("folder tree is fetched flat in one request and objects are paged", async ({
@@ -102,6 +102,22 @@ test("status and sort controls reach the API", async ({ page }) => {
     if (url.includes("/api/v1/objects?")) objectRequests.push(url);
   });
 
+  // The column headers only exist when the list has rows, so answer the object
+  // list with one (requests are still observed above).
+  await page.route("**/api/v1/objects?*", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            id: "obj-sort", display_name: "tri.pdf", content_type: "application/pdf",
+            size_bytes: 11, status: "available", folder_id: null,
+            checksum_sha256: "a".repeat(64), created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+          },
+        ],
+      },
+    }),
+  );
   await login(page);
 
   await page.getByLabel("État").selectOption("available");
@@ -109,12 +125,21 @@ test("status and sort controls reach the API", async ({ page }) => {
     .poll(() => objectRequests.some((url) => url.includes("status=available")))
     .toBe(true);
 
-  await page.getByLabel("Trier par").selectOption("display_name");
-  await page.getByLabel("Ordre").selectOption("asc");
+  // Sorting happens from the column headers (server-side): the list starts
+  // on "Ajouté" descending; a first click on "Nom" sorts A to Z, a second Z to A.
+  await page.getByRole("button", { name: /^Nom/ }).click();
   await expect
     .poll(() =>
       objectRequests.some(
         (url) => url.includes("sort=display_name") && url.includes("order=asc"),
+      ),
+    )
+    .toBe(true);
+  await page.getByRole("button", { name: /^Nom/ }).click();
+  await expect
+    .poll(() =>
+      objectRequests.some(
+        (url) => url.includes("sort=display_name") && url.includes("order=desc"),
       ),
     )
     .toBe(true);
