@@ -42,7 +42,9 @@
 - Human sessions are relatively short-lived by default (`AURA_SESSION_TTL` = 8 hours)
   in the Docker Compose stack (and `api/config.py` defaults to 8 hours). The narrower
   theft window reduces exposure; the team can override the value explicitly in
-  `.env` when a longer session is an operational requirement. The cookie is
+  `.env` when a longer session is an operational requirement (a long-lived value such
+  as 30 days widens the theft window and is compensated by the HttpOnly, `Secure`,
+  `SameSite=Strict` cookie and the CSRF double-submit on mutations). The cookie is
   `HttpOnly`, `Secure`, `SameSite=Strict` and set with `max_age` corresponding to
   the effective TTL (no sliding refresh). A new login always issues a new session
   identifier and a new CSRF token.

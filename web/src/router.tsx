@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router";
 import { Layout } from "./components/Layout";
 import { AuthProvider, RequireAuth } from "./lib/auth";
+import { FolderProvider } from "./lib/folderContext";
 import { LoginPage } from "./pages/LoginPage";
 import { ObjectsPage } from "./pages/ObjectsPage";
 import { AdminPage } from "./pages/AdminPage";
@@ -13,7 +14,9 @@ import { AdminPage } from "./pages/AdminPage";
 const rootRoute = createRootRoute({
   component: () => (
     <AuthProvider>
-      <Outlet />
+      <FolderProvider>
+        <Outlet />
+      </FolderProvider>
     </AuthProvider>
   ),
 });

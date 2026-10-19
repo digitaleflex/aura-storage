@@ -231,9 +231,9 @@ def test_me_csrf_token_is_null_for_service_principal():
     assert me.json()["csrf_token"] is None
 
 
-def test_default_session_ttl_is_90_days():
-    # The shipped default (no override) is 7776000s = 90 days. Skip if the
-    # running environment deliberately overrides the TTL.
+def test_default_session_ttl_is_8_hours():
+    # The shipped default (no override) is 28800s = 8 hours (audit H6). Skip if
+    # the running environment deliberately overrides the TTL.
     if os.environ.get("AURA_SESSION_TTL"):
         pytest.skip("AURA_SESSION_TTL is overridden in this environment")
     assert main.settings.session_ttl == 28800

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { useFolderNavigation } from "../lib/folderContext";
 import {
   useInfiniteQuery,
   useMutation,
@@ -17,6 +18,7 @@ import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
 import type {
   QueueInput,
+  QueueItem,
   QueueState,
   TransferDeps,
   TransferPhase,
@@ -32,6 +34,7 @@ import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
+import { PreviewModal } from "../components/PreviewModal";
 import { RowMenu } from "../components/RowMenu";
 
 /** Objects fetched per page ("Charger plus" increments the offset). */
@@ -39,7 +42,7 @@ const OBJECTS_PAGE_SIZE = 50;
 
 /** Human label for each transfer phase (import → validation → availability). */
 const PHASE_LABEL: Record<TransferPhase, string> = {
-  idle: "En attente",
+  idle: "En file d'attente",
   "requesting-intent": "Autorisation…",
   uploading: "Envoi…",
   validating: "Validation…",
@@ -57,6 +60,20 @@ function queuePhaseClass(phase: TransferPhase): string {
   if (phase === "failed") return "chip chip-error";
   if (phase === "cancelled" || phase === "idle") return "chip chip-muted";
   return "chip chip-warn";
+}
+
+/**
+ * A held file (paused) keeps `state.phase === "idle"` in the engine, so the
+ * pause must be read from `item.paused` — never guessed from the phase — or a
+ * paused file would lie and read as "En file d'attente".
+ */
+function queueItemLabel(item: QueueItem): string {
+  return item.paused ? "En pause" : PHASE_LABEL[item.state.phase];
+}
+
+/** Chip style for a queue item: a held file is paused, not queued. */
+function queueItemClass(item: QueueItem): string {
+  return item.paused ? "chip chip-muted" : queuePhaseClass(item.state.phase);
 }
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
@@ -393,12 +410,29 @@ export function ObjectsPage() {
   const session = useSession();
   const queryClient = useQueryClient();
 
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const { currentFolderId, setCurrentFolderId } = useFolderNavigation();
   // Uploads run through the M03 transfer engine as a bounded multi-file queue.
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [queue, setQueue] = useState<QueueState>(() => emptyQueue());
   const queueRef = useRef<UploadQueue | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
+  // Page Lifecycle "freeze": a truly frozen tab suspends its JS, so progress
+  // genuinely stops there. Surface it honestly instead of pretending otherwise.
+  const [tabFrozen, setTabFrozen] = useState(false);
+  useEffect(() => {
+    const onFreeze = () => setTabFrozen(true);
+    const onResume = () => setTabFrozen(false);
+    document.addEventListener("freeze", onFreeze);
+    document.addEventListener("resume", onResume);
+    return () => {
+      document.removeEventListener("freeze", onFreeze);
+      document.removeEventListener("resume", onResume);
+    };
+  }, []);
+
+  // The transfer engine owns its own window listeners (beforeunload guard,
+  // offline/online suspension). Detach them when this page unmounts.
+  useEffect(() => () => queueRef.current?.dispose(), []);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -434,6 +468,8 @@ export function ObjectsPage() {
   const [moveTarget, setMoveTarget] = useState<FolderItem | null>(null);
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
   const [details, setDetails] = useState<ObjectItem | null>(null);
+  /** Object whose inline preview modal is open (null = closed). */
+  const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // The import panel opens on demand (header button) and stays open while it
@@ -542,8 +578,26 @@ export function ObjectsPage() {
     retry: false,
   });
 
-  /** True while any file of the queue is transferring (blocks double submit). */
+  /** True while any file of the queue is transferring (drives live readouts). */
   const transferActive = queue.active > 0;
+
+  /** True while the queue still has unfinished work (running or held): it blocks
+   * a second submission and keeps the lifecycle guards honest — a paused queue
+   * is not "done". */
+  const queueBusy = queue.items.length > 0 && !queue.finished;
+
+  /** At least one file can still be held (queued or moving) and nothing is
+   * already suspended: the "Pause tout" control is worth offering. */
+  const canPauseAll =
+    !queue.schedulerPaused &&
+    queue.items.some(
+      (item) =>
+        !item.paused &&
+        (item.state.phase === "idle" || ACTIVE_PHASES.includes(item.state.phase)),
+    );
+
+  /** True while any file is held (explicit pause or a connectivity loss). */
+  const queuePaused = queue.paused > 0 || queue.schedulerPaused;
 
   /** Wire the injected engine to the real API for one authenticated session. */
   function transferDeps(activeCsrf: string): TransferDeps {
@@ -835,11 +889,11 @@ export function ObjectsPage() {
       setUploadError("Choisissez au moins un fichier.");
       return;
     }
-    if (transferActive) {
+    if (queueBusy) {
       // A submit can still reach here (e.g. Enter in the form) even though the
       // button is disabled: say why instead of returning silently.
       setUploadError(
-        "Un transfert est déjà en cours : attendez sa fin ou annulez-le avant de relancer l'import.",
+        "Un import est déjà en cours (ou en pause) : terminez-le ou annulez-le avant d'en lancer un autre.",
       );
       return;
     }
@@ -875,7 +929,7 @@ export function ObjectsPage() {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
     }
-    if (transferActive) return;
+    if (queueBusy) return;
     setUploadError(null);
     setNotice(null);
 
@@ -957,6 +1011,16 @@ export function ObjectsPage() {
 
   function handleCancelUpload() {
     queueRef.current?.cancelAll();
+  }
+
+  /** Hold every file still in play (in-flight PUTs finish, new starts stop). */
+  function handlePauseUpload() {
+    queueRef.current?.pauseAll();
+  }
+
+  /** Release the queue and every held file. */
+  function handleResumeUpload() {
+    queueRef.current?.resumeAll();
   }
 
   function handleRetryFailed() {
@@ -1066,7 +1130,7 @@ export function ObjectsPage() {
       return;
     }
     const hasFolders = entries.some((entry) => entry.rel.includes("/"));
-    if (transferActive) {
+    if (queueBusy) {
       const loose = entries.filter((entry) => !entry.rel.includes("/"));
       if (loose.length > 0) {
         // Buffer loose files for the next run and say so (P0.1): never
@@ -1677,7 +1741,7 @@ export function ObjectsPage() {
                 multiple
                 data-testid="files-input"
                 className="visually-hidden"
-                disabled={transferActive}
+                disabled={queueBusy}
                 onChange={(e) => {
                   handleFilesChange(e.target.files);
                   e.target.value = "";
@@ -1699,7 +1763,7 @@ export function ObjectsPage() {
             multiple
             data-testid="folder-input"
             className="visually-hidden"
-            disabled={transferActive}
+            disabled={queueBusy}
             onChange={(e) => {
               void handleFolderUpload(e.target.files);
               e.target.value = "";
@@ -1709,7 +1773,7 @@ export function ObjectsPage() {
           <button
             type="button"
             className="btn"
-            disabled={transferActive}
+            disabled={queueBusy}
             onClick={() => dirInputRef.current?.click()}
           >
             Importer un dossier…
@@ -1717,16 +1781,16 @@ export function ObjectsPage() {
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={transferActive || pendingFiles.length === 0}
+            disabled={queueBusy || pendingFiles.length === 0}
           >
             {transferActive ? "Transfert…" : "Importer et valider"}
           </button>
-          {transferActive ? (
+          {queueBusy ? (
             <button type="button" className="btn" onClick={handleCancelUpload}>
-              Annuler
+              Annuler tout
             </button>
           ) : null}
-          {!transferActive && (queue.failed > 0 || queue.cancelled > 0) ? (
+          {!queueBusy && (queue.failed > 0 || queue.cancelled > 0) ? (
             <button type="button" className="btn" onClick={handleRetryFailed}>
               Réessayer les échecs
             </button>
@@ -1735,7 +1799,7 @@ export function ObjectsPage() {
 
         {pendingFiles.length > 0 ? (
           <>
-            {transferActive ? (
+            {queueBusy ? (
               <p className="pending-hint" role="status">
                 En attente du prochain import — le transfert en cours se termine
                 d'abord.
@@ -1766,6 +1830,7 @@ export function ObjectsPage() {
               <span className="muted">
                 {queue.done}/{queue.items.length} transféré
                 {queue.items.length > 1 ? "s" : ""}
+                {queue.paused > 0 ? ` · ${queue.paused} en pause` : ""}
                 {queue.failed > 0 ? ` · ${queue.failed} en échec` : ""}
                 {queue.cancelled > 0
                   ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
@@ -1776,7 +1841,42 @@ export function ObjectsPage() {
                   jusqu'à {queue.concurrency} en parallèle
                 </span>
               ) : null}
+              {canPauseAll ? (
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={handlePauseUpload}
+                >
+                  Pause tout
+                </button>
+              ) : null}
+              {queuePaused ? (
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={handleResumeUpload}
+                >
+                  Reprendre tout
+                </button>
+              ) : null}
             </div>
+            {queue.schedulerPaused ? (
+              <p className="muted" role="status">
+                Import en pause — reprise automatique au retour de la connexion,
+                ou manuelle via «&nbsp;Reprendre tout&nbsp;».
+              </p>
+            ) : null}
+            {tabFrozen && queueBusy ? (
+              <p className="muted" role="status">
+                En pause — onglet en arrière-plan, reprise au retour.
+              </p>
+            ) : null}
+            {queueBusy ? (
+              <p className="muted" role="status">
+                Fermer l'onglet interrompt l'import : re-sélection nécessaire
+                après fermeture.
+              </p>
+            ) : null}
             {transferActive &&
             queue.maxConcurrency > 1 &&
             queue.concurrency < queue.maxConcurrency ? (
@@ -1791,13 +1891,34 @@ export function ObjectsPage() {
                   <div className="queue-line">
                     <span className="transfer-name">{item.fileName}</span>
                     <span className="muted">{formatBytes(item.sizeBytes)}</span>
-                    <span className={queuePhaseClass(item.state.phase)}>
-                      {PHASE_LABEL[item.state.phase]}
+                    <span className={queueItemClass(item)}>
+                      {queueItemLabel(item)}
                     </span>
                     {item.state.phase === "available" ? (
                       <span className="chip chip-muted">SHA-256 vérifié</span>
                     ) : null}
-                    {ACTIVE_PHASES.includes(item.state.phase) ? (
+                    {item.state.phase === "idle" && !item.paused ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-small"
+                        aria-label={`Mettre en pause ${item.fileName}`}
+                        onClick={() => queueRef.current?.pauseItem(item.id)}
+                      >
+                        Pause
+                      </button>
+                    ) : null}
+                    {item.paused ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-small"
+                        aria-label={`Reprendre ${item.fileName}`}
+                        onClick={() => queueRef.current?.resumeItem(item.id)}
+                      >
+                        Reprendre
+                      </button>
+                    ) : null}
+                    {ACTIVE_PHASES.includes(item.state.phase) ||
+                    item.state.phase === "idle" ? (
                       <button
                         type="button"
                         className="btn btn-ghost btn-small"
@@ -2224,6 +2345,11 @@ export function ObjectsPage() {
                       items={[
                         { label: "Détails", onSelect: () => setDetails(item) },
                         {
+                          label: "Aperçu",
+                          disabled: item.status !== "available",
+                          onSelect: () => setPreviewTarget(item),
+                        },
+                        {
                           label: "Télécharger",
                           disabled:
                             item.status !== "available" || downloadingId !== null,
@@ -2419,6 +2545,14 @@ export function ObjectsPage() {
             <button
               type="button"
               className="btn"
+              disabled={details.status !== "available"}
+              onClick={() => setPreviewTarget(details)}
+            >
+              Aperçu
+            </button>
+            <button
+              type="button"
+              className="btn"
               onClick={() => void handleCopyReference(details)}
             >
               Copier la référence
@@ -2469,6 +2603,18 @@ export function ObjectsPage() {
           </aside>
         </>
       ) : null}
+
+      {/* Inline preview: image / audio / PDF rendered from the presigned URL,
+          with a download fallback for anything the browser cannot display. */}
+      <PreviewModal
+        item={previewTarget}
+        csrf={csrf}
+        onClose={() => setPreviewTarget(null)}
+        onDownload={(target) => {
+          setPreviewTarget(null);
+          void handleDownload(target);
+        }}
+      />
 
       {/* New folder */}
       <Dialog

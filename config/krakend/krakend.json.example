@@ -1,0 +1,28 @@
+{
+  "version": 3,
+  "$schema": "https://www.krakend.io/schema/krakend.json",
+  "name": "aura-api-facade",
+  "port": 8080,
+  "endpoints": [
+    {
+      "endpoint": "/health",
+      "method": "GET",
+      "backend": [
+        {
+          "host": ["http://api:8000"],
+          "url_pattern": "/health/live"
+        }
+      ]
+    },
+    {
+      "endpoint": "/api/v1/me",
+      "method": "GET",
+      "backend": [
+        {
+          "host": ["http://api:8000"],
+          "url_pattern": "/api/v1/me"
+        }
+      ]
+    }
+  ]
+}

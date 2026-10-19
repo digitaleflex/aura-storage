@@ -41,17 +41,24 @@ class Settings:
     # Only used when backend is 'postgres'. Never logged.
     db_dsn: str = os.environ.get("AURA_API_DSN", "")
     # Lifetimes (seconds).
-    # Human session cookie lifetime: 90 days by default. A long session widens the
-    # window during which a stolen cookie stays valid; that is compensated by the
-    # HttpOnly + Secure + SameSite=Strict cookie and the CSRF double-submit enforced
-    # in api/main.py. The expiry is fixed at login (no rolling renewal), so logout
-    # or TTL expiry truly ends the session. Shorten via AURA_SESSION_TTL if needed.
+    # Human session cookie lifetime: 8 hours by default (audit H6 kept the
+    # default short). A longer session (e.g. 2592000 = 30 days) widens the window
+    # during which a stolen cookie stays valid; that is compensated by the
+    # HttpOnly + Secure + SameSite=Strict cookie and the CSRF double-submit
+    # enforced in api/main.py. The expiry is fixed at login (no rolling renewal),
+    # so logout or TTL expiry truly ends the session. Override deliberately via
+    # AURA_SESSION_TTL in .env if a longer session is an operational requirement.
     session_ttl: int = _int("AURA_SESSION_TTL", 28800)
     intent_ttl: int = _int("AURA_INTENT_TTL", 900)
     # Grace period after intent_ttl during which a commit is still accepted
     # (upload may finish just before expiry; #37).
     intent_grace_s: int = _int("AURA_INTENT_GRACE_SECONDS", 300)
     # Audit log (JSON-lines, IDs and statuses only — never secrets or URLs).
+    # The Compose stack pins an absolute path on the persistent `api-audit`
+    # volume, so events survive container recreations; this relative default is
+    # for local/dev runs only. `audit_event` creates the parent directory on
+    # first write, and the /admin/health disk probe measures that directory, not
+    # the file, so a not-yet-written log never reports the disk as unreadable.
     audit_log: str = os.environ.get("AURA_AUDIT_LOG", "aura-audit.jsonl")
     # Login rate limit (failed attempts per window, per client IP). A successful
     # login clears the counter for that client.

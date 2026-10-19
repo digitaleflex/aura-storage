@@ -303,3 +303,30 @@ def test_upload_intent_validates_folder_ownership():
     assert c.post("/api/v1/objects/upload-intents",
                   json={"display_name": "d.txt", "size_bytes": 1, "folder_id": fid},
                   headers={"Authorization": f"Bearer {token}"}).status_code == 403
+
+
+def test_folder_with_only_soft_deleted_objects_can_be_deleted():
+    # Regression: soft-deleted objects are hidden from every listing, so a
+    # folder the user sees as empty must be deletable. It used to be refused
+    # forever ("folder is not empty") because the emptiness check counted rows
+    # the explorer no longer shows — which also broke the cascade flow (files
+    # first, then folders), leaving the folder undeletable.
+    n, p = _ordinary_user()
+    u, h = _login(n, p)
+    fid = _mk(u, h, f"soft-del-{uuid.uuid4().hex[:8]}")["id"]
+
+    intent = u.post("/api/v1/objects/upload-intents",
+                    json={"display_name": "f.txt", "size_bytes": 1, "folder_id": fid},
+                    headers=h)
+    assert intent.status_code == 200, intent.text
+    oid = intent.json()["id"]
+
+    # A live (pending) object still blocks the delete.
+    assert u.delete(f"/api/v1/folders/{fid}", headers=h).status_code == 409
+
+    # Once soft-deleted (as the cascade does), the folder reads as empty and
+    # can be removed; the deleted row survives until an explicit purge.
+    assert u.delete(f"/api/v1/objects/{oid}", headers=h).status_code == 200
+    assert u.delete(f"/api/v1/folders/{fid}", headers=h).status_code == 200
+    assert u.get(f"/api/v1/folders/{fid}", headers=h).status_code == 404
+    assert u.get(f"/api/v1/objects/{oid}", headers=h).status_code == 200
