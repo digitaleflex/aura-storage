@@ -33,6 +33,8 @@ import { ConfirmAction, Dialog } from "../components/Dialog";
 import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
 import { RowMenu } from "../components/RowMenu";
+import { PreviewModal } from "../components/PreviewModal";
+import { isPreviewable } from "../lib/preview";
 
 /** Objects fetched per page ("Charger plus" increments the offset). */
 const OBJECTS_PAGE_SIZE = 50;
@@ -436,6 +438,7 @@ export function ObjectsPage() {
   const [moveTarget, setMoveTarget] = useState<FolderItem | null>(null);
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
   const [details, setDetails] = useState<ObjectItem | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // The import panel opens on demand (header button) and stays open while it
@@ -2131,6 +2134,9 @@ export function ObjectsPage() {
                       label={`Actions pour ${item.display_name}`}
                       items={[
                         { label: "Détails", onSelect: () => setDetails(item) },
+                        ...(item.status === "available" && isPreviewable(item.content_type)
+                          ? [{ label: "Aperçu", onSelect: () => setPreviewTarget(item) }]
+                          : []),
                         {
                           label: "Télécharger",
                           disabled:
@@ -2295,6 +2301,15 @@ export function ObjectsPage() {
             </span>
           </div>
           <div className="drawer-actions">
+            {details.status === "available" && isPreviewable(details.content_type) ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setPreviewTarget(details)}
+              >
+                Aperçu
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn-primary"
@@ -2767,6 +2782,15 @@ export function ObjectsPage() {
         </section>
       ) : null}
 
+      <PreviewModal
+        item={previewTarget}
+        csrf={csrf}
+        onClose={() => setPreviewTarget(null)}
+        onDownload={(item) => {
+          setPreviewTarget(null);
+          void handleDownload(item);
+        }}
+      />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {/* Recursive (cascade) folder deletion: real listing, typed confirmation,
