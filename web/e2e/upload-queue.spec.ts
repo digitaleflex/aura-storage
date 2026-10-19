@@ -103,7 +103,10 @@ test("queues several files, isolates one failure and retries only it", async ({ 
   // Two succeed, one fails, and the failure is surfaced with its detail.
   await expect(status.getByText("Disponible", { exact: true })).toHaveCount(2);
   await expect(status.getByText("Échec", { exact: true })).toHaveCount(1);
-  await expect(page.getByRole("alert")).toContainText("does not match");
+  // Scoped to the import panel: the page can show other alerts (e.g. storage usage).
+  await expect(
+    page.getByRole("region", { name: "Importer" }).getByRole("alert"),
+  ).toContainText("does not match");
 
   // Retry only the failed file; the two successes are not re-uploaded.
   state.failBad = false;
