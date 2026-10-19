@@ -103,6 +103,9 @@ class Settings:
     audit_error_window_s: int = _int("AURA_AUDIT_ERROR_WINDOW_S", 3600)
     # Upper bound (characters) for a client-supplied ``Idempotency-Key`` header.
     idempotency_key_max: int = _int("AURA_IDEMPOTENCY_KEY_MAX", 200)
+    # Refuse to commit an object the storage does not report as encrypted at
+    # rest (SSE-S3 ``AES256``). Disable only against a backend without SSE-S3.
+    require_sse: bool = os.environ.get("AURA_REQUIRE_SSE", "1") == "1"
     # Cookie security.
     cookie_secure: bool = os.environ.get("AURA_COOKIE_SECURE", "1") == "1"
 

@@ -26,6 +26,12 @@ def make_clients(public_endpoint: str, internal_endpoint: str,
     return presign, ops
 
 
+# SeaweedFS applies SSE-S3 only when the write asks for it (no default
+# encryption on buckets AURA uses), so every upload must carry this header.
+SSE_ALGORITHM = "AES256"
+SSE_HEADER = "x-amz-server-side-encryption"
+
+
 def presigned_put(client, bucket: str, key: str, content_type: str, expires: int,
                   content_length: int) -> str:
     """Presign a PUT bound to an exact ``Content-Length``.
@@ -37,10 +43,16 @@ def presigned_put(client, bucket: str, key: str, content_type: str, expires: int
     API approved. The caller (upload-intent handler) enforces the upper bound
     (``settings.max_object_bytes``) before presigning.
 
+    ``x-amz-server-side-encryption: AES256`` is signed too: the object is
+    encrypted at rest by SeaweedFS (SSE-S3), and a PUT that omits the header
+    fails the signature check (403). The caller must forward it, which the
+    upload-intent response does through its ``headers`` map.
+
     Note: enforcement relies on the gateway validating signed headers; this is
     exercised live on the pilot, not in the offline suite.
     """
-    params = {"Bucket": bucket, "Key": key, "ContentType": content_type}
+    params = {"Bucket": bucket, "Key": key, "ContentType": content_type,
+              "ServerSideEncryption": SSE_ALGORITHM}
     if content_length is not None:
         params["ContentLength"] = content_length
     return client.generate_presigned_url(

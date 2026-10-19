@@ -72,7 +72,8 @@ class DummyS3:
     def head_object(self, Bucket, Key):
         if self.head_error is not None:
             raise self.head_error
-        return {"ContentLength": self.declared_size, "ContentType": "application/octet-stream"}
+        return {"ContentLength": self.declared_size, "ContentType": "application/octet-stream",
+                "ServerSideEncryption": "AES256"}
 
     def get_object(self, Bucket, Key):
         if self.get_error is not None:
