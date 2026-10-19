@@ -149,3 +149,14 @@ test("uploads show in a floating tray that stays in view and can be folded", asy
   await tray.getByRole("button", { name: "Effacer" }).click();
   await expect(tray).toHaveCount(0);
 });
+
+test("on a phone the notification stack never blocks the page", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page);
+  await login(page);
+
+  // The (empty) toast stack used to stretch over the whole screen on phones
+  // and swallow every tap on the list.
+  await page.getByRole("button", { name: `Détails de ${FILE.display_name}` }).click();
+  await expect(page.getByRole("dialog", { name: FILE.display_name })).toBeVisible();
+});
