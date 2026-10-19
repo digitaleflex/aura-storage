@@ -253,9 +253,10 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: Presigned GET URL bound to Content-Disposition inline and the object content type, plus display_name, content_type and size_bytes; the client falls back to a download when the type is not renderable }
+        "200": { description: Presigned GET URL bound to Content-Disposition inline and the object content type, plus display_name, content_type and size_bytes }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
+        "415": { description: Content type is not on the inline allow-list (images except SVG, PDF, audio); offer a download instead }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)

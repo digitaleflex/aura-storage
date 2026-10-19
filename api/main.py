@@ -864,14 +864,32 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
     }
 
 
+# Media types that may be rendered in place. Anything that can carry script or
+# markup (text/html, image/svg+xml, xml, ...) is deliberately absent: a
+# user-uploaded file must never execute from the storage origin. Everything not
+# listed here is offered as a download instead (415 from preview-intent).
+PREVIEWABLE_CONTENT_TYPES = frozenset({
+    "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif",
+    "application/pdf",
+    "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg",
+    "audio/webm", "audio/mp4", "audio/aac", "audio/flac",
+})
+
+
+def is_previewable(content_type: str) -> bool:
+    """True when `content_type` (parameters ignored) may be previewed inline."""
+    return (content_type or "").split(";", 1)[0].strip().lower() in PREVIEWABLE_CONTENT_TYPES
+
+
 @app.post("/api/v1/objects/{oid}/preview-intent")
 def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
     # Mirror of download-intent: same scope, same 404 (foreign/unknown id is not
     # an existence oracle) and same 409 (only available objects are previewable).
     # The difference is the presigned GET is bound to ``Content-Disposition:
     # inline`` and the object's own content type, so the browser renders PDFs,
-    # images and audio in place; the frontend falls back to a download when the
-    # type is not renderable. No storage coordinates are echoed back.
+    # images and audio in place. Only the allow-listed types above are served
+    # inline (415 otherwise: the frontend offers a download). No storage
+    # coordinates are echoed back.
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -879,6 +897,8 @@ def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)))
     row = _as_dict(row)
     if row["status"] != "available":
         raise HTTPException(status_code=409, detail="object not available")
+    if not is_previewable(row["content_type"]):
+        raise HTTPException(status_code=415, detail="preview not supported for this content type")
     url = presigned_get(
         s3, row["bucket"], row["object_key"], settings.intent_ttl,
         content_disposition="inline", content_type=row["content_type"],

@@ -280,6 +280,17 @@ export interface CommitResponse {
   checksum_algorithm?: string;
 }
 
+export interface PreviewIntentResponse {
+  id: string;
+  preview_url: string;
+  method: string;
+  expires_in: number;
+  expires_at: number | null;
+  display_name: string;
+  content_type: string;
+  size_bytes: number;
+}
+
 export interface DownloadIntentResponse {
   id: string;
   download_url: string;
@@ -546,6 +557,14 @@ export const api = {
   createDownloadIntent(id: string, csrf: string): Promise<DownloadIntentResponse> {
     return request<DownloadIntentResponse>(
       `/api/v1/objects/${encodeURIComponent(id)}/download-intent`,
+      { method: "POST", csrf },
+    );
+  },
+
+  /** Short-lived inline GET for images, audio and PDF (415 for other types). */
+  createPreviewIntent(id: string, csrf: string): Promise<PreviewIntentResponse> {
+    return request<PreviewIntentResponse>(
+      `/api/v1/objects/${encodeURIComponent(id)}/preview-intent`,
       { method: "POST", csrf },
     );
   },
