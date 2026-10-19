@@ -24,11 +24,16 @@ jobs:
           bash -n tests/sse-s3-smoke-test.sh
           bash -n tests/s3-smoke-test.sh
           bash -n tests/test-s3-smoke-validation.sh
+          bash -n scripts/host-preflight.sh
+          bash -n scripts/install-admin-key.sh
+          bash -n tests/test-landing-routing.sh
       - name: Run offline regression tests
-        run: bash tests/test-s3-smoke-validation.sh
+        run: |
+          bash tests/test-s3-smoke-validation.sh
+          bash tests/test-landing-routing.sh
       - name: Run API unit tests (offline)
         run: |
-          python3 -m pip install -r api/requirements.txt
+          python3 -m pip install -r api/requirements-dev.txt
           AURA_API_ADMIN_PASSWORD=ci-dummy-password AURA_S3_ACCESS_KEY=ci-dummy-access-key-1234 AURA_S3_SECRET_KEY=ci-dummy-secret-12345678901234567890 AURA_S3_ENDPOINT=https://127.0.0.1:9 AURA_API_DB=:memory: AURA_COOKIE_SECURE=0 python3 -m pytest tests/ -q
       - name: Check sample S3 JSON
         run: python3 -m json.tool config/seaweedfs/s3.json.example >/dev/null

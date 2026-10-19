@@ -39,11 +39,13 @@
 - A valid session or CSRF token is authentication, not authorization: administrative
   and destructive actions (purge, reconcile, provisioning) require the matching role
   or scope and are refused with 403 otherwise.
-- Human sessions are long-lived by default (`AURA_SESSION_TTL` = 90 days). The wider
-  theft window is compensated by an HttpOnly, `Secure`, `SameSite=Strict` cookie and
-  the CSRF double-submit on mutations; the expiry is fixed at login (no rolling
-  renewal), so logout or expiry genuinely ends the session. Shorten the TTL where a
-  higher-value deployment warrants it.
+- Human sessions are relatively short-lived by default (`AURA_SESSION_TTL` = 8 hours)
+  in the Docker Compose stack (and `api/config.py` defaults to 8 hours). The narrower
+  theft window reduces exposure; the team can override the value explicitly in
+  `.env` when a longer session is an operational requirement. The cookie is
+  `HttpOnly`, `Secure`, `SameSite=Strict` and set with `max_age` corresponding to
+  the effective TTL (no sliding refresh). A new login always issues a new session
+  identifier and a new CSRF token.
 - Objects carry an application/space/environment boundary. Catalogue queries are
   always filtered by the caller's space, and human users are further limited to their
   own objects.
@@ -81,6 +83,11 @@
   the API authorised and fill the volume before commit. Declared sizes above the
   configured maximum are refused up front (422), and the commit-time size check remains
   as defence in depth (#40). Enforcement of the signed header is validated on the pilot.
+- The presigned PUT also signs the SSE-S3 request header
+  **`x-amz-server-side-encryption: AES256`** (`api/s3.py`), so the client must send it
+  for the gateway to encrypt the object at rest; the commit step can then require
+  AES256 at the object level. Like `Content-Length`, the signed-header enforcement is
+  validated on the pilot, not in the offline suite.
 - Default bucket names (derived from the space name/environment, or supplied) are
   validated against the S3 naming rules before the bucket is registered, so a space can
   never point at a bucket name S3 would reject (`api/s3.py:is_valid_bucket_name`, #41).

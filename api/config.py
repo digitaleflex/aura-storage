@@ -46,7 +46,7 @@ class Settings:
     # HttpOnly + Secure + SameSite=Strict cookie and the CSRF double-submit enforced
     # in api/main.py. The expiry is fixed at login (no rolling renewal), so logout
     # or TTL expiry truly ends the session. Shorten via AURA_SESSION_TTL if needed.
-    session_ttl: int = _int("AURA_SESSION_TTL", 7776000)
+    session_ttl: int = _int("AURA_SESSION_TTL", 28800)
     intent_ttl: int = _int("AURA_INTENT_TTL", 900)
     # Grace period after intent_ttl during which a commit is still accepted
     # (upload may finish just before expiry; #37).

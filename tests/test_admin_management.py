@@ -335,8 +335,9 @@ def test_register_bucket_validations_and_default_toggle():
     defaults = [b["id"] for b in buckets if b["is_default"]]
     assert defaults == [bid]
 
-    # Clearing it leaves the space without an explicit default (the upload path
-    # still falls back to the oldest bucket), and is reversible.
+    # Clearing it leaves the space without an explicit default bucket. There is
+    # no "oldest bucket" fallback: an upload intent for that space is refused
+    # with 409 until a default is set again. This is reversible.
     assert c.patch(f"/api/v1/admin/buckets/{bid}", json={"is_default": False},
                    headers=headers).json()["is_default"] is False
     assert c.patch(f"/api/v1/admin/buckets/{main.repo.new_id()}",

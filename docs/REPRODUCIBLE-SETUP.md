@@ -25,8 +25,8 @@
 - Plan last recorded: KVM Storage 3 Slices; 2 vCPU and approximately 5.3 GiB RAM
 - Root filesystem last observed: approximately 2.9 TiB. This is unusually large relative to the plan; reconcile actual allocation, mount and quota with the provider before relying on it.
 - Administrator: `aura-admin`; sudo was verified.
-- At the last recorded OS check, kernel `7.0.0-28-generic` was running while `7.0.0-38-generic` was installed and a reboot was required. This may now be stale; verify the live state.
-- SSH key login, firewall, Docker, VPN, AURA containers, S3 encryption, HTTPS and restore are not yet confirmed by this document.
+- The reboot was performed and verified on 2026-10-14: kernel `7.0.0-38-generic` is running with no reboot marker. Re-verify the live state before reuse.
+- SSH key login, firewall, WireGuard and restore are not yet confirmed by this document. Docker is running and the stack is deployed; S3 SSE-S3 and HTTPS have partial dated evidence (see the verification logs linked from `README.md`), but full acceptance is still open.
 
 ## 3. Phase A — preflight and controlled reboot
 
@@ -151,7 +151,7 @@ Copy the key directly into the private `.env` file using a local editor; do not 
 Inspect the generator and configuration before running:
 
 ```bash
-sed -n '1,240p' scripts/generate-config.sh
+sed -n '1,80p' scripts/generate-config.sh
 bash ./scripts/generate-config.sh
 chmod 600 config/seaweedfs/s3.json
 git check-ignore .env config/seaweedfs/s3.json
@@ -223,7 +223,7 @@ free -h
 sudo ss -lntup
 ```
 
-Run Compose-specific checks from the repository directory. Check service logs and the external HTTPS/S3 acceptance tests. Store evidence without secrets in `docs/verification-log.md` or a private operations record; never commit private addresses, credentials, keys or customer metadata unnecessarily.
+Run Compose-specific checks from the repository directory. Check service logs and the external HTTPS/S3 acceptance tests. Store evidence without secrets following [docs/verification-log-template.md](verification-log-template.md) as a dated `docs/verification-log-YYYY-MM-DD-*.md` (examples: `docs/verification-log-2026-10-15-canonical-ids.md`, `docs/verification-log-2026-10-16-s16-deploy.md`) or a private operations record; never commit private addresses, credentials, keys or customer metadata unnecessarily.
 
 ### Catalogue parity (SQLite and PostgreSQL)
 

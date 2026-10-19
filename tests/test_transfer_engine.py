@@ -164,6 +164,36 @@ def test_presigned_url_binds_content_length_and_type(monkeypatch):
     assert "content-type" in signed
 
 
+def test_presigned_put_signs_sse_s3_and_get_does_not():
+    # SSE-S3 (AES256) is bound into the upload signature, exactly like the
+    # size/type headers above; botocore records it in X-Amz-SignedHeaders (it is
+    # a *header*, not a query parameter). The GET path must not carry it: a
+    # download is never re-encrypted and must stay byte-identical.
+    from api.s3 import make_client, presigned_get, presigned_put
+
+    client = make_client("https://example.invalid", "ak-1234567890", "sk-1234567890", "us-east-1")
+    put = presigned_put(client, "bucket", "key", "text/plain", 900, 10)
+    signed = parse_qs(urlparse(put).query)["X-Amz-SignedHeaders"][0]
+    assert "x-amz-server-side-encryption" in signed
+    assert "x-amz-server-side-encryption" in put
+
+    get = presigned_get(client, "bucket", "key", 900)
+    assert "x-amz-server-side-encryption" not in get
+
+
+def test_intent_tells_the_client_to_send_the_sse_header(monkeypatch):
+    monkeypatch.setattr(main, "s3ops", DummyS3(b"x"))
+    c, headers = _admin()
+    r = _intent(c, headers, size_bytes=4096, content_type="text/plain")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    signed = parse_qs(urlparse(body["upload_url"]).query)["X-Amz-SignedHeaders"][0]
+    assert "x-amz-server-side-encryption" in signed
+    # The header the API signed and the header the client is told to send must
+    # match, or the gateway rejects the PUT (signed-header mismatch).
+    assert body["headers"]["x-amz-server-side-encryption"] == "AES256"
+
+
 # ---------------------------------------------------------------------------
 # Empty file (allowed only when the deployment enables it)
 # ---------------------------------------------------------------------------

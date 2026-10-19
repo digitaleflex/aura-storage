@@ -26,7 +26,7 @@
 - [ ] If /var/run/reboot-required exists, plan a controlled reboot before installing Docker.
 - [ ] Confirm the provider panel or recovery console is accessible before hardening SSH.
 
-At the last recorded check, the running kernel was 7.0.0-28-generic, kernel 7.0.0-38-generic was installed, and the system required a reboot. Recheck live state; do not assume the reboot has completed.
+The reboot was performed and verified on 2026-10-14: the running kernel is 7.0.0-38-generic and no `/var/run/reboot-required` marker is present (see [Server Profile](SERVER-PROFILE.md)). Recheck the live state before proceeding.
 
 ## Phase 1 — Administrator access
 
@@ -124,4 +124,4 @@ A snapshot or second directory on the same VPS is not an independent backup. A r
 
 ## Change log
 
-- 2026-10-14: initial server profile and host bootstrap checklist created. Kernel reboot, SSH-key setup, firewall review, Docker deployment, S3 acceptance, and independent restore remain to be verified.
+- 2026-10-14: initial server profile and host bootstrap checklist created; reboot performed and kernel 7.0.0-38-generic verified. SSH-key setup, firewall review, S3 acceptance, Docker deployment and independent restore remain to be verified.
