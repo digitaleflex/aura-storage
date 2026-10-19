@@ -114,6 +114,7 @@ def authenticate(request: Request) -> dict:
         return {
             "kind": "service",
             "id": row["id"],
+            "name": row.get("name"),
             "role": row.get("role") or "service",
             "scopes": scopes,
             "space_id": row["space_id"],
@@ -136,6 +137,7 @@ def authenticate(request: Request) -> dict:
     return {
         "kind": "user",
         "id": user["id"],
+        "name": user["username"],
         "role": user["role"] or "user",
         "scopes": set(),
         "space_id": user["space_id"],

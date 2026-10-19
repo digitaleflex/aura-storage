@@ -503,6 +503,9 @@ def me(principal: dict = Depends(authorize())):
     return {
         "id": principal["id"],
         "kind": principal["kind"],
+        # Display name (additive): username for a person, identity name for a
+        # service. Lets the UI say who is signed in instead of a generic label.
+        "name": principal.get("name"),
         "role": principal["role"],
         "space_id": principal["space_id"],
         "application_id": principal["application_id"],
