@@ -33,6 +33,8 @@ test("create application, space and identity, then revoke", async ({ page }) => 
     has: page.getByRole("heading", { name: "Identités machine-à-machine" }),
   });
 
+  await page.getByRole("tab", { name: "Applications et espaces" }).click();
+
   // 1. Application.
   await appsSection.getByLabel("Nouvelle application").fill(appName);
   await appsSection.getByRole("button", { name: "Créer", exact: true }).click();
@@ -43,6 +45,8 @@ test("create application, space and identity, then revoke", async ({ page }) => 
   await spacesSection.getByLabel("Nom").fill(spaceName);
   await spacesSection.getByRole("button", { name: "Créer l'espace" }).click();
   await expect(spacesSection.locator("tr", { hasText: spaceName })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Identités de service" }).click();
 
   // 3. Identity: the token must appear exactly once.
   await idsSection.getByLabel("Nom").fill(idName);

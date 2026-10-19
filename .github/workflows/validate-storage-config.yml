@@ -24,8 +24,14 @@ jobs:
           bash -n tests/sse-s3-smoke-test.sh
           bash -n tests/s3-smoke-test.sh
           bash -n tests/test-s3-smoke-validation.sh
+          bash -n scripts/backup-lib.sh scripts/backup.sh scripts/restore-check.sh scripts/restore.sh
+          bash -n tests/test-backup-scripts.sh
       - name: Run offline regression tests
         run: bash tests/test-s3-smoke-validation.sh
+      - name: Run offline backup script checks
+        run: bash tests/test-backup-scripts.sh
+      - name: Check sample backup configuration is ignored
+        run: git check-ignore config/backup.env
       - name: Run API unit tests (offline)
         run: |
           python3 -m pip install -r api/requirements.txt

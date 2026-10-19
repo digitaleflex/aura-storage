@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, hasAdminAccess, hasScope, SERVICE_SCOPES } from "../lib/api";
 import type {
@@ -59,7 +59,7 @@ function formatBytes(size: number): string {
   if (size === 0) {
     return "0 o";
   }
-  const units = ["o", "Kio", "Mio", "Gio", "Tio"];
+  const units = ["o", "Ko", "Mo", "Go", "To"];
   let value = size;
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {
@@ -70,6 +70,31 @@ function formatBytes(size: number): string {
 }
 
 const AUDIT_PAGE_SIZE = 50;
+
+/** Sections of the console, one tab each (labels are what the user reads). */
+const ADMIN_TABS = [
+  { id: "overview", label: "Vue d'ensemble" },
+  { id: "audit", label: "Journal d'audit" },
+  { id: "apps", label: "Applications et espaces" },
+  { id: "buckets", label: "Buckets" },
+  { id: "identities", label: "Identités de service" },
+] as const;
+
+type AdminTab = (typeof ADMIN_TABS)[number]["id"];
+
+function tabFromHash(): AdminTab {
+  const wanted = window.location.hash.replace(/^#/, "");
+  return ADMIN_TABS.find((tab) => tab.id === wanted)?.id ?? "overview";
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Human label for an audit result (the stored value stays machine-readable). */
+function resultLabel(result: string): string {
+  if (result === "success") return "Réussi";
+  if (result === "failure") return "Refusé";
+  return result;
+}
 
 /** Rename an application. The stable id is never editable. */
 function EditApplicationDialog({
@@ -209,6 +234,13 @@ export function AdminPage() {
   const canAdmin = hasAdminAccess(session.data?.role);
   const canWrite = hasScope(session.data?.scopes, "admin:write");
 
+  const [tab, setTab] = useState<AdminTab>(tabFromHash);
+  // A link such as /admin#audit must work while the page is already open.
+  useEffect(() => {
+    const onHashChange = () => setTab(tabFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [oneTimeToken, setOneTimeToken] = useState<string | null>(null);
   const [editingApp, setEditingApp] = useState<ApplicationItem | null>(null);
@@ -293,6 +325,25 @@ export function AdminPage() {
     enabled: canAdmin,
     retry: false,
   });
+
+  /** Name a known actor: the signed-in account and service identities are
+   * resolved from data already loaded; any other id stays shortened (the API
+   * has no user directory), with the full value kept in the tooltip. */
+  function actorLabel(actor: string | null | undefined): { text: string; title?: string } {
+    if (!actor) return { text: "—" };
+    if (session.data?.id === actor && session.data.name) {
+      return { text: `${session.data.name} (vous)`, title: actor };
+    }
+    const identity = identities.data?.items.find((item) => item.id === actor);
+    if (identity) return { text: identity.name, title: actor };
+    if (UUID_PATTERN.test(actor)) return { text: `${actor.slice(0, 8)}…`, title: actor };
+    return { text: actor };
+  }
+
+  function selectTab(next: AdminTab) {
+    setTab(next);
+    window.history.replaceState(null, "", `#${next}`);
+  }
 
   function refreshAdmin() {
     void queryClient.invalidateQueries({ queryKey: ["admin"] });
@@ -517,6 +568,34 @@ export function AdminPage() {
       <div className="page-head">
         <h1>Administration</h1>
       </div>
+      <div role="tablist" aria-label="Rubriques de l'administration" className="tabs">
+        {ADMIN_TABS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            id={`admin-tab-${item.id}`}
+            aria-selected={tab === item.id}
+            tabIndex={tab === item.id ? 0 : -1}
+            className="tab"
+            onClick={() => selectTab(item.id)}
+            onKeyDown={(event) => {
+              const step =
+                event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+              if (step === 0) return;
+              event.preventDefault();
+              const index = ADMIN_TABS.findIndex((entry) => entry.id === item.id);
+              const next = ADMIN_TABS[(index + step + ADMIN_TABS.length) % ADMIN_TABS.length];
+              if (next) {
+                selectTab(next.id);
+                document.getElementById(`admin-tab-${next.id}`)?.focus();
+              }
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
       <p className="muted">
         Applications, espaces, buckets et identités machine-à-machine.
         {canWrite
@@ -541,7 +620,11 @@ export function AdminPage() {
         <OneTimeToken token={oneTimeToken} onDismiss={() => setOneTimeToken(null)} />
       ) : null}
 
-      <section className="section" aria-labelledby="admin-stats-title">
+      <section
+        className="section"
+        aria-labelledby="admin-stats-title"
+        hidden={tab !== "overview"}
+      >
         <div className="section-head">
           <h2 id="admin-stats-title">Tableau de bord</h2>
           {canWrite ? (
@@ -624,7 +707,11 @@ export function AdminPage() {
         )}
       </section>
 
-      <section className="section" aria-labelledby="admin-usage-title">
+      <section
+        className="section"
+        aria-labelledby="admin-usage-title"
+        hidden={tab !== "overview"}
+      >
         <div className="section-head">
           <h2 id="admin-usage-title">Consommation</h2>
         </div>
@@ -696,7 +783,11 @@ export function AdminPage() {
         )}
       </section>
 
-      <section className="section" aria-labelledby="admin-health-title">
+      <section
+        className="section"
+        aria-labelledby="admin-health-title"
+        hidden={tab !== "overview"}
+      >
         <div className="section-head">
           <h2 id="admin-health-title">Supervision</h2>
         </div>
@@ -837,9 +928,13 @@ export function AdminPage() {
                         <td>
                           <code>{event.action}</code>
                         </td>
-                        <td className="muted">{event.actor ?? "—"}</td>
                         <td>
-                          <span className="chip chip-warn">{event.result}</span>
+                          <span title={actorLabel(event.actor).title}>
+                            {actorLabel(event.actor).text}
+                          </span>
+                        </td>
+                        <td>
+                          <span className="chip chip-warn">{resultLabel(event.result)}</span>
                         </td>
                       </tr>
                     ))}
@@ -856,7 +951,11 @@ export function AdminPage() {
         )}
       </section>
 
-      <section className="section" aria-labelledby="admin-audit-title">
+      <section
+        className="section"
+        aria-labelledby="admin-audit-title"
+        hidden={tab !== "audit"}
+      >
         <div className="section-head">
           <h2 id="admin-audit-title">Journal d'audit</h2>
           {canWrite ? (
@@ -978,14 +1077,18 @@ export function AdminPage() {
                     <td>
                       <code>{event.action}</code>
                     </td>
-                    <td className="muted">{event.actor ?? "—"}</td>
+                    <td>
+                          <span title={actorLabel(event.actor).title}>
+                            {actorLabel(event.actor).text}
+                          </span>
+                        </td>
                     <td>
                       <span
                         className={
                           event.result === "success" ? "chip chip-ok" : "chip chip-warn"
                         }
                       >
-                        {event.result}
+                        {resultLabel(event.result)}
                       </span>
                     </td>
                     <td className="muted">
@@ -1031,7 +1134,11 @@ export function AdminPage() {
         )}
       </section>
 
-      <section className="section" aria-labelledby="admin-apps-title">
+      <section
+        className="section"
+        aria-labelledby="admin-apps-title"
+        hidden={tab !== "apps"}
+      >
         <h2 id="admin-apps-title">Applications</h2>
         {canWrite ? (
           <form
@@ -1141,7 +1248,11 @@ export function AdminPage() {
         )}
       </section>
 
-      <section className="section" aria-labelledby="admin-spaces-title">
+      <section
+        className="section"
+        aria-labelledby="admin-spaces-title"
+        hidden={tab !== "apps"}
+      >
         <h2 id="admin-spaces-title">Espaces</h2>
         {canWrite ? (
           <form
@@ -1300,7 +1411,11 @@ export function AdminPage() {
         )}
       </section>
 
-      <section className="section" aria-labelledby="admin-buckets-title">
+      <section
+        className="section"
+        aria-labelledby="admin-buckets-title"
+        hidden={tab !== "buckets"}
+      >
         <h2 id="admin-buckets-title">Buckets</h2>
         <p className="muted">
           Un bucket est rattaché à un espace. AURA ne conserve et n'affiche
@@ -1430,7 +1545,11 @@ export function AdminPage() {
         )}
       </section>
 
-      <section className="section" aria-labelledby="admin-identities-title">
+      <section
+        className="section"
+        aria-labelledby="admin-identities-title"
+        hidden={tab !== "identities"}
+      >
         <h2 id="admin-identities-title">Identités machine-à-machine</h2>
         <p className="muted">
           Les jetons ne sont jamais réaffichés : AURA n'en conserve que
