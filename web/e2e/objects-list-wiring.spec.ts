@@ -59,7 +59,7 @@ test("the folders tab shows the empty state rather than fake data", async ({
   await login(page);
   // The API drives the view: whatever it returns is rendered as-is.
   await expect(
-    page.getByRole("heading", { name: /^Objets — / }),
+    page.getByRole("heading", { name: /^Contenu — / }),
   ).toBeVisible();
   await expect(
     page.getByText(/Aucun sous-dossier ici\.|Aucun fichier dans ce dossier\./).first(),

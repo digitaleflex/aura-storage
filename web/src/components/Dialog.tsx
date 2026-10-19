@@ -23,6 +23,12 @@ export function Dialog({
     if (!el) return;
     if (open && !el.open) {
       el.showModal();
+      // showModal() focuses the first focusable element, which is the header's
+      // "Fermer" button: typing a name then Enter would close the dialog. Move
+      // focus to the first field of the body when there is one.
+      el.querySelector<HTMLElement>(
+        ".dialog-body input:not([type=hidden]):not([disabled]), .dialog-body select, .dialog-body textarea",
+      )?.focus();
     } else if (!open && el.open) {
       el.close();
     }

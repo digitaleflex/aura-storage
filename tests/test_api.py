@@ -182,6 +182,12 @@ def test_me_endpoint():
     assert c2.get("/api/v1/me").json()["id"]
 
 
+def test_me_exposes_the_signed_in_display_name():
+    c = make_client()
+    login(c)
+    assert c.get("/api/v1/me").json()["name"] == "admin"
+
+
 def test_me_exposes_csrf_token_recoverable_without_relogin():
     # Regression for "session expires all the time": the CSRF token was returned
     # only by POST /login and kept in the frontend's memory, so a refresh/new tab

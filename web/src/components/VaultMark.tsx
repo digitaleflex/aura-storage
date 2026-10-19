@@ -11,7 +11,7 @@ export function VaultMark({ size = 26 }: { size?: number }) {
     >
       <path
         d="M4 11 L16 4 L28 11 L16 18 Z"
-        fill="#A06A08"
+        fill="#E0A33A"
       />
       <path
         d="M4 16.5 L16 23.5 L28 16.5 L28 19.5 L16 26.5 L4 19.5 Z"

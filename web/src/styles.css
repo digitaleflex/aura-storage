@@ -1,9 +1,8 @@
-/* AURA Vault — direction A « Salle des coffres ».
- * Métal brossé et émail mat dans une salle de coffres éclairée : structure
- * graphite (bandeau, casiers), surface de travail en acier clair, et UNE seule
- * couleur de signalisation (ambre) réservée aux actions et aux changements
- * d'état. Aucun dégradé, aucune ombre décorative, aucun serif d'apparat.
- * Les états ne reposent jamais sur la seule couleur : pastille + libellé.
+/* AURA Vault — UI v2 (maquette « AURA Vault — Nouvelle UI », oct. 2026).
+ * Barre latérale sombre, surface de travail claire et UNE seule couleur
+ * d'accent (ambre de la marque, assombri pour le contraste AA) réservée aux
+ * actions. Les états restent sémantiques (vert disponible, bleu en cours,
+ * rouge échec) et ne reposent jamais sur la seule couleur : pastille + mot.
  */
 
 /* IBM Plex Sans (fichier variable, 400–600) et IBM Plex Mono, self-hosted (OFL). */
@@ -30,47 +29,59 @@
 }
 
 :root {
-  /* Structure : graphite. Surface de travail : acier clair. */
-  --graphite: #1a1f27;
-  --graphite-2: #232a34;
-  --graphite-3: #303a46;
+  /* Structure : barre latérale sombre, surface de travail claire. */
+  --side: #0f151d;
+  --side-2: #1c2531;
+  --side-3: #222c38;
+  --side-ink: #d5dbe3;
+  --side-muted: #8e99a8;
+  /* Historique : anciens noms encore lus par l'administration et le login. */
+  --graphite: #0f151d;
+  --graphite-2: #1c2531;
+  --graphite-3: #2a3442;
 
-  --steel-0: #eceff3;
+  --steel-0: #f5f6f8;
   --steel-1: #ffffff;
-  --steel-2: #e3e8ee;
-  --steel-3: #d4dbe3;
+  --steel-2: #eef0f3;
+  --steel-3: #e3e6eb;
 
-  --ink: #14181f;
-  --ink-2: #414a56;
-  --muted: #5f6874;
-  --faint: #8a94a1;
+  --ink: #141a22;
+  --ink-2: #3d4654;
+  --muted: #5b6472;
+  /* Plus clair que --muted mais toujours ≥ 4,5:1 sur blanc. */
+  --faint: #6b7480;
 
-  --line: #d8dee6;
-  --line-2: #c1c9d3;
+  --line: #e3e6eb;
+  --line-2: #d3d8df;
   --field-line: #a9b2be;
 
-  /* Signalisation : la seule couleur d'action du produit. */
-  --signal: #a06a08;
-  --signal-2: #8a5605;
-  --signal-soft: #fdf3e2;
+  /* Accent : la seule couleur d'action du produit (5,6:1 sur blanc). */
+  --signal: #8f5600;
+  --signal-2: #6e4200;
+  --signal-soft: #fbf1e0;
   --signal-line: #e6c893;
+  /* Ambre clair pour les marques sur fond sombre (logo, focus latéral). */
+  --signal-bright: #e0a33a;
 
-  --ok: #1e6a4a;
-  --ok-bg: #e7f0ea;
+  --ok: #1e6b44;
+  --ok-bg: #e6f3ec;
+  --run: #2350ae;
+  --run-bg: #e7eefb;
   --warn: #8a6410;
   --warn-bg: #f8f0dc;
-  --danger: #a63328;
-  --danger-bg: #f9e9e6;
+  --danger: #a8291f;
+  --danger-bg: #fbeae8;
 
-  --radius: 3px;
-  --radius-small: 2px;
+  --radius: 8px;
+  --radius-small: 6px;
+  --radius-card: 12px;
 
   --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 
-  --band-h: 56px;
-  --rail-w: 248px;
-  --content-width: 1440px;
+  --band-h: 60px;
+  --side-w: 248px;
+  --content-width: 1240px;
 }
 
 * {
@@ -110,15 +121,11 @@ h3 {
   margin: 0 0 6px;
 }
 
-/* Section labels read like equipment plates, not like headings. */
-.section-head h2,
-.casiers h2 {
-  font-size: 11.5px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--muted);
+/* Section titles are plain sentence-case headings. */
+.section-head h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .muted {
@@ -136,89 +143,114 @@ h3 {
 }
 
 /* ------------------------------------------------------------------ */
-/* Shell: a graphite identity band, then the working surface.          */
+/* Shell: dark navigation sidebar, light top bar, working surface.     */
 /* ------------------------------------------------------------------ */
 .shell {
   min-height: 100vh;
   display: flex;
-  flex-direction: column;
   background: var(--steel-0);
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  flex: none;
+  width: var(--side-w);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 20px 14px;
+  background: var(--side);
+  color: var(--side-ink);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+  text-decoration: none;
+}
+
+.brand svg {
+  flex: none;
+  color: var(--side-muted);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--radius-small);
+  color: var(--side-ink);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.nav a:hover {
+  background: var(--side-3);
+  color: #ffffff;
+}
+
+.nav a[aria-current="page"] {
+  background: var(--side-2);
+  color: #ffffff;
+}
+
+.nav a svg {
+  flex: none;
+}
+
+.sidebar a:focus-visible,
+.sidebar button:focus-visible {
+  outline-color: var(--signal-bright);
+}
+
+.sidebar-foot {
+  margin: auto 0 0;
+  padding: 14px 10px 4px;
+  border-top: 1px solid var(--side-3);
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--side-muted);
+}
+
+.sidebar-foot svg {
+  flex: none;
+  margin-top: 1px;
+  color: #7fc8a0;
+}
+
+.main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .topbar {
   position: sticky;
   top: 0;
   z-index: 40;
-  background: var(--graphite);
-  border-bottom: 1px solid var(--graphite-3);
-}
-
-.topbar-inner {
-  max-width: var(--content-width);
-  margin: 0 auto;
-  padding: 0 28px;
   height: var(--band-h);
   display: flex;
   align-items: center;
-  gap: 26px;
-}
-
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: #f2f5f8;
-  text-decoration: none;
-}
-
-.brand svg {
-  flex: none;
-  color: #cfd6de;
-}
-
-.nav {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.nav a,
-.nav button {
-  position: relative;
-  color: #aab4c0;
-  background: none;
-  border: none;
-  font: inherit;
-  font-size: 13.5px;
-  font-weight: 500;
-  text-decoration: none;
-  cursor: pointer;
-  padding: 8px 12px;
-  border-radius: var(--radius-small);
-}
-
-.nav a:hover,
-.nav button:hover {
-  color: #f2f5f8;
-  background: var(--graphite-2);
-}
-
-.nav a[aria-current="page"] {
-  color: #ffffff;
-}
-
-/* The active bay is marked by the same amber used for action. */
-.nav a[aria-current="page"]::after {
-  content: "";
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: -1px;
-  height: 2px;
-  background: var(--signal);
+  padding: 0 32px;
+  background: var(--steel-1);
+  border-bottom: 1px solid var(--line);
 }
 
 .session {
@@ -228,43 +260,48 @@ h3 {
   gap: 14px;
 }
 
-/* "Coffre déverrouillé" is a state, so it is drawn as an instrument readout. */
-.session .whoami {
+.whoami {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #9fb0a4;
+  gap: 10px;
 }
 
-.session .whoami::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  background: #4fae7c;
+.avatar {
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--signal-soft);
+  color: var(--signal);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.whoami-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.whoami-name {
+  font-weight: 500;
+}
+
+.whoami-role {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .session a {
-  color: #aab4c0;
-  font-size: 13.5px;
+  color: var(--signal);
   font-weight: 500;
-  text-decoration: none;
-}
-
-.session a:hover {
-  color: #ffffff;
 }
 
 .content {
   width: 100%;
   max-width: var(--content-width);
-  margin: 0 auto;
-  padding: 26px 28px 132px;
+  padding: 24px 32px 120px;
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,10 +313,10 @@ h3 {
   background: var(--steel-1);
   color: var(--ink);
   font: inherit;
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 500;
-  border-radius: var(--radius-small);
-  padding: 8px 14px;
+  border-radius: var(--radius);
+  padding: 9px 14px;
   cursor: pointer;
   transition: background 110ms ease, border-color 110ms ease, color 110ms ease,
     transform 70ms ease;
@@ -294,12 +331,12 @@ h3 {
   transform: translateY(1px);
 }
 
-.btn:focus-visible,
+button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible {
   outline: 2px solid var(--signal);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .btn:disabled {
@@ -369,13 +406,10 @@ select:focus-visible {
 .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 11.5px;
+  gap: 5px;
+  font-size: 13px;
   font-weight: 500;
-  font-family: var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .field input[type="text"],
@@ -391,8 +425,8 @@ select:focus-visible {
   letter-spacing: 0;
   text-transform: none;
   border: 1px solid var(--field-line);
-  border-radius: var(--radius-small);
-  padding: 8px 10px;
+  border-radius: var(--radius);
+  padding: 9px 11px;
   background: var(--steel-1);
   color: var(--ink);
   max-width: 420px;
@@ -429,8 +463,7 @@ select:focus-visible {
 
 .file-picker-name {
   color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
@@ -453,10 +486,13 @@ select:focus-visible {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 20px;
+  gap: 16px 20px;
   flex-wrap: wrap;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line-2);
+}
+
+.page-sub {
+  margin: 4px 0 0;
+  font-size: 14px;
 }
 
 .page-head h1 {
@@ -487,16 +523,16 @@ select:focus-visible {
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  margin: 2px 0 0;
+  font-size: 13px;
+  margin: 0;
+  color: var(--muted);
 }
 
 .crumb {
   border: none;
   background: none;
   font: inherit;
-  color: var(--ink-2);
+  color: var(--muted);
   cursor: pointer;
   padding: 2px 5px;
   border-radius: var(--radius-small);
@@ -528,186 +564,69 @@ select:focus-visible {
 }
 
 /* ------------------------------------------------------------------ */
-/* The workspace: a dark casiers rail beside the light register.       */
-/* This replaces the usual "top chips + card grid" console layout.     */
-/* Scoped to the Fichiers page: .stack is shared with Administration.  */
+/* The Fichiers workspace: one column in reading order (breadcrumb,    */
+/* title, messages, import, register). No explicit grid rows: anything */
+/* rendered before the register stays above it.                        */
 /* ------------------------------------------------------------------ */
 .vault-workspace {
-  display: grid;
-  grid-template-columns: var(--rail-w) minmax(0, 1fr);
-  align-items: start;
-  gap: 12px 0;
-}
-
-.vault-workspace > .page-head,
-.vault-workspace > .breadcrumb,
-.vault-workspace > .alert {
-  grid-column: 1 / -1;
-}
-
-.vault-workspace > .casiers {
-  grid-column: 1;
-  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 /* The register is the light working surface. */
 .vault-workspace > .section[aria-labelledby="objects-title"] {
-  grid-column: 2;
-  grid-row: 3;
   min-width: 0;
-  margin-left: 16px;
   background: var(--steel-1);
-  border: 1px solid var(--line-2);
-  padding: 16px 18px 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 16px 18px 6px;
 }
 
-.casiers {
-  display: flex;
-  flex-direction: column;
-  background: var(--graphite);
-  border: 1px solid var(--graphite-3);
-  padding: 14px 0 0;
-  /* Hug the content: a stretched rail left ~54% of the column as flat void. */
-  align-self: start;
-}
-
-/* The rail carries a real readout, so it is not a black column with a tail. */
-.casiers-foot {
-  margin-top: auto;
-  border-top: 1px solid var(--graphite-2);
-  padding: 12px 16px 14px;
-}
-
-.casiers-foot dl {
-  margin: 0;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 5px 10px;
-}
-
-.casiers-foot dt {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: #8b96a3;
-  align-self: center;
-}
-
-.casiers-foot dd {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: #dfe5eb;
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-
-.casiers h2 {
-  color: #8b96a3;
-  padding: 0 16px 10px;
-  margin: 0;
-}
-
-.casier-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-/* Each folder is a deposit slot, not a pill. */
-.casier {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px 0 4px;
-  border-top: 1px solid var(--graphite-2);
-  border-left: 3px solid transparent;
-  transition: border-color 120ms ease, background 120ms ease;
-}
-
-.casier:hover {
-  background: var(--graphite-2);
-  border-left-color: var(--signal);
-}
-
-/* Current location, marked the same way as an active nav bay. */
-.casier-current {
-  background: var(--graphite-2);
-  border-left-color: var(--signal);
-}
-
-.casier-current .folder-open {
-  color: #ffffff;
-}
-
-.casier-current .folder-icon {
-  color: var(--signal);
-}
-
-.casier .folder-open {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.casier .folder-icon {
-  color: #7d8b99;
-}
-
-.casier:hover .folder-icon {
-  color: var(--signal);
-}
-
-.casier .menu-trigger {
-  color: #8b96a3;
-}
-
-.casier .menu-trigger:hover,
-.casier .menu-trigger[aria-expanded="true"] {
-  background: var(--graphite-3);
-  color: #ffffff;
-}
-
+/* Folders listed at the top of the register. */
 .folder-open {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   border: none;
   background: none;
   font: inherit;
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 500;
-  color: #dfe5eb;
+  color: var(--ink);
   cursor: pointer;
   text-align: left;
-  padding: 10px 6px;
+  padding: 2px 0;
   border-radius: var(--radius-small);
+  min-width: 0;
 }
 
-.folder-open:hover {
-  color: #ffffff;
+.folder-open:hover .folder-name {
+  color: var(--signal-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .folder-icon {
-  display: inline-flex;
+  display: inline-grid;
+  place-items: center;
   flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius);
+  background: var(--signal-soft);
+  color: var(--signal);
 }
 
 .folder-name {
-  font-size: 13.5px;
   overflow-wrap: anywhere;
 }
 
-/* Empty / error notes inside the rail. */
-.casiers .empty,
-.casiers .muted {
-  color: #7d8b99;
-  padding: 6px 16px;
-  font-size: 12.5px;
-}
-
-.casiers .alert {
-  margin: 6px 12px 0;
+/* Keeps folder names aligned with file names (which follow a checkbox). */
+.check-spacer {
+  display: inline-block;
+  width: 13px;
+  margin-right: 4px;
 }
 
 /* ------------------------------------------------------------------ */
@@ -737,7 +656,7 @@ select:focus-visible {
   padding: 13px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--steel-2);
+  background: var(--steel-0);
 }
 
 .filters-toggle {
@@ -753,8 +672,7 @@ select:focus-visible {
 }
 
 .filters-count {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   color: #ffffff;
   background: var(--signal);
@@ -774,13 +692,10 @@ select:focus-visible {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 104px 96px 116px 140px 40px;
   gap: 10px;
-  padding: 7px 8px;
-  border-bottom: 1px solid var(--line-2);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
   color: var(--muted);
 }
 
@@ -795,14 +710,12 @@ select:focus-visible {
   gap: 10px;
   align-items: center;
   padding: 10px 8px;
-  border-bottom: 1px solid var(--line);
-  border-left: 3px solid transparent;
-  transition: border-color 120ms ease, background 120ms ease;
+  border-bottom: 1px solid var(--steel-2);
+  transition: background 120ms ease;
 }
 
 .ledger-row:hover {
-  background: var(--steel-2);
-  border-left-color: var(--signal);
+  background: #f8f9fb;
 }
 
 .ledger-meta {
@@ -822,8 +735,7 @@ select:focus-visible {
 .ledger-type,
 .ledger-size,
 .ledger-date {
-  font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -831,8 +743,6 @@ select:focus-visible {
 
 .ledger-type {
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
 }
 
 .ledger-size {
@@ -890,11 +800,15 @@ select:focus-visible {
 }
 
 .status-warn::before {
-  background: var(--warn);
+  background: var(--run);
 }
 
 .status-error::before {
   background: var(--danger);
+}
+
+.status-muted::before {
+  background: var(--faint);
 }
 
 /* ------------------------------------------------------------------ */
@@ -964,6 +878,12 @@ select:focus-visible {
   color: var(--danger);
 }
 
+/* A hairline before the first destructive entry. */
+.menu-item:not(.menu-item-danger) + .menu-item-danger {
+  margin-top: 5px;
+  box-shadow: 0 -3px 0 -2px var(--line);
+}
+
 .menu-item-danger:hover {
   background: var(--danger-bg);
 }
@@ -973,19 +893,28 @@ select:focus-visible {
 /* This is the structural fix — the main task used to sit below the   */
 /* fold, after a list that can be hundreds of rows long.              */
 /* ------------------------------------------------------------------ */
-/* Deposit: the anchor of the register, first thing in the working column.
-   It used to be pinned over the list, which hid rows and left the product's
-   main task looking like an orphaned toast in the corner. */
+/* Import panel: opened on demand from the header, above the register. */
 .vault-workspace > .intake {
-  grid-column: 2;
-  grid-row: 2;
-  margin-left: 16px;
   margin-bottom: 0;
   background: var(--steel-1);
-  border: 1px solid var(--line-2);
-  border-left: 3px solid var(--signal);
-  border-radius: var(--radius);
-  padding: 14px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 16px 18px 18px;
+}
+
+.vault-workspace > .intake[hidden] {
+  display: none;
+}
+
+.intake-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.intake-head h2 {
+  font-size: 16px;
 }
 
 .intake .muted {
@@ -993,24 +922,31 @@ select:focus-visible {
   max-width: 64ch;
 }
 
-/* Drop affordance (P0.3): unmistakable amber state while dragging over. */
-.intake.drop-active {
-  border-color: var(--signal);
-  border-left-width: 3px;
-  background: var(--signal-soft);
-  outline: 2px dashed var(--signal-2);
-  outline-offset: -6px;
+/* Drop affordance: the whole page accepts a drop while dragging. */
+.drop-overlay {
+  position: fixed;
+  inset: 12px 12px 12px calc(var(--side-w) + 12px);
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--signal);
+  border-radius: 16px;
+  background: rgba(251, 241, 224, 0.92);
+  pointer-events: none;
 }
 
 .drop-hint {
-  margin: 8px 0 0;
+  margin: 0;
+  padding: 0 24px;
+  font-size: 20px;
   font-weight: 600;
+  text-align: center;
   color: var(--signal-2);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .intake.drop-active {
-    outline-style: solid;
+  .drop-overlay {
+    border-style: solid;
   }
 }
 
@@ -1114,15 +1050,6 @@ select:focus-visible {
     bottom: 8px;
     max-width: none;
   }
-}
-
-.intake h2 {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--muted);
 }
 
 .intake .form-inline {
@@ -1701,17 +1628,6 @@ p .chip {
   }
 }
 
-@keyframes rail-in {
-  from {
-    opacity: 0;
-    transform: translateX(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
 @media (prefers-reduced-motion: no-preference) {
   .ledger-row {
     /* `backwards` (not `both`): once the entrance ends the row keeps no
@@ -1724,16 +1640,6 @@ p .chip {
   .ledger-row:nth-child(4) { animation-delay: 72ms; }
   .ledger-row:nth-child(5) { animation-delay: 96ms; }
   .ledger-row:nth-child(6) { animation-delay: 120ms; }
-
-  /* The rail answers the same way, one beat behind the register. */
-  .casier {
-    animation: rail-in 180ms ease-out backwards;
-  }
-  .casier:nth-child(1) { animation-delay: 0ms; }
-  .casier:nth-child(2) { animation-delay: 20ms; }
-  .casier:nth-child(3) { animation-delay: 40ms; }
-  .casier:nth-child(4) { animation-delay: 60ms; }
-  .casier:nth-child(5) { animation-delay: 80ms; }
 
   /* Integrity confirmed: the seal stamps down on the transfer panel. */
   .transfer .chip-ok {
@@ -1752,73 +1658,41 @@ p .chip {
 /* ------------------------------------------------------------------ */
 /* Narrow screens: the rail becomes a shelf, rows stack.              */
 /* ------------------------------------------------------------------ */
-@media (max-width: 1000px) {
-  .vault-workspace {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .vault-workspace > .casiers,
-  .vault-workspace > .intake,
-  .vault-workspace > .section[aria-labelledby="objects-title"] {
-    grid-column: 1;
-    /* Single column: the explicit rows above would make the rail span the
-       deposit and the register and paint over them. Back to DOM order. */
-    grid-row: auto;
-    margin-left: 0;
-  }
-
-  .casiers {
-    padding-bottom: 10px;
-  }
-
-  .casier-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 0 12px;
-  }
-
-  .casier {
-    border: 1px solid var(--graphite-3);
-    border-left-width: 3px;
-    border-radius: var(--radius-small);
-    padding: 0 4px;
-    /* Two even columns: a shelf, not a ragged row of chips. */
-    flex: 1 1 45%;
-  }
-
-  .folder-open {
-    padding: 8px 4px;
-  }
-}
-
 @media (max-width: 760px) {
-  .topbar-inner {
-    /* The band wraps instead of hiding the vault state: it is the one status
-       a vault console must not drop, least of all on a phone. */
-    flex-wrap: wrap;
+  /* The sidebar becomes a top band: brand and sections in one row. */
+  .shell {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    position: static;
     height: auto;
-    padding: 7px 14px 9px;
-    gap: 8px;
-    row-gap: 4px;
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 10px 14px;
   }
 
-  .nav a,
-  .nav button {
-    padding: 7px 9px;
-    font-size: 13px;
+  .nav {
+    flex-direction: row;
   }
 
-  .session {
-    gap: 8px;
+  .nav a {
+    padding: 8px 10px;
   }
 
-  .brand {
-    font-size: 15px;
+  .sidebar-foot {
+    display: none;
   }
 
-  .session .whoami {
-    font-size: 10.5px;
+  .topbar {
+    padding: 0 14px;
+  }
+
+  .drop-overlay {
+    inset: 12px;
   }
 
   .content {
@@ -1920,31 +1794,8 @@ p .chip {
 }
 
 /* ------------------------------------------------------------------ */
-/* Intake categories (informative, non-clickable) + drop backlog hint. */
+/* Drop backlog hint.                                                  */
 /* ------------------------------------------------------------------ */
-.intake-cats {
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 8px 0 0;
-  padding: 0;
-}
-
-/* Static badges: they describe what the intake accepts, they are not controls. */
-.intake-cat {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-  background: var(--steel-2);
-  border: 1px solid var(--line-2);
-  border-radius: var(--radius-small);
-  padding: 2px 8px;
-  cursor: default;
-}
-
 /* Files dropped while a transfer runs are a real backlog for the next run. */
 .pending-hint {
   margin: 10px 0 0;
@@ -1953,50 +1804,6 @@ p .chip {
   color: var(--signal-2);
 }
 
-.casiers-usage-note {
-  margin: 8px 0 0;
-  font-size: 12px;
-}
-
-/* ------------------------------------------------------------------ */
-/* Vault S16 tokens wired into ObjectsPage.                            */
-/* Keeps the mock's accent (green primary, blue secondary, IMAGE badge, */
-/* neutral deleted pastille) while deferring to the existing .btn        */
-/* grammar for sizing/focus. Tokens themselves live in vault-tokens.css. */
-/* ------------------------------------------------------------------ */
-
-/* The `.btn:hover` steel fill would otherwise repaint the accent buttons. */
-.btn.vault-btn-primary:hover {
-  background: var(--vault-accent);
-  border-color: var(--vault-accent);
-  color: var(--vault-accent-ink);
-  filter: brightness(0.95);
-}
-
-.btn.vault-btn-blue:hover {
-  background: var(--vault-blue);
-  border-color: var(--vault-blue);
-  color: #ffffff;
-  filter: brightness(0.95);
-}
-
-/* IMAGE type as a soft badge; the grid cell stretches, so hug the text. */
-.ledger-type.vault-badge-image {
-  justify-self: start;
-  width: fit-content;
-  padding: 2px 8px;
-}
-
-/* The vault token paints a neutral grey background; scope it to the status
-   dot and keep the label itself transparent. Deletion stays grey, never the
-   activity/accent green. */
-.status.vault-dot-deleted-neutre {
-  background: none;
-}
-
-.status.vault-dot-deleted-neutre::before {
-  background: var(--vault-muted, var(--faint));
-}
 
 /* ------------------------------------------------------------------ */
 /* Recursive (cascade) folder deletion.                                */

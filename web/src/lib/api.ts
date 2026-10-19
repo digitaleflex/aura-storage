@@ -298,6 +298,8 @@ export interface SessionInfo {
   id: string;
   /** "user" (human session) or "service" (machine identity). */
   kind: string;
+  /** Display name: username for a person, identity name for a service. */
+  name?: string | null;
   /** Role for humans: "user" | "operator" | "admin"; null for services. */
   role: string | null;
   space_id: string | null;
