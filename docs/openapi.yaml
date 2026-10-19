@@ -257,6 +257,15 @@ paths:
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
         "415": { description: Content type is not on the inline allow-list (images except SVG, PDF, audio); offer a download instead }
+  /api/v1/objects/{oid}/restore:
+    post:
+      summary: Restore a soft-deleted object from the trash (objects:delete)
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Object metadata, status available again }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object is not in the trash, or was deleted before its upload completed (nothing to restore) }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)

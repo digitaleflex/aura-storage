@@ -799,6 +799,25 @@ def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DEL
     return {"id": oid, "status": "deleted"}
 
 
+@app.post("/api/v1/objects/{oid}/restore")
+def restore_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
+    # Undo a soft delete (trash). Same scope as the delete it reverses. Only a
+    # committed object can come back: a pending intent that was soft-deleted
+    # never received its bytes (size_bytes stays -1), so it is not restorable.
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != DELETED:
+        raise HTTPException(status_code=409, detail="object is not in the trash")
+    if row["size_bytes"] < 0:
+        raise HTTPException(status_code=409, detail="object was never uploaded")
+    repo.set_status(oid, AVAILABLE)
+    audit_event("restore", principal["id"], "success", {"object_id": oid})
+    return _object_public(repo.get_object(oid, **_object_scope(principal)))
+
+
 @app.patch("/api/v1/objects/{oid}")
 def update_object(
     oid: str, body: ObjectPatchIn,
