@@ -39,6 +39,8 @@ from .config import settings
 from .identity import fingerprint, format_token, new_secret
 from .lifecycle import purge_object, reconcile_pending
 from .s3 import (
+    SSE_ALGORITHM,
+    SSE_HEADER,
     ObjectTooLarge,
     is_valid_bucket_name,
     make_clients,
@@ -161,6 +163,9 @@ def _ensure_bootstrap_admin() -> None:
 
 
 _ensure_bootstrap_admin()
+
+# Verified against when the username is unknown (timing equalisation in login).
+_DUMMY_PASS_HASH = hash_password(new_token(32))
 
 
 def _as_dict(row) -> dict:
@@ -456,7 +461,10 @@ def login(body: LoginIn, request: Request, response: Response):
         raise HTTPException(status_code=429, detail="too many login attempts",
                             headers={"Retry-After": str(settings.login_rate_window)})
     row = repo.get_user_by_name(body.username)
-    if row is None or not verify_password(row["pass_hash"], body.password):
+    # An unknown username still pays one argon2 verification, so response time
+    # does not reveal which usernames exist.
+    stored_hash = row["pass_hash"] if row is not None else _DUMMY_PASS_HASH
+    if not verify_password(stored_hash, body.password) or row is None:
         _login_record_failure(client_ip)
         audit_event("login", body.username, "failure")
         raise HTTPException(status_code=401, detail="invalid credentials")
@@ -501,6 +509,11 @@ def me(principal: dict = Depends(authorize())):
         "scopes": sorted(effective_scopes(principal)),
         "csrf_token": principal.get("csrf") if principal["kind"] == "user" else None,
     }
+
+
+def _upload_headers(content_type: str) -> dict:
+    """Headers the client must send with the presigned PUT (both are signed)."""
+    return {"Content-Type": content_type, SSE_HEADER: SSE_ALGORITHM}
 
 
 @app.post("/api/v1/objects/upload-intents")
@@ -572,7 +585,7 @@ def upload_intent(
                 return {
                     "id": existing["id"], "status": PENDING, "method": "PUT",
                     "upload_url": url,
-                    "headers": {"Content-Type": existing["content_type"]},
+                    "headers": _upload_headers(existing["content_type"]),
                     "content_type": existing["content_type"],
                     "size_bytes": expected, "expires_in": settings.intent_ttl,
                     "expires_at": expires_at, "idempotent_replay": True,
@@ -612,7 +625,7 @@ def upload_intent(
     })
     return {
         "id": oid, "status": PENDING, "method": "PUT", "upload_url": url,
-        "headers": {"Content-Type": content_type},
+        "headers": _upload_headers(content_type),
         "content_type": content_type, "size_bytes": body.size_bytes,
         "expires_in": settings.intent_ttl, "expires_at": intent_expires_at,
         "idempotent_replay": False,
@@ -654,6 +667,16 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
     if size > settings.max_object_bytes:
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
+    if settings.require_sse and head.get("ServerSideEncryption") != SSE_ALGORITHM:
+        # Never mark plaintext-at-rest bytes available; drop them best-effort
+        # (the reconciliation sweep retries a failed delete).
+        repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
+        audit_event("commit", principal["id"], "unencrypted", {"object_id": oid})
+        raise HTTPException(status_code=422, detail="object not encrypted at rest")
 
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]

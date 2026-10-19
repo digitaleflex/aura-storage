@@ -8,6 +8,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from . import ids
+from .auth import new_token, session_key
 from .dblock import synchronized
 from .migrations import (
     DEFAULT_APPLICATION_NAME,
@@ -115,20 +116,29 @@ class Repository:
 
     # -- sessions ---------------------------------------------------------
     def create_session(self, user_id: str, csrf: str, expires_at: int) -> str:
-        sid = self.new_id()
+        """Create a session and return its opaque cookie token.
+
+        Only ``session_key(token)`` is stored (row ``id``); the clear token
+        exists solely in the returned value and the client cookie. Expired rows
+        are pruned here so the table cannot grow without bound.
+        """
+        token = new_token(32)
+        self._run("DELETE FROM sessions WHERE expires_at <= %s", (self.now(),))
         self._run(
             "INSERT INTO sessions (id, user_id, csrf, expires_at) VALUES (%s, %s, %s, %s)",
-            (sid, user_id, csrf, expires_at),
+            (session_key(token), user_id, csrf, expires_at),
         )
-        return sid
+        return token
 
-    def get_session(self, sid: str) -> Optional[dict]:
+    def get_session(self, token: str) -> Optional[dict]:
+        """Look a session up by its cookie token (hashed before the query)."""
         return self._one(
             "SELECT * FROM sessions WHERE id = %s AND expires_at > %s",
-            (sid, self.now()),
+            (session_key(token), self.now()),
         )
 
     def delete_session(self, sid: str) -> None:
+        """Delete by stored row id (``session["id"]``, i.e. the digest)."""
         self._run("DELETE FROM sessions WHERE id = %s", (sid,))
 
     # -- applications / spaces / buckets (#35) ----------------------------
@@ -466,11 +476,12 @@ class Repository:
         if parent_id is None:
             return self._all(
                 "SELECT * FROM folders WHERE owner_id = %s AND parent_id IS NULL "
-                "ORDER BY name",
+                'ORDER BY name COLLATE "C"',
                 (owner_id,),
             )
         return self._all(
-            "SELECT * FROM folders WHERE owner_id = %s AND parent_id = %s ORDER BY name",
+            "SELECT * FROM folders WHERE owner_id = %s AND parent_id = %s "
+            'ORDER BY name COLLATE "C"',
             (owner_id, parent_id),
         )
 
@@ -478,8 +489,11 @@ class Repository:
         # Flat listing of the owner's whole tree in one query (#62 follow-up).
         # Ordered by name for a deterministic payload; the client rebuilds the
         # hierarchy from parent_id. Owner-scoped, so no cross-user leak.
+        # COLLATE "C": byte order, same as SQLite, whatever the database locale
+        # (an en_US.utf8 cluster would put "d10-x" before "d1-x").
         return self._all(
-            "SELECT * FROM folders WHERE owner_id = %s ORDER BY name, id", (owner_id,)
+            'SELECT * FROM folders WHERE owner_id = %s ORDER BY name COLLATE "C", id',
+            (owner_id,),
         )
 
     def folder_name_exists(

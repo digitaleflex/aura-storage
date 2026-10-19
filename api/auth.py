@@ -1,4 +1,5 @@
 """Password hashing (argon2) and opaque session tokens (server-side store)."""
+import hashlib
 import secrets
 
 from argon2 import PasswordHasher
@@ -28,3 +29,14 @@ def verify_password(stored_hash: str, password: str) -> bool:
 
 def new_token(nbytes: int = 32) -> str:
     return secrets.token_urlsafe(nbytes)
+
+
+def session_key(token: str) -> str:
+    """Storage key for a session cookie value: its SHA-256 hex digest.
+
+    The cookie carries a 256-bit random token; the catalogue only keeps this
+    digest, so a database or backup leak does not hand out live sessions
+    (same model as machine tokens in ``api/identity.py``). A fast hash is
+    enough because the input is high-entropy, not a password.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

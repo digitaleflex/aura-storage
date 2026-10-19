@@ -53,8 +53,16 @@ services:
       - traefik.http.routers.traefik-dashboard.tls=true
       - traefik.http.routers.traefik-dashboard.tls.certresolver=le
       - traefik.http.routers.traefik-dashboard.service=api@internal
-      - traefik.http.routers.traefik-dashboard.middlewares=dash-auth
+      - traefik.http.routers.traefik-dashboard.middlewares=dash-ipallow,dash-auth
       - traefik.http.middlewares.dash-auth.basicauth.users=${DASHBOARD_AUTH:?Set DASHBOARD_AUTH in .env}
+      # Source allow-list in front of BasicAuth. The default admits loopback only,
+      # i.e. the dashboard is closed until DASHBOARD_ALLOWED_IPS names the
+      # operator VPN / admin addresses (comma-separated IPs or CIDRs).
+      - traefik.http.middlewares.dash-ipallow.ipallowlist.sourcerange=${DASHBOARD_ALLOWED_IPS:-127.0.0.1/32}
+      # HSTS for every public router (app, S3, landing). Declared here because
+      # Traefik is the single TLS terminator; one year, subdomains included.
+      - traefik.http.middlewares.aura-hsts.headers.stsSeconds=31536000
+      - traefik.http.middlewares.aura-hsts.headers.stsIncludeSubdomains=true
       # Port 8080 is never published to the host; the dashboard is reachable only
       # through this HTTPS router with BasicAuth (bcrypt).
 
@@ -132,6 +140,7 @@ services:
       - traefik.http.routers.aura-s3.entrypoints=websecure
       - traefik.http.routers.aura-s3.tls=true
       - traefik.http.routers.aura-s3.tls.certresolver=le
+      - traefik.http.routers.aura-s3.middlewares=aura-hsts@docker
       - traefik.http.services.aura-s3.loadbalancer.server.port=8333
     security_opt:
       - no-new-privileges:true
@@ -179,10 +188,15 @@ services:
       # deployed stack matches the documented default (api/config.py). Override
       # in .env only deliberately; the expiry is fixed at login (no renewal).
       AURA_SESSION_TTL: "7776000"
+      # Audit trail on a named volume: it must survive image rebuilds and
+      # container recreation (the default path is inside the container).
+      AURA_AUDIT_LOG: /var/lib/aura/audit/aura-audit.jsonl
       # No origin/CORS allow-list here on purpose: the api has no Traefik route
       # and is reached same-origin through the app proxy (app/nginx.conf proxies
       # /api/ to this service). Browser uploads go straight to SeaweedFS via
       # presigned URLs, so any CORS belongs to the SeaweedFS S3 gateway.
+    volumes:
+      - audit-log:/var/lib/aura/audit
     networks:
       - storage
     depends_on:
@@ -205,7 +219,11 @@ services:
     restart: unless-stopped
     volumes:
       - ./web/dist:/usr/share/nginx/html:ro
-      - ./app/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Rendered by the nginx image's envsubst step into conf.d/default.conf, so
+      # the CSP can name the S3 host that receives direct presigned uploads.
+      - ./app/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+    environment:
+      S3_DOMAIN: ${S3_DOMAIN:?Set S3_DOMAIN in .env}
     networks:
       - storage
       - edge
@@ -219,6 +237,7 @@ services:
       - traefik.http.routers.aura-app.entrypoints=websecure
       - traefik.http.routers.aura-app.tls=true
       - traefik.http.routers.aura-app.tls.certresolver=le
+      - traefik.http.routers.aura-app.middlewares=aura-hsts@docker
       - traefik.http.services.aura-app.loadbalancer.server.port=80
       # No path prefix, no strip: the app is served from the domain root.
       # The S3 API keeps exclusive use of aura-storage.eurinhash.com.
@@ -258,6 +277,7 @@ services:
       - traefik.http.routers.aura-s3-landing.entrypoints=websecure
       - traefik.http.routers.aura-s3-landing.tls=true
       - traefik.http.routers.aura-s3-landing.tls.certresolver=le
+      - traefik.http.routers.aura-s3-landing.middlewares=aura-hsts@docker
       - traefik.http.services.aura-s3-landing.loadbalancer.server.port=80
     security_opt:
       - no-new-privileges:true
@@ -273,3 +293,4 @@ networks:
 volumes:
   traefik-acme:
   pgdata:
+  audit-log:

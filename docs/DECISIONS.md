@@ -30,3 +30,10 @@ serializes every operation with a per-instance re-entrant lock (`api/dblock.py`)
 - Follow-up at scale: replace the lock with a real connection pool; the decorator
   is the only thing to remove, method bodies stay unchanged. Multiple uvicorn
   workers already each get their own connection and lock.
+  Measured 2026-10-18 (local PostgreSQL 16, one uvicorn worker, 20 concurrent
+  clients, authenticated object listing): the global lock serves ~210 req/s; a
+  psycopg_pool prototype (one connection + transaction per repository call)
+  served ~125 req/s, ~175-210 req/s without the per-borrow health check and in
+  autocommit. The lock is not the bottleneck at pilot scale (CPU-bound Python
+  in one process is), so the pool was not adopted. Revisit with a remote
+  database or several workers (which first needs shared rate-limiter state).
