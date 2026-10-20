@@ -77,6 +77,10 @@ def _start_verifier() -> None:
     if settings.verify_worker == "inline":
         from .verifier import start_background
         start_background(repo, s3ops, settings, audit=audit_event)
+    # Stored bytes are re-hashed periodically to catch silent corruption.
+    if settings.scrub_enabled:
+        from .scrubber import start_background as start_scrubber
+        start_scrubber(repo, s3ops, settings, audit=audit_event)
 
 
 @app.middleware("http")
@@ -1355,6 +1359,34 @@ def reconcile(limit: int = 500,
         multipart_expired_before=int(time.time()) - settings.intent_grace_s,
     )
     audit_event("admin.reconcile", principal["id"], "success", out)
+    return out
+
+
+@app.get("/api/v1/admin/integrity")
+def integrity_report(limit: int = 100,
+                     principal: dict = Depends(authorize(ADMIN_READ))):
+    """Periodic scrub results: counts per result and the objects at fault.
+
+    ``mismatch`` means the stored bytes no longer match the SHA-256 verified at
+    import; ``missing`` means the storage lost the object. Both call for a
+    restore from backup; nothing is changed automatically.
+    """
+    limit = max(1, min(limit, 500))
+    summary = repo.integrity_summary()
+    problems = [_as_dict(r) for r in repo.list_integrity_problems(limit=limit)]
+    return {
+        "interval_days": settings.scrub_interval_days,
+        "results": summary,
+        "problems": problems,
+    }
+
+
+@app.post("/api/v1/admin/integrity/scrub")
+def integrity_scrub_now(principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Run one bounded scrub pass now (same byte budget as the periodic one)."""
+    from .scrubber import scrub_run
+    out = scrub_run(repo, s3ops, settings, audit=audit_event)
+    audit_event("admin.scrub", principal["id"], "success", out)
     return out
 
 

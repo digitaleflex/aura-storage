@@ -224,6 +224,22 @@ export interface OrphanScanResponse {
   checked_at: number;
 }
 
+export interface IntegrityProblem {
+  id: string;
+  space_id: string;
+  display_name: string;
+  size_bytes: number;
+  scrub_result: "mismatch" | "missing";
+  scrubbed_at: number;
+}
+
+export interface IntegrityReport {
+  interval_days: number;
+  /** Count (and oldest check) per result: ok, mismatch, missing, unchecked. */
+  results: Record<string, { count: number; oldest: number | null }>;
+  problems: IntegrityProblem[];
+}
+
 export interface ReconcileResponse {
   expired: number;
   storage_deletes_attempted: number;
@@ -745,6 +761,11 @@ export const api = {
     return request<OrphanScanResponse>(
       `/api/v1/admin/orphans?limit=${encodeURIComponent(String(limit))}`,
     );
+  },
+
+  /** Periodic integrity scrub results (admin:read). */
+  adminIntegrity(): Promise<IntegrityReport> {
+    return request<IntegrityReport>("/api/v1/admin/integrity");
   },
 
   // --- Administration mutations (`admin:write`) ---

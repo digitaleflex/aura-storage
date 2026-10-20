@@ -319,6 +319,12 @@ export function AdminPage() {
     enabled: canAdmin,
     retry: false,
   });
+  const integrity = useQuery({
+    queryKey: ["admin", "integrity"],
+    queryFn: () => api.adminIntegrity(),
+    enabled: canAdmin,
+    retry: false,
+  });
   const auditSearch = useQuery({
     queryKey: ["admin", "audit", auditApplied, auditOffset],
     queryFn: () =>
@@ -948,6 +954,72 @@ export function AdminPage() {
                 {Math.round(health.data.recent_errors.window_s / 60)} minutes.
               </p>
             )}
+          </>
+        )}
+      </section>
+
+      <section
+        className="section"
+        aria-labelledby="admin-integrity-title"
+        hidden={tab !== "overview"}
+      >
+        <div className="section-head">
+          <h2 id="admin-integrity-title">Intégrité des fichiers</h2>
+        </div>
+        {integrity.isError ? (
+          <p role="alert" className="alert alert-error">
+            Rapport d'intégrité indisponible.
+          </p>
+        ) : integrity.isPending ? (
+          <p className="muted">Chargement…</p>
+        ) : (
+          <>
+            <p className="muted" data-testid="integrity-summary">
+              Chaque fichier est relu et son SHA-256 recalculé au moins tous les{" "}
+              {integrity.data.interval_days} jours :{" "}
+              {integrity.data.results.ok?.count ?? 0} intact(s),{" "}
+              {integrity.data.results.unchecked?.count ?? 0} pas encore relu(s),{" "}
+              {(integrity.data.results.mismatch?.count ?? 0) +
+                (integrity.data.results.missing?.count ?? 0)}{" "}
+              en défaut.
+            </p>
+            {integrity.data.problems.length > 0 ? (
+              <>
+                <p role="alert" className="alert alert-error">
+                  Des fichiers ne correspondent plus à leur empreinte vérifiée ou ont
+                  disparu du stockage : restaurez-les depuis la sauvegarde.
+                </p>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Objet</th>
+                      <th>Espace</th>
+                      <th>Constat</th>
+                      <th>Relu le</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {integrity.data.problems.map((problem) => (
+                      <tr key={problem.id}>
+                        <td>
+                          {problem.display_name}{" "}
+                          <span className="muted">({problem.id.slice(0, 8)}…)</span>
+                        </td>
+                        <td className="muted">
+                          {spaceNames.get(problem.space_id) ?? problem.space_id.slice(0, 8)}
+                        </td>
+                        <td>
+                          {problem.scrub_result === "missing"
+                            ? "Absent du stockage"
+                            : "Contenu altéré"}
+                        </td>
+                        <td className="muted">{formatTs(problem.scrubbed_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : null}
           </>
         )}
       </section>

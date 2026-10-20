@@ -106,6 +106,14 @@ class Settings:
     verify_heartbeat_bytes: int = _int("AURA_VERIFY_HEARTBEAT_BYTES", 256 * 1024 * 1024)
     verify_max_attempts: int = _int("AURA_VERIFY_MAX_ATTEMPTS", 8)
     verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
+    # Periodic integrity scrub (api/scrubber.py): every available object is
+    # re-hashed at least once per interval, oldest check first, within a byte
+    # budget per run so the disk is never saturated. Read-only: it reports,
+    # it never deletes or rewrites.
+    scrub_enabled: bool = os.environ.get("AURA_SCRUB_ENABLED", "1") == "1"
+    scrub_interval_days: int = _int("AURA_SCRUB_INTERVAL_DAYS", 30)
+    scrub_bytes_per_run: int = _int("AURA_SCRUB_BYTES_PER_RUN", 10 * 1024 ** 3)
+    scrub_period_s: int = _int("AURA_SCRUB_PERIOD_SECONDS", 3600)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
     # Zero-byte objects are refused by default: an empty upload is usually a

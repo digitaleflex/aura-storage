@@ -468,6 +468,48 @@ class Repository:
             (actor_id, idempotency_key, space_id),
         )
 
+    # -- periodic integrity scrub ------------------------------------------
+    def claim_scrub(self, now: int, lease_until: int, checked_before: int):
+        """Take the available object checked longest ago (never-checked first),
+        under a lease, if it is due (checked before ``checked_before``)."""
+        return self._one(
+            "UPDATE objects SET scrub_lease_until = %s WHERE id = ("
+            "SELECT id FROM objects WHERE status = 'available' "
+            "AND (scrubbed_at IS NULL OR scrubbed_at < %s) "
+            "AND (scrub_lease_until IS NULL OR scrub_lease_until < %s) "
+            "ORDER BY COALESCE(scrubbed_at, 0) ASC, created_at ASC LIMIT 1 "
+            "FOR UPDATE SKIP LOCKED) RETURNING *",
+            (lease_until, checked_before, now),
+        )
+
+    def record_scrub(self, oid: str, result: str, at: int) -> None:
+        self._run(
+            "UPDATE objects SET scrubbed_at = %s, scrub_result = %s, scrub_lease_until = NULL "
+            "WHERE id = %s",
+            (at, result, oid),
+        )
+
+    def release_scrub(self, oid: str) -> None:
+        """Give the object back unchecked (storage outage): retried next run."""
+        self._run("UPDATE objects SET scrub_lease_until = NULL WHERE id = %s", (oid,))
+
+    def integrity_summary(self) -> dict:
+        rows = self._all(
+            "SELECT COALESCE(scrub_result, 'unchecked') AS result, COUNT(*) AS n, "
+            "MIN(scrubbed_at) AS oldest FROM objects WHERE status = 'available' "
+            "GROUP BY COALESCE(scrub_result, 'unchecked')"
+        )
+        return {r["result"]: {"count": int(r["n"]), "oldest": r["oldest"]} for r in rows}
+
+    def list_integrity_problems(self, limit: int = 100):
+        return self._all(
+            "SELECT id, space_id, display_name, size_bytes, scrub_result, scrubbed_at "
+            "FROM objects WHERE status = 'available' "
+            "AND scrub_result IN ('mismatch', 'missing') "
+            "ORDER BY scrubbed_at DESC LIMIT %s",
+            (limit,),
+        )
+
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
         self._run(
             "UPDATE objects SET status = 'available', size_bytes = %s, checksum_sha256 = %s, updated_at = %s WHERE id = %s",

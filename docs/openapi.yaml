@@ -464,6 +464,27 @@ paths:
         "401": { description: Authentication required }
         "403": { description: Not authorised }
         "503": { description: Audit log rewrite failed (the file itself is still readable) }
+  /api/v1/admin/integrity:
+    get:
+      summary: Periodic integrity scrub results (admin:read)
+      description: >-
+        Counts of available objects per scrub result (ok, mismatch, missing,
+        unchecked) and the objects at fault. Read-only; nothing is changed
+        automatically — a mismatch or missing object calls for a restore.
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+          description: Problems listed (server clamps to 1..500)
+      responses:
+        "200": { description: "interval_days, results {result: {count, oldest}}, problems" }
+        "403": { description: Not authorised }
+  /api/v1/admin/integrity/scrub:
+    post:
+      summary: Run one bounded scrub pass now (admin:write)
+      responses:
+        "200": { description: "Counts of this pass: ok, mismatch, missing, error, bytes" }
+        "403": { description: Not authorised }
   /api/v1/admin/orphans:
     get:
       summary: Read-only orphan candidates, available rows missing at storage (admin:read)
