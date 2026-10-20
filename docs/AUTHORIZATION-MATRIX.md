@@ -57,7 +57,7 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | GET | `/api/v1/objects/{oid}` | `objects:read` | 404 if outside the caller's scope |
 | PATCH | `/api/v1/objects/{oid}` | `objects:write` | **human only**; file/unfile an object into an owned folder |
 | POST | `/api/v1/objects/upload-intents` | `objects:write` | server picks the object key; server enforces type/size/empty policy; optional `Idempotency-Key` dedupes double submits |
-| POST | `/api/v1/objects/{oid}/commit` | `objects:write` | streaming SHA-256, idempotent |
+| POST | `/api/v1/objects/{oid}/commit` | `objects:write` | streaming SHA-256, idempotent; **202 `verifying`** for large objects, hashed by the verification worker (N5) |
 | POST | `/api/v1/objects/{oid}/abort` | `objects:write` | cancel a pending intent (best-effort delete); idempotent; refused on available/deleted |
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
 | POST | `/api/v1/objects/{oid}/preview-intent` | `objects:read` | presigned GET bound to `Content-Disposition: inline` (PDF/image/audio preview); same 404/409 as download-intent, plus **415** for types outside the inline allow-list (images except SVG, PDF, audio: never HTML/SVG/XML); scoped |

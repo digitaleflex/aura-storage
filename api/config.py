@@ -94,6 +94,18 @@ class Settings:
     # A multipart session outlives a single-PUT intent: a large upload may be
     # paused (reload, sleep, network loss) and resumed within this window.
     multipart_session_ttl: int = _int("AURA_MULTIPART_SESSION_TTL", 7 * 24 * 3600)
+    # Asynchronous integrity check (N5). At or above this size, commit answers
+    # 202 'verifying' and a worker hashes the object outside the request.
+    verify_async_threshold_bytes: int = _int(
+        "AURA_VERIFY_ASYNC_THRESHOLD_BYTES", 256 * 1024 * 1024
+    )
+    # "inline": a worker thread inside the API process (default). "off": run
+    # `python -m api.verifier` as its own process instead.
+    verify_worker: str = os.environ.get("AURA_VERIFY_WORKER", "inline")
+    verify_lease_s: int = _int("AURA_VERIFY_LEASE_SECONDS", 300)
+    verify_heartbeat_bytes: int = _int("AURA_VERIFY_HEARTBEAT_BYTES", 256 * 1024 * 1024)
+    verify_max_attempts: int = _int("AURA_VERIFY_MAX_ATTEMPTS", 8)
+    verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
     # Zero-byte objects are refused by default: an empty upload is usually a

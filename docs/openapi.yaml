@@ -100,7 +100,7 @@ paths:
           name: status
           schema:
             type: string
-            enum: [pending, available, deleted, expired, failed, aborted]
+            enum: [pending, verifying, available, deleted, expired, failed, aborted]
           description: Exact catalogue status.
         - in: query
           name: content_type
@@ -185,6 +185,7 @@ paths:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: Object available with checksum_sha256 (algorithm sha256); idempotent on repeat }
+        "202": { description: "Large object (>= AURA_VERIFY_ASYNC_THRESHOLD_BYTES): status verifying; a worker computes the SHA-256 and marks it available or failed. Follow GET /objects/{oid}. Idempotent on repeat" }
         "404": { description: Object not found or not visible }
         "409": { description: Object not committable (including aborted/expired/deleted), or multipart parts still missing }
         "410": { description: Upload intent expired }

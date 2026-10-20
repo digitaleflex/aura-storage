@@ -63,11 +63,20 @@ from .transfer import (
     DELETED,
     EXPIRED,
     PENDING,
+    VERIFYING,
     validate_upload_policy,
     valid_idempotency_key,
 )
 
 app = FastAPI(title="AURA Management API", version="0.2.0")
+
+
+@app.on_event("startup")
+def _start_verifier() -> None:
+    # Large objects are hashed outside the commit request (N5).
+    if settings.verify_worker == "inline":
+        from .verifier import start_background
+        start_background(repo, s3ops, settings, audit=audit_event)
 
 
 @app.middleware("http")
@@ -208,7 +217,7 @@ Uuid4 = Annotated[str, AfterValidator(_canonical_uuid)]
 # Object list query vocabulary (M02). Literals make FastAPI return 422 for any
 # unsupported value and let the OpenAPI document describe the accepted set.
 ObjectStatus = Literal[
-    "pending", "available", "deleted", "expired", "failed", "aborted"
+    "pending", "verifying", "available", "deleted", "expired", "failed", "aborted",
 ]
 ObjectSort = Literal["created_at", "display_name", "size_bytes"]
 SortOrder = Literal["asc", "desc"]
@@ -614,6 +623,22 @@ def upload_intent(
             # catalogue never keeps two live intents for one key.
             repo.set_status(existing["id"], EXPIRED)
 
+    if idem_key:
+        # The same file was already sent (page reloaded while its check ran):
+        # report it instead of sending the bytes a second time.
+        done = repo.get_by_idempotency(
+            actor_id=principal["id"], idempotency_key=idem_key, space_id=space_id
+        )
+        if done is not None and _as_dict(done)["status"] in (VERIFYING, AVAILABLE):
+            done = _as_dict(done)
+            return {
+                "id": done["id"], "status": done["status"], "method": "PUT",
+                "upload_url": None, "headers": {},
+                "content_type": done["content_type"],
+                "size_bytes": done.get("expected_size_bytes"),
+                "expires_in": 0, "expires_at": None, "idempotent_replay": True,
+            }
+
     if repo.count_pending(**_object_scope(principal)) >= settings.max_pending_intents:
         raise HTTPException(status_code=429, detail="too many pending uploads")
 
@@ -844,6 +869,11 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
             "checksum_sha256": row["checksum_sha256"],
             "checksum_algorithm": "sha256",
         }
+    if row["status"] == VERIFYING:
+        # Idempotent: the integrity check is still running (N5).
+        return JSONResponse(status_code=202, content={
+            "id": oid, "status": VERIFYING, "size_bytes": row.get("expected_size_bytes"),
+        })
     if row["status"] != "pending":
         raise HTTPException(status_code=409, detail="object not committable")
 
@@ -880,6 +910,15 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
             pass
         audit_event("commit", principal["id"], "unencrypted", {"object_id": oid})
         raise HTTPException(status_code=422, detail="object not encrypted at rest")
+
+    if size >= settings.verify_async_threshold_bytes:
+        # Large object: hand it to the verification worker instead of hashing
+        # gigabytes inside this request (N5). The client follows the status.
+        repo.mark_verifying(oid, head.get("ETag"))
+        audit_event("commit", principal["id"], "verifying", {"object_id": oid, "size_bytes": size})
+        return JSONResponse(status_code=202, content={
+            "id": oid, "status": VERIFYING, "size_bytes": size,
+        })
 
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]

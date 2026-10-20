@@ -100,6 +100,8 @@ export interface TransferDeps {
   multipartStatus?: (id: string) => Promise<MultipartStatus>;
   /** Multipart (#72): presigned PUTs for the given part numbers. */
   partUrls?: (id: string, partNumbers: number[]) => Promise<MultipartPartUrls>;
+  /** Current object state, to follow an integrity check that runs after commit (N5). */
+  objectStatus?: (id: string) => Promise<{ status: string; checksum_sha256?: string }>;
   sleep: (ms: number) => Promise<void>;
   random: () => number;
 }
@@ -373,8 +375,7 @@ export async function runTransfer(
       emit({ phase: "validating", progress: 1, transferredBytes: file.size, error: null });
       try {
         const committed = await withRetry(() => deps.commit(current.id));
-        emit({ phase: "available", error: null, intentId: current.id });
-        return { state, objectId: current.id, checksum: committed.checksum_sha256 };
+        return settle(current.id, committed);
       } catch (err) {
         if (aborted()) return cancel();
         // 409: a part is still missing at the storage (lost, or a size
@@ -384,6 +385,44 @@ export async function runTransfer(
         return { state, objectId: current.id };
       }
     }
+  };
+
+  /**
+   * A large object is checked after commit (202 "verifying", N5): follow its
+   * state until the server marks it available or failed. Never reports success
+   * before the server does.
+   */
+  const settle = async (
+    id: string,
+    committed: { status: string; checksum_sha256?: string },
+  ): Promise<TransferResult> => {
+    let current = committed;
+    for (let polls = 0; current.status === "verifying"; polls += 1) {
+      if (aborted()) return cancel();
+      if (!deps.objectStatus) break;
+      emit({ phase: "validating", error: null });
+      await deps.sleep(Math.min(15_000, 1_000 * 2 ** Math.min(polls, 4)));
+      try {
+        current = await deps.objectStatus(id);
+      } catch (err) {
+        if (classifyError(err) !== "retryable") {
+          emit({ phase: "failed", error: messageOf(err) });
+          return { state, objectId: id };
+        }
+      }
+    }
+    if (current.status !== "available") {
+      emit({
+        phase: "failed",
+        error:
+          current.status === "verifying"
+            ? "Vérification d'intégrité en cours côté serveur."
+            : "La vérification d'intégrité a échoué.",
+      });
+      return { state, objectId: id };
+    }
+    emit({ phase: "available", error: null, intentId: id, progress: 1, transferredBytes: file.size });
+    return { state, objectId: id, checksum: current.checksum_sha256 };
   };
 
   emit({ phase: "requesting-intent" });
@@ -398,6 +437,11 @@ export async function runTransfer(
       // otherwise there is no live intent to reference.
       if (aborted()) return cancel();
       return { state, objectId: null };
+    }
+    // Already sent (a reload while the server was checking it): no new bytes.
+    if (current.status === "available" || current.status === "verifying") {
+      emit({ phase: "validating", progress: 1, transferredBytes: file.size });
+      return settle(current.id, { status: current.status });
     }
     if (current.upload_mode === "multipart") return runMultipart(current);
     if (!current.upload_url) {
@@ -418,8 +462,7 @@ export async function runTransfer(
       });
       emit({ phase: "validating", progress: 1, transferredBytes: file.size });
       const committed = await deps.commit(current.id);
-      emit({ phase: "available", error: null, intentId: current.id });
-      return { state, objectId: current.id, checksum: committed.checksum_sha256 };
+      return settle(current.id, committed);
     } catch (err) {
       if (aborted() || classifyError(err) === "aborted") {
         return cancel();
