@@ -1,0 +1,48 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "build",
+  "subagent_depth": 2,
+  "permission": {
+    "*": "allow",
+    "read": {
+      "*": "allow",
+      ".env": "deny",
+      ".env.*": "deny",
+      "**/.env": "deny",
+      "**/.env.*": "deny",
+      "config/backup.env": "deny",
+      "**/config/backup.env": "deny",
+      "config/seaweedfs/s3.json": "deny",
+      "**/config/seaweedfs/s3.json": "deny"
+    },
+    "edit": "allow",
+    "bash": {
+      "*": "allow",
+      "sudo": "deny",
+      "sudo *": "deny",
+      "doas *": "deny",
+      "su *": "deny",
+      "ssh *": "deny",
+      "scp *": "deny",
+      "sftp *": "deny",
+      "rsync *": "deny",
+      "telnet *": "deny",
+      "nc *": "deny",
+      "ncat *": "deny",
+      "socat *": "deny",
+      "git push origin main": "deny",
+      "git push * main": "deny",
+      "docker compose up": "deny",
+      "docker compose up *": "deny",
+      "docker compose down": "deny",
+      "docker compose down *": "deny",
+      "docker compose rm *": "deny",
+      "docker compose kill *": "deny",
+      "docker volume rm *": "deny",
+      "docker system prune*": "deny",
+      "docker volume prune*": "deny"
+    },
+    "external_directory": "ask",
+    "doom_loop": "ask"
+  }
+}
