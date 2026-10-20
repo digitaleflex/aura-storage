@@ -16,7 +16,9 @@ SORT_COLUMNS = {
 }
 
 # Statuses the catalogue can hold, mirroring what the API writes.
-OBJECT_STATUSES = ("pending", "available", "deleted", "expired", "failed")
+OBJECT_STATUSES = (
+    "pending", "verifying", "available", "deleted", "expired", "failed", "aborted",
+)
 
 # LIKE escape character (a single backslash) and the matching SQL clause.
 LIKE_ESCAPE = "\\"

@@ -73,6 +73,7 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "Tous les états" },
   { value: "available", label: "Disponible" },
   { value: "pending", label: "En cours" },
+  { value: "verifying", label: "Vérification" },
   { value: "deleted", label: "Supprimé" },
   { value: "expired", label: "Expiré" },
   { value: "failed", label: "Échec" },
@@ -149,6 +150,7 @@ function parseSize(value: string): number | undefined {
 const STATUS_LABELS: Record<string, string> = {
   available: "Disponible",
   pending: "En cours",
+  verifying: "Vérification…",
   deleted: "Supprimé",
   expired: "Expiré",
   failed: "Échec",
@@ -181,7 +183,7 @@ function StatusLabel({ status }: { status: string }) {
   const variant =
     status === "available"
       ? "status status-ok"
-      : status === "pending"
+      : status === "pending" || status === "verifying"
         ? "status status-warn"
         : status === "failed"
           ? "status status-error"
@@ -727,6 +729,7 @@ export function ObjectsPage() {
         }),
       commit: (id) => api.commitObject(id, activeCsrf),
       multipartStatus: (id) => api.multipartStatus(id),
+      objectStatus: (id) => api.getObject(id),
       partUrls: (id, numbers) => api.multipartPartUrls(id, numbers, activeCsrf),
       abortIntent: async (id) => {
         await api.abortObject(id, activeCsrf);

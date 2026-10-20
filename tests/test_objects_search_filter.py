@@ -326,7 +326,10 @@ def test_invalid_query_values_are_refused(params):
 
 def test_query_vocabulary_matches_the_repository():
     # The Literal sets in the route and the SQL builder must not drift.
-    assert set(OBJECT_STATUSES) == {"pending", "available", "deleted", "expired", "failed"}
+    assert set(OBJECT_STATUSES) == {
+        "pending", "verifying", "available", "deleted", "expired", "failed", "aborted",
+    }
+    assert set(OBJECT_STATUSES) == set(main.ObjectStatus.__args__)
     assert set(SORT_COLUMNS) == {"created_at", "display_name", "size_bytes"}
 
 
