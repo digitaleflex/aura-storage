@@ -320,6 +320,13 @@ export function AdminPage() {
     enabled: canAdmin,
     retry: false,
   });
+  // Lists whole buckets: only on demand, never on page load.
+  const storageOrphans = useQuery({
+    queryKey: ["admin", "storage-orphans"],
+    queryFn: () => api.adminStorageOrphans(),
+    enabled: false,
+    retry: false,
+  });
   const auditSearch = useQuery({
     queryKey: ["admin", "audit", auditApplied, auditOffset],
     queryFn: () =>
@@ -973,6 +980,49 @@ export function AdminPage() {
             )}
           </>
         )}
+      </section>
+
+      <section
+        className="section"
+        aria-labelledby="admin-storage-orphans-title"
+        hidden={tab !== "overview"}
+      >
+        <div className="section-head">
+          <h2 id="admin-storage-orphans-title">Octets non référencés</h2>
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            disabled={storageOrphans.isFetching}
+            onClick={() => void storageOrphans.refetch()}
+          >
+            {storageOrphans.isFetching ? "Analyse…" : "Analyser le stockage"}
+          </button>
+        </div>
+        <p className="muted">
+          Fichiers présents au stockage sans fiche au catalogue, octets laissés par des
+          envois abandonnés et envois en plusieurs parties orphelins. La corbeille n'en
+          fait pas partie. Lecture seule : rien n'est supprimé depuis cet écran.
+        </p>
+        {storageOrphans.isError ? (
+          <p role="alert" className="alert alert-error">
+            Analyse du stockage indisponible.
+          </p>
+        ) : storageOrphans.data ? (
+          <ul className="plain-list" data-testid="storage-orphans">
+            {storageOrphans.data.buckets.map((entry) => (
+              <li key={entry.bucket}>
+                <strong>{entry.bucket}</strong> :{" "}
+                {entry.error
+                  ? "stockage indisponible"
+                  : `${entry.orphans?.length ?? 0} fichier(s) non référencé(s) (${formatBytes(
+                      entry.orphan_bytes ?? 0,
+                    )}), ${entry.stale_uploads?.length ?? 0} envoi(s) en parties abandonné(s) sur ${
+                      entry.scanned ?? 0
+                    } objet(s) analysé(s)${entry.next_start_after ? " — analyse partielle" : ""}`}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </section>
 
       <section

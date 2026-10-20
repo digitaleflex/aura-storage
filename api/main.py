@@ -1422,6 +1422,78 @@ def list_orphan_candidates(limit: int = 100,
             "checked_at": int(time.time())}
 
 
+@app.get("/api/v1/admin/storage-orphans")
+def storage_orphans(
+    bucket: str | None = Query(default=None, max_length=63),
+    start_after: str | None = Query(default=None, max_length=1024),
+    max_keys: int = 5000,
+    principal: dict = Depends(authorize(ADMIN_READ)),
+):
+    """Read-only: storage bytes the catalogue does not account for (#87).
+
+    Bounded per call (``max_keys`` per bucket) and resumable with the returned
+    ``next_start_after``. Only registered buckets are scanned.
+    """
+    from .storage_reconcile import scan_bucket, scan_multipart
+    max_keys = max(1, min(max_keys, 50_000))
+    names = [b["name"] for b in repo.list_all_buckets()]
+    if bucket is not None:
+        if bucket not in names:
+            raise HTTPException(status_code=404, detail="bucket not registered")
+        names = [bucket]
+    out = []
+    for name in names:
+        try:
+            report = scan_bucket(repo, s3ops, name, grace_s=settings.orphan_grace_s,
+                                 max_keys=max_keys, start_after=start_after)
+            report["stale_uploads"] = scan_multipart(
+                repo, s3ops, name, grace_s=settings.orphan_grace_s,
+            )
+        except Exception:
+            out.append({"bucket": name, "error": "storage unavailable"})
+            continue
+        out.append(report)
+    return {"grace_seconds": settings.orphan_grace_s, "buckets": out,
+            "checked_at": int(time.time())}
+
+
+class OrphanUploadIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(min_length=1, max_length=1024)
+    upload_id: str = Field(min_length=1, max_length=1024)
+
+
+class OrphanCleanupIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    bucket: str = Field(min_length=1, max_length=63)
+    keys: list[str] = Field(default_factory=list, max_length=100)
+    uploads: list[OrphanUploadIn] = Field(default_factory=list, max_length=100)
+
+
+@app.post("/api/v1/admin/storage-orphans/cleanup")
+def storage_orphans_cleanup(
+    body: OrphanCleanupIn, principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Destructive, explicit: remove listed orphan keys / abort listed uploads.
+
+    Each item is re-checked just before acting (still unaccounted for, older
+    than the grace period, inside the AURA key prefix); anything else is
+    skipped with a reason. At most 100 keys and 100 uploads per call.
+    """
+    from .storage_reconcile import remove_orphans
+    if body.bucket not in {b["name"] for b in repo.list_all_buckets()}:
+        raise HTTPException(status_code=404, detail="bucket not registered")
+    out = remove_orphans(
+        repo, s3ops, body.bucket, body.keys,
+        [u.model_dump() for u in body.uploads], grace_s=settings.orphan_grace_s,
+    )
+    audit_event("admin.storage-orphans.cleanup", principal["id"], "success", {
+        "bucket": body.bucket, "removed": len(out["removed"]),
+        "aborted_uploads": len(out["aborted_uploads"]), "skipped": len(out["skipped"]),
+    })
+    return out
+
+
 @app.get("/api/v1/admin/stats")
 def admin_stats(principal: dict = Depends(authorize(ADMIN_READ))):
     return repo.stats()
