@@ -38,6 +38,10 @@ Wait for an unambiguous human approval of that action before executing it. Appro
 
 Stop before the risky action if target identity is ambiguous, a backup is missing or unverified, the operation is irreversible, recovery access is unknown, the encryption key may be unavailable, current state contradicts the runbook, or the action would weaken a security boundary. Continue with safe diagnostics, prepare a plan, and report the blocker.
 
+## VPS and deployment autonomy
+
+Routine deployments may be autonomous only after the exact target, deployment identity, fixed command, permitted services, preflight checks, backup/recovery requirements and rollback procedure have been reviewed and recorded. Follow [docs/AGENT-VPS-AUTONOMY.md](AGENT-VPS-AUTONOMY.md). Do not interpret this policy as permission for unrestricted sudo, root SSH, arbitrary Docker administration, or any destructive data operation. Until host controls and the initial activation checklist are verified, do not mutate the live VPS.
+
 ## Required safeguards
 
 - Use least privilege and deny by default.
