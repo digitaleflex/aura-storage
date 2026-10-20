@@ -40,6 +40,9 @@ test("a slow supervision says what it is doing, then that it is slow", async ({ 
   await loginToAdmin(page);
   const section = page.getByRole("region", { name: "Supervision" });
   await expect(section.getByRole("status")).toContainText("Vérification des services");
+  // The waiting state is styled (a lost stylesheet block once left it bare).
+  await expect(section.locator(".loading")).toHaveCSS("display", "flex");
+  await expect(section.locator(".loading .spinner")).toHaveCSS("animation-name", "spin");
   await expect(section.getByRole("status")).toContainText("met du temps à répondre", {
     timeout: 8000,
   });
