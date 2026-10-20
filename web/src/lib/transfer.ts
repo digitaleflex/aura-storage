@@ -140,6 +140,9 @@ type Classification = "retryable" | "expired" | "aborted" | "fatal";
 
 function classifyHttp(status: number): Classification {
   if (status === 403) return "expired";
+  // 507: the server refused the upload because the storage is full. Retrying
+  // cannot help until space is freed.
+  if (status === 507) return "fatal";
   if (status === 408 || status === 410 || status === 425 || status === 429) return "retryable";
   if (status >= 500) return "retryable";
   return "fatal";
@@ -159,6 +162,9 @@ export function classifyError(err: unknown): Classification {
 }
 
 function messageOf(err: unknown): string {
+  if (err instanceof ApiError && err.status === 507) {
+    return "Espace de stockage plein : import refusé. Libérez de la place ou contactez l'administrateur.";
+  }
   if (err instanceof ApiError) return err.detail;
   if (err instanceof Error) return err.message;
   return "Échec du transfert.";

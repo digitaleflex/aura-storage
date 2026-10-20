@@ -522,6 +522,23 @@ class Repository:
             (actor_id, idempotency_key, space_id),
         ).fetchone()
 
+    def storage_commitment(self) -> dict:
+        """Bytes the object store holds or has promised, across every space.
+
+        ``stored``: verified bytes still on disk (available, trash, purge in
+        progress). ``reserved``: declared sizes of uploads not yet verified
+        (pending, verifying) — counted from the moment the intent is issued.
+        """
+        row = self.conn.execute(
+            "SELECT "
+            "COALESCE(SUM(CASE WHEN status IN ('available', 'deleted', 'purging') "
+            "AND size_bytes > 0 THEN size_bytes ELSE 0 END), 0) AS stored, "
+            "COALESCE(SUM(CASE WHEN status IN ('pending', 'verifying') "
+            "AND expected_size_bytes > 0 THEN expected_size_bytes ELSE 0 END), 0) AS reserved "
+            "FROM objects"
+        ).fetchone()
+        return {"stored": int(row["stored"]), "reserved": int(row["reserved"])}
+
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
         self.conn.execute(
             "UPDATE objects SET status = 'available', size_bytes = ?, checksum_sha256 = ?, updated_at = ? WHERE id = ?",
