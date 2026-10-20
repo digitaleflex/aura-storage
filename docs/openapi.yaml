@@ -301,6 +301,54 @@ paths:
         "200": { description: Object metadata, status available again }
         "404": { description: Object not found or not visible }
         "409": { description: Object is not in the trash, or was deleted before its upload completed (nothing to restore) }
+  /api/v1/me/master-mode:
+    post:
+      summary: Enter master mode by re-entering the password (objects:purge, human session)
+      description: >-
+        Short, session-bound elevation (AURA_MASTER_MODE_SECONDS, default 900)
+        for bulk destructive actions without a confirmation per item. Wrong
+        passwords count against the login rate limit. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        "200": { description: "master_until (epoch seconds)" }
+        "403": { description: Not authorised, or the password does not match }
+        "429": { description: Too many attempts }
+    delete:
+      summary: Leave master mode now
+      responses:
+        "200": { description: "master_until null" }
+  /api/v1/objects/bulk-purge:
+    post:
+      summary: Master mode only — purge up to AURA_MASTER_BULK_MAX objects in one call (objects:purge)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ids]
+              properties:
+                ids: { type: array, minItems: 1, items: { type: string } }
+      responses:
+        "200": { description: "purged, not_found (or outside the caller's scope), failed (storage error; catalogue reference kept)" }
+        "403": { description: Not authorised, or master mode not active }
+        "422": { description: Too many ids }
+  /api/v1/objects/trash/empty:
+    post:
+      summary: Master mode only — purge the caller's trash, up to AURA_MASTER_BULK_MAX per call (objects:purge)
+      responses:
+        "200": { description: "purged, not_found, failed, more (true when another call is needed)" }
+        "403": { description: Not authorised, or master mode not active }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)

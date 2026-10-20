@@ -106,6 +106,10 @@ class Settings:
     verify_heartbeat_bytes: int = _int("AURA_VERIFY_HEARTBEAT_BYTES", 256 * 1024 * 1024)
     verify_max_attempts: int = _int("AURA_VERIFY_MAX_ATTEMPTS", 8)
     verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
+    # Master mode: how long a password-confirmed elevation for bulk purges
+    # lasts on one session (seconds), and the most objects one call may purge.
+    master_mode_ttl: int = _int("AURA_MASTER_MODE_SECONDS", 900)
+    master_bulk_max: int = _int("AURA_MASTER_BULK_MAX", 500)
     # Capacity guard: the usable object-store capacity in bytes (0 = off) and
     # the fill level, in percent, above which new uploads are refused (507).
     # Every upload reserves its declared size from the moment its intent is

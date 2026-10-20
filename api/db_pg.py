@@ -141,6 +141,10 @@ class Repository:
         """Delete by stored row id (``session["id"]``, i.e. the digest)."""
         self._run("DELETE FROM sessions WHERE id = %s", (sid,))
 
+    def set_session_master(self, sid: str, until: Optional[int]) -> None:
+        """Grant (epoch seconds) or end (None) master mode on one session."""
+        self._run("UPDATE sessions SET master_until = %s WHERE id = %s", (until, sid))
+
     # -- applications / spaces / buckets (#35) ----------------------------
     def create_application(self, name: str) -> str:
         aid = self.new_id()

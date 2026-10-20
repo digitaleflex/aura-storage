@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 /**
@@ -17,6 +17,9 @@ export function Dialog({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  // Unique per instance: several dialogs live on one page, and a shared id
+  // would give every one of them the first dialog's title as its name.
+  const titleId = useId();
 
   useEffect(() => {
     const el = ref.current;
@@ -35,9 +38,9 @@ export function Dialog({
   }, [open]);
 
   return (
-    <dialog ref={ref} className="dialog" onClose={onClose} aria-labelledby="dlg-title">
+    <dialog ref={ref} className="dialog" onClose={onClose} aria-labelledby={titleId}>
       <div className="dialog-head">
-        <h2 id="dlg-title">{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         <button
           type="button"
           className="btn btn-ghost btn-small"
