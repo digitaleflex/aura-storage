@@ -48,6 +48,7 @@ const OBJECT_STATUS_LABELS: Record<string, string> = {
   pending: "En cours",
   verifying: "Vérification",
   deleted: "Supprimé",
+  purging: "Purge en cours",
   expired: "Expiré",
   failed: "Échec",
 };
@@ -758,6 +759,28 @@ export function AdminPage() {
               Mesuré à {formatTs(usage.data.measured_at)} — les intentions en
               attente ne portent aucun octet engagé.
             </p>
+            {usage.data.capacity ? (
+              <p
+                className={
+                  usage.data.capacity.free_for_uploads_bytes <
+                  usage.data.capacity.capacity_bytes / 20
+                    ? "alert alert-error"
+                    : "muted"
+                }
+                data-testid="capacity"
+              >
+                Capacité : {formatBytes(usage.data.capacity.stored_bytes)} stockés et{" "}
+                {formatBytes(usage.data.capacity.reserved_bytes)} réservés par des envois en
+                cours, sur {formatBytes(usage.data.capacity.capacity_bytes)}. Les nouveaux
+                envois sont refusés au-delà de {usage.data.capacity.high_watermark_pct} % :
+                encore {formatBytes(usage.data.capacity.free_for_uploads_bytes)} disponibles.
+              </p>
+            ) : (
+              <p className="muted" data-testid="capacity">
+                Aucune capacité configurée (AURA_STORAGE_CAPACITY_BYTES) : le remplissage du
+                disque n'est pas surveillé.
+              </p>
+            )}
             {usage.data.spaces.length > 0 ? (
               <table className="table">
                 <thead>

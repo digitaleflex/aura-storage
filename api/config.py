@@ -106,9 +106,12 @@ class Settings:
     verify_heartbeat_bytes: int = _int("AURA_VERIFY_HEARTBEAT_BYTES", 256 * 1024 * 1024)
     verify_max_attempts: int = _int("AURA_VERIFY_MAX_ATTEMPTS", 8)
     verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
-    # Storage orphans (api/storage_reconcile.py): bytes younger than this are
-    # never reported or removed, so an upload in flight is never mistaken for one.
-    orphan_grace_s: int = _int("AURA_ORPHAN_GRACE_SECONDS", 86400)
+    # Capacity guard: the usable object-store capacity in bytes (0 = off) and
+    # the fill level, in percent, above which new uploads are refused (507).
+    # Every upload reserves its declared size from the moment its intent is
+    # issued, so concurrent imports cannot overfill the single disk.
+    storage_capacity_bytes: int = _int("AURA_STORAGE_CAPACITY_BYTES", 0)
+    storage_high_watermark_pct: int = _int("AURA_STORAGE_HIGH_WATERMARK", 90)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
     # Zero-byte objects are refused by default: an empty upload is usually a

@@ -468,24 +468,22 @@ class Repository:
             (actor_id, idempotency_key, space_id),
         )
 
-    def object_states_for_keys(self, bucket: str, keys: list) -> dict:
-        """Catalogue state of storage keys: ``{key: {id, status, multipart_upload_id}}``.
+    def storage_commitment(self) -> dict:
+        """Bytes the object store holds or has promised, across every space.
 
-        Keys without a row are absent from the result (storage orphans).
+        ``stored``: verified bytes still on disk (available, trash, purge in
+        progress). ``reserved``: declared sizes of uploads not yet verified
+        (pending, verifying) — counted from the moment the intent is issued.
         """
-        out: dict = {}
-        if not keys:
-            return out
-        for r in self._all(
-            "SELECT id, object_key, status, multipart_upload_id FROM objects "
-            "WHERE bucket = %s AND object_key = ANY(%s)",
-            (bucket, list(keys)),
-        ):
-            out[r["object_key"]] = {
-                "id": r["id"], "status": r["status"],
-                "multipart_upload_id": r["multipart_upload_id"],
-            }
-        return out
+        row = self._one(
+            "SELECT "
+            "COALESCE(SUM(CASE WHEN status IN ('available', 'deleted', 'purging') "
+            "AND size_bytes > 0 THEN size_bytes ELSE 0 END), 0) AS stored, "
+            "COALESCE(SUM(CASE WHEN status IN ('pending', 'verifying') "
+            "AND expected_size_bytes > 0 THEN expected_size_bytes ELSE 0 END), 0) AS reserved "
+            "FROM objects"
+        )
+        return {"stored": int(row["stored"]), "reserved": int(row["reserved"])}
 
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
         self._run(
@@ -526,6 +524,14 @@ class Repository:
         self._run(
             "UPDATE objects SET status = %s, updated_at = %s WHERE id = %s",
             (status, self.now(), oid),
+        )
+
+    def list_status_before(self, status: str, cutoff: int, limit: int = 500):
+        """Rows in ``status`` not updated since ``cutoff``, oldest first."""
+        return self._all(
+            "SELECT * FROM objects WHERE status = %s AND updated_at < %s "
+            "ORDER BY updated_at ASC LIMIT %s",
+            (status, cutoff, limit),
         )
 
     def delete_object_row(self, oid: str) -> None:
