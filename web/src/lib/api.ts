@@ -171,6 +171,15 @@ export interface UsageResponse {
     intent_ttl: number;
     allow_empty_objects: boolean;
   };
+  /** Capacity guard; null when no capacity is configured. */
+  capacity?: {
+    capacity_bytes: number;
+    high_watermark_pct: number;
+    accept_until_bytes: number;
+    stored_bytes: number;
+    reserved_bytes: number;
+    free_for_uploads_bytes: number;
+  } | null;
   totals: {
     objects_by_status: Record<string, number>;
     available_count: number;

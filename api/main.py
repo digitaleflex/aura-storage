@@ -641,6 +641,7 @@ def upload_intent(
 
     if repo.count_pending(**_object_scope(principal)) >= settings.max_pending_intents:
         raise HTTPException(status_code=429, detail="too many pending uploads")
+    _check_capacity(body.size_bytes)
 
     if body.folder_id is not None:
         # A client-supplied folder must exist and be owned by the caller (#61).
@@ -699,6 +700,37 @@ def upload_intent(
         "expires_in": settings.intent_ttl, "expires_at": intent_expires_at,
         "idempotent_replay": False,
     }
+
+
+def _capacity() -> dict | None:
+    """Fill level of the object store against the configured capacity."""
+    if settings.storage_capacity_bytes <= 0:
+        return None
+    committed = repo.storage_commitment()
+    limit = settings.storage_capacity_bytes * settings.storage_high_watermark_pct // 100
+    used = committed["stored"] + committed["reserved"]
+    return {
+        "capacity_bytes": settings.storage_capacity_bytes,
+        "high_watermark_pct": settings.storage_high_watermark_pct,
+        "accept_until_bytes": limit,
+        "stored_bytes": committed["stored"],
+        "reserved_bytes": committed["reserved"],
+        "free_for_uploads_bytes": max(0, limit - used),
+    }
+
+
+def _check_capacity(size_bytes: int) -> None:
+    """Refuse (507) an upload that would push the disk past the watermark.
+
+    The declared size is reserved as soon as the intent exists, so a burst of
+    parallel imports is accounted for before any byte lands.
+    """
+    cap = _capacity()
+    if cap is not None and size_bytes > cap["free_for_uploads_bytes"]:
+        audit_event("upload-intent", None, "capacity", {
+            "size_bytes": size_bytes, "free_bytes": cap["free_for_uploads_bytes"],
+        })
+        raise HTTPException(status_code=507, detail="storage capacity reached")
 
 
 def _upload_ceiling() -> int:
@@ -1499,6 +1531,8 @@ def admin_usage(
             "intent_ttl": settings.intent_ttl,
             "allow_empty_objects": settings.allow_empty_objects,
         },
+        # Capacity guard (null when AURA_STORAGE_CAPACITY_BYTES is not set).
+        "capacity": _capacity(),
         "totals": {
             "objects_by_status": totals_by_status,
             "available_count": total_available,
