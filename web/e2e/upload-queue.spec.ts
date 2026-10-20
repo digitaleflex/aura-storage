@@ -95,7 +95,7 @@ test("queues several files, isolates one failure and retries only it", async ({ 
 
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
-  const status = page.getByTestId("transfer-status");
+  const status = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
   await expect(status).toContainText("alpha.pdf");
   await expect(status).toContainText("bad.pdf");
   await expect(status).toContainText("gamma.pdf");
