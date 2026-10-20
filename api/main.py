@@ -49,6 +49,7 @@ from .s3 import (
     is_valid_bucket_name,
     list_uploaded_parts,
     make_clients,
+    make_probe_client,
     part_length,
     plan_parts,
     presigned_get,
@@ -165,6 +166,11 @@ def reset_login_attempts() -> None:
 s3, s3ops = make_clients(
     settings.s3_endpoint, settings.s3_internal_endpoint,
     settings.s3_access_key, settings.s3_secret_key, settings.s3_region,
+)
+# Supervision only: answers within seconds when the storage is down.
+s3probe = make_probe_client(
+    settings.s3_internal_endpoint, settings.s3_access_key,
+    settings.s3_secret_key, settings.s3_region,
 )
 
 
@@ -1536,7 +1542,7 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
         components["database"] = {"status": "down", "error": "unreachable"}
     start = time.monotonic()
     try:
-        s3ops.list_buckets()
+        s3probe.list_buckets()
         components["storage"] = {
             "status": "ok",
             "latency_ms": int((time.monotonic() - start) * 1000),

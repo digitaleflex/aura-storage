@@ -12,6 +12,7 @@
  * endpoint; this module calls it and never pretends to cancel server-side.
  */
 import { ApiError, PresignedUploadError } from "./api";
+import { describeError } from "./errors";
 import type {
   CommitResponse,
   MultipartPartUrls,
@@ -159,9 +160,13 @@ export function classifyError(err: unknown): Classification {
 }
 
 function messageOf(err: unknown): string {
-  if (err instanceof ApiError) return err.detail;
-  if (err instanceof Error) return err.message;
-  return "Échec du transfert.";
+  const fallback =
+    err instanceof ApiError
+      ? err.detail
+      : err instanceof Error
+        ? err.message
+        : "Échec du transfert.";
+  return describeError(err, fallback);
 }
 
 function isNearExpiry(intent: UploadIntentResponse, nowMs: number): boolean {

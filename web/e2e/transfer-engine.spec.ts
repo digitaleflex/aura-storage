@@ -209,7 +209,7 @@ test("a validation error fails without retry or success", async () => {
   });
   const result = await runTransfer(FILE, deps, { folderId: null, idempotencyKey: "k-422" });
   expect(result.state.phase).toBe("failed");
-  expect(result.state.error).toContain("does not match");
+  expect(result.state.error).toContain("incomplet ou différent de l'original");
   expect(rec.commits).toBe(1);
 });
 

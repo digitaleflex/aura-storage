@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../lib/api";
+import { describeError } from "../lib/errors";
 import type { ObjectItem, PreviewIntentResponse } from "../lib/api";
 import { previewKind } from "../lib/preview";
 
@@ -59,11 +60,9 @@ export function PreviewModal({
       (err: unknown) => {
         if (cancelled) return;
         setError(
-          err instanceof ApiError
-            ? err.status === 415
-              ? "Ce type de fichier ne peut pas être affiché dans le navigateur."
-              : `Aperçu indisponible : ${err.detail}`
-            : "Aperçu indisponible.",
+          err instanceof ApiError && err.status === 415
+            ? "Ce type de fichier ne peut pas être affiché dans le navigateur."
+            : `Aperçu indisponible. ${describeError(err, "")}`.trim(),
         );
         setStatus("error");
       },

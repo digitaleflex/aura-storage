@@ -106,7 +106,7 @@ test("queues several files, isolates one failure and retries only it", async ({ 
   // Scoped to the import panel: the page can show other alerts (e.g. storage usage).
   await expect(
     page.getByRole("region", { name: "Importer" }).getByRole("alert"),
-  ).toContainText("does not match");
+  ).toContainText("incomplet ou différent de l'original");
 
   // Retry only the failed file; the two successes are not re-uploaded.
   state.failBad = false;

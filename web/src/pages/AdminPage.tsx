@@ -11,6 +11,8 @@ import type {
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { OneTimeToken } from "../components/OneTimeToken";
+import { Loading, LoadError } from "../components/Loading";
+import { describeError } from "../lib/errors";
 
 const DATE_FMT = new Intl.DateTimeFormat("fr-FR", {
   dateStyle: "medium",
@@ -350,8 +352,9 @@ export function AdminPage() {
     void queryClient.invalidateQueries({ queryKey: ["admin"] });
   }
 
+  /** What failed, then why in plain words (never a raw "API 409: …"). */
   function fail(err: unknown, fallback: string) {
-    setError(err instanceof Error ? err.message : fallback);
+    setError(`${fallback} ${describeError(err, "")}`.trim());
   }
 
   const reconcile = useMutation({
@@ -651,9 +654,12 @@ export function AdminPage() {
           </p>
         ) : null}
         {stats.isError ? (
-          <p role="alert" className="alert alert-error">
-            Statistiques indisponibles.
-          </p>
+          <LoadError
+            message="Statistiques indisponibles."
+            error={stats.error}
+            retrying={stats.isFetching}
+            onRetry={() => void stats.refetch()}
+          />
         ) : stats.isPending ? (
           <div className="stat-grid skeleton" role="status" aria-label="Chargement des statistiques">
             <span className="visually-hidden">Chargement…</span>
@@ -722,11 +728,14 @@ export function AdminPage() {
           bande passante ni de capacité totale n'existe hors ligne.
         </p>
         {usage.isError ? (
-          <p role="alert" className="alert alert-error">
-            Consommation indisponible.
-          </p>
+          <LoadError
+            message="Consommation indisponible."
+            error={usage.error}
+            retrying={usage.isFetching}
+            onRetry={() => void usage.refetch()}
+          />
         ) : usage.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Calcul de la consommation" />
         ) : (
           <>
             <div className="stat-grid">
@@ -793,11 +802,15 @@ export function AdminPage() {
           <h2 id="admin-health-title">Supervision</h2>
         </div>
         {health.isError ? (
-          <p role="alert" className="alert alert-error">
-            Supervision indisponible.
-          </p>
+          <LoadError
+            message="Supervision indisponible."
+            error={health.error}
+            retrying={health.isFetching}
+            onRetry={() => void health.refetch()}
+          />
         ) : health.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Vérification des services (base, stockage, disque)"
+            slowHint="Le stockage met du temps à répondre ; le résultat s'affichera dès qu'il aura répondu ou abandonné." />
         ) : (
           <>
             <p role="status">
@@ -876,11 +889,15 @@ export function AdminPage() {
               produit les mêmes candidats).
             </p>
             {orphans.isError ? (
-              <p role="alert" className="alert alert-error">
-                Analyse des orphelins indisponible.
-              </p>
+              <LoadError
+                message="Analyse des orphelins indisponible."
+                error={orphans.error}
+                retrying={orphans.isFetching}
+                onRetry={() => void orphans.refetch()}
+              />
             ) : orphans.isPending ? (
-              <p className="muted">Chargement…</p>
+              <Loading label="Recherche des fichiers introuvables au stockage"
+                slowHint="L'analyse interroge chaque fichier ; cela peut prendre un moment." />
             ) : orphans.data.candidates.length === 0 ? (
               <p className="muted">
                 Aucun candidat sur {orphans.data.checked} objet(s) vérifié(s).
@@ -1052,11 +1069,14 @@ export function AdminPage() {
           </div>
         </form>
         {auditSearch.isError ? (
-          <p role="alert" className="alert alert-error">
-            Journal indisponible.
-          </p>
+          <LoadError
+            message="Journal indisponible."
+            error={auditSearch.error}
+            retrying={auditSearch.isFetching}
+            onRetry={() => void auditSearch.refetch()}
+          />
         ) : auditSearch.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Chargement du journal d'audit" />
         ) : auditSearch.data.items.length === 0 ? (
           <p className="muted">Aucun événement pour ces critères.</p>
         ) : (
@@ -1169,11 +1189,14 @@ export function AdminPage() {
           </form>
         ) : null}
         {applications.isError ? (
-          <p role="alert" className="alert alert-error">
-            Applications indisponibles.
-          </p>
+          <LoadError
+            message="Applications indisponibles."
+            error={applications.error}
+            retrying={applications.isFetching}
+            onRetry={() => void applications.refetch()}
+          />
         ) : applications.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Chargement des applications" />
         ) : (applications.data?.items.length ?? 0) === 0 ? (
           <p className="empty">Aucune application.</p>
         ) : (
@@ -1324,11 +1347,14 @@ export function AdminPage() {
           </form>
         ) : null}
         {spaces.isError ? (
-          <p role="alert" className="alert alert-error">
-            Espaces indisponibles.
-          </p>
+          <LoadError
+            message="Espaces indisponibles."
+            error={spaces.error}
+            retrying={spaces.isFetching}
+            onRetry={() => void spaces.refetch()}
+          />
         ) : spaces.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Chargement des espaces" />
         ) : (spaces.data?.items.length ?? 0) === 0 ? (
           <p className="empty">Aucun espace.</p>
         ) : (
@@ -1472,11 +1498,14 @@ export function AdminPage() {
           </form>
         ) : null}
         {buckets.isError ? (
-          <p role="alert" className="alert alert-error">
-            Buckets indisponibles.
-          </p>
+          <LoadError
+            message="Buckets indisponibles."
+            error={buckets.error}
+            retrying={buckets.isFetching}
+            onRetry={() => void buckets.refetch()}
+          />
         ) : buckets.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Chargement des buckets" />
         ) : bucketItems.length === 0 ? (
           <p className="empty">Aucun bucket.</p>
         ) : (
@@ -1629,11 +1658,14 @@ export function AdminPage() {
           </form>
         ) : null}
         {identities.isError ? (
-          <p role="alert" className="alert alert-error">
-            Identités indisponibles.
-          </p>
+          <LoadError
+            message="Identités indisponibles."
+            error={identities.error}
+            retrying={identities.isFetching}
+            onRetry={() => void identities.refetch()}
+          />
         ) : identities.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Chargement des identités" />
         ) : (identities.data?.items.length ?? 0) === 0 ? (
           <p className="empty">Aucune identité de service.</p>
         ) : (

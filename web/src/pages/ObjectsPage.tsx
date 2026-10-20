@@ -41,6 +41,7 @@ import { ConfirmAction, Dialog } from "../components/Dialog";
 import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
 import { RowMenu } from "../components/RowMenu";
+import { describeError } from "../lib/errors";
 import { PreviewModal } from "../components/PreviewModal";
 import { isPreviewable } from "../lib/preview";
 
@@ -814,7 +815,7 @@ export function ObjectsPage() {
 
   function reportError(err: unknown, fallback: string) {
     setNotice(null);
-    setActionError(err instanceof ApiError ? err.detail : fallback);
+    setActionError(describeError(err, fallback));
   }
 
   // -- mutations -----------------------------------------------------------
@@ -1315,11 +1316,7 @@ export function ObjectsPage() {
         )}).`,
       );
     } catch (err) {
-      setActionError(
-        err instanceof ApiError
-          ? `Téléchargement refusé : ${err.detail}`
-          : "Téléchargement impossible.",
-      );
+      setActionError(`Téléchargement impossible. ${describeError(err, "")}`.trim());
     } finally {
       setDownloadingId(null);
     }
@@ -1421,10 +1418,7 @@ export function ObjectsPage() {
       applyCascade({
         ...live,
         phase: "confirm",
-        scanError:
-          err instanceof ApiError
-            ? `Analyse impossible : ${err.detail}`
-            : "Analyse du contenu impossible.",
+        scanError: `Analyse du contenu impossible. ${describeError(err, "")}`.trim(),
       });
     }
   }
@@ -1477,7 +1471,7 @@ export function ObjectsPage() {
         done += 1;
         failures = failures.filter((failure) => failure.key !== key);
       } catch (err) {
-        const detail = err instanceof ApiError ? err.detail : "Échec de suppression.";
+        const detail = describeError(err, "Échec de suppression.");
         failures = [
           ...failures.filter((failure) => failure.key !== key),
           { key, kind: op.kind, id: op.id, label: op.label, path: op.path, error: detail },
