@@ -522,6 +522,28 @@ class Repository:
             (actor_id, idempotency_key, space_id),
         ).fetchone()
 
+    def object_states_for_keys(self, bucket: str, keys: list) -> dict:
+        """Catalogue state of storage keys: ``{key: {id, status, multipart_upload_id}}``.
+
+        Keys without a row are absent from the result (storage orphans).
+        """
+        out: dict = {}
+        for i in range(0, len(keys), 500):
+            chunk = list(keys[i:i + 500])
+            if not chunk:
+                continue
+            marks = ",".join("?" for _ in chunk)
+            for r in self.conn.execute(
+                f"SELECT id, object_key, status, multipart_upload_id FROM objects "
+                f"WHERE bucket = ? AND object_key IN ({marks})",
+                (bucket, *chunk),
+            ).fetchall():
+                out[r["object_key"]] = {
+                    "id": r["id"], "status": r["status"],
+                    "multipart_upload_id": r["multipart_upload_id"],
+                }
+        return out
+
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
         self.conn.execute(
             "UPDATE objects SET status = 'available', size_bytes = ?, checksum_sha256 = ?, updated_at = ? WHERE id = ?",

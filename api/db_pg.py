@@ -468,6 +468,25 @@ class Repository:
             (actor_id, idempotency_key, space_id),
         )
 
+    def object_states_for_keys(self, bucket: str, keys: list) -> dict:
+        """Catalogue state of storage keys: ``{key: {id, status, multipart_upload_id}}``.
+
+        Keys without a row are absent from the result (storage orphans).
+        """
+        out: dict = {}
+        if not keys:
+            return out
+        for r in self._all(
+            "SELECT id, object_key, status, multipart_upload_id FROM objects "
+            "WHERE bucket = %s AND object_key = ANY(%s)",
+            (bucket, list(keys)),
+        ):
+            out[r["object_key"]] = {
+                "id": r["id"], "status": r["status"],
+                "multipart_upload_id": r["multipart_upload_id"],
+            }
+        return out
+
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
         self._run(
             "UPDATE objects SET status = 'available', size_bytes = %s, checksum_sha256 = %s, updated_at = %s WHERE id = %s",

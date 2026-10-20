@@ -464,6 +464,58 @@ paths:
         "401": { description: Authentication required }
         "403": { description: Not authorised }
         "503": { description: Audit log rewrite failed (the file itself is still readable) }
+  /api/v1/admin/storage-orphans:
+    get:
+      summary: Read-only storage bytes the catalogue does not account for (admin:read)
+      description: >-
+        Keys in registered buckets with no catalogue row (no_row) or whose row is
+        aborted/expired/failed (terminal), plus unfinished multipart uploads no
+        pending row owns. Soft-deleted objects (trash) are not orphans. Anything
+        younger than AURA_ORPHAN_GRACE_SECONDS is ignored. Bounded and resumable.
+      parameters:
+        - in: query
+          name: bucket
+          schema: { type: string, maxLength: 63 }
+          description: One registered bucket; omitted = all registered buckets
+        - in: query
+          name: start_after
+          schema: { type: string, maxLength: 1024 }
+          description: Resume after this key (next_start_after of a previous call)
+        - in: query
+          name: max_keys
+          schema: { type: integer, minimum: 1, maximum: 50000, default: 5000 }
+      responses:
+        "200": { description: "grace_seconds, buckets[{bucket, scanned, orphans, orphan_bytes, stale_uploads, next_start_after}]" }
+        "403": { description: Not authorised }
+        "404": { description: Bucket not registered }
+  /api/v1/admin/storage-orphans/cleanup:
+    post:
+      summary: Remove listed orphan keys and abort listed stale uploads (admin:write, destructive)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [bucket]
+              properties:
+                bucket: { type: string, maxLength: 63 }
+                keys: { type: array, maxItems: 100, items: { type: string } }
+                uploads:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [key, upload_id]
+                    properties:
+                      key: { type: string }
+                      upload_id: { type: string }
+      responses:
+        "200": { description: "removed, aborted_uploads, skipped[{key, reason}] — each item re-checked before acting" }
+        "403": { description: Not authorised }
+        "404": { description: Bucket not registered }
   /api/v1/admin/orphans:
     get:
       summary: Read-only orphan candidates, available rows missing at storage (admin:read)
