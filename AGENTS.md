@@ -8,7 +8,7 @@ This repository is a security-sensitive storage service. Agents are expected to 
 - Execution workflow: [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md)
 - Definition of done: [docs/AGENT-DEFINITION-OF-DONE.md](docs/AGENT-DEFINITION-OF-DONE.md)
 - Task contract: [docs/AGENT-TASK-TEMPLATE.md](docs/AGENT-TASK-TEMPLATE.md)
-- Deployment and host operations: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), [docs/RUNBOOK.md](docs/RUNBOOK.md)
+- Deployment and host operations: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), [docs/RUNBOOK.md](docs/RUNBOOK.md), [docs/AGENT-VPS-AUTONOMY.md](docs/AGENT-VPS-AUTONOMY.md)
 - Security baseline: [docs/SECURITY.md](docs/SECURITY.md)
 - Authorization source of truth: [docs/AUTHORIZATION-MATRIX.md](docs/AUTHORIZATION-MATRIX.md)
 - Backup and restore: [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md)
