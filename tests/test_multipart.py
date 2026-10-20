@@ -147,10 +147,25 @@ def _intent(c, headers, size, idem=None, name="big.bin"):
                   json={"display_name": name, "size_bytes": size}, headers=hdrs)
 
 
+def _sql(sql: str, params: tuple = ()):
+    """Run a test-only statement on either catalogue backend (SQLite or the
+    PostgreSQL parity job) and return the first row, or None."""
+    if main.repo.dialect == "sqlite":
+        row = main.repo.conn.execute(sql, params).fetchone()
+        main.repo.conn.commit()
+        return row
+    cur = main.repo.conn.execute(sql.replace("?", "%s"), params)
+    return cur.fetchone() if cur.description else None
+
+
 def _upload_id(oid: str) -> str:
-    return main.repo.conn.execute(
-        "SELECT multipart_upload_id FROM objects WHERE id = ?", (oid,)
-    ).fetchone()[0]
+    return _sql("SELECT multipart_upload_id FROM objects WHERE id = ?", (oid,))[
+        "multipart_upload_id"
+    ]
+
+
+def _object_status(oid: str) -> str:
+    return _sql("SELECT status FROM objects WHERE id = ?", (oid,))["status"]
 
 
 def _send(fake, oid, data, numbers):
@@ -279,7 +294,7 @@ def test_commit_after_a_crash_between_complete_and_record(_multipart):
     oid = _intent(c, headers, len(DATA)).json()["id"]
     _send(fake, oid, DATA, range(1, 6))
     # The storage completed the upload but the API died before clearing it.
-    row = dict(main.repo.conn.execute("SELECT * FROM objects WHERE id = ?", (oid,)).fetchone())
+    row = dict(_sql("SELECT * FROM objects WHERE id = ?", (oid,)))
     parts = s3mod.list_uploaded_parts(fake, row["bucket"], row["object_key"], _upload_id(oid))
     s3mod.complete_multipart(fake, row["bucket"], row["object_key"], _upload_id(oid), parts)
 
@@ -304,21 +319,11 @@ def test_reconcile_keeps_a_live_session_and_sweeps_an_expired_one(_multipart):
     oid = _intent(c, headers, len(DATA)).json()["id"]
     upload_id = _upload_id(oid)
     # Created long ago, but its multipart session has not expired yet.
-    main.repo.conn.execute(
-        "UPDATE objects SET created_at = ? WHERE id = ?", (int(time.time()) - 86_400, oid)
-    )
-    main.repo.conn.commit()
+    _sql("UPDATE objects SET created_at = ? WHERE id = ?", (int(time.time()) - 86_400, oid))
     reconcile_pending(main.repo, fake, expire_after_s=3600, limit=5000)
-    assert main.repo.conn.execute(
-        "SELECT status FROM objects WHERE id = ?", (oid,)
-    ).fetchone()[0] == "pending"
+    assert _object_status(oid) == "pending"
 
-    main.repo.conn.execute(
-        "UPDATE objects SET intent_expires_at = ? WHERE id = ?", (int(time.time()) - 10, oid)
-    )
-    main.repo.conn.commit()
+    _sql("UPDATE objects SET intent_expires_at = ? WHERE id = ?", (int(time.time()) - 10, oid))
     reconcile_pending(main.repo, fake, expire_after_s=3600, limit=5000)
-    assert main.repo.conn.execute(
-        "SELECT status FROM objects WHERE id = ?", (oid,)
-    ).fetchone()[0] == "expired"
+    assert _object_status(oid) == "expired"
     assert upload_id in fake.aborted

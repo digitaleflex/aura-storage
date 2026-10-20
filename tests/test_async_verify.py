@@ -94,8 +94,19 @@ def _upload(c, headers, size=len(DATA), idem=None):
     return r.json()["id"]
 
 
+def _sql(sql: str, params: tuple = ()):
+    """Run a test-only statement on either catalogue backend (SQLite or the
+    PostgreSQL parity job) and return the first row, or None."""
+    if main.repo.dialect == "sqlite":
+        row = main.repo.conn.execute(sql, params).fetchone()
+        main.repo.conn.commit()
+        return row
+    cur = main.repo.conn.execute(sql.replace("?", "%s"), params)
+    return cur.fetchone() if cur.description else None
+
+
 def _status(oid):
-    return main.repo.conn.execute("SELECT status FROM objects WHERE id = ?", (oid,)).fetchone()[0]
+    return _sql("SELECT status FROM objects WHERE id = ?", (oid,))["status"]
 
 
 def test_large_commit_returns_202_and_the_worker_makes_it_available(_setup):
