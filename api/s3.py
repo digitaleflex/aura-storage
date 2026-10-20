@@ -5,6 +5,27 @@ import re
 import boto3
 from botocore.client import Config
 
+def make_probe_client(endpoint: str, access_key: str, secret_key: str, region: str):
+    """A client for health checks: fails in seconds instead of retrying.
+
+    The default botocore client retries a refused connection several times
+    with backoff, so a supervision page waited ~7 s just to learn the storage
+    is down. A probe must answer fast; real transfers keep the patient client.
+    """
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=region,
+        config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"},
+            connect_timeout=2, read_timeout=3,
+            retries={"max_attempts": 1, "mode": "standard"},
+        ),
+    )
+
+
 def make_client(endpoint: str, access_key: str, secret_key: str, region: str):
     return boto3.client(
         "s3",

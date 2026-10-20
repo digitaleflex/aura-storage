@@ -2329,3 +2329,11 @@ p .chip {
   color: var(--danger);
   border-color: #fff;
 }
+.plain-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 13.5px;
+}

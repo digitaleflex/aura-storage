@@ -338,12 +338,24 @@ def test_m07_health_ok_when_dependencies_answer(monkeypatch):
         def list_buckets(self):
             return {"Buckets": []}
 
-    monkeypatch.setattr(main, "s3ops", HealthyS3())
+    # Supervision probes the storage with its own fast-failing client.
+    monkeypatch.setattr(main, "s3probe", HealthyS3())
     c, headers = _admin()
     body = c.get("/api/v1/admin/health", headers=headers).json()
     assert body["status"] == "ok"
     assert body["components"]["storage"]["status"] == "ok"
     assert "latency_ms" in body["components"]["storage"]
+
+
+def test_m07_health_answers_fast_when_storage_is_down():
+    # The real probe client against an unreachable endpoint (127.0.0.1:9):
+    # one attempt with a short timeout, not botocore's default retries.
+    import time as _time
+    c, headers = _admin()
+    start = _time.monotonic()
+    body = c.get("/api/v1/admin/health", headers=headers).json()
+    assert body["components"]["storage"]["status"] == "down"
+    assert _time.monotonic() - start < 4
 
 
 # ---------------------------------------------------------------------------

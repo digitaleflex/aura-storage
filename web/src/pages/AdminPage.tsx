@@ -11,6 +11,8 @@ import type {
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { OneTimeToken } from "../components/OneTimeToken";
+import { Loading, LoadError } from "../components/Loading";
+import { describeError } from "../lib/errors";
 
 const DATE_FMT = new Intl.DateTimeFormat("fr-FR", {
   dateStyle: "medium",
@@ -48,6 +50,7 @@ const OBJECT_STATUS_LABELS: Record<string, string> = {
   pending: "En cours",
   verifying: "Vérification",
   deleted: "Supprimé",
+  purging: "Purge en cours",
   expired: "Expiré",
   failed: "Échec",
 };
@@ -319,6 +322,19 @@ export function AdminPage() {
     enabled: canAdmin,
     retry: false,
   });
+  // Lists whole buckets: only on demand, never on page load.
+  const storageOrphans = useQuery({
+    queryKey: ["admin", "storage-orphans"],
+    queryFn: () => api.adminStorageOrphans(),
+    enabled: false,
+    retry: false,
+  });
+  const integrity = useQuery({
+    queryKey: ["admin", "integrity"],
+    queryFn: () => api.adminIntegrity(),
+    enabled: canAdmin,
+    retry: false,
+  });
   const auditSearch = useQuery({
     queryKey: ["admin", "audit", auditApplied, auditOffset],
     queryFn: () =>
@@ -350,8 +366,9 @@ export function AdminPage() {
     void queryClient.invalidateQueries({ queryKey: ["admin"] });
   }
 
+  /** What failed, then why in plain words (never a raw "API 409: …"). */
   function fail(err: unknown, fallback: string) {
-    setError(err instanceof Error ? err.message : fallback);
+    setError(`${fallback} ${describeError(err, "")}`.trim());
   }
 
   const reconcile = useMutation({
@@ -651,9 +668,12 @@ export function AdminPage() {
           </p>
         ) : null}
         {stats.isError ? (
-          <p role="alert" className="alert alert-error">
-            Statistiques indisponibles.
-          </p>
+          <LoadError
+            message="Statistiques indisponibles."
+            error={stats.error}
+            retrying={stats.isFetching}
+            onRetry={() => void stats.refetch()}
+          />
         ) : stats.isPending ? (
           <div className="stat-grid skeleton" role="status" aria-label="Chargement des statistiques">
             <span className="visually-hidden">Chargement…</span>
@@ -722,11 +742,14 @@ export function AdminPage() {
           bande passante ni de capacité totale n'existe hors ligne.
         </p>
         {usage.isError ? (
-          <p role="alert" className="alert alert-error">
-            Consommation indisponible.
-          </p>
+          <LoadError
+            message="Consommation indisponible."
+            error={usage.error}
+            retrying={usage.isFetching}
+            onRetry={() => void usage.refetch()}
+          />
         ) : usage.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Calcul de la consommation" />
         ) : (
           <>
             <div className="stat-grid">
@@ -751,6 +774,28 @@ export function AdminPage() {
               Mesuré à {formatTs(usage.data.measured_at)} — les intentions en
               attente ne portent aucun octet engagé.
             </p>
+            {usage.data.capacity ? (
+              <p
+                className={
+                  usage.data.capacity.free_for_uploads_bytes <
+                  usage.data.capacity.capacity_bytes / 20
+                    ? "alert alert-error"
+                    : "muted"
+                }
+                data-testid="capacity"
+              >
+                Capacité : {formatBytes(usage.data.capacity.stored_bytes)} stockés et{" "}
+                {formatBytes(usage.data.capacity.reserved_bytes)} réservés par des envois en
+                cours, sur {formatBytes(usage.data.capacity.capacity_bytes)}. Les nouveaux
+                envois sont refusés au-delà de {usage.data.capacity.high_watermark_pct} % :
+                encore {formatBytes(usage.data.capacity.free_for_uploads_bytes)} disponibles.
+              </p>
+            ) : (
+              <p className="muted" data-testid="capacity">
+                Aucune capacité configurée (AURA_STORAGE_CAPACITY_BYTES) : le remplissage du
+                disque n'est pas surveillé.
+              </p>
+            )}
             {usage.data.spaces.length > 0 ? (
               <table className="table">
                 <thead>
@@ -793,11 +838,15 @@ export function AdminPage() {
           <h2 id="admin-health-title">Supervision</h2>
         </div>
         {health.isError ? (
-          <p role="alert" className="alert alert-error">
-            Supervision indisponible.
-          </p>
+          <LoadError
+            message="Supervision indisponible."
+            error={health.error}
+            retrying={health.isFetching}
+            onRetry={() => void health.refetch()}
+          />
         ) : health.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Vérification des services (base, stockage, disque)"
+            slowHint="Le stockage met du temps à répondre ; le résultat s'affichera dès qu'il aura répondu ou abandonné." />
         ) : (
           <>
             <p role="status">
@@ -876,11 +925,15 @@ export function AdminPage() {
               produit les mêmes candidats).
             </p>
             {orphans.isError ? (
-              <p role="alert" className="alert alert-error">
-                Analyse des orphelins indisponible.
-              </p>
+              <LoadError
+                message="Analyse des orphelins indisponible."
+                error={orphans.error}
+                retrying={orphans.isFetching}
+                onRetry={() => void orphans.refetch()}
+              />
             ) : orphans.isPending ? (
-              <p className="muted">Chargement…</p>
+              <Loading label="Recherche des fichiers introuvables au stockage"
+                slowHint="L'analyse interroge chaque fichier ; cela peut prendre un moment." />
             ) : orphans.data.candidates.length === 0 ? (
               <p className="muted">
                 Aucun candidat sur {orphans.data.checked} objet(s) vérifié(s).
@@ -948,6 +1001,115 @@ export function AdminPage() {
                 {Math.round(health.data.recent_errors.window_s / 60)} minutes.
               </p>
             )}
+          </>
+        )}
+      </section>
+
+      <section
+        className="section"
+        aria-labelledby="admin-storage-orphans-title"
+        hidden={tab !== "overview"}
+      >
+        <div className="section-head">
+          <h2 id="admin-storage-orphans-title">Octets non référencés</h2>
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            disabled={storageOrphans.isFetching}
+            onClick={() => void storageOrphans.refetch()}
+          >
+            {storageOrphans.isFetching ? "Analyse…" : "Analyser le stockage"}
+          </button>
+        </div>
+        <p className="muted">
+          Fichiers présents au stockage sans fiche au catalogue, octets laissés par des
+          envois abandonnés et envois en plusieurs parties orphelins. La corbeille n'en
+          fait pas partie. Lecture seule : rien n'est supprimé depuis cet écran.
+        </p>
+        {storageOrphans.isError ? (
+          <p role="alert" className="alert alert-error">
+            Analyse du stockage indisponible.
+          </p>
+        ) : storageOrphans.data ? (
+          <ul className="plain-list" data-testid="storage-orphans">
+            {storageOrphans.data.buckets.map((entry) => (
+              <li key={entry.bucket}>
+                <strong>{entry.bucket}</strong> :{" "}
+                {entry.error
+                  ? "stockage indisponible"
+                  : `${entry.orphans?.length ?? 0} fichier(s) non référencé(s) (${formatBytes(
+                      entry.orphan_bytes ?? 0,
+                    )}), ${entry.stale_uploads?.length ?? 0} envoi(s) en parties abandonné(s) sur ${
+                      entry.scanned ?? 0
+                    } objet(s) analysé(s)${entry.next_start_after ? " — analyse partielle" : ""}`}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
+
+      <section
+        className="section"
+        aria-labelledby="admin-integrity-title"
+        hidden={tab !== "overview"}
+      >
+        <div className="section-head">
+          <h2 id="admin-integrity-title">Intégrité des fichiers</h2>
+        </div>
+        {integrity.isError ? (
+          <p role="alert" className="alert alert-error">
+            Rapport d'intégrité indisponible.
+          </p>
+        ) : integrity.isPending ? (
+          <p className="muted">Chargement…</p>
+        ) : (
+          <>
+            <p className="muted" data-testid="integrity-summary">
+              Chaque fichier est relu et son SHA-256 recalculé au moins tous les{" "}
+              {integrity.data.interval_days} jours :{" "}
+              {integrity.data.results.ok?.count ?? 0} intact(s),{" "}
+              {integrity.data.results.unchecked?.count ?? 0} pas encore relu(s),{" "}
+              {(integrity.data.results.mismatch?.count ?? 0) +
+                (integrity.data.results.missing?.count ?? 0)}{" "}
+              en défaut.
+            </p>
+            {integrity.data.problems.length > 0 ? (
+              <>
+                <p role="alert" className="alert alert-error">
+                  Des fichiers ne correspondent plus à leur empreinte vérifiée ou ont
+                  disparu du stockage : restaurez-les depuis la sauvegarde.
+                </p>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Objet</th>
+                      <th>Espace</th>
+                      <th>Constat</th>
+                      <th>Relu le</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {integrity.data.problems.map((problem) => (
+                      <tr key={problem.id}>
+                        <td>
+                          {problem.display_name}{" "}
+                          <span className="muted">({problem.id.slice(0, 8)}…)</span>
+                        </td>
+                        <td className="muted">
+                          {spaceNames.get(problem.space_id) ?? problem.space_id.slice(0, 8)}
+                        </td>
+                        <td>
+                          {problem.scrub_result === "missing"
+                            ? "Absent du stockage"
+                            : "Contenu altéré"}
+                        </td>
+                        <td className="muted">{formatTs(problem.scrubbed_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : null}
           </>
         )}
       </section>
@@ -1052,11 +1214,14 @@ export function AdminPage() {
           </div>
         </form>
         {auditSearch.isError ? (
-          <p role="alert" className="alert alert-error">
-            Journal indisponible.
-          </p>
+          <LoadError
+            message="Journal indisponible."
+            error={auditSearch.error}
+            retrying={auditSearch.isFetching}
+            onRetry={() => void auditSearch.refetch()}
+          />
         ) : auditSearch.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Chargement du journal d'audit" />
         ) : auditSearch.data.items.length === 0 ? (
           <p className="muted">Aucun événement pour ces critères.</p>
         ) : (
@@ -1169,11 +1334,14 @@ export function AdminPage() {
           </form>
         ) : null}
         {applications.isError ? (
-          <p role="alert" className="alert alert-error">
-            Applications indisponibles.
-          </p>
+          <LoadError
+            message="Applications indisponibles."
+            error={applications.error}
+            retrying={applications.isFetching}
+            onRetry={() => void applications.refetch()}
+          />
         ) : applications.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Chargement des applications" />
         ) : (applications.data?.items.length ?? 0) === 0 ? (
           <p className="empty">Aucune application.</p>
         ) : (
@@ -1324,11 +1492,14 @@ export function AdminPage() {
           </form>
         ) : null}
         {spaces.isError ? (
-          <p role="alert" className="alert alert-error">
-            Espaces indisponibles.
-          </p>
+          <LoadError
+            message="Espaces indisponibles."
+            error={spaces.error}
+            retrying={spaces.isFetching}
+            onRetry={() => void spaces.refetch()}
+          />
         ) : spaces.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Chargement des espaces" />
         ) : (spaces.data?.items.length ?? 0) === 0 ? (
           <p className="empty">Aucun espace.</p>
         ) : (
@@ -1472,11 +1643,14 @@ export function AdminPage() {
           </form>
         ) : null}
         {buckets.isError ? (
-          <p role="alert" className="alert alert-error">
-            Buckets indisponibles.
-          </p>
+          <LoadError
+            message="Buckets indisponibles."
+            error={buckets.error}
+            retrying={buckets.isFetching}
+            onRetry={() => void buckets.refetch()}
+          />
         ) : buckets.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Chargement des buckets" />
         ) : bucketItems.length === 0 ? (
           <p className="empty">Aucun bucket.</p>
         ) : (
@@ -1629,11 +1803,14 @@ export function AdminPage() {
           </form>
         ) : null}
         {identities.isError ? (
-          <p role="alert" className="alert alert-error">
-            Identités indisponibles.
-          </p>
+          <LoadError
+            message="Identités indisponibles."
+            error={identities.error}
+            retrying={identities.isFetching}
+            onRetry={() => void identities.refetch()}
+          />
         ) : identities.isPending ? (
-          <p className="muted">Chargement…</p>
+          <Loading label="Chargement des identités" />
         ) : (identities.data?.items.length ?? 0) === 0 ? (
           <p className="empty">Aucune identité de service.</p>
         ) : (
