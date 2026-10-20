@@ -138,6 +138,11 @@ class Repository:
         self.conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
         self.conn.commit()
 
+    def set_session_master(self, sid: str, until: Optional[int]) -> None:
+        """Grant (epoch seconds) or end (None) master mode on one session."""
+        self.conn.execute("UPDATE sessions SET master_until = ? WHERE id = ?", (until, sid))
+        self.conn.commit()
+
     # -- applications / spaces / buckets (#35) ----------------------------
     def create_application(self, name: str) -> str:
         aid = self.new_id()

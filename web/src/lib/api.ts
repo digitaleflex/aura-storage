@@ -340,6 +340,16 @@ export interface SessionInfo {
    * re-hydrate the in-memory CSRF token after a reload/new tab.
    */
   csrf_token: string | null;
+  /** Master mode expiry (epoch seconds) while active on this session, else null. */
+  master_until?: number | null;
+}
+
+export interface BulkPurgeResult {
+  purged: string[];
+  not_found: string[];
+  failed: string[];
+  /** Empty trash only: true when another call is needed. */
+  more?: boolean;
 }
 
 /** True when a role may read the administration console (`admin:read`). */
@@ -616,6 +626,36 @@ export const api = {
       `/api/v1/objects/${encodeURIComponent(id)}/multipart/parts`,
       { method: "POST", csrf, body: { part_numbers: partNumbers } },
     );
+  },
+
+  /** Enter master mode by re-entering the password (objects:purge). */
+  enableMasterMode(password: string, csrf: string): Promise<{ master_until: number }> {
+    return request<{ master_until: number }>("/api/v1/me/master-mode", {
+      method: "POST",
+      csrf,
+      body: { password },
+    });
+  },
+
+  disableMasterMode(csrf: string): Promise<{ master_until: null }> {
+    return request<{ master_until: null }>("/api/v1/me/master-mode", {
+      method: "DELETE",
+      csrf,
+    });
+  },
+
+  /** Master mode: purge many objects in one call. */
+  bulkPurge(ids: string[], csrf: string): Promise<BulkPurgeResult> {
+    return request<BulkPurgeResult>("/api/v1/objects/bulk-purge", {
+      method: "POST",
+      csrf,
+      body: { ids },
+    });
+  },
+
+  /** Master mode: purge the trash (call again while `more`). */
+  emptyTrash(csrf: string): Promise<BulkPurgeResult> {
+    return request<BulkPurgeResult>("/api/v1/objects/trash/empty", { method: "POST", csrf });
   },
 
   /** Soft-delete an object (objects:delete). */

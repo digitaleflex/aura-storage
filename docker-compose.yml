@@ -215,6 +215,10 @@ services:
       # hashed by a worker thread in this container, outside the commit request.
       AURA_VERIFY_ASYNC_THRESHOLD_BYTES: ${AURA_VERIFY_ASYNC_THRESHOLD_BYTES:-268435456}
       AURA_VERIFY_WORKER: ${AURA_VERIFY_WORKER:-inline}
+      # Master mode: password-confirmed elevation for bulk purges (seconds) and
+      # the most objects one bulk call may purge.
+      AURA_MASTER_MODE_SECONDS: ${AURA_MASTER_MODE_SECONDS:-900}
+      AURA_MASTER_BULK_MAX: ${AURA_MASTER_BULK_MAX:-500}
       # No origin/CORS allow-list here on purpose: the api has no Traefik route
       # and is reached same-origin through the app proxy (app/nginx.conf proxies
       # /api/ to this service). Browser uploads go straight to SeaweedFS via

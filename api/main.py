@@ -34,6 +34,7 @@ from .authz import (
     SERVICE_SCOPES,
     authorize,
     effective_scopes,
+    master_mode_active,
 )
 from .config import settings
 from .identity import fingerprint, format_token, new_secret
@@ -530,7 +531,103 @@ def me(principal: dict = Depends(authorize())):
         "application_id": principal["application_id"],
         "scopes": sorted(effective_scopes(principal)),
         "csrf_token": principal.get("csrf") if principal["kind"] == "user" else None,
+        # Master mode expiry (epoch seconds) while active on this session, else null.
+        "master_until": principal["master_until"] if master_mode_active(principal) else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Master mode: a short, password-confirmed elevation for bulk destructive
+# actions (bulk purge, emptying the trash) without a confirmation per item.
+# Bound to one browser session, needs objects:purge, expires on its own,
+# and every activation and bulk action is audited.
+# ---------------------------------------------------------------------------
+class MasterModeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str = Field(min_length=1, max_length=1024)
+
+
+@app.post("/api/v1/me/master-mode")
+def master_mode_on(
+    body: MasterModeIn, request: Request,
+    principal: dict = Depends(authorize(OBJECTS_PURGE, human=True)),
+):
+    client_ip = _client_ip(request)
+    if _login_blocked(client_ip):
+        raise HTTPException(status_code=429, detail="too many attempts",
+                            headers={"Retry-After": str(settings.login_rate_window)})
+    user = repo.get_user(principal["id"])
+    if user is None or not verify_password(user["pass_hash"], body.password):
+        _login_record_failure(client_ip)
+        audit_event("master-mode", principal["id"], "failure")
+        raise HTTPException(status_code=403, detail="password does not match")
+    until = int(time.time()) + settings.master_mode_ttl
+    repo.set_session_master(principal["session_id"], until)
+    audit_event("master-mode", principal["id"], "on", {"until": until})
+    return {"master_until": until}
+
+
+@app.delete("/api/v1/me/master-mode")
+def master_mode_off(principal: dict = Depends(authorize(human=True))):
+    repo.set_session_master(principal["session_id"], None)
+    audit_event("master-mode", principal["id"], "off")
+    return {"master_until": None}
+
+
+def _require_master(principal: dict) -> None:
+    if not master_mode_active(principal):
+        raise HTTPException(status_code=403, detail="master mode required")
+
+
+class BulkIdsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(min_length=1)
+
+
+def _bulk_purge(ids: list[str], principal: dict) -> dict:
+    from .lifecycle import StorageDeleteError
+    purged: list[str] = []
+    not_found: list[str] = []
+    failed: list[str] = []
+    for oid in ids:
+        try:
+            oid = _canonical_id(oid, "object id")
+        except HTTPException:
+            not_found.append(oid)
+            continue
+        try:
+            done = purge_object(repo, s3ops, oid, **_object_scope(principal))
+        except StorageDeleteError:
+            failed.append(oid)
+            continue
+        (purged if done else not_found).append(oid)
+    audit_event("bulk-purge", principal["id"], "success", {
+        "purged": len(purged), "not_found": len(not_found), "failed": len(failed),
+    })
+    return {"purged": purged, "not_found": not_found, "failed": failed}
+
+
+@app.post("/api/v1/objects/bulk-purge")
+def bulk_purge(body: BulkIdsIn, principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
+    """Master mode: purge many objects in one call, no per-item confirmation."""
+    _require_master(principal)
+    if len(body.ids) > settings.master_bulk_max:
+        raise HTTPException(status_code=422, detail=f"at most {settings.master_bulk_max} ids per call")
+    return _bulk_purge(body.ids, principal)
+
+
+@app.post("/api/v1/objects/trash/empty")
+def empty_trash(principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
+    """Master mode: purge the caller's trash (at most master_bulk_max per call)."""
+    _require_master(principal)
+    rows = repo.list_objects(
+        **_object_scope(principal), status=DELETED, limit=settings.master_bulk_max,
+    )
+    ids = [_as_dict(r)["id"] for r in rows]
+    out = _bulk_purge(ids, principal)
+    # More than one call's worth: the client simply calls again.
+    out["more"] = bool(repo.list_objects(**_object_scope(principal), status=DELETED, limit=1))
+    return out
 
 
 def _upload_headers(content_type: str) -> dict:

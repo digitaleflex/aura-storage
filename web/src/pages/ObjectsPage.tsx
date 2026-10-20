@@ -42,6 +42,11 @@ import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
 import { RowMenu } from "../components/RowMenu";
 import { PreviewModal } from "../components/PreviewModal";
+import {
+  MasterModeBanner,
+  MasterModeDialog,
+  useMasterMode,
+} from "../components/MasterMode";
 import { isPreviewable } from "../lib/preview";
 
 /** Objects fetched per page ("Charger plus" increments the offset). */
@@ -964,6 +969,55 @@ export function ObjectsPage() {
     onError: (err) => reportError(err, "Restauration impossible."),
   });
 
+  // -- Master mode: bulk purges without a confirmation per item ------------
+  const master = useMasterMode();
+  const [masterDialogOpen, setMasterDialogOpen] = useState(false);
+  const bulkPurgeMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.bulkPurge(ids, csrf);
+    },
+    onSuccess: (out) => {
+      setSelectedIds(new Set());
+      setDetails(null);
+      notify(
+        out.failed.length ? "error" : "ok",
+        `${out.purged.length} fichier(s) purgé(s) définitivement` +
+          (out.failed.length
+            ? ` ; ${out.failed.length} échec(s) du stockage, fiches conservées.`
+            : "."),
+      );
+      invalidateLibrary();
+    },
+    onError: (err) => reportError(err, "Purge en masse impossible."),
+  });
+  const emptyTrashMutation = useMutation({
+    mutationFn: async () => {
+      if (!csrf) throw new Error("Session expirée.");
+      let purged = 0;
+      let failed = 0;
+      // The server purges at most one batch per call and says when to go on.
+      for (let round = 0; round < 50; round += 1) {
+        const out = await api.emptyTrash(csrf);
+        purged += out.purged.length;
+        failed += out.failed.length;
+        if (!out.more || out.purged.length === 0) break;
+      }
+      return { purged, failed };
+    },
+    onSuccess: ({ purged, failed }) => {
+      notify(
+        failed ? "error" : "ok",
+        purged === 0
+          ? "La corbeille était déjà vide."
+          : `Corbeille vidée : ${purged} fichier(s) purgé(s)` +
+              (failed ? ` ; ${failed} échec(s) du stockage, fiches conservées.` : "."),
+      );
+      invalidateLibrary();
+    },
+    onError: (err) => reportError(err, "Vidage de la corbeille impossible."),
+  });
+
   const purgeMutation = useMutation({
     mutationFn: (id: string) => {
       if (!csrf) throw new Error("Session expirée.");
@@ -1355,7 +1409,10 @@ export function ObjectsPage() {
 
   // Only deletable rows are selectable: the server refuses anything else
   // with 409, so offering them would manufacture failures.
-  const selectableItems = items.filter(isDeletable);
+  // In master mode the trash can be selected too: its rows are purgeable.
+  const selectableItems = items.filter(
+    (item) => isDeletable(item) || (master.active && item.status === "deleted"),
+  );
   const selectableIds = new Set(selectableItems.map((item) => item.id));
 
   const currentName = currentFolderId ? byId.get(currentFolderId)?.name : null;
@@ -1750,6 +1807,28 @@ export function ObjectsPage() {
           >
             {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
           </button>
+          {canPurge && !master.active ? (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setMasterDialogOpen(true)}
+            >
+              Mode maître
+            </button>
+          ) : null}
+          {master.active && statusFilter === "deleted" ? (
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={emptyTrashMutation.isPending}
+              onClick={() => emptyTrashMutation.mutate()}
+            >
+              {emptyTrashMutation.isPending ? (
+                <span className="spinner" aria-hidden="true" />
+              ) : null}
+              {emptyTrashMutation.isPending ? "Vidage…" : "Vider la corbeille"}
+            </button>
+          ) : null}
           <button
             type="button"
             className="btn"
@@ -1783,6 +1862,10 @@ export function ObjectsPage() {
             Fermer
           </button>
         </p>
+      ) : null}
+
+      {master.active ? (
+        <MasterModeBanner secondsLeft={master.secondsLeft} csrf={csrf} />
       ) : null}
 
       {resumable.length > 0 && !transferActive ? (
@@ -2228,6 +2311,23 @@ export function ObjectsPage() {
                 >
                   Tout désélectionner
                 </button>{" "}
+                {master.active ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-small"
+                      disabled={bulkPurgeMutation.isPending}
+                      onClick={() => bulkPurgeMutation.mutate([...selectedIds])}
+                    >
+                      {bulkPurgeMutation.isPending ? (
+                        <span className="spinner" aria-hidden="true" />
+                      ) : null}
+                      {bulkPurgeMutation.isPending
+                        ? "Purge…"
+                        : `Purger définitivement (${selectedIds.size})`}
+                    </button>{" "}
+                  </>
+                ) : null}
                 <ConfirmAction
                   label={
                     deleteManyMutation.isPending
@@ -2455,20 +2555,23 @@ export function ObjectsPage() {
                                 label: "Purger définitivement",
                                 danger: true,
                                 disabled: objectBusy,
+                                // Master mode: no confirmation per item.
                                 onSelect: () =>
-                                  setPendingConfirm({
-                                    title: "Purger définitivement",
-                                    message: (
-                                      <>
-                                        Supprimer définitivement{" "}
-                                        <strong>{item.display_name}</strong> et ses
-                                        octets ? Action irréversible.
-                                      </>
-                                    ),
-                                    confirmLabel: "Purger",
-                                    danger: true,
-                                    onConfirm: () => purgeMutation.mutate(item.id),
-                                  }),
+                                  master.active
+                                    ? purgeMutation.mutate(item.id)
+                                    : setPendingConfirm({
+                                        title: "Purger définitivement",
+                                        message: (
+                                          <>
+                                            Supprimer définitivement{" "}
+                                            <strong>{item.display_name}</strong> et ses
+                                            octets ? Action irréversible.
+                                          </>
+                                        ),
+                                        confirmLabel: "Purger",
+                                        danger: true,
+                                        onConfirm: () => purgeMutation.mutate(item.id),
+                                      }),
                               },
                             ]
                           : []),
@@ -3042,6 +3145,11 @@ export function ObjectsPage() {
         </section>
       ) : null}
 
+      <MasterModeDialog
+        open={masterDialogOpen}
+        csrf={csrf}
+        onClose={() => setMasterDialogOpen(false)}
+      />
       <PreviewModal
         item={previewTarget}
         csrf={csrf}

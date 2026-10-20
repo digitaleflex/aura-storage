@@ -106,6 +106,10 @@ class Settings:
     verify_heartbeat_bytes: int = _int("AURA_VERIFY_HEARTBEAT_BYTES", 256 * 1024 * 1024)
     verify_max_attempts: int = _int("AURA_VERIFY_MAX_ATTEMPTS", 8)
     verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
+    # Master mode: how long a password-confirmed elevation for bulk purges
+    # lasts on one session (seconds), and the most objects one call may purge.
+    master_mode_ttl: int = _int("AURA_MASTER_MODE_SECONDS", 900)
+    master_bulk_max: int = _int("AURA_MASTER_BULK_MAX", 500)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
     # Zero-byte objects are refused by default: an empty upload is usually a

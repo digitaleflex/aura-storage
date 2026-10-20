@@ -62,6 +62,10 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
 | POST | `/api/v1/objects/{oid}/preview-intent` | `objects:read` | presigned GET bound to `Content-Disposition: inline` (PDF/image/audio preview); same 404/409 as download-intent, plus **415** for types outside the inline allow-list (images except SVG, PDF, audio: never HTML/SVG/XML); scoped |
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |
+| POST | `/api/v1/me/master-mode` | `objects:purge`, **human only** + password re-entry | enter master mode for `AURA_MASTER_MODE_SECONDS` (900 s) on this session; failures count against the login rate limit; audited |
+| DELETE | `/api/v1/me/master-mode` | authenticated **human** | leave master mode |
+| POST | `/api/v1/objects/bulk-purge` | `objects:purge`, **human**, **master mode active** | destructive: purge up to `AURA_MASTER_BULK_MAX` (500) objects of the caller's scope in one call; audited |
+| POST | `/api/v1/objects/trash/empty` | `objects:purge`, **human**, **master mode active** | destructive: purge the caller's trash (≤500 per call, `more` says to call again); audited |
 | GET | `/api/v1/objects/{oid}/multipart` | `objects:write` | multipart plan and parts already held (resume); only when `AURA_MULTIPART_ENABLED=1` created the session |
 | POST | `/api/v1/objects/{oid}/multipart/parts` | `objects:write` | presigned part PUTs (≤100 per call, exact signed length per part) |
 | POST | `/api/v1/objects/{oid}/restore` | `objects:delete` | undo a soft delete (trash); 409 unless the object is `deleted` and was fully uploaded |

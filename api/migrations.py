@@ -71,6 +71,11 @@ ADDED_COLUMNS = {
         ("verify_lease_until", "INTEGER"),
         ("verify_attempts", "INTEGER DEFAULT 0"),
     ],
+    # Master mode: a session-bound, short-lived elevation for bulk destructive
+    # actions, granted only after re-entering the password (step-up).
+    "sessions": [
+        ("master_until", "INTEGER"),
+    ],
     # #M04: a space is soft-disabled, never deleted. Pre-existing spaces are
     # backfilled to 'active' in `_seed`.
     "spaces": [
