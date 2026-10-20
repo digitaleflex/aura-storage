@@ -74,3 +74,8 @@ Until these gates are verified, agents may prepare code and deployment artifacts
 ## Explicitly not done by this change
 
 This document does not create or install an SSH key, change GitHub secrets or environment protection, modify sudoers, change firewall/SSH settings, install a wrapper on the VPS, run a remote command, or deploy the application.
+## OpenCode project configuration
+
+The repository's `opencode.json` enables ordinary project editing and development commands, blocks common direct privileged/remote commands, protects known secret-bearing files from normal OpenCode reads, and keeps external-directory access approval-gated. The `.opencode/agents/reviewer.md` and `.opencode/agents/ops-planner.md` subagents are read-only by policy.
+
+These OpenCode rules are defense-in-depth and usability controls, not a security sandbox. Shell pattern matching can be bypassed by wrappers, scripts or other tools, and agent-specific permissions may differ. Never put production credentials in an agent context. Do not use `--auto` as a substitute for host-level privilege separation. The VPS remains out of scope until a dedicated deployment identity, a fixed root-owned wrapper, host-side allowlist, verified backup/restore and rollback checks are installed and tested on the actual host.
