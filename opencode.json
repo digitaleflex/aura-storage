@@ -13,7 +13,11 @@
       "config/backup.env": "deny",
       "**/config/backup.env": "deny",
       "config/seaweedfs/s3.json": "deny",
-      "**/config/seaweedfs/s3.json": "deny"
+      "**/config/seaweedfs/s3.json": "deny",
+      ".env.example": "allow",
+      "**/.env.example": "allow",
+      "config/backup.env.example": "allow",
+      "**/config/backup.env.example": "allow"
     },
     "edit": "allow",
     "bash": {
@@ -40,7 +44,17 @@
       "docker compose kill *": "deny",
       "docker volume rm *": "deny",
       "docker system prune*": "deny",
-      "docker volume prune*": "deny"
+      "docker volume prune*": "deny",
+      "git push --force*": "deny",
+      "git push -f*": "deny",
+      "docker compose restart": "deny",
+      "docker compose restart *": "deny",
+      "docker compose pull": "deny",
+      "docker compose pull *": "deny",
+      "docker stop *": "deny",
+      "docker restart *": "deny",
+      "docker rm *": "deny",
+      "docker volume *": "deny"
     },
     "external_directory": "ask",
     "doom_loop": "ask"
