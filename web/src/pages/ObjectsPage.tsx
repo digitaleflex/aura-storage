@@ -195,6 +195,11 @@ function StatusLabel({ status }: { status: string }) {
 /** Server-side soft delete accepts only `available` or `pending` rows; anything
  * else is refused with 409. The bulk selection and the per-row "Supprimer"
  * action share this predicate so they never diverge. */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `k-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function isDeletable(item: ObjectItem): boolean {
   return item.status === "available" || item.status === "pending";
 }
@@ -613,15 +618,23 @@ export function ObjectsPage() {
   /** Start a queue, journaling every file so the import survives a reload. */
   function launchQueue(
     activeCsrf: string,
-    entries: Array<{ file: File; rel: string; folderId: string | null }>,
+    entries: Array<{
+      file: File;
+      rel: string;
+      folderId: string | null;
+      idempotencyKey?: string;
+    }>,
   ) {
     const journal: JournalEntry[] = [];
-    const inputs: QueueInput[] = entries.map(({ file, rel, folderId }) => {
+    const inputs: QueueInput[] = entries.map(({ file, rel, folderId, idempotencyKey }) => {
       if (!owner) return { file, folderId };
       const key = fingerprint(owner, rel, file);
+      // One key per file for its whole life: a resume after a reload reopens
+      // the same server session and keeps the parts already sent.
+      const idem = idempotencyKey ?? newIdempotencyKey();
       forgottenRef.current.delete(key);
-      journal.push({ key, owner, rel, size: file.size, folderId });
-      return { file, folderId, key };
+      journal.push({ key, owner, rel, size: file.size, folderId, idempotencyKey: idem });
+      return { file, folderId, key, idempotencyKey: idem };
     });
     void addEntries(journal);
     const uploadQueue = startUploadQueue(inputs, transferDeps(activeCsrf), {
@@ -643,7 +656,12 @@ export function ObjectsPage() {
         entry,
       ]),
     );
-    const matched: Array<{ file: File; rel: string; folderId: string | null }> = [];
+    const matched: Array<{
+      file: File;
+      rel: string;
+      folderId: string | null;
+      idempotencyKey?: string;
+    }> = [];
     const seen = new Set<string>();
     for (const file of Array.from(selected)) {
       const rel = normalizeRelativePath(
@@ -660,7 +678,12 @@ export function ObjectsPage() {
         })();
       if (!entry || seen.has(entry.key)) continue;
       seen.add(entry.key);
-      matched.push({ file, rel: entry.rel, folderId: entry.folderId });
+      matched.push({
+        file,
+        rel: entry.rel,
+        folderId: entry.folderId,
+        idempotencyKey: entry.idempotencyKey,
+      });
     }
     const ignored = selected.length - matched.length;
     if (matched.length === 0) {
@@ -703,6 +726,8 @@ export function ObjectsPage() {
           signal: opts.signal,
         }),
       commit: (id) => api.commitObject(id, activeCsrf),
+      multipartStatus: (id) => api.multipartStatus(id),
+      partUrls: (id, numbers) => api.multipartPartUrls(id, numbers, activeCsrf),
       abortIntent: async (id) => {
         await api.abortObject(id, activeCsrf);
       },

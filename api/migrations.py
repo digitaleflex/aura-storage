@@ -60,6 +60,10 @@ ADDED_COLUMNS = {
         # client idempotency key dedupes accidental double submits.
         ("expected_size_bytes", "INTEGER"),
         ("idempotency_key", "TEXT"),
+        # Multipart session (#72): backend upload id while parts are being
+        # sent (cleared once completed) and the server-chosen part size.
+        ("multipart_upload_id", "TEXT"),
+        ("multipart_part_bytes", "INTEGER"),
     ],
     # #M04: a space is soft-disabled, never deleted. Pre-existing spaces are
     # backfilled to 'active' in `_seed`.

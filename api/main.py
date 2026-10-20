@@ -42,10 +42,18 @@ from .s3 import (
     SSE_ALGORITHM,
     SSE_HEADER,
     ObjectTooLarge,
+    abort_multipart,
+    complete_multipart,
+    create_multipart,
+    is_no_such_upload,
     is_valid_bucket_name,
+    list_uploaded_parts,
     make_clients,
+    part_length,
+    plan_parts,
     presigned_get,
     presigned_put,
+    presigned_upload_part,
     stream_sha256,
 )
 from .store import repo
@@ -538,7 +546,7 @@ def upload_intent(
     try:
         content_type = validate_upload_policy(
             body.content_type, body.size_bytes,
-            max_bytes=settings.max_object_bytes,
+            max_bytes=_upload_ceiling(),
             allow_empty=settings.allow_empty_objects,
             allowed_types=settings.allowed_content_types,
         )
@@ -575,6 +583,13 @@ def upload_intent(
             existing = _as_dict(existing)
             expires_at = existing.get("intent_expires_at")
             if not expires_at or int(time.time()) <= int(expires_at) + settings.intent_grace_s:
+                if existing.get("multipart_upload_id"):
+                    # A resumed multipart upload: same session, the client then
+                    # asks which parts are still missing (#72).
+                    audit_event("upload-intent", principal["id"], "replay", {
+                        "object_id": existing["id"], "bucket": existing["bucket"],
+                    })
+                    return _multipart_intent_response(existing, replay=True)
                 expected = existing.get("expected_size_bytes")
                 if expected is None or expected < 0:
                     expected = body.size_bytes
@@ -610,7 +625,13 @@ def upload_intent(
 
     owner_id = principal["id"] if principal["kind"] == "user" else None
     key = f"aura/{space_id}/{principal['id']}/{ids.new_id()}"
-    intent_expires_at = int(time.time()) + settings.intent_ttl
+    multipart = (
+        settings.multipart_enabled
+        and body.size_bytes >= settings.multipart_threshold_bytes
+    )
+    intent_expires_at = int(time.time()) + (
+        settings.multipart_session_ttl if multipart else settings.intent_ttl
+    )
     oid = repo.create_pending_object(
         space_id=space_id, application_id=principal["application_id"],
         environment=principal["environment"], bucket=bucket, object_key=key,
@@ -619,6 +640,24 @@ def upload_intent(
         intent_expires_at=intent_expires_at, folder_id=body.folder_id,
         expected_size_bytes=body.size_bytes, idempotency_key=idem_key,
     )
+    if multipart:
+        part_bytes, _ = plan_parts(body.size_bytes, settings.multipart_part_bytes)
+        try:
+            upload_id = create_multipart(s3ops, bucket, key, content_type)
+        except Exception:
+            repo.set_status(oid, "failed")
+            audit_event("upload-intent", principal["id"], "storage_failure", {
+                "object_id": oid, "bucket": bucket,
+            })
+            raise HTTPException(status_code=502, detail="storage unavailable")
+        repo.set_multipart(oid, upload_id, part_bytes)
+        audit_event("upload-intent", principal["id"], "success", {
+            "object_id": oid, "bucket": bucket, "size_bytes": body.size_bytes,
+            "multipart": True,
+        })
+        return _multipart_intent_response(
+            _as_dict(repo.get_object(oid, **_object_scope(principal))), replay=False,
+        )
     url = presigned_put(
         s3, bucket, key, content_type, settings.intent_ttl, body.size_bytes
     )
@@ -633,6 +672,159 @@ def upload_intent(
         "expires_in": settings.intent_ttl, "expires_at": intent_expires_at,
         "idempotent_replay": False,
     }
+
+
+def _upload_ceiling() -> int:
+    """Largest declarable size: multipart lifts the single-PUT ceiling."""
+    if settings.multipart_enabled:
+        return max(settings.max_object_bytes, settings.multipart_max_object_bytes)
+    return settings.max_object_bytes
+
+
+def _multipart_intent_response(row: dict, *, replay: bool) -> dict:
+    size = int(row["expected_size_bytes"])
+    part_bytes = int(row["multipart_part_bytes"])
+    return {
+        "id": row["id"], "status": PENDING, "method": "PUT",
+        "upload_mode": "multipart", "upload_url": None, "headers": {},
+        "content_type": row["content_type"], "size_bytes": size,
+        "multipart": {
+            "part_size_bytes": part_bytes,
+            "part_count": -(-size // part_bytes),
+        },
+        "expires_in": max(0, int(row["intent_expires_at"]) - int(time.time())),
+        "expires_at": row["intent_expires_at"], "idempotent_replay": replay,
+    }
+
+
+def _pending_multipart(oid: str, principal: dict) -> dict:
+    """The caller's own pending object with an open multipart session (or 404/409)."""
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != PENDING or not row.get("multipart_upload_id"):
+        raise HTTPException(status_code=409, detail="no multipart upload in progress")
+    expires_at = row.get("intent_expires_at")
+    if expires_at and int(time.time()) > int(expires_at) + settings.intent_grace_s:
+        raise HTTPException(status_code=410, detail="upload intent expired")
+    return row
+
+
+def _uploaded_parts(row: dict) -> dict[int, tuple[int, str]]:
+    """Parts the backend holds whose size matches the plan exactly."""
+    size = int(row["expected_size_bytes"])
+    part_bytes = int(row["multipart_part_bytes"])
+    count = -(-size // part_bytes)
+    try:
+        held = list_uploaded_parts(
+            s3ops, row["bucket"], row["object_key"], row["multipart_upload_id"]
+        )
+    except Exception as exc:
+        if is_no_such_upload(exc):
+            raise HTTPException(status_code=410, detail="multipart upload no longer exists")
+        raise HTTPException(status_code=502, detail="storage unavailable")
+    return {
+        number: part for number, part in held.items()
+        if 1 <= number <= count and part[0] == part_length(number, part_bytes, size)
+    }
+
+
+def _complete_multipart_session(row: dict, principal: dict) -> None:
+    """Check every planned part is held, then assemble the object (#72).
+
+    The part list is read from the backend, never taken from the client. A
+    missing part is a 409 the client resolves by sending it; after a successful
+    completion the session is cleared, so a retried commit goes straight to the
+    full-object SHA-256 verification.
+    """
+    size = int(row["expected_size_bytes"])
+    part_bytes = int(row["multipart_part_bytes"])
+    count = -(-size // part_bytes)
+    try:
+        parts = _uploaded_parts(row)
+    except HTTPException as exc:
+        if exc.status_code != 410:
+            raise
+        # The session is gone: a previous commit completed it and crashed
+        # before recording that. The object itself decides (head below).
+        repo.set_multipart(row["id"], None, part_bytes)
+        row["multipart_upload_id"] = None
+        return
+    missing = count - len(parts)
+    if missing:
+        raise HTTPException(
+            status_code=409, detail=f"{missing} part(s) missing; upload them, then commit",
+        )
+    try:
+        complete_multipart(
+            s3ops, row["bucket"], row["object_key"], row["multipart_upload_id"], parts,
+        )
+    except Exception as exc:
+        if is_no_such_upload(exc):
+            repo.set_multipart(row["id"], None, part_bytes)
+            row["multipart_upload_id"] = None
+            return
+        audit_event("commit", principal["id"], "storage_failure", {"object_id": row["id"]})
+        raise HTTPException(status_code=502, detail="storage could not assemble the parts")
+    repo.set_multipart(row["id"], None, part_bytes)
+    row["multipart_upload_id"] = None
+
+
+def _abort_multipart_session(row: dict) -> None:
+    if not row.get("multipart_upload_id"):
+        return
+    try:
+        abort_multipart(s3ops, row["bucket"], row["object_key"], row["multipart_upload_id"])
+    except Exception as exc:
+        if not is_no_such_upload(exc):
+            # Best effort: the session stays recorded and the sweep retries.
+            return
+    repo.set_multipart(row["id"], None, row.get("multipart_part_bytes"))
+
+
+class PartUrlsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    part_numbers: list[int] = Field(min_length=1, max_length=100)
+
+
+@app.get("/api/v1/objects/{oid}/multipart")
+def multipart_status(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
+    """Plan and parts already held: a resumed upload sends only the rest."""
+    row = _pending_multipart(oid, principal)
+    size = int(row["expected_size_bytes"])
+    part_bytes = int(row["multipart_part_bytes"])
+    return {
+        "id": row["id"], "size_bytes": size, "part_size_bytes": part_bytes,
+        "part_count": -(-size // part_bytes),
+        "uploaded_parts": sorted(_uploaded_parts(row)),
+    }
+
+
+@app.post("/api/v1/objects/{oid}/multipart/parts")
+def multipart_part_urls(
+    oid: str, body: PartUrlsIn, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Short-lived presigned PUTs for the requested part numbers (max 100)."""
+    row = _pending_multipart(oid, principal)
+    size = int(row["expected_size_bytes"])
+    part_bytes = int(row["multipart_part_bytes"])
+    count = -(-size // part_bytes)
+    numbers = sorted(set(body.part_numbers))
+    if any(n < 1 or n > count for n in numbers):
+        raise HTTPException(status_code=422, detail="part number out of range")
+    parts = []
+    for number in numbers:
+        length = part_length(number, part_bytes, size)
+        parts.append({
+            "part_number": number, "size_bytes": length,
+            "url": presigned_upload_part(
+                s3, row["bucket"], row["object_key"], row["multipart_upload_id"],
+                number, length, settings.intent_ttl,
+            ),
+        })
+    return {"id": row["id"], "expires_in": settings.intent_ttl, "parts": parts}
 
 
 @app.post("/api/v1/objects/{oid}/commit")
@@ -659,6 +851,12 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
         audit_event("commit", principal["id"], "expired", {"object_id": oid})
         raise HTTPException(status_code=410, detail="upload intent expired")
 
+    max_bytes = settings.max_object_bytes
+    if row.get("multipart_part_bytes"):
+        max_bytes = settings.multipart_max_object_bytes
+    if row.get("multipart_upload_id"):
+        _complete_multipart_session(row, principal)
+
     try:
         head = s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
     except Exception:
@@ -667,7 +865,7 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
     size = int(head.get("ContentLength", -1))
     if size < 0:
         raise HTTPException(status_code=422, detail="upload size unknown")
-    if size > settings.max_object_bytes:
+    if size > max_bytes:
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
     if settings.require_sse and head.get("ServerSideEncryption") != SSE_ALGORITHM:
@@ -683,9 +881,7 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
 
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
-        total, digest = stream_sha256(
-            body, settings.max_object_bytes, settings.commit_chunk_bytes
-        )
+        total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes)
     except ObjectTooLarge:
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
@@ -729,6 +925,7 @@ def abort_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
     if row["status"] != PENDING:
         raise HTTPException(status_code=409, detail="object not abortable")
 
+    _abort_multipart_session(row)
     try:
         s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
     except Exception:
@@ -794,6 +991,9 @@ def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DEL
     row = _as_dict(row)
     if row["status"] not in ("available", "pending"):
         raise HTTPException(status_code=409, detail="object not deletable")
+    if row["status"] == "pending":
+        # Parts of an unfinished multipart upload are not an object yet: free them.
+        _abort_multipart_session(row)
     repo.set_status(oid, "deleted")
     audit_event("delete", principal["id"], "success", {"object_id": oid})
     return {"id": oid, "status": "deleted"}
@@ -1081,7 +1281,8 @@ def reconcile(limit: int = 500,
     # Bounded sweep (#87): at most `limit` stale intents per run so a huge
     # backlog cannot monopolize the API; repeat until expired is 0.
     limit = max(1, min(limit, 5000))
-    out = reconcile_pending(repo, s3ops, limit=limit)
+    out = reconcile_pending(repo, s3ops, limit=limit,
+                            multipart_expired_before=int(time.time()) - settings.intent_grace_s)
     audit_event("admin.reconcile", principal["id"], "success", out)
     return out
 

@@ -473,11 +473,26 @@ class Repository:
         )
         self.conn.commit()
 
-    def list_pending_before(self, cutoff: int, limit: int = 500):
+    def set_multipart(self, oid: str, upload_id: Optional[str],
+                      part_bytes: Optional[int]) -> None:
+        """Record (or clear, with ``upload_id=None``) a multipart session (#72)."""
+        self.conn.execute(
+            "UPDATE objects SET multipart_upload_id = ?, multipart_part_bytes = ?, "
+            "updated_at = ? WHERE id = ?",
+            (upload_id, part_bytes, self.now(), oid),
+        )
+        self.conn.commit()
+
+    def list_pending_before(self, cutoff: int, limit: int = 500,
+                            multipart_expired_before: Optional[int] = None):
+        # A multipart session lives longer than a single-PUT intent: it is only
+        # stale once its own expiry has passed, whatever its creation time.
+        mp_cut = multipart_expired_before if multipart_expired_before is not None else cutoff
         return self.conn.execute(
             "SELECT * FROM objects WHERE status = 'pending' AND created_at < ? "
+            "AND (multipart_upload_id IS NULL OR intent_expires_at < ?) "
             "ORDER BY created_at ASC LIMIT ?",
-            (cutoff, limit),
+            (cutoff, mp_cut, limit),
         ).fetchall()
 
     def list_available(self, limit: int = 500):

@@ -127,3 +127,101 @@ def stream_sha256(body, max_bytes: int, chunk_bytes: int = 1024 * 1024):
             raise ObjectTooLarge()
         digest.update(chunk)
     return total, digest.hexdigest()
+
+
+# -- Multipart upload (#72) ----------------------------------------------------
+# S3 rules (SeaweedFS documents the same API; the exact limits on the pinned
+# image are part of the compatibility gate in docs/MULTIPART-UPLOAD-PLAN.md):
+# every part but the last is at least 5 MiB, and an upload has at most 10 000.
+MIN_PART_BYTES = 5 * 1024 * 1024
+MAX_PARTS = 10_000
+_MIB = 1024 * 1024
+
+
+def plan_parts(size_bytes: int, preferred_part_bytes: int) -> tuple[int, int]:
+    """Server-side part plan: ``(part_bytes, part_count)`` for an object size.
+
+    The part size is the preferred size, raised to the S3 minimum and, for very
+    large objects, to whatever keeps the count within ``MAX_PARTS`` (rounded up
+    to a whole MiB). The client never chooses it.
+    """
+    if size_bytes <= 0:
+        raise ValueError("multipart needs a positive size")
+    part = max(preferred_part_bytes, MIN_PART_BYTES, -(-size_bytes // MAX_PARTS))
+    part = -(-part // _MIB) * _MIB
+    count = -(-size_bytes // part)
+    return part, count
+
+
+def part_length(part_number: int, part_bytes: int, size_bytes: int) -> int:
+    """Exact byte length of part ``part_number`` (1-based) of the plan."""
+    start = (part_number - 1) * part_bytes
+    return max(0, min(part_bytes, size_bytes - start))
+
+
+def create_multipart(client, bucket: str, key: str, content_type: str) -> str:
+    """Open a multipart session, encrypted at rest (SSE-S3) like a single PUT."""
+    out = client.create_multipart_upload(
+        Bucket=bucket, Key=key, ContentType=content_type,
+        ServerSideEncryption=SSE_ALGORITHM,
+    )
+    return out["UploadId"]
+
+
+def presigned_upload_part(client, bucket: str, key: str, upload_id: str,
+                          part_number: int, content_length: int,
+                          expires: int) -> str:
+    """Presign one part PUT bound to its exact length (signed Content-Length)."""
+    return client.generate_presigned_url(
+        "upload_part",
+        Params={
+            "Bucket": bucket, "Key": key, "UploadId": upload_id,
+            "PartNumber": part_number, "ContentLength": content_length,
+        },
+        ExpiresIn=expires,
+    )
+
+
+def list_uploaded_parts(client, bucket: str, key: str,
+                        upload_id: str) -> dict[int, tuple[int, str]]:
+    """Parts the backend holds: ``{part_number: (size, etag)}`` (all pages)."""
+    parts: dict[int, tuple[int, str]] = {}
+    marker = 0
+    while True:
+        kwargs = {"Bucket": bucket, "Key": key, "UploadId": upload_id, "MaxParts": 1000}
+        if marker:
+            kwargs["PartNumberMarker"] = marker
+        page = client.list_parts(**kwargs)
+        for part in page.get("Parts", []):
+            parts[int(part["PartNumber"])] = (int(part["Size"]), part["ETag"])
+        if not page.get("IsTruncated"):
+            return parts
+        next_marker = int(page.get("NextPartNumberMarker") or 0)
+        if next_marker <= marker:
+            return parts
+        marker = next_marker
+
+
+def complete_multipart(client, bucket: str, key: str, upload_id: str,
+                       parts: dict[int, tuple[int, str]]) -> None:
+    client.complete_multipart_upload(
+        Bucket=bucket, Key=key, UploadId=upload_id,
+        MultipartUpload={"Parts": [
+            {"PartNumber": number, "ETag": parts[number][1]}
+            for number in sorted(parts)
+        ]},
+    )
+
+
+def abort_multipart(client, bucket: str, key: str, upload_id: str) -> None:
+    client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+
+
+def is_no_such_upload(exc: Exception) -> bool:
+    """True when the backend no longer knows the multipart session.
+
+    That happens after a completed or aborted upload: a retried complete/abort
+    or a sweep after a crash must treat it as "already done", not as an outage.
+    """
+    response = getattr(exc, "response", None) or {}
+    return response.get("Error", {}).get("Code") == "NoSuchUpload"

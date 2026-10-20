@@ -568,7 +568,7 @@ test("queue restores parallelism after sustained success", async () => {
   const deps: TransferDeps = {
     requestIntent: async (input) => queueIntent(input),
     upload: async (_url, file) => {
-      if (file.name.startsWith("bad")) {
+      if ((file as File).name.startsWith("bad")) {
         throw new PresignedUploadError("network", 0, "Réseau interrompu.");
       }
       await okGate;
@@ -680,7 +680,7 @@ test("retryItem re-runs only the chosen failed file with a fresh key", async () 
       return queueIntent(input);
     },
     upload: async (_url, file) => {
-      if (file.name === "bad.bin") {
+      if ((file as File).name === "bad.bin") {
         badUploads += 1;
         // Fail every internal attempt of the first submission only.
         if (badUploads <= 3) throw new PresignedUploadError("network", 0, "Réseau interrompu.");
@@ -723,7 +723,7 @@ test("retryItem ignores unknown, active and successful files", async () => {
   const deps: TransferDeps = {
     requestIntent: async (input) => queueIntent(input),
     upload: async (_url, file) => {
-      if (file.name === "bad.bin") {
+      if ((file as File).name === "bad.bin") {
         badUploads += 1;
         throw new PresignedUploadError("network", 0, "Réseau interrompu.");
       }
