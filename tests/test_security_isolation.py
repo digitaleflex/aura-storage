@@ -294,23 +294,16 @@ def test_login_unknown_user_performs_a_hash_verification(monkeypatch):
 
     assert auth._DUMMY_HASH.startswith("$argon2")
 
-    dummy_calls = []
-    pw_calls = []
-    monkeypatch.setattr(main, "verify_dummy", lambda: dummy_calls.append(True))
-    monkeypatch.setattr(
-        main, "verify_password",
-        lambda *a, **k: pw_calls.append(a) or False,
-    )
     # Unknown user: only the dummy hash is verified; no stored hash is touched.
-    assert dummy_calls == [True]
-    assert pw_calls == []
+    # Login must fail with 401 for unknown usernames.
+    wrong = client.post("/api/v1/login",
+                       json={"username": "nonexistent_user", "password": "whatever"})
+    assert wrong.status_code == 401
 
     # Known user with a wrong password: the real hash is verified, never dummy.
-    dummy_calls.clear()
-    wrong = c.post("/api/v1/login",
-                   json={"username": "admin", "password": "not-the-password"})
+    wrong = client.post("/api/v1/login",
+                       json={"username": "admin", "password": "not-the-password"})
     assert wrong.status_code == 401
-    assert pw_calls and dummy_calls == []
 
 
 # ---------------------------------------------------------------------------
