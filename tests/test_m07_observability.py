@@ -627,9 +627,11 @@ def test_m07_reconcile_uses_the_derived_intent_window(monkeypatch):
     c, headers = _admin()
     captured = {}
 
-    def _spy(repo_, s3_, *, expire_after_s, limit):
+    def _spy(repo_, s3_, *, expire_after_s, limit, multipart_expired_before):
         captured["expire_after_s"] = expire_after_s
         captured["limit"] = limit
+        # A multipart session (#72) is only swept after its own expiry + grace.
+        captured["multipart_expired_before"] = multipart_expired_before
         return {"expired": 0, "storage_deletes_attempted": 0, "storage_failures": 0}
 
     monkeypatch.setattr(main, "reconcile_pending", _spy)
@@ -638,3 +640,4 @@ def test_m07_reconcile_uses_the_derived_intent_window(monkeypatch):
     assert captured["expire_after_s"] == (
         main.settings.intent_ttl + main.settings.intent_grace_s
     )
+    assert captured["multipart_expired_before"] <= int(time.time()) - main.settings.intent_grace_s

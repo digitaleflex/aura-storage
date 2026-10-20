@@ -46,6 +46,7 @@ function lifecycleState(status: string): { label: string; className: string } {
 const OBJECT_STATUS_LABELS: Record<string, string> = {
   available: "Disponible",
   pending: "En cours",
+  verifying: "Vérification",
   deleted: "Supprimé",
   expired: "Expiré",
   failed: "Échec",

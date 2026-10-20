@@ -1,3 +1,5 @@
+> **État (2026-10-20) : implémenté dans le code** (`api/verifier.py`, `commit` en 202 au-delà de `AURA_VERIFY_ASYNC_THRESHOLD_BYTES`, worker en thread dans l'API ou `python -m api.verifier`, bail + battement, contrôle d'ETag avant et après hachage, relances bornées). Tests : `tests/test_async_verify.py`, `web/e2e/async-verify-engine.spec.ts`. Non validé sur le pilote.
+
 ## Contexte
 `POST /objects/{id}/commit` relit l'objet entier depuis S3 pour calculer le SHA-256 **dans la requête HTTP**, jusqu'à `AURA_MAX_OBJECT_BYTES` (5 Gio). L'API tourne avec un seul worker uvicorn : quelques gros commits simultanés occupent le pool de threads, et un client qui coupe pendant le hachage obtient un résultat ambigu.
 

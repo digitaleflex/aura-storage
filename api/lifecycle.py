@@ -1,6 +1,8 @@
 """Lifecycle: reconcile stale pending uploads, soft-delete, purge (#19 follow-up)."""
 import time
 
+from .s3 import is_no_such_upload
+
 
 class StorageDeleteError(RuntimeError):
     """Raised when the storage backend refuses a delete (M06).
@@ -11,7 +13,8 @@ class StorageDeleteError(RuntimeError):
 
 
 def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
-                      limit: int = 500) -> dict:
+                      limit: int = 500,
+                      multipart_expired_before: int | None = None) -> dict:
     """Expire pending objects older than the grace period.
 
     Administrative sweep across every space; the route that calls it requires
@@ -25,9 +28,23 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
     expired = 0
     storage_deletes = 0
     storage_failures = 0
-    for r in repo.list_pending_before(cutoff, limit=max(1, limit)):
+    if multipart_expired_before is None:
+        multipart_expired_before = int(time.time())
+    for r in repo.list_pending_before(
+        cutoff, limit=max(1, limit), multipart_expired_before=multipart_expired_before,
+    ):
         row = dict(r) if not isinstance(r, dict) else r
         try:
+            if row.get("multipart_upload_id"):
+                # Free the parts of an abandoned multipart upload (#72).
+                try:
+                    s3ops.abort_multipart_upload(
+                        Bucket=row["bucket"], Key=row["object_key"],
+                        UploadId=row["multipart_upload_id"],
+                    )
+                except Exception as exc:
+                    if not is_no_such_upload(exc):
+                        raise
             s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
         except Exception:
             # Keep the pending reference so the next sweep retries; never

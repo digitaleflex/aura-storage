@@ -466,6 +466,62 @@ class Repository:
             (actor_id, idempotency_key, space_id),
         ).fetchone()
 
+    # -- asynchronous verification (N5) ------------------------------------
+    def mark_verifying(self, oid: str, etag: Optional[str]) -> None:
+        """Hand an uploaded object to the verification worker."""
+        self.conn.execute(
+            "UPDATE objects SET status = 'verifying', verify_etag = ?, "
+            "verify_lease_until = NULL, verify_attempts = 0, updated_at = ? "
+            "WHERE id = ? AND status = 'pending'",
+            (etag, self.now(), oid),
+        )
+        self.conn.commit()
+
+    def claim_verification(self, now: int, lease_until: int):
+        """Take the oldest verifying object nobody holds, under a lease.
+
+        Compare-and-set on the lease, so two workers (threads or processes)
+        never hash the same object at once; a crashed worker's lease simply
+        runs out and the object is taken again.
+        """
+        row = self.conn.execute(
+            "SELECT id FROM objects WHERE status = 'verifying' "
+            "AND (verify_lease_until IS NULL OR verify_lease_until < ?) "
+            "ORDER BY updated_at ASC LIMIT 1",
+            (now,),
+        ).fetchone()
+        if row is None:
+            return None
+        cur = self.conn.execute(
+            "UPDATE objects SET verify_lease_until = ?, "
+            "verify_attempts = COALESCE(verify_attempts, 0) + 1 "
+            "WHERE id = ? AND status = 'verifying' "
+            "AND (verify_lease_until IS NULL OR verify_lease_until < ?)",
+            (lease_until, row["id"], now),
+        )
+        self.conn.commit()
+        if cur.rowcount != 1:
+            return None
+        return self.conn.execute("SELECT * FROM objects WHERE id = ?", (row["id"],)).fetchone()
+
+    def extend_verification(self, oid: str, lease_until: int) -> None:
+        """Push the lease (heartbeat while hashing, or a retry delay)."""
+        self.conn.execute(
+            "UPDATE objects SET verify_lease_until = ? WHERE id = ? AND status = 'verifying'",
+            (lease_until, oid),
+        )
+        self.conn.commit()
+
+    def get_by_idempotency(
+        self, *, actor_id: str, idempotency_key: str, space_id: str,
+    ):
+        """Newest object of any status for an ``Idempotency-Key`` + actor."""
+        return self.conn.execute(
+            "SELECT * FROM objects WHERE actor_id = ? AND idempotency_key = ? "
+            "AND space_id = ? ORDER BY created_at DESC LIMIT 1",
+            (actor_id, idempotency_key, space_id),
+        ).fetchone()
+
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
         self.conn.execute(
             "UPDATE objects SET status = 'available', size_bytes = ?, checksum_sha256 = ?, updated_at = ? WHERE id = ?",
@@ -473,11 +529,26 @@ class Repository:
         )
         self.conn.commit()
 
-    def list_pending_before(self, cutoff: int, limit: int = 500):
+    def set_multipart(self, oid: str, upload_id: Optional[str],
+                      part_bytes: Optional[int]) -> None:
+        """Record (or clear, with ``upload_id=None``) a multipart session (#72)."""
+        self.conn.execute(
+            "UPDATE objects SET multipart_upload_id = ?, multipart_part_bytes = ?, "
+            "updated_at = ? WHERE id = ?",
+            (upload_id, part_bytes, self.now(), oid),
+        )
+        self.conn.commit()
+
+    def list_pending_before(self, cutoff: int, limit: int = 500,
+                            multipart_expired_before: Optional[int] = None):
+        # A multipart session lives longer than a single-PUT intent: it is only
+        # stale once its own expiry has passed, whatever its creation time.
+        mp_cut = multipart_expired_before if multipart_expired_before is not None else cutoff
         return self.conn.execute(
             "SELECT * FROM objects WHERE status = 'pending' AND created_at < ? "
+            "AND (multipart_upload_id IS NULL OR intent_expires_at < ?) "
             "ORDER BY created_at ASC LIMIT ?",
-            (cutoff, limit),
+            (cutoff, mp_cut, limit),
         ).fetchall()
 
     def list_available(self, limit: int = 500):

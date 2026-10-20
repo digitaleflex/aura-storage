@@ -424,17 +424,75 @@ class Repository:
             (actor_id, idempotency_key, space_id),
         )
 
+    # -- asynchronous verification (N5) ------------------------------------
+    def mark_verifying(self, oid: str, etag: Optional[str]) -> None:
+        """Hand an uploaded object to the verification worker."""
+        self._run(
+            "UPDATE objects SET status = 'verifying', verify_etag = %s, "
+            "verify_lease_until = NULL, verify_attempts = 0, updated_at = %s "
+            "WHERE id = %s AND status = 'pending'",
+            (etag, self.now(), oid),
+        )
+
+    def claim_verification(self, now: int, lease_until: int):
+        """Take the oldest verifying object nobody holds, under a lease.
+
+        ``FOR UPDATE SKIP LOCKED`` lets several workers claim in parallel
+        without blocking or taking the same row; a crashed worker's lease
+        simply runs out and the object is taken again.
+        """
+        return self._one(
+            "UPDATE objects SET verify_lease_until = %s, "
+            "verify_attempts = COALESCE(verify_attempts, 0) + 1 "
+            "WHERE id = (SELECT id FROM objects WHERE status = 'verifying' "
+            "AND (verify_lease_until IS NULL OR verify_lease_until < %s) "
+            "ORDER BY updated_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED) "
+            "RETURNING *",
+            (lease_until, now),
+        )
+
+    def extend_verification(self, oid: str, lease_until: int) -> None:
+        """Push the lease (heartbeat while hashing, or a retry delay)."""
+        self._run(
+            "UPDATE objects SET verify_lease_until = %s WHERE id = %s AND status = 'verifying'",
+            (lease_until, oid),
+        )
+
+    def get_by_idempotency(
+        self, *, actor_id: str, idempotency_key: str, space_id: str,
+    ):
+        """Newest object of any status for an ``Idempotency-Key`` + actor."""
+        return self._one(
+            "SELECT * FROM objects WHERE actor_id = %s AND idempotency_key = %s "
+            "AND space_id = %s ORDER BY created_at DESC LIMIT 1",
+            (actor_id, idempotency_key, space_id),
+        )
+
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
         self._run(
             "UPDATE objects SET status = 'available', size_bytes = %s, checksum_sha256 = %s, updated_at = %s WHERE id = %s",
             (size_bytes, checksum_sha256, self.now(), oid),
         )
 
-    def list_pending_before(self, cutoff: int, limit: int = 500):
+    def set_multipart(self, oid: str, upload_id: Optional[str],
+                      part_bytes: Optional[int]) -> None:
+        """Record (or clear, with ``upload_id=None``) a multipart session (#72)."""
+        self._run(
+            "UPDATE objects SET multipart_upload_id = %s, multipart_part_bytes = %s, "
+            "updated_at = %s WHERE id = %s",
+            (upload_id, part_bytes, self.now(), oid),
+        )
+
+    def list_pending_before(self, cutoff: int, limit: int = 500,
+                            multipart_expired_before: Optional[int] = None):
+        # A multipart session lives longer than a single-PUT intent: it is only
+        # stale once its own expiry has passed, whatever its creation time.
+        mp_cut = multipart_expired_before if multipart_expired_before is not None else cutoff
         return self._all(
             "SELECT * FROM objects WHERE status = 'pending' AND created_at < %s "
+            "AND (multipart_upload_id IS NULL OR intent_expires_at < %s) "
             "ORDER BY created_at ASC LIMIT %s",
-            (cutoff, limit),
+            (cutoff, mp_cut, limit),
         )
 
     def list_available(self, limit: int = 500):

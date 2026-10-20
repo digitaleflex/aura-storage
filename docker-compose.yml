@@ -204,6 +204,17 @@ services:
       # Audit trail on a named volume: it must survive image rebuilds and
       # container recreation (the default path is inside the container).
       AURA_AUDIT_LOG: /var/lib/aura/audit/aura-audit.jsonl
+      # Multipart upload (#72): off until the compatibility gate in
+      # docs/MULTIPART-UPLOAD-PLAN.md passes on the pinned SeaweedFS image.
+      AURA_MULTIPART_ENABLED: ${AURA_MULTIPART_ENABLED:-0}
+      AURA_MULTIPART_THRESHOLD_BYTES: ${AURA_MULTIPART_THRESHOLD_BYTES:-104857600}
+      AURA_MULTIPART_PART_BYTES: ${AURA_MULTIPART_PART_BYTES:-16777216}
+      AURA_MULTIPART_MAX_OBJECT_BYTES: ${AURA_MULTIPART_MAX_OBJECT_BYTES:-1099511627776}
+      AURA_MULTIPART_SESSION_TTL: ${AURA_MULTIPART_SESSION_TTL:-604800}
+      # Asynchronous integrity check (N5): objects at or above the threshold are
+      # hashed by a worker thread in this container, outside the commit request.
+      AURA_VERIFY_ASYNC_THRESHOLD_BYTES: ${AURA_VERIFY_ASYNC_THRESHOLD_BYTES:-268435456}
+      AURA_VERIFY_WORKER: ${AURA_VERIFY_WORKER:-inline}
       # No origin/CORS allow-list here on purpose: the api has no Traefik route
       # and is reached same-origin through the app proxy (app/nginx.conf proxies
       # /api/ to this service). Browser uploads go straight to SeaweedFS via

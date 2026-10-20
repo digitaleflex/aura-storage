@@ -73,6 +73,7 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "Tous les états" },
   { value: "available", label: "Disponible" },
   { value: "pending", label: "En cours" },
+  { value: "verifying", label: "Vérification" },
   { value: "deleted", label: "Corbeille" },
   { value: "expired", label: "Expiré" },
   { value: "failed", label: "Échec" },
@@ -149,6 +150,7 @@ function parseSize(value: string): number | undefined {
 const STATUS_LABELS: Record<string, string> = {
   available: "Disponible",
   pending: "En cours",
+  verifying: "Vérification…",
   deleted: "Supprimé",
   expired: "Expiré",
   failed: "Échec",
@@ -181,7 +183,7 @@ function StatusLabel({ status }: { status: string }) {
   const variant =
     status === "available"
       ? "status status-ok"
-      : status === "pending"
+      : status === "pending" || status === "verifying"
         ? "status status-warn"
         : status === "failed"
           ? "status status-error"
@@ -195,6 +197,11 @@ function StatusLabel({ status }: { status: string }) {
 /** Server-side soft delete accepts only `available` or `pending` rows; anything
  * else is refused with 409. The bulk selection and the per-row "Supprimer"
  * action share this predicate so they never diverge. */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `k-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 /** In the trash and fully uploaded: the server refuses to restore anything else. */
 function isRestorable(item: ObjectItem): boolean {
   return item.status === "deleted" && item.size_bytes >= 0;
@@ -618,15 +625,23 @@ export function ObjectsPage() {
   /** Start a queue, journaling every file so the import survives a reload. */
   function launchQueue(
     activeCsrf: string,
-    entries: Array<{ file: File; rel: string; folderId: string | null }>,
+    entries: Array<{
+      file: File;
+      rel: string;
+      folderId: string | null;
+      idempotencyKey?: string;
+    }>,
   ) {
     const journal: JournalEntry[] = [];
-    const inputs: QueueInput[] = entries.map(({ file, rel, folderId }) => {
+    const inputs: QueueInput[] = entries.map(({ file, rel, folderId, idempotencyKey }) => {
       if (!owner) return { file, folderId };
       const key = fingerprint(owner, rel, file);
+      // One key per file for its whole life: a resume after a reload reopens
+      // the same server session and keeps the parts already sent.
+      const idem = idempotencyKey ?? newIdempotencyKey();
       forgottenRef.current.delete(key);
-      journal.push({ key, owner, rel, size: file.size, folderId });
-      return { file, folderId, key };
+      journal.push({ key, owner, rel, size: file.size, folderId, idempotencyKey: idem });
+      return { file, folderId, key, idempotencyKey: idem };
     });
     void addEntries(journal);
     const uploadQueue = startUploadQueue(inputs, transferDeps(activeCsrf), {
@@ -648,7 +663,12 @@ export function ObjectsPage() {
         entry,
       ]),
     );
-    const matched: Array<{ file: File; rel: string; folderId: string | null }> = [];
+    const matched: Array<{
+      file: File;
+      rel: string;
+      folderId: string | null;
+      idempotencyKey?: string;
+    }> = [];
     const seen = new Set<string>();
     for (const file of Array.from(selected)) {
       const rel = normalizeRelativePath(
@@ -665,7 +685,12 @@ export function ObjectsPage() {
         })();
       if (!entry || seen.has(entry.key)) continue;
       seen.add(entry.key);
-      matched.push({ file, rel: entry.rel, folderId: entry.folderId });
+      matched.push({
+        file,
+        rel: entry.rel,
+        folderId: entry.folderId,
+        idempotencyKey: entry.idempotencyKey,
+      });
     }
     const ignored = selected.length - matched.length;
     if (matched.length === 0) {
@@ -708,6 +733,9 @@ export function ObjectsPage() {
           signal: opts.signal,
         }),
       commit: (id) => api.commitObject(id, activeCsrf),
+      multipartStatus: (id) => api.multipartStatus(id),
+      objectStatus: (id) => api.getObject(id),
+      partUrls: (id, numbers) => api.multipartPartUrls(id, numbers, activeCsrf),
       abortIntent: async (id) => {
         await api.abortObject(id, activeCsrf);
       },

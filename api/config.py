@@ -79,6 +79,33 @@ class Settings:
     # multipart workflow is implemented and compatibility-tested; see
     # docs/TRANSFER-ENGINE.md. The default equals that limit on purpose.
     max_object_bytes: int = _int("AURA_MAX_OBJECT_BYTES", 5 * 1024 * 1024 * 1024)
+    # Multipart upload (#72). Off by default until the compatibility gate in
+    # docs/MULTIPART-UPLOAD-PLAN.md is recorded on the pinned SeaweedFS image.
+    # When on, files at or above the threshold are sent as independently
+    # retried parts and may exceed ``max_object_bytes`` up to the multipart cap.
+    multipart_enabled: bool = os.environ.get("AURA_MULTIPART_ENABLED", "0") == "1"
+    multipart_threshold_bytes: int = _int("AURA_MULTIPART_THRESHOLD_BYTES", 100 * 1024 * 1024)
+    # Each part is one request through the edge proxy: keep part / slowest
+    # supported rate well under Traefik's readTimeout (see the plan).
+    multipart_part_bytes: int = _int("AURA_MULTIPART_PART_BYTES", 16 * 1024 * 1024)
+    multipart_max_object_bytes: int = _int(
+        "AURA_MULTIPART_MAX_OBJECT_BYTES", 1024 * 1024 * 1024 * 1024
+    )
+    # A multipart session outlives a single-PUT intent: a large upload may be
+    # paused (reload, sleep, network loss) and resumed within this window.
+    multipart_session_ttl: int = _int("AURA_MULTIPART_SESSION_TTL", 7 * 24 * 3600)
+    # Asynchronous integrity check (N5). At or above this size, commit answers
+    # 202 'verifying' and a worker hashes the object outside the request.
+    verify_async_threshold_bytes: int = _int(
+        "AURA_VERIFY_ASYNC_THRESHOLD_BYTES", 256 * 1024 * 1024
+    )
+    # "inline": a worker thread inside the API process (default). "off": run
+    # `python -m api.verifier` as its own process instead.
+    verify_worker: str = os.environ.get("AURA_VERIFY_WORKER", "inline")
+    verify_lease_s: int = _int("AURA_VERIFY_LEASE_SECONDS", 300)
+    verify_heartbeat_bytes: int = _int("AURA_VERIFY_HEARTBEAT_BYTES", 256 * 1024 * 1024)
+    verify_max_attempts: int = _int("AURA_VERIFY_MAX_ATTEMPTS", 8)
+    verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
     # Zero-byte objects are refused by default: an empty upload is usually a

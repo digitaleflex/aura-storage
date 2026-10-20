@@ -259,7 +259,11 @@ export interface UploadIntentResponse {
   status: string;
   /** Data-plane method the browser must use. */
   method: string;
-  upload_url: string;
+  /** Single presigned PUT; null for a multipart upload (parts are requested). */
+  upload_url: string | null;
+  /** "multipart" when the server chose part-level upload (#72). */
+  upload_mode?: "single" | "multipart";
+  multipart?: { part_size_bytes: number; part_count: number };
   /** Headers to send with the presigned PUT (Content-Type is signed). */
   headers: Record<string, string>;
   /** Server-normalized media type actually stored/authorized. */
@@ -289,6 +293,20 @@ export interface PreviewIntentResponse {
   display_name: string;
   content_type: string;
   size_bytes: number;
+}
+
+export interface MultipartStatus {
+  id: string;
+  size_bytes: number;
+  part_size_bytes: number;
+  part_count: number;
+  uploaded_parts: number[];
+}
+
+export interface MultipartPartUrls {
+  id: string;
+  expires_in: number;
+  parts: Array<{ part_number: number; size_bytes: number; url: string }>;
 }
 
 export interface DownloadIntentResponse {
@@ -583,6 +601,23 @@ export const api = {
     });
   },
 
+  /** Multipart plan and the parts the storage already holds (resume). */
+  multipartStatus(id: string): Promise<MultipartStatus> {
+    return request<MultipartStatus>(`/api/v1/objects/${encodeURIComponent(id)}/multipart`);
+  },
+
+  /** Short-lived presigned PUTs for up to 100 parts. */
+  multipartPartUrls(
+    id: string,
+    partNumbers: number[],
+    csrf: string,
+  ): Promise<MultipartPartUrls> {
+    return request<MultipartPartUrls>(
+      `/api/v1/objects/${encodeURIComponent(id)}/multipart/parts`,
+      { method: "POST", csrf, body: { part_numbers: partNumbers } },
+    );
+  },
+
   /** Soft-delete an object (objects:delete). */
   deleteObject(id: string, csrf: string): Promise<{ id: string; status: string }> {
     return request<{ id: string; status: string }>(
@@ -864,7 +899,7 @@ export interface PutOptions {
  */
 export function putToPresignedUrl(
   url: string,
-  file: File,
+  file: Blob,
   options: PutOptions = {},
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
