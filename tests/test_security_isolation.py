@@ -309,6 +309,30 @@ def test_login_unknown_user_performs_a_hash_verification(monkeypatch):
 # ---------------------------------------------------------------------------
 # #38 scenarios: M2M validity, revocation, rotation, expiry, secrecy.
 # ---------------------------------------------------------------------------
+def test_identity_revocation_and_rotation():
+    c, headers = _admin()
+    _, space, _ = _make_app_space(c, headers)
+    created = _make_identity(c, headers, space, ["objects:read"])
+    token = created["token"]
+
+    assert c.get("/api/v1/me", headers=_svc(token)).status_code == 200
+
+    # Rotation invalidates the old secret immediately.
+    rotated = c.post(f"/api/v1/admin/identities/{created['id']}/rotate", headers=headers)
+    assert rotated.status_code == 200, rotated.text
+    new_token = rotated.json()["token"]
+    assert new_token != token
+    assert c.get("/api/v1/me", headers=_svc(token)).status_code == 401
+    assert c.get("/api/v1/me", headers=_svc(new_token)).status_code == 200
+
+    # Revocation invalidates the current secret.
+    assert c.post(f"/api/v1/admin/identities/{created['id']}/revoke",
+                  headers=headers).status_code == 200
+    assert c.get("/api/v1/me", headers=_svc(new_token)).status_code == 401
+
+
+def test_expired_identity_is_rejected():
+    c, headers = _admin()
     app_id, space, _ = _make_app_space(c, headers)
     iid = main.repo.new_id()
     secret = identity.new_secret()
