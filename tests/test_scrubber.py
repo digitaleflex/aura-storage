@@ -176,8 +176,11 @@ def test_two_scrubbers_never_take_the_same_object(store):
     c, headers = _admin()
     oid, _ = _stored(store, c, headers, b"only once")
     now = int(time.time())
-    assert main.repo.claim_scrub(now, now + 600, now)["id"] == oid
-    assert main.repo.claim_scrub(now, now + 600, now) is None
+    # checked_before=0: only never-checked rows qualify, so objects left by
+    # other tests (marked checked a second ago) cannot become "due" when the
+    # clock ticks over between the fixture and this call.
+    assert main.repo.claim_scrub(now, now + 600, 0)["id"] == oid
+    assert main.repo.claim_scrub(now, now + 600, 0) is None
 
 
 def test_admin_routes_need_admin(store):
