@@ -1309,6 +1309,33 @@ p .chip {
   margin-left: auto;
 }
 
+.alert-warn {
+  background: var(--signal-soft);
+  color: var(--ink);
+  border-color: var(--signal-line);
+  border-left-color: var(--signal);
+}
+
+.resume-banner {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.resume-banner p {
+  margin: 0;
+}
+
+.resume-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resume-actions .btn {
+  margin-left: 0;
+}
+
 .empty {
   padding: 22px 4px;
   color: var(--muted);
