@@ -509,6 +509,14 @@ class Repository:
             (status, self.now(), oid),
         )
 
+    def list_status_before(self, status: str, cutoff: int, limit: int = 500):
+        """Rows in ``status`` not updated since ``cutoff``, oldest first."""
+        return self._all(
+            "SELECT * FROM objects WHERE status = %s AND updated_at < %s "
+            "ORDER BY updated_at ASC LIMIT %s",
+            (status, cutoff, limit),
+        )
+
     def delete_object_row(self, oid: str) -> None:
         self._run("DELETE FROM objects WHERE id = %s", (oid,))
 

@@ -100,7 +100,7 @@ paths:
           name: status
           schema:
             type: string
-            enum: [pending, verifying, available, deleted, expired, failed, aborted]
+            enum: [pending, verifying, available, deleted, expired, failed, aborted, purging]
           description: Exact catalogue status.
         - in: query
           name: content_type

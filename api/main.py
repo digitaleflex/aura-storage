@@ -218,6 +218,7 @@ Uuid4 = Annotated[str, AfterValidator(_canonical_uuid)]
 # unsupported value and let the OpenAPI document describe the accepted set.
 ObjectStatus = Literal[
     "pending", "verifying", "available", "deleted", "expired", "failed", "aborted",
+    "purging",
 ]
 ObjectSort = Literal["created_at", "display_name", "size_bytes"]
 SortOrder = Literal["asc", "desc"]
@@ -1354,6 +1355,9 @@ def reconcile(limit: int = 500,
         repo, s3ops, expire_after_s=expire_after_s, limit=limit,
         multipart_expired_before=int(time.time()) - settings.intent_grace_s,
     )
+    # Finish purges a crashed process left half-done (two-phase purge).
+    from .lifecycle import resume_purges
+    out.update(resume_purges(repo, s3ops, limit=limit))
     audit_event("admin.reconcile", principal["id"], "success", out)
     return out
 
