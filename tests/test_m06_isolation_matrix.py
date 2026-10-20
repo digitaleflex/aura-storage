@@ -172,6 +172,7 @@ def test_m06_other_space_and_application_are_isolated():
         ("post", f"/api/v1/objects/{oid}/purge", {}),
         ("get", f"/api/v1/objects/{oid}/multipart", {}),
         ("post", f"/api/v1/objects/{oid}/multipart/parts", {"json": {"part_numbers": [1]}}),
+        ("post", f"/api/v1/objects/{oid}/restore", {}),
         ("delete", f"/api/v1/objects/{oid}", {}),
     ]:
         r = c.request(method, path, headers=hb, **kwargs)
@@ -249,6 +250,7 @@ def test_m06_unauthenticated_is_denied():
         ("post", f"/api/v1/objects/{oid}/purge", {}),
         ("get", f"/api/v1/objects/{oid}/multipart", {}),
         ("post", f"/api/v1/objects/{oid}/multipart/parts", {"json": {"part_numbers": [1]}}),
+        ("post", f"/api/v1/objects/{oid}/restore", {}),
         ("delete", f"/api/v1/objects/{oid}", {}),
         ("patch", f"/api/v1/objects/{oid}", {"json": {"folder_id": None}}),
         ("get", "/api/v1/folders", {}),

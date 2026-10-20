@@ -264,6 +264,58 @@ def test_mutating_routes_require_csrf_for_sessions():
                   json={"display_name": "csrf.txt", "size_bytes": 1}).status_code == 403
 
 
+def test_csrf_comparison_uses_constant_time_compare(monkeypatch):
+    # The session CSRF token is compared with ``secrets.compare_digest`` so the
+    # check cannot leak the token byte-by-byte through timing (same primitive as
+    # api/identity.py's token check).
+    name, password = _ordinary_user()
+    c, headers = _login(name, password)
+    session_token = headers["X-CSRF-Token"]
+
+    calls = []
+    real_compare = authz.secrets.compare_digest
+
+    def _spy(a, b):
+        calls.append((a, b))
+        return real_compare(a, b)
+
+    monkeypatch.setattr(authz.secrets, "compare_digest", _spy)
+    r = c.post("/api/v1/objects/upload-intents",
+               json={"display_name": "ct.txt", "size_bytes": 1},
+               headers={"X-CSRF-Token": "wrong-token"})
+    assert r.status_code == 403
+    # The presented token was compared against the session's own token.
+    assert calls == [("wrong-token", session_token)]
+
+
+def test_login_unknown_user_performs_a_hash_verification(monkeypatch):
+    # An unknown username must cost the same Argon2 work as a wrong password:
+    # otherwise the login response time reveals whether a user exists.
+    assert main._DUMMY_PASS_HASH.startswith("$argon2")
+
+    verified = []
+    monkeypatch.setattr(
+        main, "verify_password",
+        lambda stored, password: verified.append(stored) or False,
+    )
+
+    c = TestClient(main.app)
+    unknown = c.post(
+        "/api/v1/login",
+        json={"username": f"ghost-{uuid.uuid4().hex}", "password": "whatever"},
+    )
+    assert unknown.status_code == 401
+    # Unknown user: exactly one verification, against the throwaway hash.
+    assert verified == [main._DUMMY_PASS_HASH]
+
+    # Known user with a wrong password: the real hash is verified, never dummy.
+    verified.clear()
+    wrong = c.post("/api/v1/login",
+                   json={"username": "admin", "password": "not-the-password"})
+    assert wrong.status_code == 401
+    assert len(verified) == 1 and verified[0] != main._DUMMY_PASS_HASH
+
+
 # ---------------------------------------------------------------------------
 # #38 scenarios: M2M validity, revocation, rotation, expiry, secrecy.
 # ---------------------------------------------------------------------------

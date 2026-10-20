@@ -37,6 +37,17 @@ Commande exacte § Phase 11. Branche `main`, worktree propre (hors
 - CORS : **écart** — aucun middleware CORS dans l'API (relève du proxy
   Traefik/nginx) ; en-têtes nosniff/DENY, cookies HttpOnly+SameSite=Strict,
   `secure` selon env.
+- CORS + SSE-S3 : **risque ouvert, à valider en live avant tout import de
+  PDF/audio** — le PUT présigné signe l'en-tête
+  `x-amz-server-side-encryption: AES256` (`api/s3.py`) ; cet en-tête est
+  non-safelisted en CORS et le PUT part cross-origin vers `S3_DOMAIN`, donc le
+  preflight exige que la passerelle S3 le renvoie dans
+  `Access-Control-Allow-Headers`. La passerelle est désormais restreinte à
+  l'origine de l'app via `-s3.allowedOrigins=https://${APP_DOMAIN}`
+  (`docker-compose.yml`, service `seaweed-filer`) ; la règle de repli SeaweedFS
+  garde `AllowedHeaders: "*"`, donc l'en-tête demandé est renvoyé (echo) — mais
+  seul un preflight réel (`OPTIONS` sur un objet du bucket) et un PUT présigné
+  cross-origin sur le pilote le confirment.
 - Erreurs génériques, coordonnées stockage exclues (`_object_public`).
 - Bloquant release : aucune fuite inter-espace connue sur le périmètre testé.
 

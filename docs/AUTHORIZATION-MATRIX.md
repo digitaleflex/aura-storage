@@ -64,6 +64,7 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |
 | GET | `/api/v1/objects/{oid}/multipart` | `objects:write` | multipart plan and parts already held (resume); only when `AURA_MULTIPART_ENABLED=1` created the session |
 | POST | `/api/v1/objects/{oid}/multipart/parts` | `objects:write` | presigned part PUTs (≤100 per call, exact signed length per part) |
+| POST | `/api/v1/objects/{oid}/restore` | `objects:delete` | undo a soft delete (trash); 409 unless the object is `deleted` and was fully uploaded |
 | POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin; a storage failure keeps the catalogue row and returns **502** (M06) |
 | GET | `/api/v1/folders` | `objects:read` | **human only**; owner-scoped, root, `?parent_id=`, or `?all=true` (flat tree) |
 | POST | `/api/v1/folders` | `objects:write` | **human only**; logical folder, no host directory |
@@ -170,7 +171,9 @@ Never place a token in logs, tickets, chat, the frontend bundle, or this reposit
   `limit` 1..500 + `offset`; `truncated` warns of older history beyond the
   window. Retention (`POST /api/v1/admin/audit/prune`, `admin:write`)
   enforces `AURA_AUDIT_RETENTION_DAYS` (default 90) and keeps
-  timestamp-less lines.
+  timestamp-less lines. The trail is written to `AURA_AUDIT_LOG`
+  (`/var/lib/aura/audit/aura-audit.jsonl` in the Compose stack) on the
+  persistent `api-audit` volume, so it survives container recreation.
 - Usage (`GET /api/v1/admin/usage`, `admin:read`) reports live catalogue
   values only — verified available bytes, counts, configured ceilings — with
   `measured_at` as the freshness marker. See `docs/OBSERVABILITY.md` for the
