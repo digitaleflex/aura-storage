@@ -583,6 +583,14 @@ class Repository:
         )
         self.conn.commit()
 
+    def list_status_before(self, status: str, cutoff: int, limit: int = 500):
+        """Rows in ``status`` not updated since ``cutoff``, oldest first."""
+        return self.conn.execute(
+            "SELECT * FROM objects WHERE status = ? AND updated_at < ? "
+            "ORDER BY updated_at ASC LIMIT ?",
+            (status, cutoff, limit),
+        ).fetchall()
+
     def delete_object_row(self, oid: str) -> None:
         self.conn.execute("DELETE FROM objects WHERE id = ?", (oid,))
         self.conn.commit()
