@@ -170,12 +170,6 @@ function messageOf(err: unknown): string {
         ? err.message
         : "Échec du transfert.";
   return describeError(err, fallback);
-  if (err instanceof ApiError && err.status === 507) {
-    return "Espace de stockage plein : import refusé. Libérez de la place ou contactez l'administrateur.";
-  }
-  if (err instanceof ApiError) return err.detail;
-  if (err instanceof Error) return err.message;
-  return "Échec du transfert.";
 }
 
 function isNearExpiry(intent: UploadIntentResponse, nowMs: number): boolean {
