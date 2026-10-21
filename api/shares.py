@@ -29,7 +29,9 @@ from urllib.parse import quote
 # 32 random bytes -> 43 url-safe characters. 256 bits means guessing is not a
 # threat model; the guards that matter are expiry, revocation and max_uses.
 TOKEN_BYTES = 32
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+# fullmatch, not `$`: `$` also matches before a trailing newline, and the gate
+# must accept exactly one 43-character token, nothing else.
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{43}")
 
 # Types allowed with Content-Disposition: inline. Everything else -- notably
 # text/html, image/svg+xml and the application/xhtml+xml family -- is refused at
@@ -62,7 +64,7 @@ def is_well_formed(token: str) -> bool:
     A malformed token cannot match a stored fingerprint, so rejecting it early
     saves a lookup and keeps obvious scanner noise out of the audit trail.
     """
-    return bool(_TOKEN_RE.match(token or ""))
+    return bool(_TOKEN_RE.fullmatch(token or ""))
 
 
 def inline_allowed(content_type: str) -> bool:

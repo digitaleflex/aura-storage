@@ -321,3 +321,57 @@ def test_share_url_is_absolute_only_when_a_base_is_configured(monkeypatch):
     monkeypatch.setattr(main.settings, "share_base_url", "https://app.example.test")
     created = _share(c, headers, oid)
     assert created["url"] == f"https://app.example.test/s/{created['token']}"
+
+
+def test_helpers_refuse_bad_tokens_and_sanitize_the_filename():
+    # Shape gate: only the 43-char url-safe form can match a stored fingerprint.
+    assert shares.is_well_formed(shares.new_token())
+    for bad in ("", "short", "a" * 42, "a" * 44, "../" + "a" * 40, "a" * 43 + "\n"):
+        assert not shares.is_well_formed(bad)
+
+    # Only non-executable types may render inline; parameters are ignored.
+    assert shares.inline_allowed("application/pdf")
+    assert shares.inline_allowed("IMAGE/PNG; charset=binary")
+    assert not shares.inline_allowed("text/html")
+    assert not shares.inline_allowed("image/svg+xml")
+    assert not shares.inline_allowed("application/xhtml+xml")
+
+    # The user-controlled name cannot break out of the header: quotes,
+    # backslashes and control characters are removed, RFC 5987 carries the rest.
+    header = shares.content_disposition_header(
+        "attachment", 'evil"; filename="x.sh\r\nInjected: 1'
+    )
+    assert "\r" not in header and "\n" not in header
+    assert header.count('"') == 2  # only the quoted ASCII filename
+    assert "Injected" not in header.split('filename=')[0]
+    assert header.startswith("attachment; filename=")
+    assert "filename*=UTF-8''" in header
+    # An empty/garbage name still yields a usable download name.
+    assert 'filename="download"' in shares.content_disposition_header("inline", "\x00")
+
+
+def test_consume_share_is_atomic_under_concurrency():
+    """Eight threads race for a single-use link: exactly one may win."""
+    import threading
+
+    c, headers = _admin()
+    oid = _object(c, headers)
+    created = _share(c, headers, oid, max_uses=1)
+
+    results: list[bool] = []
+    lock = threading.Lock()
+
+    def take():
+        won = main.repo.consume_share(created["id"], int(time.time()))
+        with lock:
+            results.append(won)
+
+    threads = [threading.Thread(target=take) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(results) == 8
+    assert results.count(True) == 1, results
+    assert main.repo.get_share(created["id"])["use_count"] == 1
