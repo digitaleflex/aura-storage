@@ -44,6 +44,7 @@ from .lifecycle import purge_object, reconcile_pending, reconcile_terminal
 from .s3 import (
     SSE_ALGORITHM,
     SSE_HEADER,
+    CommitDeadlineExceeded,
     ObjectTooLarge,
     abort_multipart,
     complete_multipart,
@@ -1114,6 +1115,10 @@ def commit_object(
     # Instrumentation only: timings for the pilot latency distribution. No
     # behaviour change -- the header and log line are the sole additions.
     started = time.perf_counter()
+    # Global deadline for this commit (#120): measured from request start so
+    # HEAD time and hashing share one budget, enforced per chunk by
+    # stream_sha256 (the other phases are bounded by the S3 client timeouts).
+    deadline = time.monotonic() + settings.commit_deadline_s
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -1198,7 +1203,19 @@ def commit_object(
     hash_started = time.perf_counter()
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
-        total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes)
+        total, digest = stream_sha256(
+            body, max_bytes, settings.commit_chunk_bytes, deadline=deadline,
+        )
+    except CommitDeadlineExceeded:
+        # A commit slower than its global deadline never hangs the request
+        # slot (#120): terminal failure + 504, and the bytes are dropped.
+        repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
+        audit_event("commit", principal["id"], "deadline", {"object_id": oid})
+        raise HTTPException(status_code=504, detail="commit deadline exceeded")
     except ObjectTooLarge:
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
@@ -1215,13 +1232,16 @@ def commit_object(
             pass
         raise HTTPException(status_code=422, detail="uploaded size does not match storage")
 
-    # Hard deadline guard for the synchronous commit path.
-    if settings.commit_deadline_s and (time.perf_counter() - started) > settings.commit_deadline_s:
+    # Hard deadline guard for the synchronous commit path. It also covers a
+    # zero-byte body (no chunk to check) and a hash that finishes just past
+    # the budget, including a configured deadline of 0 seconds.
+    if time.monotonic() > deadline:
         repo.set_status(oid, "failed")
         try:
             s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
         except Exception:
             pass
+        audit_event("commit", principal["id"], "deadline", {"object_id": oid})
         raise HTTPException(status_code=504, detail="commit exceeded deadline")
 
     row_version = row.get("version")
