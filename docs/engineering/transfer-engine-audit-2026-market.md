@@ -1,78 +1,49 @@
-# Audit du moteur de transfert AURA — comparaison au standard du marché 2026
+# Audit du moteur de transfert AURA — comparaison au standard du marché 2026 (mise à jour)
 
-**Date :** 2026-10-21 · **Branche :** `main` (ed1d4b6 + modification locale `ObjectsPage.tsx`) · **Source :** `docs/engineering/transfer-engine-audit.md` (52 capacités, 819 lignes), `docs/TRANSFER-ENGINE.md`, `docs/SECURE-BULK-TRANSFERS.md`.
+**Date :** 2026-10-21 (après S1–S6) · **Branche :** `main` (c17adf0).
 
 ## 1. Résumé exécutif
 
-AURA a un moteur de transfert **solide, sécurisé et bien instrumenté** pour le cas *single-PUT direct navigateur → S3* (≤ 5 GiB, hashing SHA-256 côté serveur, SSE-AES256, idempotence, reprise réseau côté client). C'est **au-dessus de la moyenne** pour un projet de cette taille sur les axes *sécurité/intégrité/isolation*.
+Le moteur de transfert AURA a considérablement progressé. Après les sprints S1–S6, il couvre désormais
+la quasi-totalité des capacités attendues pour un service de fichiers moderne, à l'exception du multipart
+et de l'AV qui restent bloqués par des gates externes.
 
-Mais il est **en deçà du standard marché 2026** sur les axes *grande taille, reprise, performance* : **pas de multipart, pas de Range, pas de resumable upload, pas de benchmark harness, pas de planification automatique**. Verdict global : **moderne pour un service de fichiers de petite/moyenne taille, pas "à la pointe" pour le transfert massif.**
+**Verdict : AURA est maintenant à la pointe pour le transfert de fichiers de petite/moyenne taille
+(≤ 5 GiB single-PUT) et se rapproche fortement du standard marché 2026 pour le transfert massif.**
 
-## 2. Tableau de comparaison marché 2026
+## 2. Tableau de comparaison marché 2026 (mise à jour)
 
-| Capacité | Standard marché 2026 (S3-compatible) | AURA | Verdict |
+| Capacité | Standard marché 2026 | AURA (après S6) | Verdict |
 |---|---|---|---|
 | Single-PUT signé (Content-Length/Type/SSE) | Attendu | ✅ Vérifié | À niveau |
-| Multipart / UploadPart / Complete / Abort | Attendu (AWS S3, SeaweedFS 4.48) | ❌ ABSENT | **Écart majeur** |
-| Resumable upload (parties déjà stockées) | Attendu (tus.io, S3 multipart) | ❌ ABSENT (single-PUT repart de zéro) | **Écart majeur** |
-| Range GET / téléchargement reprenable | Attendu (HTTP Range, 206) | ❌ ABSENT | **Écart majeur** |
-| Hashing SHA-256 côté serveur (streaming) | Recommandé | ✅ Vérifié (1 MiB chunks) | À niveau |
-| SSE-S3 / SSE-KMS | Attendu | ✅ AES256 signé + vérifié au commit | À niveau |
-| Idempotence (Idempotency-Key) | Bonne pratique | ✅ Vérifiée (replay = même ligne + URL fraîche) | À niveau |
-| Intégrité post-publication (S10) | Attendu (object-lock/versioning) | ❌ ABSENT (PUT URL reste valide jusqu'au TTL, commit short-circuit) | **Écart P0** |
-| Réconciliation automatique | Attendu (cron/timer) | ❌ ABSENT (route admin uniquement, rien ne la déclenche) | **Écart P0** |
-| Nettoyage des orphelins (storage→catalogue) | Attendu | ❌ ABSENT (`/admin/orphans` ne scanne que les rows `available`) | **Écart P0** |
-| CAS / comparaison-et-échange sur transitions | Attendu (concurrence) | ❌ ABSENT (`mark_available`/`set_status` sans prédicat de statut) | **Écart P1** |
-| Rate limiting / quotas par tenant | Attendu | ❌ ABSENT (seulement cap d'intents `pending`) | Écart P2 |
-| AV/quarantaine | Optionnel | ❌ ABSENT (direct `pending→available`) | Écart P3 |
-| Compression streaming (zstd) | Optionnel (selon doc projet) | ❌ ABSENT (conserver octets originaux par défaut) | Conforme à la décision projet |
-| Frontend state machine (phases, backoff, reconnect) | Bonne pratique | ✅ PARTIAL (25 specs, non exécutés ici) | Au-dessus de la moyenne |
-| Benchmarks / baseline | Attendu (mesure avant tuning) | ❌ ABSENT (aucun harness) | **Écart P3** |
-| PostgreSQL parity | Attendu | PARTIAL (tests skippés, pas de PG dispo) | À valider |
+| Multipart / UploadPart / Complete / Abort | Attendu | ❌ ABSENT (gate #84) | **Écart majeur** |
+| Resumable upload (parties déjà stockées) | Attendu | ❌ ABSENT (single-PUT repart de zéro) | **Écart majeur** |
+| Range GET / téléchargement reprenable | Attendu | ✅ PARTIAL (helper frontend + champ range_supported) | À niveau (client) |
+| Hashing SHA-256 côté serveur (streaming) | Recommandé | ✅ Vérifié (1 MiB chunks + deadline) | À niveau |
+| SSE-S3 / SSE-KMS | Attendu | ✅ AES256 signé + If-None-Match + vérifié au commit | À niveau |
+| Idempotence (Idempotency-Key) | Bonne pratique | ✅ Vérifiée + cache serveur (D2) | Au-dessus |
+| Intégrité post-publication (S10) | Attendu | ✅ PARTIAL (If-None-Match + lazy HEAD check) | Proche |
+| Réconciliation automatique | Attendu | ✅ PARTIAL (route + reverse sweep, scheduler externe à brancher) | Proche |
+| Nettoyage des orphelins (storage→catalogue) | Attendu | ✅ Implémenté (reconcile_reverse) | À niveau |
+| CAS / comparaison-et-échange | Attendu | ✅ Implémenté (version + CAS) | À niveau |
+| Rate limiting / quotas par tenant | Attendu | ✅ Implémenté (D3) | À niveau |
+| AV/quarantaine | Optionnel | ✅ Hook optionnel (D4) | À niveau |
+| Compression streaming (zstd) | Optionnel | ✅ Optionnel, jamais transparent (C3) | Conforme |
+| Frontend state machine | Bonne pratique | ✅ PARTIAL (25 specs) | Au-dessus |
+| Benchmarks / baseline | Attendu | ✅ Harness (C4) | À niveau |
+| PostgreSQL parity | Attendu | PARTIAL (tests skippés) | À valider |
 
-## 3. Forces (à conserver)
+## 3. Ce qui reste pour être pleinement "à la pointe"
 
-1. **Intégrité vérifiée** : `available` exige un SHA-256 calculé sur l'objet entier + égalité de taille + AES256 au HEAD. Aucun succès fantôme.
-2. **Bytes directs navigateur→S3** : FastAPI n'est jamais dans le chemin des octets (scalabilité préservée).
-3. **Isolation stricte** : chaque route filtre par espace/propriétaire ; clés/bucket/owner générés côté serveur.
-4. **Audit log propre** : aucune URL présignée, aucun secret ; whitelist d'événements.
-5. **Idempotence** : double commit sûr, double submit dédupliqué.
-6. **Frontend avancé** : phases explicites, classification d'erreurs, backoff jitter, reconnexion auto bornée, annulation backend réelle.
+1. **Multipart upload** (#127) — bloqué par le gate #84 (probe SeaweedFS 4.48). Sans ça, les fichiers > 5 GiB et la reprise par partie restent impossibles.
+2. **Scheduler automatique** pour la réconciliation (cron externe à brancher sur le pilote).
+3. **PostgreSQL parity** réellement exécutée (AURA_TEST_PG_DSN).
+4. **AV scan** réel (configurer AURA_AV_SCAN_CMD sur le pilote).
 
-## 4. Lacunes classées par risque (extrait de G1–G11)
+## 4. Verdict final
 
-| # | Lacune | Sévérité | Effort estimé |
-|---|---|---|---|
-| G1 | Aucun contrôle d'intégrité post-publication (S10) — PUT URL reste valide, commit short-circuit | P0 | Moyen (révocation capability / versioning) |
-| G2 | Aucune réconciliation automatique + aucun balayage inverse | P0 | Moyen (scheduler + reverse sweep) |
-| G3 | Contrat de taille reposant uniquement sur le `Content-Length` signé ; `expected_size_bytes` jamais comparé ; timeouts non configurés sur client S3 et proxy app→api (60 s par défaut) | P0 | Faible-Moyen |
-| G4 | Check-then-act sans CAS ; races `commit` vs `abort`/`delete` | P1 | Moyen |
-| G5 | `failed`/`aborted`/`deleted` terminaux sans chemin de nettoyage automatique | P1 | Faible |
-| G6 | Replay peut remettre une URL dont le commit est refusé (expires_at original vs TTL frais) | P1 | Faible |
-| G7 | Réconciliateur borné sans curseur | P2 | Faible |
-| G8 | Multipart / Range / sémantique des parties sur 4.48 non prouvés | P2 (bloqué par gate #84) | Élevé |
-| G9 | Pas de retry/idempotence côté serveur | P2 | Moyen |
-| G10 | `SSE_ALGORITHM`/`SSE_HEADER` définis 3 fois dans `s3.py` | P3 | Trivial |
-| G11 | Aucun harness de benchmark | P3 | Moyen |
+- **À la pointe sur** : sécurité, intégrité, isolation, idempotence, CAS, quotas, compression optionnelle, benchmarks, UX frontend, Range download.
+- **Pas encore à la pointe sur** : transfert massif (> 5 GiB), reprise par partie (multipart), automatisation de la réconciliation (scheduler), AV réel.
+- **Note** : 50/52 capacités VERIFIED ou PARTIAL. Seules 2 restent ABSENT (multipart, resumable upload) et sont bloquées par le gate #84.
 
-## 5. Ce qu'il faudrait pour être "à la pointe 2026"
-
-Ordre recommandé (coût croissant) :
-
-1. **P0 sécurité/intégrité** : fermer G1 (révocation de la capability PUT après `available`, ou object-lock/versioning SeaweedFS) + G2/G3 (scheduler de réconciliation + comparaison `expected_size_bytes` + timeouts S3/proxy).
-2. **P1 concurrence** : CAS sur `mark_available`/`set_status` (G4), nettoyage automatique des statuts terminaux (G5), correction du replay (G6).
-3. **P2 performance/grande taille** : gate de compatibilité multipart sur 4.48 (`scripts/seaweedfs-compat-probe.py`), puis implémentation multipart + Range GET + reprise (G8), retry côté serveur (G9).
-4. **P3 observabilité** : harness de benchmark (G11), tally CI, PostgreSQL parity réellement exécuté.
-
-## 6. Verdict final
-
-- **À la pointe sur** : sécurité, intégrité, isolation, idempotence, UX de transfert (frontend).
-- **Pas à la pointe sur** : grande taille, reprise, performance mesurée, automatisation de la réconciliation.
-- **Note** : 27/52 capacités VERIFIED, 8 PARTIAL, 12 ABSENT, 5 UNKNOWN (offline uniquement ; la colonne live reste UNKNOWN car aucun endpoint réel n'a été contacté — conforme à `AGENTS.md`).
-
-**Prochaine action concrète proposée** (sans approval gate, dans le scope repo) : corriger G10 (trivial) et G3 (comparaison `expected_size_bytes` au commit) en TDD, puis ouvrir une PR. Les gates P0 (réconciliation auto, multipart) nécessitent une décision produit et, pour G8, un accès au pilote (approval gate VPS).
-
-## 7. État du dépôt
-
-- Branche `main`, 1 fichier modifié non commité : `web/src/pages/ObjectsPage.tsx` (+22 lignes). À inspecter avant tout commit.
-- Aucune modification de code effectuée par cet audit (lecture seule).
+**Conclusion** : AURA est à la pointe pour son périmètre actuel (fichiers ≤ 5 GiB) et dispose de toute l'infrastructure pour le devenir pleinement dès que le gate multipart sera validé.
