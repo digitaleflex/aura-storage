@@ -123,6 +123,17 @@ function formatBytes(size: number): string {
   return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
+/** Formatage lisible du temps écoulé ou restant (HH:MM:SS ou MM:SS). */
+function formatDuration(seconds?: number): string {
+  if (seconds === undefined || seconds <= 0) return "—";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return `${h > 0 ? `${h}h ` : ""}${m
+    .toString()
+    .padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+}
+
 const DATE_FORMAT = new Intl.DateTimeFormat("fr-FR", {
   dateStyle: "medium",
   timeStyle: "short",
@@ -416,6 +427,7 @@ export function ObjectsPage() {
   // Uploads run through the M03 transfer engine as a bounded multi-file queue.
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [queue, setQueue] = useState<QueueState>(() => emptyQueue());
+  const [queueEtaText, setQueueEtaText] = useState<string>("—");
   const queueRef = useRef<UploadQueue | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
   // Page Lifecycle "freeze": a truly frozen tab suspends its JS, so progress
@@ -871,6 +883,20 @@ export function ObjectsPage() {
   /** Shared queue subscriber: mirrors state and reacts when it settles. */
   function handleQueueUpdate(next: QueueState) {
     setQueue(next);
+    // Calcul du texte ETA pour l'affichage
+    const etaText = (() => {
+      const remainingBytes = next.items
+        .filter(
+          (item) =>
+            item.state.phase !== "available" &&
+            item.state.phase !== "cancelled" &&
+            item.state.phase !== "failed"
+        )
+        .reduce((sum, item) => sum + item.state.sizeBytes, 0);
+      const etaSeconds = remainingBytes > 0 ? Math.max(1, Math.ceil(remainingBytes / 1000)) : 0;
+      return formatDuration(etaSeconds);
+    })();
+    setQueueEtaText(etaText);
     if (!next.finished) return;
     if (next.done > 0) {
       invalidateLibrary();
@@ -1866,12 +1892,7 @@ export function ObjectsPage() {
               <span className="muted">
                 {queue.done}/{queue.items.length} transféré
                 {queue.items.length > 1 ? "s" : ""}
-                {queue.paused > 0 ? ` · ${queue.paused} en pause` : ""}
-                {queue.failed > 0 ? ` · ${queue.failed} en échec` : ""}
-                {queue.cancelled > 0
-                  ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
-                  : ""}
-              </span>
+                &nbsp;·&nbsp;{queueEtaText}</span>
               {transferActive ? (
                 <span className="muted">
                   jusqu'à {queue.concurrency} en parallèle
