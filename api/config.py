@@ -53,6 +53,7 @@ class Settings:
     # Grace period after intent_ttl during which a commit is still accepted
     # (upload may finish just before expiry; #37).
     intent_grace_s: int = _int("AURA_INTENT_GRACE_SECONDS", 300)
+    replay_refresh_margin_s: int = _int("AURA_REPLAY_REFRESH_MARGIN_SECONDS", 60)
     # Public share links (api/shares.py). A share is an unauthenticated,
     # revocable read-only capability for one object: the token is stored as a
     # SHA-256 fingerprint and redeemed through a 302 to a presigned URL.
@@ -127,6 +128,9 @@ class Settings:
     verify_heartbeat_bytes: int = _int("AURA_VERIFY_HEARTBEAT_BYTES", 256 * 1024 * 1024)
     verify_max_attempts: int = _int("AURA_VERIFY_MAX_ATTEMPTS", 8)
     verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
+    # Hard deadline for a single commit response (seconds). Objects above the
+    # async threshold return 202 quickly; this guards the synchronous path.
+    commit_deadline_s: int = _int("AURA_COMMIT_DEADLINE_SECONDS", 300)
     # Master mode: how long a password-confirmed elevation for bulk purges
     # lasts on one session (seconds), and the most objects one call may purge.
     master_mode_ttl: int = _int("AURA_MASTER_MODE_SECONDS", 900)
@@ -149,6 +153,12 @@ class Settings:
     # never reported or removed, so an upload in flight is never mistaken for one.
     orphan_grace_s: int = _int("AURA_ORPHAN_GRACE_SECONDS", 86400)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
+    # Global deadline for one commit request (hashing phase, #120): past it the
+    # intent is marked failed and the client gets 504 instead of an unbounded
+    # wait. Must stay *below* the app proxy's read timeout for the commit route
+    # (app/nginx.conf, 310 s) so the API's structured 504 wins over the proxy's
+    # generic one; change both together.
+    commit_deadline_s: int = _int("AURA_COMMIT_DEADLINE_S", 300)
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
     # Zero-byte objects are refused by default: an empty upload is usually a
     # client bug rather than intent. Enable only when a caller legitimately needs
@@ -193,3 +203,7 @@ if settings.audit_error_scan_lines < 1:
     raise RuntimeError("AURA_AUDIT_ERROR_SCAN_LINES must be >= 1")
 if settings.audit_error_window_s < 0:
     raise RuntimeError("AURA_AUDIT_ERROR_WINDOW_S must be >= 0")
+# A zero/negative commit deadline would fail every commit instead of
+# guarding one (#120), so refuse the process at boot.
+if settings.commit_deadline_s < 1:
+    raise RuntimeError("AURA_COMMIT_DEADLINE_S must be >= 1")

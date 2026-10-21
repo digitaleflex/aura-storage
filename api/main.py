@@ -40,10 +40,11 @@ from .authz import (
 )
 from .config import settings
 from .identity import fingerprint, format_token, new_secret
-from .lifecycle import purge_object, reconcile_pending
+from .lifecycle import purge_object, reconcile_pending, reconcile_terminal
 from .s3 import (
     SSE_ALGORITHM,
     SSE_HEADER,
+    CommitDeadlineExceeded,
     ObjectTooLarge,
     abort_multipart,
     complete_multipart,
@@ -803,7 +804,19 @@ def upload_intent(
         if existing is not None:
             existing = _as_dict(existing)
             expires_at = existing.get("intent_expires_at")
-            if not expires_at or int(time.time()) <= int(expires_at) + settings.intent_grace_s:
+            now_ts = int(time.time())
+            grace_deadline = int(expires_at) + settings.intent_grace_s if expires_at else now_ts
+            # G6: a replay accepted too close to the grace deadline would hand
+            # out a URL whose commits are refused for most of its life. Retire
+            # the old intent and fall through to mint a fresh one.
+            if expires_at and (now_ts + settings.replay_refresh_margin_s) > grace_deadline:
+                try:
+                    s3ops.delete_object(Bucket=existing["bucket"], Key=existing["object_key"])
+                except Exception:
+                    pass
+                repo.set_status(existing["id"], EXPIRED)
+                # fall through: create a new intent below
+            elif not expires_at or now_ts <= grace_deadline:
                 if existing.get("multipart_upload_id"):
                     # A resumed multipart upload: same session, the client then
                     # asks which parts are still missing (#72).
@@ -829,9 +842,7 @@ def upload_intent(
                     "size_bytes": expected, "expires_in": settings.intent_ttl,
                     "expires_at": expires_at, "idempotent_replay": True,
                 }
-            # The prior intent is past its grace window: retire it so the
-            # catalogue never keeps two live intents for one key.
-            repo.set_status(existing["id"], EXPIRED)
+            # Retired above (or past grace): fall through to mint a fresh intent.
 
     if idem_key:
         # The same file was already sent (page reloaded while its check ran):
@@ -1104,6 +1115,10 @@ def commit_object(
     # Instrumentation only: timings for the pilot latency distribution. No
     # behaviour change -- the header and log line are the sole additions.
     started = time.perf_counter()
+    # Global deadline for this commit (#120): measured from request start so
+    # HEAD time and hashing share one budget, enforced per chunk by
+    # stream_sha256 (the other phases are bounded by the S3 client timeouts).
+    deadline = time.monotonic() + settings.commit_deadline_s
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -1161,6 +1176,21 @@ def commit_object(
         audit_event("commit", principal["id"], "unencrypted", {"object_id": oid})
         raise HTTPException(status_code=422, detail="object not encrypted at rest")
 
+    # Defence in depth: the declared size must match the size actually stored.
+    expected_declared = row.get("expected_size_bytes")
+    try:
+        expected_declared = int(expected_declared) if expected_declared is not None else None
+    except (TypeError, ValueError):
+        expected_declared = None
+    if expected_declared is not None and expected_declared >= 0 and size != expected_declared:
+        repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
+        audit_event("commit", principal["id"], "size_mismatch_declared", {"object_id": oid})
+        raise HTTPException(status_code=422, detail="uploaded size does not match declared size")
+
     if size >= settings.verify_async_threshold_bytes:
         # Large object: hand it to the verification worker instead of hashing
         # gigabytes inside this request (N5). The client follows the status.
@@ -1173,7 +1203,19 @@ def commit_object(
     hash_started = time.perf_counter()
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
-        total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes)
+        total, digest = stream_sha256(
+            body, max_bytes, settings.commit_chunk_bytes, deadline=deadline,
+        )
+    except CommitDeadlineExceeded:
+        # A commit slower than its global deadline never hangs the request
+        # slot (#120): terminal failure + 504, and the bytes are dropped.
+        repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
+        audit_event("commit", principal["id"], "deadline", {"object_id": oid})
+        raise HTTPException(status_code=504, detail="commit deadline exceeded")
     except ObjectTooLarge:
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
@@ -1181,12 +1223,40 @@ def commit_object(
         raise HTTPException(status_code=422, detail="upload not readable at storage")
     hash_s = time.perf_counter() - hash_started
 
-    if total != size:
+    if total != size or (expected_declared is not None and expected_declared >= 0 and total != expected_declared):
         # Truncated or mismatched upload is never marked available (#37).
         repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
         raise HTTPException(status_code=422, detail="uploaded size does not match storage")
 
-    repo.mark_available(oid, size, digest)
+    # Hard deadline guard for the synchronous commit path. It also covers a
+    # zero-byte body (no chunk to check) and a hash that finishes just past
+    # the budget, including a configured deadline of 0 seconds.
+    if time.monotonic() > deadline:
+        repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
+        audit_event("commit", principal["id"], "deadline", {"object_id": oid})
+        raise HTTPException(status_code=504, detail="commit exceeded deadline")
+
+    row_version = row.get("version")
+    n = repo.mark_available(oid, size, digest, expected_version=row_version)
+    if n == 0:
+        # Compare-and-set lost the race. Re-read to distinguish idempotent
+        # success (already available with the same digest) from a real conflict.
+        fresh = _as_dict(repo.get_object(oid, **_object_scope(principal)))
+        if fresh and fresh.get("status") == "available" and fresh.get("checksum_sha256") == digest:
+            audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
+            return {
+                "id": oid, "status": "available", "size_bytes": fresh.get("size_bytes", size),
+                "checksum_sha256": digest, "checksum_algorithm": "sha256",
+            }
+        raise HTTPException(status_code=409, detail="concurrent commit conflict")
     audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
     total_s = time.perf_counter() - started
     head_ms = head_s * 1000.0
@@ -1756,6 +1826,15 @@ def reconcile(limit: int = 500,
     from .lifecycle import resume_purges
     out.update(resume_purges(repo, s3ops, limit=limit))
     audit_event("admin.reconcile", principal["id"], "success", out)
+    return out
+
+
+@app.post("/api/v1/admin/reconcile-terminal")
+def reconcile_terminal_route(limit: int = 500,
+                            principal: dict = Depends(authorize(ADMIN_WRITE))):
+    limit = max(1, min(limit, 5000))
+    out = reconcile_terminal(repo, s3ops, limit=limit)
+    audit_event("admin.reconcile_terminal", principal["id"], "success", out)
     return out
 
 

@@ -135,6 +135,38 @@ the gateway rejects a different size/type than the API authorized.
   run against a real endpoint.
 - The API reports `checksum_algorithm: "sha256"` wherever a checksum is returned.
 
+### The size contract is checked server-side, not only by the gateway
+
+The signed `Content-Length` is a *gateway* control: it is enforced by the S3
+backend, and that enforcement is verified live, not offline. The commit
+therefore cross-checks the catalogue against the storage:
+
+- the size declared at intent time (`expected_size_bytes`) must equal the size
+  the gateway reports (`HEAD`), and the streamed total must equal it too;
+- a mismatch marks the intent `failed`, drops the bytes best-effort (the
+  reconciliation sweep retries a failed delete) and answers `422` — an object
+  whose stored size differs from the authorised one never becomes `available`.
+
+## Bounded commits (no unbounded wait)
+
+A commit streams the object twice (HEAD, then the hash), so it can take minutes
+on a large object. Three layers bound it, in this order:
+
+1. the S3 client (`api/s3.py::make_client`) uses `connect_timeout=10`,
+   `read_timeout=60` and adaptive retries (3) — a stalled backend fails instead
+   of hanging the request;
+2. the commit itself has a global deadline, `AURA_COMMIT_DEADLINE_S` (default
+   300 s), checked between chunks: past it the intent is `failed` and the
+   client gets `504`;
+3. the app proxy (`app/nginx.conf`) gives the commit route a 310 s read/send
+   timeout (the default 60 s would cut the response and hide the API's own
+   outcome), and Traefik's entrypoint already allows 1200 s.
+
+The API deadline stays below the proxy timeout on purpose: the API's structured
+`504` (which marks the intent `failed`) must reach the client instead of the
+proxy's generic one (which would leave it `pending`). Raise one, raise all
+three.
+
 ## Large files and multipart: analysis, gaps, proposal
 
 **Decision: multipart is NOT implemented. No resumable/multipart behaviour is

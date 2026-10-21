@@ -62,6 +62,40 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
     }
 
 
+def reconcile_terminal(repo, s3ops, *, statuses=("failed", "aborted", "deleted"),
+                      retention_s: int = 7 * 24 * 3600, limit: int = 500) -> dict:
+    """Clean up bytes for terminal rows older than ``retention_s``.
+
+    Administrative sweep across every space. A row is removed (row deleted) only
+    after its bytes were actually deleted: a storage failure keeps the row for a
+    later sweep and is reported in ``storage_failures``.
+    """
+    now_ts = int(time.time())
+    cutoff = now_ts - retention_s
+    cleaned = 0
+    storage_deletes = 0
+    storage_failures = 0
+    for status in statuses:
+        for r in repo.list_status_before(status, cutoff, limit=max(1, limit)):
+            row = dict(r) if not isinstance(r, dict) else r
+            ts = row.get("terminal_since") or row.get("updated_at") or 0
+            if int(ts) > cutoff:
+                continue
+            try:
+                s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+            except Exception:
+                storage_failures += 1
+                continue
+            storage_deletes += 1
+            repo.delete_object_row(row["id"])
+            cleaned += 1
+    return {
+        "cleaned": cleaned,
+        "storage_deletes_attempted": storage_deletes,
+        "storage_failures": storage_failures,
+    }
+
+
 def purge_object(repo, s3ops, oid: str, *, space_id: str,
                  owner_id: str | None = None) -> bool:
     """Permanently delete bytes then the catalogue row. Returns True if done.

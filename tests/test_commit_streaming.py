@@ -124,7 +124,7 @@ def test_commit_is_idempotent(monkeypatch):
     data = b"idempotent-payload"
     monkeypatch.setattr(main, "s3ops", DummyS3(data))
     c, headers = _admin_headers()
-    oid = _intent(c, headers)
+    oid = _intent(c, headers, size_bytes=len(data))
     first = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
     second = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
     assert first.status_code == 200 and second.status_code == 200
@@ -171,7 +171,7 @@ def test_expired_intent_is_refused(monkeypatch):
 def test_pending_object_is_not_visible_as_available(monkeypatch):
     monkeypatch.setattr(main, "s3ops", DummyS3(b"pending"))
     c, headers = _admin_headers()
-    oid = _intent(c, headers, "notyet.bin")
+    oid = _intent(c, headers, "notyet.bin", size_bytes=len(b"pending"))
     items = c.get("/api/v1/objects").json()["items"]
     entry = next(i for i in items if i["id"] == oid)
     assert entry["status"] == "pending"
@@ -182,7 +182,7 @@ def test_commit_emits_server_timing(monkeypatch, caplog):
     data = b"timed-payload"
     monkeypatch.setattr(main, "s3ops", DummyS3(data))
     c, headers = _admin_headers()
-    oid = _intent(c, headers, "timed.bin")
+    oid = _intent(c, headers, "timed.bin", size_bytes=len(data))
 
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
         r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)

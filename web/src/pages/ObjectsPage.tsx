@@ -42,7 +42,8 @@ import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
 import { RowMenu } from "../components/RowMenu";
 import { describeError } from "../lib/errors";
-import { PreviewModal } from "../components/PreviewModal";
+import { lazy, Suspense } from "react";
+const PreviewModal = lazy(() => import("../components/PreviewModal").then((m) => ({ default: m.PreviewModal })));
 import {
   MasterModeBanner,
   MasterModeDialog,
@@ -52,6 +53,31 @@ import { isPreviewable } from "../lib/preview";
 
 /** Objects fetched per page ("Charger plus" increments the offset). */
 const OBJECTS_PAGE_SIZE = 50;
+
+/**
+ * True when a key event belongs to text entry. Global shortcuts must not
+ * hijack typing, but they should still work when focus is on a checkbox or a
+ * button (e.g. selecting rows then pressing Suppr).
+ */
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target.tagName === "TEXTAREA" || target.tagName === "SELECT") return true;
+  if (target.tagName === "INPUT") {
+    const type = (target as HTMLInputElement).type;
+    return ![
+      "checkbox",
+      "radio",
+      "button",
+      "submit",
+      "reset",
+      "file",
+      "range",
+      "color",
+    ].includes(type);
+  }
+  return false;
+}
 
 /** Human label for each transfer phase (import → validation → availability). */
 const PHASE_LABEL: Record<TransferPhase, string> = {
@@ -165,6 +191,66 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 /** Friendly type label for scanning; the raw MIME stays in the details panel. */
+/** SVG icon for a recognized file type. Returns null for unknown types. */
+function FileTypeIcon({ contentType }: { contentType: string }) {
+  const value = contentType.toLowerCase();
+  if (value.startsWith("image/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.6" />
+        <circle cx="8" cy="10" r="2" fill="currentColor" />
+        <path d="M3 17l5-4 4 3 5-5 4 4" stroke="currentColor" strokeWidth="1.4" />
+      </svg>
+    );
+  }
+  if (value === "application/pdf") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="6" y="2" width="12" height="20" rx="1" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M9 7h6M9 11h6M9 15h4" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+  if (value.startsWith("audio/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    );
+  }
+  if (value.startsWith("video/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="2" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M18 9l4-2v10l-4-2" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    );
+  }
+  if (value === "application/zip" || value === "application/gzip" || value === "application/x-tar") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M4 10h16M10 4v6" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+  if (value.startsWith("text/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M14 2v6h6M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
 function typeLabel(contentType: string): string {
   const value = contentType.toLowerCase();
   if (value === "application/pdf") return "PDF";
@@ -455,8 +541,8 @@ export function ObjectsPage() {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }
 
-  function notify(kind: Toast["kind"], text: string) {
-    setToasts((current) => [...current.slice(-4), makeToast(kind, text)]);
+  function notify(kind: Toast["kind"], text: string, action?: Toast["action"]) {
+    setToasts((current) => [...current.slice(-4), makeToast(kind, text, action)]);
   }
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -472,6 +558,27 @@ export function ObjectsPage() {
   // holds pending files, a queue or an error; a drop anywhere also opens it.
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [trayCollapsed, setTrayCollapsed] = useState(false);
+  // Directory import: which folder of the plan is being created (item P1.7).
+  const [folderProgress, setFolderProgress] = useState<{
+    done: number;
+    total: number;
+    name: string;
+  } | null>(null);
+  // Bulk delete: the dialog stays open while the per-file loop reports its
+  // real progress instead of a silent "Suppression…" (item P1.8).
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [deleteManyProgress, setDeleteManyProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const uploadStartTimeRef = useRef<number | null>(null);
+
+  // File d'attente automatique : placeholder (defini plus bas apres transferActive)
+
+  // Infinite scroll : charger automatiquement quand le bouton "Charger plus" est visible
+  // (defini apres objectsQuery pour eviter le TDZ)
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
     message: ReactNode;
@@ -558,6 +665,10 @@ export function ObjectsPage() {
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
 
+  // Permissions d'écriture : tout utilisateur authentifié peut créer des dossiers
+  // et importer des fichiers ; l'API reste autoritaire.
+  const canCreate = !!session.data?.id;
+  const canCreateFolder = !!session.data?.id;
   // Recursive deletion deletes objects (objects:delete) inside folders the
   // caller owns (objects:write); it is a human-only flow, like folders. When
   // either scope is missing the option is never offered.
@@ -577,6 +688,24 @@ export function ObjectsPage() {
 
   /** True while any file of the queue is transferring (blocks double submit). */
   const transferActive = queue.active > 0;
+
+  // File d'attente automatique : quand le transfert se termine et qu'il y a
+  // des fichiers en attente, les lancer automatiquement.
+  useEffect(() => {
+    if (transferActive) return;
+    if (pendingFiles.length === 0) return;
+    if (!csrf) return;
+    // Petite temporisation pour laisser l'UI se stabiliser
+    const timer = setTimeout(() => {
+      launchQueue(
+        csrf,
+        pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
+      );
+      setPendingFiles([]);
+      setNotice(null);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [transferActive, pendingFiles.length, csrf, currentFolderId]);
 
   // -- Upload journal: resume a long import after a reload --------------------
   const owner = session.data?.id ?? null;
@@ -606,6 +735,38 @@ export function ObjectsPage() {
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [transferActive]);
+
+  // Raccourcis clavier : / pour focus recherche
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (isTextEntryTarget(event.target)) return;
+      // Un "/" majuscule ouvre la légende, pas la recherche : les deux
+      // raccourcis partagent la même touche physique.
+      if (event.key === "/" && !event.shiftKey) {
+        event.preventDefault();
+        const searchInput = document.querySelector('input[name="filter"]') as HTMLInputElement;
+        if (searchInput) searchInput.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Coller-pour-importer (Ctrl+V / Cmd+V)
+  useEffect(() => {
+    function onPaste(event: ClipboardEvent) {
+      const files = event.clipboardData?.files;
+      if (!files || files.length === 0) return;
+      // Ignorer si on est dans un champ de saisie
+      const target = event.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      event.preventDefault();
+      setPendingFiles((prev) => [...prev, ...Array.from(files)]);
+      setIntakeOpen(true);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
 
   // Keep the screen (and so the machine) awake while files are being sent.
   // Best effort: unsupported browsers or a refused lock change nothing.
@@ -776,6 +937,23 @@ export function ObjectsPage() {
         : undefined,
   });
 
+  // Infinite scroll : charger automatiquement quand le bouton "Charger plus" est visible
+  useEffect(() => {
+    if (!objectsQuery.hasNextPage) return;
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !objectsQuery.isFetchingNextPage) {
+          void objectsQuery.fetchNextPage();
+        }
+      },
+      { threshold: 0.1 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [objectsQuery.hasNextPage, objectsQuery.isFetchingNextPage]);
+
   const tree = treeQuery.data?.items ?? [];
   const byId = useMemo(() => new Map(tree.map((f) => [f.id, f])), [tree]);
   const childrenOf = useMemo(() => {
@@ -922,9 +1100,12 @@ export function ObjectsPage() {
       if (!csrf) throw new Error("Session expirée.");
       return api.deleteObject(id, csrf);
     },
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       setDetails(null);
-      notify("ok", "Objet marqué comme supprimé. Les octets restent jusqu'à une purge.");
+      notify("ok", "Objet marqué comme supprimé. Les octets restent jusqu'à une purge.", {
+        label: "Annuler",
+        onClick: () => restoreMutation.mutate(id),
+      });
       invalidateLibrary();
     },
     onError: (err) => reportError(err, "Suppression impossible."),
@@ -938,6 +1119,7 @@ export function ObjectsPage() {
       if (!csrf) throw new Error("Session expirée.");
       const failed: string[] = [];
       let deleted = 0;
+      setDeleteManyProgress({ done: 0, total: ids.length });
       for (const id of ids) {
         try {
           await api.deleteObject(id, csrf);
@@ -945,17 +1127,30 @@ export function ObjectsPage() {
         } catch {
           const target = items.find((item) => item.id === id);
           failed.push(target?.display_name ?? id);
+        } finally {
+          setDeleteManyProgress({ done: deleted + failed.length, total: ids.length });
         }
       }
       return { deleted, failed };
     },
-    onSuccess: ({ deleted, failed }) => {
+    onSuccess: ({ deleted, failed }, ids) => {
+      setBulkDeleteOpen(false);
+      setDeleteManyProgress(null);
       setSelectedIds(new Set());
       setDetails(null);
       if (failed.length === 0) {
         notify(
           "ok",
           `${deleted} objet(s) marqué(s) comme supprimé(s). Les octets restent jusqu'à une purge.`,
+          {
+            label: "Annuler",
+            onClick: () => {
+              if (!csrf) return;
+              for (const id of ids) {
+                void restoreMutation.mutate(id);
+              }
+            },
+          },
         );
       } else {
         notify(
@@ -965,8 +1160,39 @@ export function ObjectsPage() {
       }
       invalidateLibrary();
     },
-    onError: (err) => reportError(err, "Suppression en masse impossible."),
+    onError: (err) => {
+      setBulkDeleteOpen(false);
+      setDeleteManyProgress(null);
+      reportError(err, "Suppression en masse impossible.");
+    },
   });
+
+  // Raccourcis clavier globaux (P1.1): `?` ouvre la légende et `Suppr`
+  // prépare la suppression de la sélection. Ignorés dans les champs de
+  // saisie et quand un dialogue est ouvert (il a déjà son propre clavier).
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (isTextEntryTarget(event.target)) return;
+      if (document.querySelector("dialog[open]")) return;
+      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
+        // "? peut arriver tel quel (clavier réel) ou comme "/" + Shift
+        // (événement synthétique, claviers où ? exige une autre touche).
+        event.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      if (
+        event.key === "Delete" &&
+        selectedIds.size > 0 &&
+        !deleteManyMutation.isPending
+      ) {
+        event.preventDefault();
+        setBulkDeleteOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedIds.size, deleteManyMutation.isPending]);
 
   const restoreMutation = useMutation({
     mutationFn: (id: string) => {
@@ -1098,10 +1324,10 @@ export function ObjectsPage() {
       return;
     }
     if (transferActive) {
-      // A submit can still reach here (e.g. Enter in the form) even though the
-      // button is disabled: say why instead of returning silently.
-      setUploadError(
-        "Un transfert est déjà en cours : attendez sa fin ou annulez-le avant de relancer l'import.",
+      // File d'attente : les fichiers sont mis en attente et seront uploadés
+      // automatiquement quand le transfert en cours se termine.
+      setNotice(
+        `${pendingFiles.length} fichier(s) mis en file d'attente — ils seront uploadés automatiquement à la fin du transfert en cours.`,
       );
       return;
     }
@@ -1109,6 +1335,20 @@ export function ObjectsPage() {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
     }
+    // Garde-fou taille client : vérifier max_object_bytes avant l'upload
+    const maxBytes = usageQuery.data?.limits?.max_object_bytes;
+    if (maxBytes && maxBytes > 0) {
+      const oversized = pendingFiles.filter((f) => f.size > maxBytes);
+      if (oversized.length > 0) {
+        const names = oversized.map((f) => f.name).join(", ");
+        setUploadError(
+          `Fichier(s) trop volumineux (max ${formatBytes(maxBytes)}) : ${names}. ` +
+            "Réduisez la taille ou contactez l'administrateur.",
+        );
+        return;
+      }
+    }
+    uploadStartTimeRef.current = Date.now();
     launchQueue(
       csrf,
       pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
@@ -1158,8 +1398,21 @@ export function ObjectsPage() {
       existing.set(keyOf(folder.parent_id, folder.name), folder.id);
     }
 
+    if (plan.folders.length > 0) {
+      setFolderProgress({
+        done: 0,
+        total: plan.folders.length,
+        name: plan.folders[0]!.name,
+      });
+    }
+
     let createdAny = false;
-    for (const folder of plan.folders) {
+    for (const [index, folder] of plan.folders.entries()) {
+      setFolderProgress({
+        done: index,
+        total: plan.folders.length,
+        name: folder.name,
+      });
       const parentId = folder.parentPath
         ? (folderIds.get(folder.parentPath) ?? currentFolderId)
         : currentFolderId;
@@ -1179,22 +1432,34 @@ export function ObjectsPage() {
         createdAny = true;
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
-          const all = await api.listAllFolders();
-          const found = all.items.find(
-            (candidate) =>
-              (candidate.parent_id ?? null) === (parentId ?? null) &&
-              candidate.name === folder.name,
-          );
-          if (found) {
-            existing.set(key, found.id);
-            folderIds.set(folder.path, found.id);
-            continue;
+          try {
+            const all = await api.listAllFolders();
+            const found = all.items.find(
+              (candidate) =>
+                (candidate.parent_id ?? null) === (parentId ?? null) &&
+                candidate.name === folder.name,
+            );
+            if (found) {
+              existing.set(key, found.id);
+              folderIds.set(folder.path, found.id);
+              continue;
+            }
+          } catch {
+            // Fall through to the named failure below: the folder that could
+            // not be resolved is the one worth reporting.
           }
         }
-        setUploadError("Création de l'arborescence impossible.");
+        setFolderProgress(null);
+        setUploadError(
+          `Création du dossier « ${folder.name} » impossible : ${describeError(
+            err,
+            "réponse inattendue du serveur",
+          )}`,
+        );
         return;
       }
     }
+    setFolderProgress(null);
     if (createdAny) invalidateLibrary();
     if (plan.tooDeep.length > 0) {
       setNotice(
@@ -1800,9 +2065,30 @@ export function ObjectsPage() {
           </p>
         </div>
         <div className="head-actions">
+          {/* Actions : Importer (principale), Nouveau dossier (secondaire), Actualiser */}
+          {canCreate ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setIntakeOpen(true)}
+            >
+              Importer
+            </button>
+          ) : null}
+          {canCreateFolder ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setNewFolderOpen(true)}
+            >
+              Nouveau dossier
+            </button>
+          ) : null}
           <button
             type="button"
             className="btn btn-ghost"
+            title="Actualiser la liste"
+            aria-label="Actualiser la liste"
             disabled={objectsQuery.isFetching || treeQuery.isFetching}
             onClick={() => {
               setActionError(null);
@@ -1811,6 +2097,16 @@ export function ObjectsPage() {
             }}
           >
             {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            aria-label="Afficher les raccourcis clavier"
+            title="Raccourcis clavier (?)"
+            aria-haspopup="dialog"
+            onClick={() => setShortcutsOpen(true)}
+          >
+            ?
           </button>
           {canPurge && !master.active ? (
             <button
@@ -1834,25 +2130,6 @@ export function ObjectsPage() {
               {emptyTrashMutation.isPending ? "Vidage…" : "Vider la corbeille"}
             </button>
           ) : null}
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              setNewFolderName("");
-              setNewFolderOpen(true);
-            }}
-          >
-            Nouveau dossier
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            aria-expanded={intakeVisible}
-            aria-controls="intake"
-            onClick={() => setIntakeOpen(true)}
-          >
-            Importer
-          </button>
         </div>
       </div>
 
@@ -2035,6 +2312,12 @@ export function ObjectsPage() {
           choisissez-les. Un fichier n'est déclaré disponible qu'une fois sa
           taille et son empreinte SHA-256 vérifiées par le serveur.
         </p>
+        {folderProgress ? (
+          <p className="pending-hint" role="status">
+            Arborescence : dossier {folderProgress.done + 1}/
+            {folderProgress.total} — «&nbsp;{folderProgress.name}&nbsp;»
+          </p>
+        ) : null}
         <form onSubmit={handleUpload} className="form form-inline">
           <div className="field file-field">
             <span>Fichiers</span>
@@ -2333,28 +2616,23 @@ export function ObjectsPage() {
                     </button>{" "}
                   </>
                 ) : null}
-                <ConfirmAction
-                  label={
-                    deleteManyMutation.isPending
-                      ? "Suppression…"
-                      : "Supprimer la sélection"
-                  }
-                  title="Supprimer la sélection"
-                  message={
-                    <>
-                      Marquer <strong>{selectedIds.size} objet(s)</strong>{" "}
-                      comme supprimé(s) ? Chaque fichier est supprimé
-                      individuellement et le résultat est rapporté par
-                      fichier. Les octets restent jusqu'à une purge.
-                    </>
-                  }
-                  confirmLabel="Supprimer"
-                  danger
-                  pending={deleteManyMutation.isPending}
-                  onConfirm={() =>
-                    deleteManyMutation.mutate([...selectedIds])
-                  }
-                />
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  disabled={deleteManyMutation.isPending}
+                  onClick={() => setBulkDeleteOpen(true)}
+                >
+                  {deleteManyMutation.isPending && deleteManyProgress
+                    ? `Suppression ${deleteManyProgress.done}/${deleteManyProgress.total}…`
+                    : "Supprimer la sélection"}
+                </button>
+                {deleteManyProgress ? (
+                  <span role="status" className="muted">
+                    {" "}
+                    Suppression {deleteManyProgress.done}/
+                    {deleteManyProgress.total}…
+                  </span>
+                ) : null}
               </p>
             ) : null}
             <div className="ledger" role="list">
@@ -2459,6 +2737,7 @@ export function ObjectsPage() {
                   </div>
                   <div className="ledger-meta">
                     <span className="ledger-type" title={item.content_type}>
+                      <FileTypeIcon contentType={item.content_type} />{" "}
                       {typeLabel(item.content_type)}
                     </span>
                     <span className="ledger-size num">
@@ -2590,7 +2869,7 @@ export function ObjectsPage() {
           </>
         )}
         {objectsQuery.hasNextPage ? (
-          <div className="load-more">
+          <div className="load-more" ref={loadMoreRef}>
             <button
               type="button"
               className="btn"
@@ -3021,6 +3300,115 @@ export function ObjectsPage() {
           </button>
         </div>
       </Dialog>
+
+      {/* Bulk delete: opened by the selection bar or the Suppr shortcut. The
+          dialog reports the real per-file progress instead of a mute spinner. */}
+      <Dialog
+        open={bulkDeleteOpen}
+        title="Supprimer la sélection"
+        onClose={() => setBulkDeleteOpen(false)}
+      >
+        <div className="dialog-text">
+          Marquer <strong>{selectedIds.size} objet(s)</strong> comme supprimé(s) ?
+          Chaque fichier est supprimé individuellement et le résultat est
+          rapporté par fichier. Les octets restent jusqu'à une purge.
+        </div>
+        {deleteManyProgress ? (
+          <>
+            <div
+              className="progress"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={deleteManyProgress.total}
+              aria-valuenow={deleteManyProgress.done}
+              aria-label="Progression de la suppression de la sélection"
+            >
+              <span
+                className="progress-bar"
+                style={{
+                  width: `${
+                    deleteManyProgress.total > 0
+                      ? Math.round(
+                          (deleteManyProgress.done / deleteManyProgress.total) * 100,
+                        )
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
+            <p className="muted" role="status">
+              Suppression {deleteManyProgress.done}/{deleteManyProgress.total}…
+            </p>
+          </>
+        ) : null}
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={deleteManyMutation.isPending}
+            onClick={() => setBulkDeleteOpen(false)}
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            disabled={
+              deleteManyMutation.isPending || selectedIds.size === 0
+            }
+            onClick={() => deleteManyMutation.mutate([...selectedIds])}
+          >
+            {deleteManyMutation.isPending ? "Suppression…" : "Supprimer"}
+          </button>
+        </div>
+      </Dialog>
+
+      {/* Keyboard legend: opened with `?` or the header help button. */}
+      <Dialog
+        open={shortcutsOpen}
+        title="Raccourcis clavier"
+        onClose={() => setShortcutsOpen(false)}
+      >
+        <dl className="shortcut-list">
+          <div>
+            <dt>
+              <kbd>/</kbd>
+            </dt>
+            <dd>Rechercher dans le dossier courant</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>Suppr</kbd>
+            </dt>
+            <dd>Supprimer la sélection (confirmation demandée)</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>?</kbd>
+            </dt>
+            <dd>Afficher cette légende</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>Échap</kbd>
+            </dt>
+            <dd>Fermer un menu, un panneau ou un dialogue</dd>
+          </div>
+        </dl>
+        <p className="muted">
+          Les raccourcis sont ignorés dans les champs de saisie.
+        </p>
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setShortcutsOpen(false)}
+          >
+            Compris
+          </button>
+        </div>
+      </Dialog>
+
       {queue.items.length > 0 ? (
         <section className="tray" aria-labelledby="tray-title">
           <div className="tray-head">
@@ -3044,8 +3432,60 @@ export function ObjectsPage() {
               >
                 Effacer
               </button>
-            ) : null}
+            ) : queue.schedulerPaused ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => queueRef.current?.resumeAll()}
+              >
+                Reprendre
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => queueRef.current?.pauseAll()}
+              >
+                Pause
+              </button>
+            )}
           </div>
+          {/* Barre de progression globale */}
+          {(() => {
+            const totalBytes = queue.items.reduce((sum, item) => sum + item.sizeBytes, 0);
+            const uploadedBytes = queue.items.reduce((sum, item) => sum + item.state.transferredBytes, 0);
+            const pct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
+            // Throughput et ETA
+            const startTime = uploadStartTimeRef.current;
+            const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
+            const throughput = elapsed > 1 ? uploadedBytes / elapsed : 0;
+            const remaining = totalBytes - uploadedBytes;
+            const eta = throughput > 0 ? remaining / throughput : 0;
+            const formatEta = (s: number) => {
+              if (!Number.isFinite(s) || s <= 0) return "";
+              if (s < 60) return `~${Math.ceil(s)}s`;
+              const m = Math.floor(s / 60);
+              const sec = Math.ceil(s % 60);
+              return `~${m}m${sec > 0 ? ` ${sec}s` : ""}`;
+            };
+            return totalBytes > 0 ? (
+              <div className="tray-progress">
+                <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+                  <span className="progress-bar" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="tray-progress-label">
+                  {formatBytes(uploadedBytes)} / {formatBytes(totalBytes)} ({pct}%)
+                  {throughput > 0 && !queue.finished ? (
+                    <>
+                      {" · "}
+                      {formatBytes(Math.round(throughput))}/s
+                      {eta > 0 ? ` · ${formatEta(eta)}` : ""}
+                    </>
+                  ) : null}
+                </span>
+              </div>
+            ) : null;
+          })()}
         <div
           className="transfer"
           data-testid="transfer-status"
@@ -3161,15 +3601,19 @@ export function ObjectsPage() {
         csrf={csrf}
         onClose={() => setMasterDialogOpen(false)}
       />
-      <PreviewModal
-        item={previewTarget}
-        csrf={csrf}
-        onClose={() => setPreviewTarget(null)}
-        onDownload={(item) => {
-          setPreviewTarget(null);
-          void handleDownload(item);
-        }}
-      />
+      {previewTarget ? (
+        <Suspense fallback={null}>
+          <PreviewModal
+            item={previewTarget}
+            csrf={csrf}
+            onClose={() => setPreviewTarget(null)}
+            onDownload={(item) => {
+              setPreviewTarget(null);
+              void handleDownload(item);
+            }}
+          />
+        </Suspense>
+      ) : null}
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {/* Recursive (cascade) folder deletion: real listing, typed confirmation,
