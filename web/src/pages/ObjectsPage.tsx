@@ -1679,28 +1679,6 @@ export function ObjectsPage() {
 
   const items = objectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
 
-  // Count objects by status for badge display
-  const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    const allItems = objectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
-    for (const item of allItems) {
-      const status = item.status ?? 'pending';
-      counts[status] = (counts[status] ?? 0) + 1;
-    }
-    return counts;
-  }, [objectsQuery]);
-
-  // Filter options with counts
-  const STATUS_OPTIONS_WITH_COUNT: { value: string; label: string; count: number }[] = [
-    { value: "", label: "Tous les états", count: Object.values(statusCounts).reduce((a, b) => a + b, 0) },
-    { value: "available", label: "Disponible", count: statusCounts.available ?? 0 },
-    { value: "pending", label: "En cours", count: statusCounts.pending ?? 0 },
-    { value: "deleted", label: "Supprimé", count: statusCounts.deleted ?? 0 },
-    { value: "expired", label: "Expiré", count: statusCounts.expired ?? 0 },
-    { value: "failed", label: "Échec", count: statusCounts.failed ?? 0 },
-    { value: "aborted", label: "Abandonné", count: statusCounts.aborted ?? 0 },
-  ];
-
   // Only deletable rows are selectable: the server refuses anything else
   // with 409, so offering them would manufacture failures.
   // In master mode the trash can be selected too: its rows are purgeable.
@@ -2487,9 +2465,9 @@ export function ObjectsPage() {
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
             >
-              {STATUS_OPTIONS_WITH_COUNT.map((option) => (
+              {STATUS_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
-                  {option.label} {option.count > 0 && <span className="badge badge-count">{option.count}</span>}
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -3034,19 +3012,6 @@ export function ObjectsPage() {
                 </>
               ) : (
                 "non disponible"
-              )}
-              {details.commitTiming && (
-                <div className="commit-timing-info">
-                  <span className="chip chip-muted">
-                    HEAD: {details.commitTiming.head_ms} ms
-                  </span>
-                  <span className="chip chip-muted">
-                    HASH: {details.commitTiming.hash_ms} ms
-                  </span>
-                  <span className="chip chip-muted">
-                    TOTAL: {details.commitTiming.total_ms} ms
-                  </span>
-                </div>
               )}
             </dd>
             <dt>Référence</dt>
