@@ -42,7 +42,8 @@ import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
 import { RowMenu } from "../components/RowMenu";
 import { describeError } from "../lib/errors";
-import { PreviewModal } from "../components/PreviewModal";
+import { lazy, Suspense } from "react";
+const PreviewModal = lazy(() => import("../components/PreviewModal").then((m) => ({ default: m.PreviewModal })));
 import {
   MasterModeBanner,
   MasterModeDialog,
@@ -3600,15 +3601,19 @@ export function ObjectsPage() {
         csrf={csrf}
         onClose={() => setMasterDialogOpen(false)}
       />
-      <PreviewModal
-        item={previewTarget}
-        csrf={csrf}
-        onClose={() => setPreviewTarget(null)}
-        onDownload={(item) => {
-          setPreviewTarget(null);
-          void handleDownload(item);
-        }}
-      />
+      {previewTarget ? (
+        <Suspense fallback={null}>
+          <PreviewModal
+            item={previewTarget}
+            csrf={csrf}
+            onClose={() => setPreviewTarget(null)}
+            onDownload={(item) => {
+              setPreviewTarget(null);
+              void handleDownload(item);
+            }}
+          />
+        </Suspense>
+      ) : null}
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {/* Recursive (cascade) folder deletion: real listing, typed confirmation,
