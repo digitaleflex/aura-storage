@@ -62,7 +62,7 @@
   --ink-2: #3d4654;
   --muted: #5b6472;
   /* Plus clair que --muted mais toujours ≥ 4,5:1 sur blanc. */
-  --faint: #6b7480;
+  --faint: #5e6773;
 
   --line: #e3e6eb;
   --line-2: #d3d8df;
@@ -73,7 +73,7 @@
      4.5:1 avec le blanc de texte des boutons primaires (4.38:1). */
   --signal: #9d660d;
   --signal-2: #7a4d07;
-  --signal-soft: #fbf1e0;
+  --signal-soft: #f6ecd0;
   --signal-line: #e6c893;
   /* Ambre clair pour les marques sur fond sombre (logo, focus latéral). */
   --signal-bright: #e0a33a;
@@ -87,8 +87,8 @@
   --ok-bg: #e6f3ec;
   --run: #2350ae;
   --run-bg: #e7eefb;
-  --warn: #8a6410;
-  --warn-bg: #f8f0dc;
+  --warn: #a34a0a;
+  --warn-bg: #fde7d0;
   --danger: #a8291f;
   --danger-bg: #fbeae8;
   --danger-strong: #8f2c22; /* survol sur fond plein danger */
@@ -2381,7 +2381,7 @@ p .chip {
 
     --signal: #c48a2a;
     --signal-2: #d99a34;
-    --signal-soft: #2a2010;
+    --signal-soft: #2a1f0a;
     --signal-line: #4a3a1a;
     --signal-bright: #e0a33a;
     --on-signal: #10151d;
@@ -2391,8 +2391,8 @@ p .chip {
     --ok-bg: #0a2a14;
     --run: #60a5fa;
     --run-bg: #0a1a2a;
-    --warn: #fbbf24;
-    --warn-bg: #2a2008;
+    --warn: #fb923c;
+    --warn-bg: #2a1508;
     --danger: #f87171;
     --danger-bg: #2a0a0a;
     --danger-strong: #dc2626;
