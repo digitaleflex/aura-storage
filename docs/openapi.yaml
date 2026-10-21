@@ -69,8 +69,14 @@ tags:
       scopes, plus rotation and immediate revocation.
   - name: administration
     description: >-
-      Operator and administrator reads — statistics, usage, audit search and
+      Operators and administrators — statistics, usage, audit search and
       retention, orphan inspection, stale-intent reconciliation.
+  - name: sharing
+    description: >-
+      Public share links — an unauthenticated, revocable, read-only capability
+      for exactly one object. Creation is human-only and always bounded by an
+      expiry; redemption (`GET /s/{token}`) is a 302 to a short-lived presigned
+      GET, so bytes never pass through the API.
 paths:
   /health/live:
     get:
@@ -87,6 +93,44 @@ paths:
       responses:
         "200": { description: Dependencies ready }
         "503": { description: Not ready }
+  /s/{token}:
+    get:
+      summary: Redeem a public share link (unauthenticated)
+      tags: [sharing]
+      security: []
+      description: >-
+        The only unauthenticated route that serves object data. It answers 302
+        to a presigned S3 GET valid for about a minute, with `Cache-Control:
+        no-store`, `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex,
+        nofollow`. Malformed, unknown, expired, exhausted and revoked links all
+        answer the same 404, so the route cannot be used to discover which
+        objects or shares exist. It never returns object bytes itself.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 43
+            maxLength: 43
+            pattern: "^[A-Za-z0-9_-]{43}$"
+          description: >-
+            Opaque link token, shown once at creation. The catalogue stores only
+            its SHA-256 fingerprint, so it cannot be recovered or listed.
+      responses:
+        "302":
+          description: Redirect to a short-lived presigned GET (no byte proxying)
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+              description: Presigned S3 URL bound to the object content type and disposition
+            Cache-Control:
+              schema: { type: string }
+              description: Always `no-store`
+        "404":
+          description: Unknown, expired, exhausted or revoked link (deliberately indistinguishable)
+        "429":
+          description: Rate limited at the edge (`api-ratelimit` middleware)
   /api/v1/login:
     post:
       summary: Create a human session (public, rate-limited)
@@ -410,6 +454,137 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
+  /api/v1/objects/{oid}/share:
+    post:
+      summary: Create a public read-only share link (objects:read, human only)
+      tags: [sharing]
+      description: >-
+        Mints an unauthenticated, revocable link for exactly one object. The
+        token is returned **once**; the catalogue stores only its SHA-256
+        fingerprint. Redeeming the link (`GET /s/<token>`) is a 302 to a
+        short-lived presigned S3 GET, so object bytes never pass through the API
+        and the link carries no S3 credential.
+
+        Human-only by design: a leaked machine identity token must not be able to
+        mint links that outlive its own revocation. Expiry is mandatory and
+        bounded by `AURA_SHARE_TTL_MAX`; `max_uses` is enforced atomically, so
+        concurrent redemptions cannot exceed it. `inline` is refused for types a
+        browser would execute (`text/html`, `image/svg+xml`, ...).
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ShareCreateRequest" }
+            examples:
+              sevenDays:
+                summary: Default 7-day download link
+                value: {}
+              burnAfterOneRead:
+                summary: 48 h, single use, forced download
+                value: { expires_in: 172800, max_uses: 1, content_disposition: attachment }
+      responses:
+        "200":
+          description: >-
+            The share, including the single-use `token` and the absolute `url`
+            when `AURA_SHARE_BASE_URL` is configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Share" }
+              examples:
+                created:
+                  value:
+                    id: b2f7c1d4-8e35-4a09-9c67-1f0a2d5e8b43
+                    object_id: 7c63c78d-d790-498e-acb5-870d53cfc0fd
+                    token: qY7m2Xb9tK4vR1sL0pN6wZ3cH8jF5dGaE7uI9oP2xS4
+                    url: https://app.aura-storage.eurinhash.com/s/qY7m2Xb9tK4vR1sL0pN6wZ3cH8jF5dGaE7uI9oP2xS4
+                    expires_in: 604800
+                    expires_at: 1761734400
+                    max_uses: null
+                    content_disposition: attachment
+        "401": { description: Authentication required }
+        "403": { description: "Machine identities cannot create shares, or CSRF validation failed" }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not available }
+        "422": { description: "expires_in above the maximum, or inline requested for an active content type" }
+  /api/v1/objects/{oid}/shares:
+    get:
+      summary: List an object's share links (objects:read)
+      tags: [sharing]
+      description: >-
+        One entry per link ever created for this object, never the tokens.
+        `active` is computed server-side from revocation, expiry and `max_uses`,
+        so a client never re-implements those rules and drifts.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200":
+          description: Share links for the object, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ShareSummary" }
+              examples:
+                list:
+                  value:
+                    items:
+                      - id: b2f7c1d4-8e35-4a09-9c67-1f0a2d5e8b43
+                        object_id: 7c63c78d-d790-498e-acb5-870d53cfc0fd
+                        created_by: 3f1c2a94-6d0b-4a7e-9f52-1b8c0d4e77aa
+                        created_by_kind: user
+                        content_disposition: attachment
+                        created_at: 1761129600
+                        expires_at: 1761734400
+                        max_uses: 1
+                        use_count: 1
+                        last_used_at: 1761129800
+                        revoked_at: null
+                        active: false
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+  /api/v1/objects/{oid}/shares/{sid}:
+    delete:
+      summary: Revoke a share link immediately (objects:read, human only)
+      tags: [sharing]
+      description: >-
+        Revocation takes effect on the next redemption and is idempotent: a
+        second call returns the original `revoked_at` instead of rewriting it.
+        Only the creator may revoke; object visibility is already owner-scoped,
+        and an admin cannot reach another user's objects through this API.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+        - name: sid
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+          description: Share identifier returned at creation (never the token).
+      responses:
+        "200":
+          description: Revoked (or already revoked)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, revoked, revoked_at]
+                properties:
+                  id: { $ref: "#/components/schemas/Uuid4" }
+                  revoked: { type: boolean }
+                  revoked_at: { type: integer, description: Epoch seconds of the (first) revocation }
+              examples:
+                revoked:
+                  value:
+                    id: b2f7c1d4-8e35-4a09-9c67-1f0a2d5e8b43
+                    revoked: true
+                    revoked_at: 1761130000
+        "401": { description: Authentication required }
+        "403": { description: "Not the creator, or CSRF validation failed" }
+        "404": { description: Object or share not found or not visible }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)
@@ -917,6 +1092,70 @@ components:
         Canonical identifier: a canonical UUID v4 (lowercase, 8-4-4-4-12).
         Alternate spellings are normalized; anything else is refused with 422.
         See docs/DATA-MODEL.md.
+    ShareCreateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        expires_in:
+          type: integer
+          minimum: 60
+          description: >-
+            Lifetime in seconds. Defaults to AURA_SHARE_TTL_DEFAULT (7 days) and
+            is refused above AURA_SHARE_TTL_MAX (30 days) rather than clamped.
+        max_uses:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+          description: >-
+            Optional use ceiling. Enforced inside the catalogue UPDATE, so
+            concurrent redemptions cannot exceed it. Omitted/null means unlimited
+            until expiry.
+        content_disposition:
+          type: string
+          enum: [attachment, inline]
+          default: attachment
+          description: >-
+            `inline` renders in the browser and is limited to non-executable
+            types (PDF, PNG/JPEG/WebP/GIF, text/plain). Active types such as
+            text/html and image/svg+xml are refused with 422.
+    Share:
+      type: object
+      required: [id, object_id, token, url, expires_in, expires_at, content_disposition]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        object_id: { $ref: "#/components/schemas/Uuid4" }
+        token:
+          type: string
+          description: >-
+            The link credential. Returned exactly once: only its SHA-256
+            fingerprint is stored, so it cannot be listed or recovered later.
+        url:
+          type: string
+          description: >-
+            Absolute link when AURA_SHARE_BASE_URL is configured, otherwise the
+            relative path `/s/<token>`.
+        expires_in: { type: integer }
+        expires_at: { type: integer }
+        max_uses: { type: [integer, "null"] }
+        content_disposition: { type: string, enum: [attachment, inline] }
+    ShareSummary:
+      type: object
+      required: [id, object_id, created_at, expires_at, use_count, active]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        object_id: { $ref: "#/components/schemas/Uuid4" }
+        created_by: { $ref: "#/components/schemas/Uuid4" }
+        created_by_kind: { type: string, enum: [user] }
+        content_disposition: { type: string, enum: [attachment, inline] }
+        created_at: { type: integer }
+        expires_at: { type: integer }
+        max_uses: { type: [integer, "null"] }
+        use_count: { type: integer }
+        last_used_at: { type: [integer, "null"] }
+        revoked_at: { type: [integer, "null"] }
+        active:
+          type: boolean
+          description: Not revoked, not expired, and uses remaining.
     LoginRequest:
       type: object
       additionalProperties: false

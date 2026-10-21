@@ -267,6 +267,14 @@ services:
       AURA_API_DB: ${AURA_API_DB:-aura-catalogue.db}
       AURA_INTENT_TTL: ${AURA_INTENT_TTL:-900}
       AURA_INTENT_GRACE_SECONDS: ${AURA_INTENT_GRACE_SECONDS:-300}
+      # Public share links (/s/<token>). The base URL is built from APP_DOMAIN,
+      # the same required variable as the app router, so the absolute link
+      # matches the host that actually serves it -- and never comes from a
+      # client-supplied Host header.
+      AURA_SHARE_BASE_URL: https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      AURA_SHARE_TTL_DEFAULT: ${AURA_SHARE_TTL_DEFAULT:-604800}
+      AURA_SHARE_TTL_MAX: ${AURA_SHARE_TTL_MAX:-2592000}
+      AURA_SHARE_PRESIGN_TTL: ${AURA_SHARE_PRESIGN_TTL:-60}
       AURA_AUDIT_RETENTION_DAYS: ${AURA_AUDIT_RETENTION_DAYS:-90}
       AURA_AUDIT_MAX_SCAN_LINES: ${AURA_AUDIT_MAX_SCAN_LINES:-20000}
       AURA_AUDIT_ERROR_SCAN_LINES: ${AURA_AUDIT_ERROR_SCAN_LINES:-5000}
@@ -317,6 +325,19 @@ services:
       # Same two gates as the docs UI: network allow-list first, then credential.
       - traefik.http.routers.aura-swagger-api.middlewares=api-docs-allowlist,api-docs-auth,api-ratelimit,api-secure-headers
       - traefik.http.services.aura-swagger-api.loadbalancer.server.port=8000
+      # Public share links: Host(APP_DOMAIN) + /s/* goes straight to the API,
+      # never through the SPA. Priority 200 beats the app catch-all router so
+      # nginx never sees these requests and cannot answer with index.html.
+      # This is the ONLY unauthenticated API surface; the token is the
+      # credential, so the guard here is the edge rate limit rather than a
+      # second factor. No CORS: a share link is navigated, not fetched.
+      - traefik.http.routers.aura-share.rule=Host(`${APP_DOMAIN:?Set APP_DOMAIN in .env}`) && PathPrefix(`/s/`)
+      - traefik.http.routers.aura-share.priority=200
+      - traefik.http.routers.aura-share.entrypoints=websecure
+      - traefik.http.routers.aura-share.tls=true
+      - traefik.http.routers.aura-share.tls.certresolver=le
+      - traefik.http.routers.aura-share.middlewares=api-ratelimit,api-secure-headers
+      - traefik.http.services.aura-share.loadbalancer.server.port=8000
     depends_on:
       postgres:
         condition: service_healthy
