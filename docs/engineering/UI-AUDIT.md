@@ -41,3 +41,49 @@ login, transitions de route, coller-pour-importer (Ctrl+V), tri par colonnes.
 
 Undo-delete exige un endpoint restore/annulation (absent) ; le reste est
 frontend seul.
+
+## État vérifié dans le code — 2026-10-21
+
+Cette section suit les trois jalons GitHub (#112 P0, #113 P1, #114 P2). Elle
+décrit le code présent sur `main`, pas un déploiement.
+
+### P0 — résolu
+
+1. Drop pendant un transfert : les fichiers libres vont dans `pendingFiles`
+   avec un toast, un dossier est refusé avec un message explicite.
+2. Dossier glissé : `dataTransfer.items` + `webkitGetAsEntry`, arborescence
+   routée vers `planFolders()`; fichiers vides et dossiers vides comptés et
+   annoncés séparément.
+3. Affordance de drop : overlay « Relâchez pour importer » et compteur de
+   profondeur anti-clignotement.
+4. « Tout sélectionner » : checkbox sortie du sous-arbre `aria-hidden`, avec
+   un libellé accessible.
+
+### P1 — résolu sauf virtualisation
+
+1. Clavier : `/` (recherche), `Suppr` (confirmation de la sélection), `?`
+   (légende), `Échap`; les raccourcis ignorent la saisie de texte mais
+   fonctionnent quand le focus est sur une case à cocher. Menu de ligne :
+   flèches/Home/End, `Échap` rend le focus au déclencheur.
+2. Undo : toast « Annuler » après suppression simple ou en masse via l'API
+   restore; erreurs d'échec listées avec le nom du fichier.
+3. Progression globale, débit/ETA et pause/reprise dans la barre d'import.
+4. Auto-collapse de la file terminée.
+5. Scroll infini : oui. **Virtualisation DOM : non** — les pages font 50
+   lignes et s'accumulent; un windowing mesuré reste à faire si les
+   catalogues dépassent quelques milliers de lignes (les menus de ligne et
+   les hauteurs variables mobile doivent être couverts par des tests dédiés).
+6. Garde-fou taille client : `max_object_bytes` vérifié avant l'upload.
+7. Import d'arborescence : progression « dossier n/N — nom » et nom du
+   dossier en échec; la progression par fichier reste dans la file.
+
+### P2 — résolu
+
+Dark mode système, focus-ring `.link-button`/`.crumb`, error boundary,
+autofocus login, transitions de contenu, coller-pour-importer (`Ctrl+V`),
+tri serveur par colonnes, harmonisation admin (tokens, plus de valeurs
+codées en dur), retry sur les erreurs admin.
+
+### Reste ouvert
+
+- Virtualisation DOM de la liste (voir P1.5).

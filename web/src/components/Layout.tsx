@@ -59,20 +59,68 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   // Mobile drawer state
   const [mobileOpen, setMobileOpen] = React.useState(false);
+  const hamburgerRef = React.useRef<HTMLButtonElement | null>(null);
+  const drawerRef = React.useRef<HTMLDivElement | null>(null);
+  const drawerCloseRef = React.useRef<HTMLButtonElement | null>(null);
 
-  // Close mobile drawer on route change
+  /** Close the drawer and give focus back to the button that opened it. */
+  function closeMobile(restoreFocus = true) {
+    setMobileOpen(false);
+    if (restoreFocus) {
+      requestAnimationFrame(() => hamburgerRef.current?.focus());
+    }
+  }
+
+  // Close mobile drawer on route change (no focus restore: the destination
+  // owns focus after navigation).
   React.useEffect(() => {
     setMobileOpen(false);
   }, [location.pathname]);
 
-  // Close mobile drawer on Escape
+  // Focus trap for the mobile drawer: opening moves focus inside, Tab and
+  // Shift+Tab cycle within it, Escape closes and restores the trigger.
   React.useEffect(() => {
     if (!mobileOpen) return;
+    drawerCloseRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const focusables = () =>
+      Array.from(
+        drawerRef.current?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => element.offsetParent !== null);
+
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setMobileOpen(false);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMobile();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !drawerRef.current?.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
+
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
   }, [mobileOpen]);
 
   // Mise à jour de l'URL lors du toggle
@@ -187,29 +235,37 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <>
           <div
             className="mobile-drawer-scrim"
-            onClick={() => setMobileOpen(false)}
+            onClick={() => closeMobile()}
             aria-hidden="true"
           />
-          <nav className="mobile-drawer" aria-label="Navigation mobile">
+          <div
+            ref={drawerRef}
+            id="mobile-navigation"
+            className="mobile-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation mobile"
+          >
             <div className="mobile-drawer-head">
-              <Link to="/" className="brand" onClick={() => setMobileOpen(false)}>
+              <Link to="/" className="brand" onClick={() => closeMobile(false)}>
                 <VaultMark />
                 <span className="brand-name">AURA Vault</span>
               </Link>
               <button
+                ref={drawerCloseRef}
                 className="btn btn-ghost btn-small"
                 aria-label="Fermer le menu"
-                onClick={() => setMobileOpen(false)}
+                onClick={() => closeMobile()}
               >
                 ✕
               </button>
             </div>
-            <div className="mobile-drawer-nav">
+            <nav className="mobile-drawer-nav" aria-label="Navigation mobile">
               <Link
                 to="/"
                 activeOptions={{ exact: true }}
                 className={isFilesPage ? "nav-link nav-link-active" : "nav-link"}
-                onClick={() => setMobileOpen(false)}
+                onClick={() => closeMobile(false)}
               >
                 <svg
                   aria-hidden="true"
@@ -231,7 +287,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   className={
                     location.pathname === "/admin" ? "nav-link nav-link-active" : "nav-link"
                   }
-                  onClick={() => setMobileOpen(false)}
+                  onClick={() => closeMobile(false)}
                 >
                   <svg
                     aria-hidden="true"
@@ -247,7 +303,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   Administration
                 </Link>
               ) : null}
-            </div>
+            </nav>
             <p className="sidebar-foot">
               <svg
                 aria-hidden="true"
@@ -267,7 +323,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   : "Chiffré au repos, intégrité vérifiée"}
               </span>
             </p>
-          </nav>
+          </div>
         </>
       ) : null}
 
@@ -275,9 +331,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <header className="topbar">
           {/* Bouton hamburger mobile */}
           <button
+            ref={hamburgerRef}
             className="btn btn-ghost btn-small topbar-mobile-toggle"
             aria-label="Ouvrir le menu de navigation"
             aria-expanded={mobileOpen}
+            aria-controls="mobile-navigation"
             onClick={() => setMobileOpen(true)}
           >
             <svg
