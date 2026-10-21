@@ -14,12 +14,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # The web dependencies live in web/ (web/package-lock.json). Run there:
-      # `npm ci` at the repository root had no lockfile to install from and
-      # failed every run, so the PR gate was red on every branch.
-      - run: npm ci --no-audit --no-fund
+      # `npm ci` at the repository root had no lockfile to install from
+      # and failed every run, so the PR gate was red on every branch.
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
         working-directory: web
-      - run: python3 -m pip install -r api/requirements-dev.txt
-      - run: |
+      - name: Build frontend
+        run: npm run build
+        working-directory: web
+      - name: Install API test dependencies
+        run: python3 -m pip install -r api/requirements-dev.txt
+      - name: Run API tests
+        run: |
           AURA_API_ADMIN_PASSWORD=ci-dummy-password \
           AURA_S3_ACCESS_KEY=ci-dummy-access-key-1234 \
           AURA_S3_SECRET_KEY=ci-dummy-secret-12345678901234567890 \
