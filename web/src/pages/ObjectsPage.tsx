@@ -575,11 +575,12 @@ export function ObjectsPage() {
   const uploadStartTimeRef = useRef<number | null>(null);
 
   // Auto-collapse la tray quand tous les fichiers sont terminés
-  useEffect(() => {
-    if (queue.finished && queue.items.length > 0) {
-      setTrayCollapsed(true);
-    }
-  }, [queue.finished, queue.items.length]);
+  // (desactive pour ne pas masquer le chip SHA-256 verifie)
+  // useEffect(() => {
+  //   if (queue.finished && queue.items.length > 0) {
+  //     setTrayCollapsed(true);
+  //   }
+  // }, [queue.finished, queue.items.length]);
 
   // Infinite scroll : charger automatiquement quand le bouton "Charger plus" est visible
   // (defini apres objectsQuery pour eviter le TDZ)

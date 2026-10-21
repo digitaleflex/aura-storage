@@ -222,7 +222,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </svg>
           <span>
             {usageQuery.data
-              ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes)} utilisés`
+              ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes).replace(" ", "")} utilisés`
               : canAdmin
                 ? "Stockage : chargement…"
                 : "Chiffré au repos, intégrité vérifiée"}
