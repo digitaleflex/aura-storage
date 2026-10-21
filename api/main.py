@@ -40,8 +40,9 @@ from .authz import (
 )
 from .config import settings
 from .identity import fingerprint, format_token, new_secret
-from .lifecycle import purge_object, reconcile_pending, reconcile_terminal
+from .lifecycle import purge_object, reconcile_pending, reconcile_terminal, reconcile_reverse
 from .s3 import (
+    CommitDeadlineExceeded,
     SSE_ALGORITHM,
     SSE_HEADER,
     ObjectTooLarge,
@@ -745,7 +746,8 @@ def empty_trash(principal: dict = Depends(authorize(OBJECTS_PURGE, human=True)))
 
 def _upload_headers(content_type: str) -> dict:
     """Headers the client must send with the presigned PUT (both are signed)."""
-    return {"Content-Type": content_type, SSE_HEADER: SSE_ALGORITHM}
+    return {"Content-Type": content_type, SSE_HEADER: SSE_ALGORITHM,
+            "If-None-Match": "*"}
 
 
 @app.post("/api/v1/objects/upload-intents")
@@ -1198,10 +1200,18 @@ def commit_object(
     hash_started = time.perf_counter()
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
-        total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes)
+        deadline = time.monotonic() + settings.commit_deadline_s if settings.commit_deadline_s is not None else None
+        total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes, deadline=deadline)
     except ObjectTooLarge:
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
+    except CommitDeadlineExceeded:
+        repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
+        raise HTTPException(status_code=504, detail="commit exceeded deadline")
     except Exception:
         raise HTTPException(status_code=422, detail="upload not readable at storage")
     hash_s = time.perf_counter() - hash_started
@@ -1559,6 +1569,20 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
     row = _as_dict(row)
     if row["status"] != "available":
         raise HTTPException(status_code=409, detail="object not available")
+    # Lazy integrity check (G1 / invariant S10): a published row must still
+    # match the bytes behind it. A divergence blocks the download until re-verified.
+    try:
+        head = s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
+        if int(head.get("ContentLength", -1)) != int(row["size_bytes"]) or (
+            settings.require_sse and head.get("ServerSideEncryption") != SSE_ALGORITHM
+        ):
+            repo.set_status(oid, "suspect")
+            raise HTTPException(status_code=409, detail="object integrity suspect")
+    except HTTPException:
+        raise
+    except Exception:
+        # Storage unreachable: do not block on a transient failure.
+        pass
     url = presigned_get(s3, row["bucket"], row["object_key"], settings.intent_ttl)
     audit_event("download-intent", principal["id"], "success", {"object_id": oid})
     return {
@@ -1815,6 +1839,14 @@ def reconcile_terminal_route(limit: int = 500,
     limit = max(1, min(limit, 5000))
     out = reconcile_terminal(repo, s3ops, limit=limit)
     audit_event("admin.reconcile_terminal", principal["id"], "success", out)
+    return out
+
+
+@app.post("/api/v1/admin/reconcile-reverse")
+def reconcile_reverse_route(dry_run: bool = True,
+                           principal: dict = Depends(authorize(ADMIN_WRITE))):
+    out = reconcile_reverse(repo, s3ops, dry_run=dry_run)
+    audit_event("admin.reconcile_reverse", principal["id"], "success", out)
     return out
 
 

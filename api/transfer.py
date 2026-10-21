@@ -13,6 +13,8 @@ PENDING = "pending"
 # Uploaded and being hashed by the verification worker (N5, api/verifier.py).
 VERIFYING = "verifying"
 AVAILABLE = "available"
+# Published row whose bytes no longer match the stored checksum (G1).
+SUSPECT = "suspect"
 FAILED = "failed"
 EXPIRED = "expired"
 ABORTED = "aborted"

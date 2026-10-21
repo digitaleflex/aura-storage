@@ -721,6 +721,18 @@ paths:
         "200": { description: "Counts (cleaned, storage_deletes_attempted, storage_failures)" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
+  /api/v1/admin/reconcile-reverse:
+    post:
+      summary: Storage-to-catalogue reverse orphan sweep (admin:write)
+      tags: [administration]
+      parameters:
+        - in: query
+          name: dry_run
+          schema: { type: boolean, default: true }
+      responses:
+        "200": { description: "Counts (scanned, orphans, deleted, failures)" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
   /api/v1/admin/stats:
     get:
       summary: Aggregate counts (admin:read)

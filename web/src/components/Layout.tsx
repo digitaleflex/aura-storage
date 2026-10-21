@@ -355,26 +355,25 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <path d="M3 12h18M3 6h18M3 18h18" />
             </svg>
           </button>
-          {/* Bouton de togglage sidebar uniquement sur grand écran */}
-          {sidebarCollapsed ? null : (
-            <button
-              className="btn btn-ghost btn-small topbar-sidebar-toggle"
-              aria-label="Réduire la sidebar"
-              onClick={() => toggleSidebar(true)}
+          {/* Bouton de togglage sidebar (réduire/agrandir) sur grand écran */}
+          <button
+            className="btn btn-ghost btn-small topbar-sidebar-toggle"
+            aria-label={sidebarCollapsed ? "Agrandir la sidebar" : "Réduire la sidebar"}
+            aria-pressed={sidebarCollapsed}
+            onClick={() => toggleSidebar(!sidebarCollapsed)}
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
             >
-              <svg
-                aria-hidden="true"
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-              >
-                <path d="M3 12h18M3 6h18M3 18h18" />
-              </svg>
-            </button>
-          )}
+              <path d="M3 12h18M3 6h18M3 18h18" />
+            </svg>
+          </button>
           <div className="session">
             {csrf ? (
               <>

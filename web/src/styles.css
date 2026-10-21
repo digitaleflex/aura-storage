@@ -399,6 +399,11 @@ h3 {
     display: inline-flex;
   }
 
+  /* Masquer le togglage sidebar desktop sur mobile (sidebar cachée) */
+  .topbar-sidebar-toggle {
+    display: none;
+  }
+
   /* Masquer le sidebar desktop sur mobile */
   .sidebar {
     display: none;

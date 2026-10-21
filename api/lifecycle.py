@@ -96,6 +96,54 @@ def reconcile_terminal(repo, s3ops, *, statuses=("failed", "aborted", "deleted")
     }
 
 
+def reconcile_reverse(repo, s3ops, *, dry_run: bool = True,
+                     limit: int = 500) -> dict:
+    """Storage -> catalogue reverse sweep (G2).
+
+    Lists objects under the ``aura/`` prefix in every known bucket and reports
+    (optionally deletes) those with no catalogue row. Dry-run by default.
+    """
+    orphans = []
+    deleted = 0
+    failures = 0
+    seen = 0
+    try:
+        buckets = [b["name"] for b in repo.list_all_buckets()]
+    except Exception:
+        buckets = []
+    for bucket in buckets:
+        try:
+            resp = s3ops.list_objects_v2(Bucket=bucket, Prefix="aura/", MaxKeys=limit)
+        except Exception:
+            failures += 1
+            continue
+        for obj in (resp.get("Contents") or []):
+            seen += 1
+            key = obj["Key"]
+            try:
+                exists = repo.has_object(bucket, key)
+            except Exception:
+                exists = True
+            if exists:
+                continue
+            orphans.append({"bucket": bucket, "key": key, "size": obj.get("Size")})
+            if dry_run:
+                continue
+            try:
+                s3ops.delete_object(Bucket=bucket, Key=key)
+                deleted += 1
+            except Exception:
+                failures += 1
+    return {
+        "scanned": seen,
+        "orphans": len(orphans),
+        "orphan_keys": orphans[:50],
+        "deleted": deleted,
+        "failures": failures,
+        "dry_run": dry_run,
+    }
+
+
 def purge_object(repo, s3ops, oid: str, *, space_id: str,
                  owner_id: str | None = None) -> bool:
     """Permanently delete bytes then the catalogue row. Returns True if done.

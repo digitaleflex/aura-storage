@@ -86,7 +86,8 @@ def presigned_put(client, bucket: str, key: str, content_type: str, expires: int
     exercised live on the pilot, not in the offline suite.
     """
     params = {"Bucket": bucket, "Key": key, "ContentType": content_type,
-              "ServerSideEncryption": SSE_ALGORITHM}
+              "ServerSideEncryption": SSE_ALGORITHM,
+              "IfNoneMatch": "*"}
     if content_length is not None:
         params["ContentLength"] = content_length
     return client.generate_presigned_url(

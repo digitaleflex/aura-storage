@@ -314,6 +314,13 @@ class Repository:
             "SELECT * FROM buckets WHERE space_id = ? ORDER BY created_at", (space_id,)
         ).fetchall()]
 
+    def has_object(self, bucket: str, object_key: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM objects WHERE bucket = ? AND object_key = ? LIMIT 1",
+            (bucket, object_key),
+        ).fetchone()
+        return row is not None
+
     def list_all_buckets(self) -> list:
         # Every registered bucket, oldest first; the API joins space/application
         # names so a bucket is never shown without its attachment (#M04).
