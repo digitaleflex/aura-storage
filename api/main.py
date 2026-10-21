@@ -4,6 +4,7 @@ Catalogue metadata lives here; object bytes travel directly between the client
 and S3 through short-lived presigned URLs. The API never stores a browser session
 token in the response body and never puts S3 credentials in the frontend.
 """
+import logging
 import os
 import shutil
 import time
@@ -61,6 +62,12 @@ from .transfer import (
 )
 
 app = FastAPI(title="AURA Management API", version="0.2.0")
+# uvicorn installs handlers on its own loggers only and leaves the root logger
+# handler-free, so an INFO record from "api.main" is dropped by logging's
+# lastResort handler (WARNING). Verified locally: an "api.main" INFO line never
+# reached the process output, while "uvicorn.error" did. Route through the logger
+# uvicorn configures so commit timings are visible in `docker logs`.
+log = logging.getLogger("uvicorn.error")
 
 
 @app.middleware("http")
@@ -652,7 +659,10 @@ def upload_intent(
 
 
 @app.post("/api/v1/objects/{oid}/commit")
-def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
+def commit_object(
+    oid: str, response: Response, principal: dict = Depends(authorize(OBJECTS_WRITE))
+):
+    started = time.perf_counter()
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -675,10 +685,12 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
         audit_event("commit", principal["id"], "expired", {"object_id": oid})
         raise HTTPException(status_code=410, detail="upload intent expired")
 
+    head_started = time.perf_counter()
     try:
         head = s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
     except Exception:
         raise HTTPException(status_code=422, detail="upload not found at storage")
+    head_s = time.perf_counter() - head_started
 
     size = int(head.get("ContentLength", -1))
     if size < 0:
@@ -697,6 +709,7 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
         audit_event("commit", principal["id"], "unencrypted", {"object_id": oid})
         raise HTTPException(status_code=422, detail="object not encrypted at rest")
 
+    hash_started = time.perf_counter()
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
         total, digest = stream_sha256(
@@ -707,6 +720,7 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
     except Exception:
         raise HTTPException(status_code=422, detail="upload not readable at storage")
+    hash_s = time.perf_counter() - hash_started
 
     if total != size:
         # Truncated or mismatched upload is never marked available (#37).
@@ -715,6 +729,17 @@ def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)))
 
     repo.mark_available(oid, size, digest)
     audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
+    # Instrumentation only: timings for the pilot latency distribution. No
+    # behaviour change — the header and log line are the sole additions.
+    total_s = time.perf_counter() - started
+    head_ms = head_s * 1000.0
+    hash_ms = hash_s * 1000.0
+    total_ms = total_s * 1000.0
+    response.headers["Server-Timing"] = (
+        f"head;dur={head_ms:.1f}, hash;dur={hash_ms:.1f}, total;dur={total_ms:.1f}"
+    )
+    log.info("commit timings oid=%s bytes=%d head_ms=%.1f hash_ms=%.1f total_ms=%.1f",
+             oid, size, head_ms, hash_ms, total_ms)
     return {
         "id": oid, "status": "available", "size_bytes": size,
         "checksum_sha256": digest, "checksum_algorithm": "sha256",
