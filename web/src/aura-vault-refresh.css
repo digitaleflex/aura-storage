@@ -438,3 +438,54 @@
     transition: none;
   }
 }
+
+
+/* Keyboard and touch affordances */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--signal-bright);
+  outline-offset: 3px;
+}
+
+.btn,
+.nav a,
+.nav-link,
+.ledger-name .link-button,
+.ledger-menu {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: none) {
+  .ledger-menu {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 520px) {
+  .head-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .head-actions .btn {
+    flex: 1 1 auto;
+  }
+
+  .filters {
+    align-items: stretch;
+  }
+
+  .filters .field {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+
+  .filters .field input,
+  .filters .field select {
+    max-width: none;
+    width: 100%;
+  }
+
+  .resume-actions .btn {
+    flex: 1 1 100%;
+  }
+}
