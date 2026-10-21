@@ -308,6 +308,10 @@ services:
       AURA_TRUSTED_PROXIES: ${AURA_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       AURA_MAX_OBJECT_BYTES: ${AURA_MAX_OBJECT_BYTES:-5368709120}
       AURA_COMMIT_CHUNK_BYTES: ${AURA_COMMIT_CHUNK_BYTES:-1048576}
+      # Commit deadline (#120). Must stay below the app proxy's read timeout
+      # for the commit route (app/nginx.conf, 310 s) so the API's structured
+      # 504 reaches the client; change both together.
+      AURA_COMMIT_DEADLINE_S: ${AURA_COMMIT_DEADLINE_S:-300}
       AURA_MAX_PENDING_INTENTS: ${AURA_MAX_PENDING_INTENTS:-100}
       AURA_ALLOW_EMPTY_OBJECTS: ${AURA_ALLOW_EMPTY_OBJECTS:-0}
       AURA_ALLOWED_CONTENT_TYPES: "${AURA_ALLOWED_CONTENT_TYPES:-}"

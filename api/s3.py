@@ -1,6 +1,7 @@
 """S3 data-plane access. Keys stay server-side; browsers only get presigned URLs."""
 import hashlib
 import re
+import time
 
 import boto3
 from botocore.client import Config
@@ -27,13 +28,26 @@ def make_probe_client(endpoint: str, access_key: str, secret_key: str, region: s
 
 
 def make_client(endpoint: str, access_key: str, secret_key: str, region: str):
+    """The transfer client used by every real operation (commit, delete, ...).
+
+    Bounded timeouts + adaptive retries (#120): without them, botocore's
+    defaults let a stalled backend hang a commit request indefinitely (a
+    refusal is retried with long backoff, an idle socket waits forever).
+    ``read_timeout`` is an *inter-byte* timeout, so streaming a multi-GiB
+    object through ``stream_sha256`` is unaffected as long as bytes keep
+    flowing. The probe client above keeps its own fast-fail profile.
+    """
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name=region,
-        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+        config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"},
+            connect_timeout=10, read_timeout=60,
+            retries={"max_attempts": 3, "mode": "adaptive"},
+        ),
     )
 
 
@@ -133,15 +147,31 @@ class ObjectTooLarge(Exception):
     """Raised by stream_sha256 when the object exceeds the configured limit."""
 
 
-def stream_sha256(body, max_bytes: int, chunk_bytes: int = 1024 * 1024):
+class CommitDeadlineExceeded(Exception):
+    """Raised by stream_sha256 when a commit outlives its global deadline.
+
+    A commit can legitimately take minutes (hashing up to 5 GiB), so it is
+    bounded by ``settings.commit_deadline_s`` rather than by an implicit
+    proxy/worker timeout (#120). Crossing it is a terminal failure, never a
+    silent hang.
+    """
+
+
+def stream_sha256(body, max_bytes: int, chunk_bytes: int = 1024 * 1024,
+                  deadline: float | None = None):
     """Hash a streaming S3 body without ever holding the whole object in memory.
 
     Returns ``(total_bytes, hex_digest)``. Raises :class:`ObjectTooLarge` as soon
     as the accumulated size exceeds ``max_bytes`` so the API aborts early (#37).
+    ``deadline`` is an optional ``time.monotonic()`` timestamp checked between
+    chunks: when it elapses, :class:`CommitDeadlineExceeded` is raised so the
+    caller can fail the intent instead of streaming forever (#120).
     """
     digest = hashlib.sha256()
     total = 0
     for chunk in body.iter_chunks(chunk_size=chunk_bytes):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise CommitDeadlineExceeded()
         total += len(chunk)
         if total > max_bytes:
             raise ObjectTooLarge()
