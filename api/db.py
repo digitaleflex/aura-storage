@@ -469,6 +469,7 @@ class Repository:
         intent_expires_at: Optional[int], folder_id: Optional[str] = None,
         expected_size_bytes: Optional[int] = None,
         idempotency_key: Optional[str] = None,
+        content_encoding: Optional[str] = None,
     ) -> str:
         oid = self.new_id()
         now = self.now()
@@ -476,11 +477,12 @@ class Repository:
             """INSERT INTO objects (id, bucket, object_key, display_name, content_type,
                size_bytes, checksum_sha256, folder_id, owner_id, visibility, status,
                created_at, updated_at, actor_kind, actor_id, application_id, space_id,
-               environment, intent_expires_at, expected_size_bytes, idempotency_key)
-               VALUES (?, ?, ?, ?, ?, -1, '', ?, ?, 'private', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               environment, intent_expires_at, expected_size_bytes, idempotency_key,
+               content_encoding)
+               VALUES (?, ?, ?, ?, ?, -1, '', ?, ?, 'private', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (oid, bucket, object_key, display_name, content_type, folder_id, owner_id,
              now, now, actor_kind, actor_id, application_id, space_id, environment,
-             intent_expires_at, expected_size_bytes, idempotency_key),
+             intent_expires_at, expected_size_bytes, idempotency_key, content_encoding),
         )
         self.conn.commit()
         return oid

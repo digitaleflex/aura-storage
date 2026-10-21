@@ -96,6 +96,13 @@ def validate_upload_policy(
     return normalized
 
 
+# Media types that are already compressed: never re-compress them (wasted CPU).
+NON_COMPRESSIBLE_TYPES = {
+    "application/pdf", "application/zip", "application/gzip",
+    "image/jpeg", "image/png", "image/webp", "image/gif",
+    "video/mp4", "video/webm", "audio/mpeg", "audio/ogg",
+}
+
 def valid_idempotency_key(value: str, *, max_length: int) -> bool:
     """True when a client ``Idempotency-Key`` is usable as an opaque dedupe key.
 

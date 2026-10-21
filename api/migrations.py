@@ -64,6 +64,8 @@ ADDED_COLUMNS = {
         # sent (cleared once completed) and the server-chosen part size.
         ("multipart_upload_id", "TEXT"),
         ("multipart_part_bytes", "INTEGER"),
+        # Transfer booster S5: optional zstd compression (never transparent).
+        ("content_encoding", "TEXT"),
         # Asynchronous integrity check (N5): the object waits in 'verifying'
         # until a worker holding the lease has hashed it. The ETag seen at
         # commit detects bytes replaced before or during hashing.

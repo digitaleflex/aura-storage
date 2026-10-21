@@ -351,6 +351,7 @@ class UploadIntentIn(BaseModel):
     # accepted only when empty objects are enabled for this deployment.
     size_bytes: int = Field(ge=0)
     folder_id: Uuid4 | None = None
+    content_encoding: str | None = Field(default=None, max_length=16)
 
 
 class ShareIn(BaseModel):
@@ -776,6 +777,16 @@ def upload_intent(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    # Optional zstd compression (C3): never transparent, never on already-compressed types.
+    content_encoding = body.content_encoding
+    if content_encoding is not None:
+        if content_encoding not in ("zstd",):
+            raise HTTPException(status_code=422, detail="unsupported content encoding")
+        from .transfer import NON_COMPRESSIBLE_TYPES
+        bare = content_type.split(";", 1)[0].strip().lower()
+        if bare in NON_COMPRESSIBLE_TYPES:
+            raise HTTPException(status_code=422, detail="content type must not be compressed")
+
     idem_key = request.headers.get("idempotency-key")
     if idem_key is not None and not valid_idempotency_key(
         idem_key, max_length=settings.idempotency_key_max
@@ -889,6 +900,7 @@ def upload_intent(
         owner_id=owner_id, actor_id=principal["id"], actor_kind=principal["kind"],
         intent_expires_at=intent_expires_at, folder_id=body.folder_id,
         expected_size_bytes=body.size_bytes, idempotency_key=idem_key,
+        content_encoding=content_encoding,
     )
     if multipart:
         part_bytes, _ = plan_parts(body.size_bytes, settings.multipart_part_bytes)
@@ -1593,6 +1605,7 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
         "size_bytes": row["size_bytes"], "checksum_sha256": row["checksum_sha256"],
         "checksum_algorithm": "sha256",
         "range_supported": True, "accept_ranges": "bytes",
+        "content_encoding": row.get("content_encoding"),
     }
 
 
