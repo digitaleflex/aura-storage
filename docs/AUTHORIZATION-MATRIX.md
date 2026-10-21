@@ -62,6 +62,10 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
 | POST | `/api/v1/objects/{oid}/preview-intent` | `objects:read` | presigned GET bound to `Content-Disposition: inline` (PDF/image/audio preview); same 404/409 as download-intent; scoped |
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |
+| POST | `/api/v1/objects/{oid}/share` | `objects:read` | **human only**; mints a public link (token shown once, only its SHA-256 fingerprint stored); expiry mandatory and bounded by `AURA_SHARE_TTL_MAX`; `inline` refused for active types |
+| GET | `/api/v1/objects/{oid}/shares` | `objects:read` | lists links (never the tokens); `active` computed server-side |
+| DELETE | `/api/v1/objects/{oid}/shares/{sid}` | `objects:read` | **human only**; creator-only, immediate and idempotent |
+| GET | `/s/{token}` | **none (public)** | the only unauthenticated object route: 302 to a presigned GET (~60 s) or one indistinguishable 404; rate-limited at the edge; audited |
 | POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin; a storage failure keeps the catalogue row and returns **502** (M06) |
 | GET | `/api/v1/folders` | `objects:read` | **human only**; owner-scoped, root, `?parent_id=`, or `?all=true` (flat tree) |
 | POST | `/api/v1/folders` | `objects:write` | **human only**; logical folder, no host directory |
