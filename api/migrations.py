@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0003_space_status"
+SCHEMA_VERSION = "0004_transfer_cas"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -75,6 +75,10 @@ ADDED_COLUMNS = {
         ("scrubbed_at", "INTEGER"),
         ("scrub_result", "TEXT"),
         ("scrub_lease_until", "INTEGER"),
+        # Transfer booster S2: compare-and-set versioning + terminal-since for
+        # automatic cleanup of terminal statuses.
+        ("version", "INTEGER NOT NULL DEFAULT 1"),
+        ("terminal_since", "INTEGER"),
     ],
     # Master mode: a session-bound, short-lived elevation for bulk destructive
     # actions, granted only after re-entering the password (step-up).

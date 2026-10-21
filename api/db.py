@@ -682,12 +682,26 @@ class Repository:
                 }
         return out
 
-    def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
-        self.conn.execute(
-            "UPDATE objects SET status = 'available', size_bytes = ?, checksum_sha256 = ?, updated_at = ? WHERE id = ?",
-            (size_bytes, checksum_sha256, self.now(), oid),
-        )
+    TERMINAL_STATUSES = {"failed", "expired", "aborted", "deleted"}
+
+    def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str,
+                       expected_version=None) -> int:
+        if expected_version is None:
+            cur = self.conn.execute(
+                "UPDATE objects SET status = 'available', size_bytes = ?, "
+                "checksum_sha256 = ?, version = version + 1, updated_at = ? "
+                "WHERE id = ? AND status = 'pending'",
+                (size_bytes, checksum_sha256, self.now(), oid),
+            )
+        else:
+            cur = self.conn.execute(
+                "UPDATE objects SET status = 'available', size_bytes = ?, "
+                "checksum_sha256 = ?, version = version + 1, updated_at = ? "
+                "WHERE id = ? AND status = 'pending' AND version = ?",
+                (size_bytes, checksum_sha256, self.now(), oid, expected_version),
+            )
         self.conn.commit()
+        return cur.rowcount
 
     def set_multipart(self, oid: str, upload_id: Optional[str],
                       part_bytes: Optional[int]) -> None:
@@ -719,12 +733,25 @@ class Repository:
             (limit,),
         ).fetchall()
 
-    def set_status(self, oid: str, status: str) -> None:
-        self.conn.execute(
-            "UPDATE objects SET status = ?, updated_at = ? WHERE id = ?",
-            (status, self.now(), oid),
-        )
+    def set_status(self, oid: str, status: str, *,
+                   expected_version=None, allowed_from=None) -> int:
+        clauses = ["status = ?", "version = version + 1", "updated_at = ?"]
+        params = [status, self.now()]
+        where = ["id = ?"]
+        params.append(oid)
+        if allowed_from:
+            where.append("status IN (%s)" % ",".join("?" for _ in allowed_from))
+            params.extend(allowed_from)
+        if expected_version is not None:
+            where.append("version = ?")
+            params.append(expected_version)
+        if status in self.TERMINAL_STATUSES:
+            clauses.append("terminal_since = COALESCE(terminal_since, ?)")
+            params.insert(1, self.now())
+        sql = "UPDATE objects SET " + ", ".join(clauses) + " WHERE " + " AND ".join(where)
+        cur = self.conn.execute(sql, params)
         self.conn.commit()
+        return cur.rowcount
 
     def list_status_before(self, status: str, cutoff: int, limit: int = 500):
         """Rows in ``status`` not updated since ``cutoff``, oldest first."""
