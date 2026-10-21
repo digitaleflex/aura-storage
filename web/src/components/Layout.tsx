@@ -64,6 +64,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   // Mobile drawer state
   const [mobileOpen, setMobileOpen] = React.useState(false);
+
+  // Densité d'affichage (compact/confortable)
+  const [density, setDensity] = React.useState<"comfortable" | "compact">(() => {
+    return (localStorage.getItem("aura-density") as "comfortable" | "compact") || "comfortable";
+  });
+  React.useEffect(() => {
+    document.body.classList.toggle("density-compact", density === "compact");
+    localStorage.setItem("aura-density", density);
+  }, [density]);
   const hamburgerRef = React.useRef<HTMLButtonElement | null>(null);
   const drawerRef = React.useRef<HTMLDivElement | null>(null);
   const drawerCloseRef = React.useRef<HTMLButtonElement | null>(null);
@@ -388,6 +397,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     </span>
                   </span>
                 </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  aria-label="Changer la densité d'affichage"
+                  onClick={() => setDensity((d) => (d === "compact" ? "comfortable" : "compact"))}
+                >
+                  {density === "compact" ? " ≡ " : " ☰ "}
+                </button>
                 <button
                   type="button"
                   className="btn btn-ghost btn-small"

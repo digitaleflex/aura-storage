@@ -2892,3 +2892,11 @@ p .chip {
 .skip-link:focus {
   top: 8px;
 }
+
+/* Densité compacte : réduit les paddings des lignes de registre. */
+body.density-compact .ledger-row {
+  padding: 6px 10px;
+}
+body.density-compact .nav a {
+  padding: 6px 10px;
+}
