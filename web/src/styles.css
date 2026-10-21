@@ -77,6 +77,11 @@
   --signal-line: #e6c893;
   /* Ambre clair pour les marques sur fond sombre (logo, focus latéral). */
   --signal-bright: #e0a33a;
+  /* Texte sur un aplat --signal : blanc sur le doré sombre clair, encre sur
+     le doré clair du thème sombre (AA dans les deux thèmes). */
+  --on-signal: #ffffff;
+  /* Idem pour les aplats de danger. */
+  --on-danger: #ffffff;
 
   --ok: #1e6b44;
   --ok-bg: #e6f3ec;
@@ -639,13 +644,13 @@ select:focus-visible {
 .btn-primary {
   background: var(--signal);
   border-color: var(--signal);
-  color: #ffffff;
+  color: var(--on-signal);
 }
 
 .btn-primary:hover {
   background: var(--signal-2);
   border-color: var(--signal-2);
-  color: #ffffff;
+  color: var(--on-signal);
 }
 
 /* A disabled primary must read as inert, not as the brightest thing on screen. */
@@ -676,12 +681,13 @@ select:focus-visible {
 .btn-danger {
   background: var(--danger);
   border-color: var(--danger);
-  color: #ffffff;
+  color: var(--on-danger);
 }
 
 .btn-danger:hover {
   background: var(--danger-strong);
   border-color: var(--danger-strong);
+  /* --danger-strong stays dark in both themes, so white remains AA. */
   color: #ffffff;
 }
 
@@ -724,7 +730,7 @@ select:focus-visible {
 }
 
 .field input::placeholder {
-  color: #8a94a1;
+  color: var(--muted);
 }
 
 .form {
@@ -974,7 +980,7 @@ select:focus-visible {
 .filters-count {
   font-size: 12px;
   font-weight: 500;
-  color: #ffffff;
+  color: var(--on-signal);
   background: var(--signal);
   border-radius: var(--radius-small);
   padding: 0 5px;
@@ -1015,7 +1021,7 @@ select:focus-visible {
 }
 
 .ledger-row:hover {
-  background: #f8f9fb;
+  background: var(--steel-2);
 }
 
 .ledger-meta {
@@ -1243,7 +1249,7 @@ select:focus-visible {
   place-items: center;
   border: var(--bw-strong) dashed var(--signal);
   border-radius: 16px;
-  background: rgba(251, 241, 224, 0.92);
+  background: var(--signal-soft);
   pointer-events: none;
 }
 
@@ -1714,6 +1720,44 @@ p .chip {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
+}
+
+/* Keyboard legend: a compact definition list, keycaps on the left. */
+.shortcut-list {
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.shortcut-list > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+}
+
+.shortcut-list dt,
+.shortcut-list dd {
+  margin: 0;
+}
+
+.shortcut-list dd {
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.shortcut-list kbd {
+  display: inline-block;
+  min-width: 28px;
+  padding: 2px 7px;
+  border: var(--bw) solid var(--line-2);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-small);
+  background: var(--steel-1);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
 }
 
 .move-list {
@@ -2328,10 +2372,12 @@ p .chip {
     --field-line: #4a5664;
 
     --signal: #c48a2a;
-    --signal-2: #a06e1a;
+    --signal-2: #d99a34;
     --signal-soft: #2a2010;
     --signal-line: #4a3a1a;
     --signal-bright: #e0a33a;
+    --on-signal: #10151d;
+    --on-danger: #10151d;
 
     --ok: #4ade80;
     --ok-bg: #0a2a14;
@@ -2698,13 +2744,13 @@ p .chip {
   padding: 10px 14px;
   border-radius: var(--radius-small);
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
   font-size: 13.5px;
 }
 
 .master-banner .btn {
   background: #fff;
-  color: var(--danger);
+  color: var(--danger-strong);
   border-color: #fff;
 }
 .plain-list {

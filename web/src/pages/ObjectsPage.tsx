@@ -53,6 +53,31 @@ import { isPreviewable } from "../lib/preview";
 /** Objects fetched per page ("Charger plus" increments the offset). */
 const OBJECTS_PAGE_SIZE = 50;
 
+/**
+ * True when a key event belongs to text entry. Global shortcuts must not
+ * hijack typing, but they should still work when focus is on a checkbox or a
+ * button (e.g. selecting rows then pressing Suppr).
+ */
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target.tagName === "TEXTAREA" || target.tagName === "SELECT") return true;
+  if (target.tagName === "INPUT") {
+    const type = (target as HTMLInputElement).type;
+    return ![
+      "checkbox",
+      "radio",
+      "button",
+      "submit",
+      "reset",
+      "file",
+      "range",
+      "color",
+    ].includes(type);
+  }
+  return false;
+}
+
 /** Human label for each transfer phase (import → validation → availability). */
 const PHASE_LABEL: Record<TransferPhase, string> = {
   idle: "En attente",
@@ -532,6 +557,20 @@ export function ObjectsPage() {
   // holds pending files, a queue or an error; a drop anywhere also opens it.
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [trayCollapsed, setTrayCollapsed] = useState(false);
+  // Directory import: which folder of the plan is being created (item P1.7).
+  const [folderProgress, setFolderProgress] = useState<{
+    done: number;
+    total: number;
+    name: string;
+  } | null>(null);
+  // Bulk delete: the dialog stays open while the per-file loop reports its
+  // real progress instead of a silent "Suppression…" (item P1.8).
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [deleteManyProgress, setDeleteManyProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const uploadStartTimeRef = useRef<number | null>(null);
 
@@ -699,12 +738,10 @@ export function ObjectsPage() {
   // Raccourcis clavier : / pour focus recherche
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      // Ignorer si on est dans un champ de saisie
-      const target = event.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
-        return;
-      }
-      if (event.key === "/") {
+      if (isTextEntryTarget(event.target)) return;
+      // Un "/" majuscule ouvre la légende, pas la recherche : les deux
+      // raccourcis partagent la même touche physique.
+      if (event.key === "/" && !event.shiftKey) {
         event.preventDefault();
         const searchInput = document.querySelector('input[name="filter"]') as HTMLInputElement;
         if (searchInput) searchInput.focus();
@@ -1081,6 +1118,7 @@ export function ObjectsPage() {
       if (!csrf) throw new Error("Session expirée.");
       const failed: string[] = [];
       let deleted = 0;
+      setDeleteManyProgress({ done: 0, total: ids.length });
       for (const id of ids) {
         try {
           await api.deleteObject(id, csrf);
@@ -1088,11 +1126,15 @@ export function ObjectsPage() {
         } catch {
           const target = items.find((item) => item.id === id);
           failed.push(target?.display_name ?? id);
+        } finally {
+          setDeleteManyProgress({ done: deleted + failed.length, total: ids.length });
         }
       }
       return { deleted, failed };
     },
     onSuccess: ({ deleted, failed }, ids) => {
+      setBulkDeleteOpen(false);
+      setDeleteManyProgress(null);
       setSelectedIds(new Set());
       setDetails(null);
       if (failed.length === 0) {
@@ -1117,8 +1159,39 @@ export function ObjectsPage() {
       }
       invalidateLibrary();
     },
-    onError: (err) => reportError(err, "Suppression en masse impossible."),
+    onError: (err) => {
+      setBulkDeleteOpen(false);
+      setDeleteManyProgress(null);
+      reportError(err, "Suppression en masse impossible.");
+    },
   });
+
+  // Raccourcis clavier globaux (P1.1): `?` ouvre la légende et `Suppr`
+  // prépare la suppression de la sélection. Ignorés dans les champs de
+  // saisie et quand un dialogue est ouvert (il a déjà son propre clavier).
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (isTextEntryTarget(event.target)) return;
+      if (document.querySelector("dialog[open]")) return;
+      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
+        // "? peut arriver tel quel (clavier réel) ou comme "/" + Shift
+        // (événement synthétique, claviers où ? exige une autre touche).
+        event.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      if (
+        event.key === "Delete" &&
+        selectedIds.size > 0 &&
+        !deleteManyMutation.isPending
+      ) {
+        event.preventDefault();
+        setBulkDeleteOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedIds.size, deleteManyMutation.isPending]);
 
   const restoreMutation = useMutation({
     mutationFn: (id: string) => {
@@ -1324,8 +1397,21 @@ export function ObjectsPage() {
       existing.set(keyOf(folder.parent_id, folder.name), folder.id);
     }
 
+    if (plan.folders.length > 0) {
+      setFolderProgress({
+        done: 0,
+        total: plan.folders.length,
+        name: plan.folders[0]!.name,
+      });
+    }
+
     let createdAny = false;
-    for (const folder of plan.folders) {
+    for (const [index, folder] of plan.folders.entries()) {
+      setFolderProgress({
+        done: index,
+        total: plan.folders.length,
+        name: folder.name,
+      });
       const parentId = folder.parentPath
         ? (folderIds.get(folder.parentPath) ?? currentFolderId)
         : currentFolderId;
@@ -1345,22 +1431,34 @@ export function ObjectsPage() {
         createdAny = true;
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
-          const all = await api.listAllFolders();
-          const found = all.items.find(
-            (candidate) =>
-              (candidate.parent_id ?? null) === (parentId ?? null) &&
-              candidate.name === folder.name,
-          );
-          if (found) {
-            existing.set(key, found.id);
-            folderIds.set(folder.path, found.id);
-            continue;
+          try {
+            const all = await api.listAllFolders();
+            const found = all.items.find(
+              (candidate) =>
+                (candidate.parent_id ?? null) === (parentId ?? null) &&
+                candidate.name === folder.name,
+            );
+            if (found) {
+              existing.set(key, found.id);
+              folderIds.set(folder.path, found.id);
+              continue;
+            }
+          } catch {
+            // Fall through to the named failure below: the folder that could
+            // not be resolved is the one worth reporting.
           }
         }
-        setUploadError("Création de l'arborescence impossible.");
+        setFolderProgress(null);
+        setUploadError(
+          `Création du dossier « ${folder.name} » impossible : ${describeError(
+            err,
+            "réponse inattendue du serveur",
+          )}`,
+        );
         return;
       }
     }
+    setFolderProgress(null);
     if (createdAny) invalidateLibrary();
     if (plan.tooDeep.length > 0) {
       setNotice(
@@ -1999,6 +2097,16 @@ export function ObjectsPage() {
           >
             {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
           </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            aria-label="Afficher les raccourcis clavier"
+            title="Raccourcis clavier (?)"
+            aria-haspopup="dialog"
+            onClick={() => setShortcutsOpen(true)}
+          >
+            ?
+          </button>
           {canPurge && !master.active ? (
             <button
               type="button"
@@ -2203,6 +2311,12 @@ export function ObjectsPage() {
           choisissez-les. Un fichier n'est déclaré disponible qu'une fois sa
           taille et son empreinte SHA-256 vérifiées par le serveur.
         </p>
+        {folderProgress ? (
+          <p className="pending-hint" role="status">
+            Arborescence : dossier {folderProgress.done + 1}/
+            {folderProgress.total} — «&nbsp;{folderProgress.name}&nbsp;»
+          </p>
+        ) : null}
         <form onSubmit={handleUpload} className="form form-inline">
           <div className="field file-field">
             <span>Fichiers</span>
@@ -2501,28 +2615,23 @@ export function ObjectsPage() {
                     </button>{" "}
                   </>
                 ) : null}
-                <ConfirmAction
-                  label={
-                    deleteManyMutation.isPending
-                      ? "Suppression…"
-                      : "Supprimer la sélection"
-                  }
-                  title="Supprimer la sélection"
-                  message={
-                    <>
-                      Marquer <strong>{selectedIds.size} objet(s)</strong>{" "}
-                      comme supprimé(s) ? Chaque fichier est supprimé
-                      individuellement et le résultat est rapporté par
-                      fichier. Les octets restent jusqu'à une purge.
-                    </>
-                  }
-                  confirmLabel="Supprimer"
-                  danger
-                  pending={deleteManyMutation.isPending}
-                  onConfirm={() =>
-                    deleteManyMutation.mutate([...selectedIds])
-                  }
-                />
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  disabled={deleteManyMutation.isPending}
+                  onClick={() => setBulkDeleteOpen(true)}
+                >
+                  {deleteManyMutation.isPending && deleteManyProgress
+                    ? `Suppression ${deleteManyProgress.done}/${deleteManyProgress.total}…`
+                    : "Supprimer la sélection"}
+                </button>
+                {deleteManyProgress ? (
+                  <span role="status" className="muted">
+                    {" "}
+                    Suppression {deleteManyProgress.done}/
+                    {deleteManyProgress.total}…
+                  </span>
+                ) : null}
               </p>
             ) : null}
             <div className="ledger" role="list">
@@ -3190,6 +3299,115 @@ export function ObjectsPage() {
           </button>
         </div>
       </Dialog>
+
+      {/* Bulk delete: opened by the selection bar or the Suppr shortcut. The
+          dialog reports the real per-file progress instead of a mute spinner. */}
+      <Dialog
+        open={bulkDeleteOpen}
+        title="Supprimer la sélection"
+        onClose={() => setBulkDeleteOpen(false)}
+      >
+        <div className="dialog-text">
+          Marquer <strong>{selectedIds.size} objet(s)</strong> comme supprimé(s) ?
+          Chaque fichier est supprimé individuellement et le résultat est
+          rapporté par fichier. Les octets restent jusqu'à une purge.
+        </div>
+        {deleteManyProgress ? (
+          <>
+            <div
+              className="progress"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={deleteManyProgress.total}
+              aria-valuenow={deleteManyProgress.done}
+              aria-label="Progression de la suppression de la sélection"
+            >
+              <span
+                className="progress-bar"
+                style={{
+                  width: `${
+                    deleteManyProgress.total > 0
+                      ? Math.round(
+                          (deleteManyProgress.done / deleteManyProgress.total) * 100,
+                        )
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
+            <p className="muted" role="status">
+              Suppression {deleteManyProgress.done}/{deleteManyProgress.total}…
+            </p>
+          </>
+        ) : null}
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={deleteManyMutation.isPending}
+            onClick={() => setBulkDeleteOpen(false)}
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            disabled={
+              deleteManyMutation.isPending || selectedIds.size === 0
+            }
+            onClick={() => deleteManyMutation.mutate([...selectedIds])}
+          >
+            {deleteManyMutation.isPending ? "Suppression…" : "Supprimer"}
+          </button>
+        </div>
+      </Dialog>
+
+      {/* Keyboard legend: opened with `?` or the header help button. */}
+      <Dialog
+        open={shortcutsOpen}
+        title="Raccourcis clavier"
+        onClose={() => setShortcutsOpen(false)}
+      >
+        <dl className="shortcut-list">
+          <div>
+            <dt>
+              <kbd>/</kbd>
+            </dt>
+            <dd>Rechercher dans le dossier courant</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>Suppr</kbd>
+            </dt>
+            <dd>Supprimer la sélection (confirmation demandée)</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>?</kbd>
+            </dt>
+            <dd>Afficher cette légende</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>Échap</kbd>
+            </dt>
+            <dd>Fermer un menu, un panneau ou un dialogue</dd>
+          </div>
+        </dl>
+        <p className="muted">
+          Les raccourcis sont ignorés dans les champs de saisie.
+        </p>
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setShortcutsOpen(false)}
+          >
+            Compris
+          </button>
+        </div>
+      </Dialog>
+
       {queue.items.length > 0 ? (
         <section className="tray" aria-labelledby="tray-title">
           <div className="tray-head">
