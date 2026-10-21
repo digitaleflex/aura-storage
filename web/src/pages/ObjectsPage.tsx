@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { useFolderNavigation } from "../lib/folderContext";
 import {
   useInfiniteQuery,
   useMutation,
@@ -16,9 +15,16 @@ import {
 } from "../lib/api";
 import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
+import {
+  addEntries,
+  clearOwner,
+  fingerprint,
+  pendingEntries,
+  removeEntries,
+  type JournalEntry,
+} from "../lib/uploadJournal";
 import type {
   QueueInput,
-  QueueItem,
   QueueState,
   TransferDeps,
   TransferPhase,
@@ -34,15 +40,16 @@ import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
-import { PreviewModal } from "../components/PreviewModal";
 import { RowMenu } from "../components/RowMenu";
+import { PreviewModal } from "../components/PreviewModal";
+import { isPreviewable } from "../lib/preview";
 
 /** Objects fetched per page ("Charger plus" increments the offset). */
 const OBJECTS_PAGE_SIZE = 50;
 
 /** Human label for each transfer phase (import → validation → availability). */
 const PHASE_LABEL: Record<TransferPhase, string> = {
-  idle: "En file d'attente",
+  idle: "En attente",
   "requesting-intent": "Autorisation…",
   uploading: "Envoi…",
   validating: "Validation…",
@@ -62,25 +69,11 @@ function queuePhaseClass(phase: TransferPhase): string {
   return "chip chip-warn";
 }
 
-/**
- * A held file (paused) keeps `state.phase === "idle"` in the engine, so the
- * pause must be read from `item.paused` — never guessed from the phase — or a
- * paused file would lie and read as "En file d'attente".
- */
-function queueItemLabel(item: QueueItem): string {
-  return item.paused ? "En pause" : PHASE_LABEL[item.state.phase];
-}
-
-/** Chip style for a queue item: a held file is paused, not queued. */
-function queueItemClass(item: QueueItem): string {
-  return item.paused ? "chip chip-muted" : queuePhaseClass(item.state.phase);
-}
-
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "Tous les états" },
   { value: "available", label: "Disponible" },
   { value: "pending", label: "En cours" },
-  { value: "deleted", label: "Supprimé" },
+  { value: "deleted", label: "Corbeille" },
   { value: "expired", label: "Expiré" },
   { value: "failed", label: "Échec" },
   { value: "aborted", label: "Abandonné" },
@@ -121,17 +114,6 @@ function formatBytes(size: number): string {
   const index = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
   const value = size / 1024 ** index;
   return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
-}
-
-/** Formatage lisible du temps écoulé ou restant (HH:MM:SS ou MM:SS). */
-function formatDuration(seconds?: number): string {
-  if (seconds === undefined || seconds <= 0) return "—";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  return `${h > 0 ? `${h}h ` : ""}${m
-    .toString()
-    .padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
 const DATE_FORMAT = new Intl.DateTimeFormat("fr-FR", {
@@ -213,6 +195,11 @@ function StatusLabel({ status }: { status: string }) {
 /** Server-side soft delete accepts only `available` or `pending` rows; anything
  * else is refused with 409. The bulk selection and the per-row "Supprimer"
  * action share this predicate so they never diverge. */
+/** In the trash and fully uploaded: the server refuses to restore anything else. */
+function isRestorable(item: ObjectItem): boolean {
+  return item.status === "deleted" && item.size_bytes >= 0;
+}
+
 function isDeletable(item: ObjectItem): boolean {
   return item.status === "available" || item.status === "pending";
 }
@@ -423,30 +410,12 @@ export function ObjectsPage() {
   const session = useSession();
   const queryClient = useQueryClient();
 
-  const { currentFolderId, setCurrentFolderId } = useFolderNavigation();
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   // Uploads run through the M03 transfer engine as a bounded multi-file queue.
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [queue, setQueue] = useState<QueueState>(() => emptyQueue());
-  const [queueEtaText, setQueueEtaText] = useState<string>("—");
   const queueRef = useRef<UploadQueue | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
-  // Page Lifecycle "freeze": a truly frozen tab suspends its JS, so progress
-  // genuinely stops there. Surface it honestly instead of pretending otherwise.
-  const [tabFrozen, setTabFrozen] = useState(false);
-  useEffect(() => {
-    const onFreeze = () => setTabFrozen(true);
-    const onResume = () => setTabFrozen(false);
-    document.addEventListener("freeze", onFreeze);
-    document.addEventListener("resume", onResume);
-    return () => {
-      document.removeEventListener("freeze", onFreeze);
-      document.removeEventListener("resume", onResume);
-    };
-  }, []);
-
-  // The transfer engine owns its own window listeners (beforeunload guard,
-  // offline/online suspension). Detach them when this page unmounts.
-  useEffect(() => () => queueRef.current?.dispose(), []);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -482,7 +451,6 @@ export function ObjectsPage() {
   const [moveTarget, setMoveTarget] = useState<FolderItem | null>(null);
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
   const [details, setDetails] = useState<ObjectItem | null>(null);
-  /** Object whose inline preview modal is open (null = closed). */
   const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -593,26 +561,131 @@ export function ObjectsPage() {
     retry: false,
   });
 
-  /** True while any file of the queue is transferring (drives live readouts). */
+  /** True while any file of the queue is transferring (blocks double submit). */
   const transferActive = queue.active > 0;
 
-  /** True while the queue still has unfinished work (running or held): it blocks
-   * a second submission and keeps the lifecycle guards honest — a paused queue
-   * is not "done". */
-  const queueBusy = queue.items.length > 0 && !queue.finished;
+  // -- Upload journal: resume a long import after a reload --------------------
+  const owner = session.data?.id ?? null;
+  const [resumable, setResumable] = useState<JournalEntry[]>([]);
+  const resumeFilesRef = useRef<HTMLInputElement>(null);
+  const resumeDirRef = useRef<HTMLInputElement>(null);
+  /** Journal keys already forgotten, so each settled file is removed once. */
+  const forgottenRef = useRef<Set<string>>(new Set());
 
-  /** At least one file can still be held (queued or moving) and nothing is
-   * already suspended: the "Pause tout" control is worth offering. */
-  const canPauseAll =
-    !queue.schedulerPaused &&
-    queue.items.some(
-      (item) =>
-        !item.paused &&
-        (item.state.phase === "idle" || ACTIVE_PHASES.includes(item.state.phase)),
+  function refreshResumable() {
+    if (!owner) return;
+    void pendingEntries(owner).then(setResumable);
+  }
+
+  useEffect(() => {
+    if (!transferActive) refreshResumable();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [owner, transferActive]);
+
+  // Leaving the page mid-import loses the files in flight: ask first.
+  useEffect(() => {
+    if (!transferActive) return;
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [transferActive]);
+
+  // Keep the screen (and so the machine) awake while files are being sent.
+  // Best effort: unsupported browsers or a refused lock change nothing.
+  useEffect(() => {
+    if (!transferActive) return;
+    let lock: { release(): Promise<void> } | null = null;
+    let released = false;
+    const wakeLock = (navigator as Navigator & {
+      wakeLock?: { request(type: "screen"): Promise<{ release(): Promise<void> }> };
+    }).wakeLock;
+    wakeLock
+      ?.request("screen")
+      .then((acquired) => {
+        if (released) void acquired.release();
+        else lock = acquired;
+      })
+      .catch(() => undefined);
+    return () => {
+      released = true;
+      void lock?.release().catch(() => undefined);
+    };
+  }, [transferActive]);
+
+  /** Start a queue, journaling every file so the import survives a reload. */
+  function launchQueue(
+    activeCsrf: string,
+    entries: Array<{ file: File; rel: string; folderId: string | null }>,
+  ) {
+    const journal: JournalEntry[] = [];
+    const inputs: QueueInput[] = entries.map(({ file, rel, folderId }) => {
+      if (!owner) return { file, folderId };
+      const key = fingerprint(owner, rel, file);
+      forgottenRef.current.delete(key);
+      journal.push({ key, owner, rel, size: file.size, folderId });
+      return { file, folderId, key };
+    });
+    void addEntries(journal);
+    const uploadQueue = startUploadQueue(inputs, transferDeps(activeCsrf), {
+      folderId: currentFolderId,
+      onUpdate: handleQueueUpdate,
+    });
+    queueRef.current = uploadQueue;
+  }
+
+  /** Re-selected files: send only those the journal still lists. */
+  function handleResume(selected: FileList | null) {
+    if (!selected || selected.length === 0 || !owner || !csrf || transferActive) return;
+    const byKey = new Map(resumable.map((entry) => [entry.key, entry]));
+    // Same file picked through the other picker (plain files vs folder) has a
+    // different relative path: fall back to name + size + mtime.
+    const byName = new Map(
+      resumable.map((entry) => [
+        `${entry.rel.split("/").pop()}\u0000${entry.size}`,
+        entry,
+      ]),
     );
+    const matched: Array<{ file: File; rel: string; folderId: string | null }> = [];
+    const seen = new Set<string>();
+    for (const file of Array.from(selected)) {
+      const rel = normalizeRelativePath(
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+      );
+      const entry =
+        byKey.get(fingerprint(owner, rel, file)) ??
+        (() => {
+          const candidate = byName.get(`${file.name}\u0000${file.size}`);
+          return candidate &&
+            candidate.key === fingerprint(owner, candidate.rel, file)
+            ? candidate
+            : undefined;
+        })();
+      if (!entry || seen.has(entry.key)) continue;
+      seen.add(entry.key);
+      matched.push({ file, rel: entry.rel, folderId: entry.folderId });
+    }
+    const ignored = selected.length - matched.length;
+    if (matched.length === 0) {
+      setUploadError(
+        "Aucun des fichiers choisis ne correspond à l'import interrompu (même nom, taille et date de modification).",
+      );
+      return;
+    }
+    setUploadError(null);
+    setNotice(
+      `Reprise de ${matched.length} fichier(s)` +
+        (ignored > 0 ? ` ; ${ignored} déjà envoyé(s) ou hors import ignoré(s).` : "."),
+    );
+    launchQueue(csrf, matched);
+  }
 
-  /** True while any file is held (explicit pause or a connectivity loss). */
-  const queuePaused = queue.paused > 0 || queue.schedulerPaused;
+  function forgetResumable() {
+    if (!owner) return;
+    void clearOwner(owner).then(() => setResumable([]));
+  }
 
   /** Wire the injected engine to the real API for one authenticated session. */
   function transferDeps(activeCsrf: string): TransferDeps {
@@ -850,6 +923,19 @@ export function ObjectsPage() {
     onError: (err) => reportError(err, "Suppression en masse impossible."),
   });
 
+  const restoreMutation = useMutation({
+    mutationFn: (id: string) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.restoreObject(id, csrf);
+    },
+    onSuccess: () => {
+      setDetails(null);
+      notify("ok", "Fichier restauré depuis la corbeille.");
+      invalidateLibrary();
+    },
+    onError: (err) => reportError(err, "Restauration impossible."),
+  });
+
   const purgeMutation = useMutation({
     mutationFn: (id: string) => {
       if (!csrf) throw new Error("Session expirée.");
@@ -883,20 +969,19 @@ export function ObjectsPage() {
   /** Shared queue subscriber: mirrors state and reacts when it settles. */
   function handleQueueUpdate(next: QueueState) {
     setQueue(next);
-    // Calcul du texte ETA pour l'affichage
-    const etaText = (() => {
-      const remainingBytes = next.items
-        .filter(
-          (item) =>
-            item.state.phase !== "available" &&
-            item.state.phase !== "cancelled" &&
-            item.state.phase !== "failed"
-        )
-        .reduce((sum, item) => sum + item.state.sizeBytes, 0);
-      const etaSeconds = remainingBytes > 0 ? Math.max(1, Math.ceil(remainingBytes / 1000)) : 0;
-      return formatDuration(etaSeconds);
-    })();
-    setQueueEtaText(etaText);
+    // Confirmed by the server, or cancelled on purpose: nothing left to resume.
+    const settled = next.items
+      .filter(
+        (item) =>
+          item.key !== undefined &&
+          (item.state.phase === "available" || item.state.phase === "cancelled") &&
+          !forgottenRef.current.has(item.key),
+      )
+      .map((item) => item.key as string);
+    if (settled.length > 0) {
+      for (const key of settled) forgottenRef.current.add(key);
+      void removeEntries(settled);
+    }
     if (!next.finished) return;
     if (next.done > 0) {
       invalidateLibrary();
@@ -918,11 +1003,11 @@ export function ObjectsPage() {
       setUploadError("Choisissez au moins un fichier.");
       return;
     }
-    if (queueBusy) {
+    if (transferActive) {
       // A submit can still reach here (e.g. Enter in the form) even though the
       // button is disabled: say why instead of returning silently.
       setUploadError(
-        "Un import est déjà en cours (ou en pause) : terminez-le ou annulez-le avant d'en lancer un autre.",
+        "Un transfert est déjà en cours : attendez sa fin ou annulez-le avant de relancer l'import.",
       );
       return;
     }
@@ -930,11 +1015,10 @@ export function ObjectsPage() {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
     }
-    const uploadQueue = startUploadQueue(pendingFiles, transferDeps(csrf), {
-      folderId: currentFolderId,
-      onUpdate: handleQueueUpdate,
-    });
-    queueRef.current = uploadQueue;
+    launchQueue(
+      csrf,
+      pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
+    );
     // The queue now owns the submitted files: clear them so anything dropped
     // during the transfer stays visible as a real backlog for the next run.
     setPendingFiles([]);
@@ -958,7 +1042,7 @@ export function ObjectsPage() {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
     }
-    if (queueBusy) return;
+    if (transferActive) return;
     setUploadError(null);
     setNotice(null);
 
@@ -1024,32 +1108,21 @@ export function ObjectsPage() {
       );
     }
 
-    const entries: QueueInput[] = kept.map((item) => {
-      const dir = parentDirOf(item.rel);
-      return {
-        file: item.file,
-        folderId: dir ? (folderIds.get(dir) ?? currentFolderId) : currentFolderId,
-      };
-    });
-    const uploadQueue = startUploadQueue(entries, transferDeps(csrf), {
-      folderId: currentFolderId,
-      onUpdate: handleQueueUpdate,
-    });
-    queueRef.current = uploadQueue;
+    launchQueue(
+      csrf,
+      kept.map((item) => {
+        const dir = parentDirOf(item.rel);
+        return {
+          file: item.file,
+          rel: item.rel,
+          folderId: dir ? (folderIds.get(dir) ?? currentFolderId) : currentFolderId,
+        };
+      }),
+    );
   }
 
   function handleCancelUpload() {
     queueRef.current?.cancelAll();
-  }
-
-  /** Hold every file still in play (in-flight PUTs finish, new starts stop). */
-  function handlePauseUpload() {
-    queueRef.current?.pauseAll();
-  }
-
-  /** Release the queue and every held file. */
-  function handleResumeUpload() {
-    queueRef.current?.resumeAll();
   }
 
   function handleRetryFailed() {
@@ -1159,7 +1232,7 @@ export function ObjectsPage() {
       return;
     }
     const hasFolders = entries.some((entry) => entry.rel.includes("/"));
-    if (queueBusy) {
+    if (transferActive) {
       const loose = entries.filter((entry) => !entry.rel.includes("/"));
       if (loose.length > 0) {
         // Buffer loose files for the next run and say so (P0.1): never
@@ -1270,6 +1343,7 @@ export function ObjectsPage() {
   const objectBusy =
     deleteObjectMutation.isPending ||
     purgeMutation.isPending ||
+    restoreMutation.isPending ||
     abortUploadMutation.isPending ||
     moveObjectMutation.isPending ||
     downloadingId !== null;
@@ -1683,6 +1757,58 @@ export function ObjectsPage() {
         </p>
       ) : null}
 
+      {resumable.length > 0 && !transferActive ? (
+        <div role="region" aria-label="Import interrompu" className="alert alert-warn resume-banner">
+          <p>
+            <strong>Import interrompu</strong> : {resumable.length} fichier(s) restant(s) (
+            {formatBytes(resumable.reduce((sum, entry) => sum + entry.size, 0))}). Choisissez
+            à nouveau les mêmes fichiers ou le même dossier : seuls ceux qui manquent
+            seront envoyés.
+          </p>
+          <div className="resume-actions">
+            <button
+              type="button"
+              className="btn btn-primary btn-small"
+              onClick={() => resumeFilesRef.current?.click()}
+            >
+              Reprendre avec des fichiers…
+            </button>
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={() => resumeDirRef.current?.click()}
+            >
+              Reprendre avec un dossier…
+            </button>
+            <button type="button" className="btn btn-ghost btn-small" onClick={forgetResumable}>
+              Oublier
+            </button>
+          </div>
+          <input
+            ref={resumeFilesRef}
+            type="file"
+            multiple
+            data-testid="resume-files-input"
+            className="visually-hidden"
+            onChange={(e) => {
+              handleResume(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={resumeDirRef}
+            type="file"
+            multiple
+            data-testid="resume-folder-input"
+            className="visually-hidden"
+            onChange={(e) => {
+              handleResume(e.target.files);
+              e.target.value = "";
+            }}
+            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+          />
+        </div>
+      ) : null}
       {notice ? (
         <p role="status" className="alert alert-ok">
           {notice}
@@ -1803,7 +1929,7 @@ export function ObjectsPage() {
                 multiple
                 data-testid="files-input"
                 className="visually-hidden"
-                disabled={queueBusy}
+                disabled={transferActive}
                 onChange={(e) => {
                   handleFilesChange(e.target.files);
                   e.target.value = "";
@@ -1825,7 +1951,7 @@ export function ObjectsPage() {
             multiple
             data-testid="folder-input"
             className="visually-hidden"
-            disabled={queueBusy}
+            disabled={transferActive}
             onChange={(e) => {
               void handleFolderUpload(e.target.files);
               e.target.value = "";
@@ -1835,7 +1961,7 @@ export function ObjectsPage() {
           <button
             type="button"
             className="btn"
-            disabled={queueBusy}
+            disabled={transferActive}
             onClick={() => dirInputRef.current?.click()}
           >
             Importer un dossier…
@@ -1843,16 +1969,16 @@ export function ObjectsPage() {
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={queueBusy || pendingFiles.length === 0}
+            disabled={transferActive || pendingFiles.length === 0}
           >
             {transferActive ? "Transfert…" : "Importer et valider"}
           </button>
-          {queueBusy ? (
+          {transferActive ? (
             <button type="button" className="btn" onClick={handleCancelUpload}>
-              Annuler tout
+              Annuler
             </button>
           ) : null}
-          {!queueBusy && (queue.failed > 0 || queue.cancelled > 0) ? (
+          {!transferActive && (queue.failed > 0 || queue.cancelled > 0) ? (
             <button type="button" className="btn" onClick={handleRetryFailed}>
               Réessayer les échecs
             </button>
@@ -1861,7 +1987,7 @@ export function ObjectsPage() {
 
         {pendingFiles.length > 0 ? (
           <>
-            {queueBusy ? (
+            {transferActive ? (
               <p className="pending-hint" role="status">
                 En attente du prochain import — le transfert en cours se termine
                 d'abord.
@@ -1884,157 +2010,6 @@ export function ObjectsPage() {
               ))}
             </ul>
           </>
-        ) : null}
-
-        {queue.items.length > 0 ? (
-          <div className="transfer" data-testid="transfer-status" aria-live="polite">
-            <div className="queue-head">
-              <span className="muted">
-                {queue.done}/{queue.items.length} transféré
-                {queue.items.length > 1 ? "s" : ""}
-                &nbsp;·&nbsp;{queueEtaText}</span>
-              {transferActive ? (
-                <span className="muted">
-                  jusqu'à {queue.concurrency} en parallèle
-                </span>
-              ) : null}
-              {canPauseAll ? (
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  onClick={handlePauseUpload}
-                >
-                  Pause tout
-                </button>
-              ) : null}
-              {queuePaused ? (
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  onClick={handleResumeUpload}
-                >
-                  Reprendre tout
-                </button>
-              ) : null}
-            </div>
-            {queue.schedulerPaused ? (
-              <p className="muted" role="status">
-                Import en pause — reprise automatique au retour de la connexion,
-                ou manuelle via «&nbsp;Reprendre tout&nbsp;».
-              </p>
-            ) : null}
-            {tabFrozen && queueBusy ? (
-              <p className="muted" role="status">
-                En pause — onglet en arrière-plan, reprise au retour.
-              </p>
-            ) : null}
-            {queueBusy ? (
-              <p className="muted" role="status">
-                Fermer l'onglet interrompt l'import : re-sélection nécessaire
-                après fermeture.
-              </p>
-            ) : null}
-            {transferActive &&
-            queue.maxConcurrency > 1 &&
-            queue.concurrency < queue.maxConcurrency ? (
-              <p className="muted" role="status">
-                Connexion difficile : envois limités à {queue.concurrency} à la
-                fois — retour à {queue.maxConcurrency} dès que ça passe.
-              </p>
-            ) : null}
-            <ul className="queue">
-              {queue.items.map((item) => (
-                <li key={item.id} className="queue-item">
-                  <div className="queue-line">
-                    <span className="transfer-name">{item.fileName}</span>
-                    <span className="muted">{formatBytes(item.sizeBytes)}</span>
-                    <span className={queueItemClass(item)}>
-                      {queueItemLabel(item)}
-                    </span>
-                    {item.state.phase === "available" ? (
-                      <span className="chip chip-muted">SHA-256 vérifié</span>
-                    ) : null}
-                    {item.state.phase === "idle" && !item.paused ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        aria-label={`Mettre en pause ${item.fileName}`}
-                        onClick={() => queueRef.current?.pauseItem(item.id)}
-                      >
-                        Pause
-                      </button>
-                    ) : null}
-                    {item.paused ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        aria-label={`Reprendre ${item.fileName}`}
-                        onClick={() => queueRef.current?.resumeItem(item.id)}
-                      >
-                        Reprendre
-                      </button>
-                    ) : null}
-                    {ACTIVE_PHASES.includes(item.state.phase) ||
-                    item.state.phase === "idle" ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        aria-label={`Interrompre ${item.fileName}`}
-                        onClick={() => queueRef.current?.cancelItem(item.id)}
-                      >
-                        ×
-                      </button>
-                    ) : null}
-                    {item.state.phase === "failed" ||
-                    item.state.phase === "cancelled" ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        aria-label={`Relancer ${item.fileName}`}
-                        onClick={() => {
-                          setUploadError(null);
-                          queueRef.current?.retryItem(item.id);
-                        }}
-                      >
-                        Relancer
-                      </button>
-                    ) : null}
-                  </div>
-                  {item.state.phase === "uploading" ? (
-                    <div
-                      className="progress"
-                      role="progressbar"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Math.round(item.state.progress * 100)}
-                      aria-label={`Progression de ${item.fileName}`}
-                    >
-                      <span
-                        className="progress-bar"
-                        style={{ width: `${Math.round(item.state.progress * 100)}%` }}
-                      />
-                    </div>
-                  ) : null}
-                  {item.state.phase === "uploading" ? (
-                    <p className="muted">
-                      {formatBytes(item.state.transferredBytes)} /{" "}
-                      {formatBytes(item.state.sizeBytes)} (
-                      {Math.round(item.state.progress * 100)} %)
-                    </p>
-                  ) : null}
-                  {item.state.attempts > 0 &&
-                  ACTIVE_PHASES.includes(item.state.phase) ? (
-                    <p className="muted">
-                      Nouvelle tentative ({item.state.attempts})…
-                    </p>
-                  ) : null}
-                  {item.state.error && item.state.phase === "failed" ? (
-                    <p className="muted">{item.state.error}</p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </div>
         ) : null}
 
         {uploadError ? (
@@ -2372,11 +2347,9 @@ export function ObjectsPage() {
                       label={`Actions pour ${item.display_name}`}
                       items={[
                         { label: "Détails", onSelect: () => setDetails(item) },
-                        {
-                          label: "Aperçu",
-                          disabled: item.status !== "available",
-                          onSelect: () => setPreviewTarget(item),
-                        },
+                        ...(item.status === "available" && isPreviewable(item.content_type)
+                          ? [{ label: "Aperçu", onSelect: () => setPreviewTarget(item) }]
+                          : []),
                         {
                           label: "Télécharger",
                           disabled:
@@ -2415,6 +2388,15 @@ export function ObjectsPage() {
                                     onConfirm: () =>
                                       abortUploadMutation.mutate(item.id),
                                   }),
+                              },
+                            ]
+                          : []),
+                        ...(isRestorable(item)
+                          ? [
+                              {
+                                label: "Restaurer",
+                                disabled: objectBusy,
+                                onSelect: () => restoreMutation.mutate(item.id),
                               },
                             ]
                           : []),
@@ -2541,6 +2523,15 @@ export function ObjectsPage() {
             </span>
           </div>
           <div className="drawer-actions">
+            {details.status === "available" && isPreviewable(details.content_type) ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setPreviewTarget(details)}
+              >
+                Aperçu
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn-primary"
@@ -2549,21 +2540,16 @@ export function ObjectsPage() {
             >
               {downloadingId === details.id ? "…" : "Télécharger"}
             </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={details.status !== "available"}
-              onClick={() => setPreviewTarget(details)}
-            >
-              Aperçu
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => void handleCopyReference(details)}
-            >
-              Copier la référence
-            </button>
+            {isRestorable(details) ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={objectBusy}
+                onClick={() => restoreMutation.mutate(details.id)}
+              >
+                Restaurer
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn"
@@ -2671,18 +2657,6 @@ export function ObjectsPage() {
           </aside>
         </>
       ) : null}
-
-      {/* Inline preview: image / audio / PDF rendered from the presigned URL,
-          with a download fallback for anything the browser cannot display. */}
-      <PreviewModal
-        item={previewTarget}
-        csrf={csrf}
-        onClose={() => setPreviewTarget(null)}
-        onDownload={(target) => {
-          setPreviewTarget(null);
-          void handleDownload(target);
-        }}
-      />
 
       {/* New folder */}
       <Dialog
@@ -3040,6 +3014,15 @@ export function ObjectsPage() {
         </section>
       ) : null}
 
+      <PreviewModal
+        item={previewTarget}
+        csrf={csrf}
+        onClose={() => setPreviewTarget(null)}
+        onDownload={(item) => {
+          setPreviewTarget(null);
+          void handleDownload(item);
+        }}
+      />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {/* Recursive (cascade) folder deletion: real listing, typed confirmation,

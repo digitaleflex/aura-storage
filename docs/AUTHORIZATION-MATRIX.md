@@ -60,12 +60,9 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/objects/{oid}/commit` | `objects:write` | streaming SHA-256, idempotent |
 | POST | `/api/v1/objects/{oid}/abort` | `objects:write` | cancel a pending intent (best-effort delete); idempotent; refused on available/deleted |
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
-| POST | `/api/v1/objects/{oid}/preview-intent` | `objects:read` | presigned GET bound to `Content-Disposition: inline` (PDF/image/audio preview); same 404/409 as download-intent; scoped |
+| POST | `/api/v1/objects/{oid}/preview-intent` | `objects:read` | presigned GET bound to `Content-Disposition: inline` (PDF/image/audio preview); same 404/409 as download-intent, plus **415** for types outside the inline allow-list (images except SVG, PDF, audio: never HTML/SVG/XML); scoped |
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |
-| POST | `/api/v1/objects/{oid}/share` | `objects:read` | **human only**; mints a public link (token shown once, only its SHA-256 fingerprint stored); expiry mandatory and bounded by `AURA_SHARE_TTL_MAX`; `inline` refused for active types |
-| GET | `/api/v1/objects/{oid}/shares` | `objects:read` | lists links (never the tokens); `active` computed server-side |
-| DELETE | `/api/v1/objects/{oid}/shares/{sid}` | `objects:read` | **human only**; creator-only, immediate and idempotent |
-| GET | `/s/{token}` | **none (public)** | the only unauthenticated object route: 302 to a presigned GET (~60 s) or one indistinguishable 404; rate-limited at the edge; audited |
+| POST | `/api/v1/objects/{oid}/restore` | `objects:delete` | undo a soft delete (trash); 409 unless the object is `deleted` and was fully uploaded |
 | POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin; a storage failure keeps the catalogue row and returns **502** (M06) |
 | GET | `/api/v1/folders` | `objects:read` | **human only**; owner-scoped, root, `?parent_id=`, or `?all=true` (flat tree) |
 | POST | `/api/v1/folders` | `objects:write` | **human only**; logical folder, no host directory |
@@ -75,8 +72,8 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/admin/reconcile` | `admin:write` | bounded global sweep of stale intents (`limit` 1..5000, oldest first; repeat until 0); returns `{expired, storage_deletes_attempted, storage_failures}` — a storage failure keeps the intent `pending` for the next sweep and is counted in `storage_failures`, never as cleaned (M06) |
 | GET | `/api/v1/admin/stats` | `admin:read` | aggregate counts, no content |
 | GET | `/api/v1/admin/audit` | `admin:read` | audit search newest-first (period/actor/action/result/space/application/request filters, `limit` 1..500 + `offset`); `total` counts window matches, `truncated` warns of older history (M07) |
-| POST | `/api/v1/admin/audit/prune` | `admin:write` | enforce `AURA_AUDIT_RETENTION_DAYS` (default 90); timestamp-less lines kept (M07) |
-| GET | `/api/v1/admin/orphans` | `admin:read` | read-only orphan candidates (available rows missing at storage); never deletes (M07/#87) |
+| POST | `/api/v1/admin/audit/prune` | `admin:write` | enforce `AURA_AUDIT_RETENTION_DAYS`
+| GET | `/api/v1/admin/orphans` | `admin:read` | read-only orphan candidates (available rows missing at storage); never deletes (M07/#87) | (default 90); timestamp-less lines kept (M07) |
 | GET | `/api/v1/admin/usage` | `admin:read` | real per-space consumption (verified available bytes + counts) with `measured_at` and configured limits; optional `space_id` filter (M07) |
 | GET | `/api/v1/admin/health` | `admin:read` | supervision snapshot (api/database/storage/disk + recent errors); always 200, top-level `degraded` on dependency failure (M07) |
 | POST/GET | `/api/v1/admin/applications` | `admin:write` / `admin:read` | platform registry |

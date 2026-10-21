@@ -542,6 +542,30 @@ def test_preview_intent_renders_inline_with_object_type(monkeypatch):
     assert "response-content-type=application%2Fpdf" in body["preview_url"]
 
 
+def test_preview_intent_refuses_types_that_can_run_script(monkeypatch):
+    # A user-uploaded HTML/SVG/XML file must never be served inline from the
+    # storage origin: preview-intent answers 415 and the UI offers a download.
+    monkeypatch.setattr(main, "s3ops", DummyS3(b"<script>1</script>"))
+    c, headers = _admin()
+    for name, ctype in (("page.html", "text/html"), ("logo.svg", "image/svg+xml"),
+                        ("data.xml", "application/xml"), ("doc.bin", "application/octet-stream")):
+        oid = _intent(c, headers, name=name, size_bytes=18, content_type=ctype).json()["id"]
+        c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
+        r = c.post(f"/api/v1/objects/{oid}/preview-intent", headers=headers)
+        assert r.status_code == 415, (ctype, r.status_code, r.text)
+        # download-intent is unaffected: the file stays retrievable.
+        assert c.post(f"/api/v1/objects/{oid}/download-intent", headers=headers).status_code == 200
+
+
+def test_is_previewable_ignores_parameters_and_case():
+    assert main.is_previewable("Application/PDF")
+    assert main.is_previewable("image/png; charset=binary")
+    assert main.is_previewable("audio/mpeg")
+    assert not main.is_previewable("image/svg+xml")
+    assert not main.is_previewable("text/html")
+    assert not main.is_previewable("")
+
+
 def test_preview_intent_matches_download_scoping(monkeypatch):
     monkeypatch.setattr(main, "s3ops", DummyS3(b"x"))
     c, headers = _admin()

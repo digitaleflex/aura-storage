@@ -1309,6 +1309,33 @@ p .chip {
   margin-left: auto;
 }
 
+.alert-warn {
+  background: var(--signal-soft);
+  color: var(--ink);
+  border-color: var(--signal-line);
+  border-left-color: var(--signal);
+}
+
+.resume-banner {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.resume-banner p {
+  margin: 0;
+}
+
+.resume-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resume-actions .btn {
+  margin-left: 0;
+}
+
 .empty {
   padding: 22px 4px;
   color: var(--muted);
@@ -1371,50 +1398,6 @@ p .chip {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
-}
-
-/* Inline preview: media is rendered from the presigned URL, kept on-screen. */
-.preview-dialog {
-  width: min(860px, 94vw);
-}
-
-.preview-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.preview-media {
-  display: block;
-  width: 100%;
-  max-height: 70vh;
-  object-fit: contain;
-  background: var(--steel-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-small);
-}
-
-.preview-audio {
-  width: 100%;
-}
-
-.preview-frame {
-  width: 100%;
-  height: 70vh;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-small);
-  background: var(--steel-2);
-}
-
-.preview-fallback {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.preview-warn {
-  margin: 0;
 }
 
 .move-list {
@@ -2130,10 +2113,6 @@ p .chip {
     padding-right: 15px;
   }
 
-  .preview-frame {
-    height: 60vh;
-  }
-
   .row-actions {
     justify-content: flex-start;
   }
@@ -2265,486 +2244,41 @@ p .chip {
   justify-content: flex-end;
 }
 
-/* ==================================================================== */
-/* Vault explorer polish (S16) — append-only, scoped to .vault-* rules.  */
-/* Behaviour is untouched: this block only dresses the existing DOM.     */
-/* Colours come from the shared tokens (vault-tokens.css + :root): the   */
-/* existing hue (graphite rail, steel surfaces, amber signal) is kept.   */
-/* ==================================================================== */
+/* --- Inline preview --- */
+.preview-dialog {
+  width: min(900px, 96vw);
+}
 
-/* --- Top band: breadcrumb, title and messages share one full-width row. --- */
-.vault-workspace > .vault-top {
-  grid-column: 1 / -1;
-  grid-row: 1;
+.preview-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-width: 0;
+  max-height: 80vh;
+  overflow: auto;
 }
 
-/* --- Page title block: larger, bolder, with a one-line lede. --- */
-.vault-page-head {
-  align-items: flex-start;
-  gap: 16px;
-}
-
-.vault-page-title {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.vault-workspace .vault-page-title h1 {
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
-}
-
-.vault-subtitle {
-  margin: 0;
-  font-size: 13.5px;
-  color: var(--muted);
-  max-width: 64ch;
-}
-
-/* --- Breadcrumb: home mark, then the path. --- */
-.vault-breadcrumb {
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  gap: 6px;
-  margin: 0;
-}
-
-.vault-crumb {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border-radius: var(--vault-radius-sm);
-  color: var(--muted);
-}
-
-.vault-crumb:hover {
-  background: var(--steel-2);
-  color: var(--ink);
-}
-
-.vault-crumb-current {
-  color: var(--vault-ink);
-  font-weight: 600;
-  cursor: default;
-}
-
-.vault-crumb-current:hover {
-  background: none;
-}
-
-.vault-home-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--vault-accent);
-}
-
-.vault-crumb-current .vault-home-icon {
-  color: var(--vault-accent);
-}
-
-.vault-breadcrumb .crumb-sep {
-  color: var(--faint);
-}
-
-/* --- Header actions: the overflow menu reads as a peer of the buttons. --- */
-.vault-head-actions {
-  align-items: center;
-  gap: 8px;
-}
-
-.vault-head-actions .menu-trigger {
-  border: 1px solid var(--line-2);
-  background: var(--steel-1);
-  color: var(--ink-2);
-  font-size: 18px;
-  line-height: 1;
-  padding: 6px 12px;
-  border-radius: var(--vault-radius-sm);
-}
-
-.vault-head-actions .menu-trigger:hover,
-.vault-head-actions .menu-trigger[aria-expanded="true"] {
-  background: var(--steel-2);
-  color: var(--ink);
-}
-
-.vault-btn-refresh,
-.vault-btn-folder {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.vault-refresh-icon,
-.vault-btn-icon,
-.vault-btn-caret {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-}
-
-.vault-btn-caret {
-  font-size: 10px;
-  color: var(--muted);
-}
-
-/* --- Import dropzone: dashed frame, cloud mark, explicit drop states. --- */
-.vault-workspace > .vault-dropzone {
-  border: 1px dashed var(--line-2);
-  border-radius: var(--vault-radius-lg);
-  background: var(--steel-1);
-  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
-}
-
-.vault-workspace > .vault-dropzone:hover {
-  border-color: var(--signal-line);
-}
-
-.vault-dropzone-main {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-}
-
-.vault-cloud-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--vault-accent);
-  background: var(--steel-2);
-  border-radius: 50%;
-  padding: 10px;
-}
-
-.vault-dropzone-text {
-  min-width: 0;
-}
-
-.vault-dropzone-title {
-  margin: 0;
-  font-family: var(--font-ui);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--ink);
-}
-
-.vault-dropzone-lead {
-  margin: 4px 0 0;
-  font-size: 13.5px;
-  color: var(--ink-2);
-}
-
-/* Dropping a payload over the zone: unmistakable accent frame. */
-.vault-workspace > .vault-dropzone.drop-active {
-  border-color: var(--vault-accent);
-  border-style: dashed;
-  background: var(--signal-soft);
-  outline: 2px dashed var(--vault-accent);
-  outline-offset: -7px;
-}
-
-/* A refused drop (empty files/folders, wrong payload) colours the zone. */
-.vault-workspace > .vault-dropzone.drop-refused {
-  border-color: var(--danger);
-}
-
-.vault-workspace > .vault-dropzone.drop-refused .vault-cloud-icon {
-  color: var(--danger);
-  background: var(--danger-bg);
-}
-
-/* --- Objects card: title mark, counter and list/grid switch. --- */
-.vault-objects-card {
-  border-radius: var(--vault-radius-lg);
-}
-
-.vault-objects-head {
-  align-items: center;
-}
-
-.vault-card-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.vault-card-title-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--muted);
-}
-
-.vault-objects-tools {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.vault-counter {
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.vault-view-toggle {
-  display: inline-flex;
-  border: 1px solid var(--line-2);
-  border-radius: var(--vault-radius-sm);
-  overflow: hidden;
-  background: var(--steel-1);
-}
-
-.vault-view-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 9px;
-  border: none;
-  background: none;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.vault-view-btn + .vault-view-btn {
-  border-left: 1px solid var(--line-2);
-}
-
-.vault-view-btn:hover {
-  color: var(--ink);
-  background: var(--steel-2);
-}
-
-.vault-view-btn-active,
-.vault-view-btn-active:hover {
-  color: var(--vault-ink);
-  background: var(--steel-2);
-}
-
-/* --- Filters: search with a leading glyph; toolbar wraps before it crowds. --- */
-.vault-filters {
-  align-items: flex-end;
-  gap: 10px;
-}
-
-.vault-search-field {
-  position: relative;
-}
-
-.vault-search-field .vault-search-icon {
-  position: absolute;
-  left: 9px;
-  bottom: 9px;
-  display: inline-flex;
-  color: var(--faint);
-  pointer-events: none;
-}
-
-.vault-search-field input {
-  padding-left: 30px;
-}
-
-/* --- Register: plate header, tabular figures, soft type badges. --- */
-.vault-workspace .ledger-head {
-  font-size: 11px;
-}
-
-.ledger-type.vault-badge-type {
-  justify-self: start;
-  width: fit-content;
-  padding: 2px 8px;
-  color: var(--vault-blue);
-  background: var(--vault-blue-soft);
-  border-radius: var(--vault-radius-sm);
-}
-
-.vault-workspace .ledger-size {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
-}
-
-.vault-workspace .ledger-date {
-  font-variant-numeric: tabular-nums;
-}
-
-/* --- Grid view: the same rows, laid out as touch-friendly cards. --- */
-.ledger.vault-view-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 12px;
-}
-
-.ledger.vault-view-grid .ledger-head {
-  display: none;
-}
-
-.ledger.vault-view-grid .ledger-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "name menu"
-    "meta meta";
-  gap: 8px;
-  align-items: start;
-  border: 1px solid var(--line);
-  border-left-width: 3px;
-  border-radius: var(--vault-radius-md);
-  padding: 12px;
-}
-
-.ledger.vault-view-grid .ledger-name {
-  grid-area: name;
-}
-
-.ledger.vault-view-grid .ledger-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  grid-area: meta;
-}
-
-.ledger.vault-view-grid .ledger-menu {
-  grid-area: menu;
-}
-
-.ledger.vault-view-grid .ledger-size {
-  text-align: left;
-}
-
-/* --- Messages and progress: shared tokens, never colour alone. --- */
-.vault-workspace .alert {
-  border-radius: var(--vault-radius-sm);
-}
-
-.vault-workspace .alert:not(.alert-ok):not(.alert-error) {
-  background: var(--vault-blue-soft);
-  color: var(--vault-blue);
-  border-color: var(--vault-blue-soft);
-  border-left-color: var(--vault-blue);
-}
-
-.vault-workspace .progress {
-  height: 5px;
-  border-radius: 999px;
-  background: var(--steel-2);
-}
-
-.vault-workspace .progress-bar {
-  border-radius: 999px;
-  background: var(--vault-accent);
-}
-
-/* --- Focus stays visible through the new controls. --- */
-.vault-workspace :is(button, a, input, select, [tabindex]):focus-visible {
-  outline: 2px solid var(--signal);
-  outline-offset: 2px;
-}
-
-/* --- No horizontal scroll from the workspace grid. --- */
-.vault-workspace {
+.preview-media {
   max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  align-self: center;
 }
 
-.vault-objects-card,
-.vault-workspace .ledger {
-  min-width: 0;
+.preview-audio {
+  width: 100%;
 }
 
-/* --- Toolbar wraps to multiple lines before 1280px. --- */
-@media (max-width: 1279px) {
-  .vault-filters,
-  .vault-head-actions,
-  .vault-objects-tools {
-    flex-wrap: wrap;
-  }
+.preview-frame {
+  width: 100%;
+  height: 70vh;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
 }
 
-/* --- 1001–1279px: the register's fixed column gates no longer fit the
-   half-width column of the two-column workspace, so a last cell would spill
-   past the viewport. Hand the register the full width; the rail and the
-   dropzone keep sharing the row above. Below 1000px the layout is already
-   single-column (see the base stylesheet), so DOM order is left untouched. --- */
-@media (min-width: 1001px) and (max-width: 1279px) {
-  .vault-workspace > .section[aria-labelledby="objects-title"] {
-    grid-column: 1 / -1;
-    grid-row: 3;
-    margin-left: 0;
-  }
-}
-
-/* --- Phones: rows become compact touch cards (~44px), grid folds to one column. --- */
-@media (max-width: 768px) {
-  .vault-workspace .ledger-head {
-    display: none;
-  }
-
-  .vault-workspace .ledger-row {
-    grid-template-columns: minmax(0, 1fr) 44px;
-    grid-template-areas:
-      "name menu"
-      "meta meta";
-    row-gap: 6px;
-    align-items: start;
-    padding: 12px 6px;
-  }
-
-  .vault-workspace .ledger-name {
-    grid-area: name;
-    min-height: 44px;
-    display: flex;
-    align-items: center;
-  }
-
-  .vault-workspace .ledger-meta {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 10px 12px;
-    grid-area: meta;
-  }
-
-  .vault-workspace .ledger-menu {
-    grid-area: menu;
-  }
-
-  .vault-workspace .ledger-size {
-    text-align: left;
-  }
-
-  .vault-workspace .ledger-date {
-    flex-basis: 100%;
-  }
-
-  .vault-workspace .menu-trigger {
-    min-width: 44px;
-    min-height: 44px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .vault-head-actions .btn,
-  .vault-head-actions .menu-trigger,
-  .vault-filters .field input,
-  .vault-filters .field select,
-  .vault-filters .field button {
-    min-height: 44px;
-  }
-
-  .vault-dropzone-main {
-    flex-direction: column;
-  }
-
-  .ledger.vault-view-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.preview-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
 }

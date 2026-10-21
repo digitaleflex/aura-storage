@@ -1,48 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../lib/api";
 import type { ObjectItem, PreviewIntentResponse } from "../lib/api";
+import { previewKind } from "../lib/preview";
 
-/**
- * Above this size the browser is doing real work to render the media; we warn
- * before attempting it instead of silently pulling tens of megabytes.
- */
+/** Above this size the browser does real work; warn instead of pulling it silently. */
 const PREVIEW_WARN_BYTES = 50 * 1024 * 1024;
 
-type PreviewKind = "image" | "audio" | "pdf" | "other";
-
-/** Which inline element (if any) can render this media type. */
-function previewKind(contentType: string | undefined): PreviewKind {
-  const value = (contentType ?? "").toLowerCase();
-  if (value.startsWith("image/")) return "image";
-  if (value.startsWith("audio/")) return "audio";
-  if (value === "application/pdf") return "pdf";
-  return "other";
-}
-
-function formatBytes(size: number): string {
-  if (!Number.isFinite(size) || size < 0) return "taille inconnue";
-  if (size === 0) return "0 o";
-  const units = ["o", "Ko", "Mo", "Go", "To"];
-  const index = Math.min(
-    Math.floor(Math.log(size) / Math.log(1024)),
-    units.length - 1,
-  );
-  const value = size / 1024 ** index;
-  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
-}
-
-type Status = "idle" | "loading" | "ready" | "error";
+type Status = "loading" | "ready" | "error";
 
 /**
- * Accessible inline preview. Built on the native <dialog> so Escape closes it
- * and focus is trapped while it is open. The media source is the short-lived
- * presigned URL returned by the API and is used directly (never turned into a
- * blob); the URL is never logged.
- *
- * Degraded mode: when the preview endpoint is missing the API returns a
- * download intent (`fallback`), whose URL may force a download and therefore
- * cannot reliably render inline — we then offer the download instead of showing
- * a broken frame.
+ * Inline preview in a native <dialog> (Escape closes, focus stays inside).
+ * The media source is the short-lived presigned URL, used directly and never
+ * logged. There is no download fallback here: the API refuses types it does not
+ * allow-list (415) and the message says so.
  */
 export function PreviewModal({
   item,
@@ -56,36 +26,30 @@ export function PreviewModal({
   onDownload: (item: ObjectItem) => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  const [status, setStatus] = useState<Status>("idle");
+  const [status, setStatus] = useState<Status>("loading");
   const [intent, setIntent] = useState<PreviewIntentResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const open = item !== null;
 
-  // Keep the native dialog in sync with the controlled `open` state.
   useEffect(() => {
     const el = dialogRef.current;
     if (!el) return;
-    if (open && !el.open) {
-      el.showModal();
-    } else if (!open && el.open) {
-      el.close();
-    }
+    if (open && !el.open) el.showModal();
+    else if (!open && el.open) el.close();
   }, [open]);
 
-  // Mint a fresh preview intent each time a new object is opened.
   useEffect(() => {
     if (!item) return;
+    setIntent(null);
+    setError(null);
     if (!csrf) {
       setStatus("error");
-      setIntent(null);
       setError("Session expirée. Reconnectez-vous.");
       return;
     }
     let cancelled = false;
     setStatus("loading");
-    setIntent(null);
-    setError(null);
     api.createPreviewIntent(item.id, csrf).then(
       (result) => {
         if (cancelled) return;
@@ -96,7 +60,9 @@ export function PreviewModal({
         if (cancelled) return;
         setError(
           err instanceof ApiError
-            ? `Aperçu indisponible : ${err.detail}`
+            ? err.status === 415
+              ? "Ce type de fichier ne peut pas être affiché dans le navigateur."
+              : `Aperçu indisponible : ${err.detail}`
             : "Aperçu indisponible.",
         );
         setStatus("error");
@@ -108,30 +74,22 @@ export function PreviewModal({
   }, [item, csrf]);
 
   const kind = previewKind(intent?.content_type ?? item?.content_type);
-  const sizeBytes = intent?.size_bytes ?? item?.size_bytes ?? 0;
-  const oversized = sizeBytes > PREVIEW_WARN_BYTES;
-  const renderable = status === "ready" && intent !== null && !intent.fallback;
-  const canRender = renderable && kind !== "other";
+  const size = intent?.size_bytes ?? item?.size_bytes ?? 0;
 
   return (
     <dialog
       ref={dialogRef}
       className="dialog preview-dialog"
       onClose={onClose}
-      role="dialog"
-      aria-modal="true"
       aria-labelledby="preview-title"
     >
       <div className="dialog-head">
-        <h2 id="preview-title">
-          {item ? `Aperçu — ${item.display_name}` : "Aperçu"}
-        </h2>
+        <h2 id="preview-title">{item ? `Aperçu — ${item.display_name}` : "Aperçu"}</h2>
         <button
           type="button"
           className="btn btn-ghost btn-small"
           onClick={onClose}
           aria-label="Fermer l'aperçu"
-          autoFocus
         >
           Fermer
         </button>
@@ -144,58 +102,42 @@ export function PreviewModal({
         ) : null}
 
         {status === "error" ? (
-          <p role="alert" className="alert alert-error">
-            {error}
-          </p>
+          <div className="preview-fallback">
+            <p role="alert" className="alert alert-error">
+              {error}
+            </p>
+            {item && item.status === "available" ? (
+              <button type="button" className="btn" onClick={() => onDownload(item)}>
+                Télécharger
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
-        {status === "ready" && item ? (
+        {status === "ready" && item && intent && kind ? (
           <>
-            {oversized ? (
+            {size > PREVIEW_WARN_BYTES ? (
               <p role="status" className="alert preview-warn">
-                Fichier volumineux ({formatBytes(sizeBytes)}) : l'aperçu peut
-                solliciter fortement le navigateur.
+                Fichier volumineux : l'aperçu peut solliciter fortement le navigateur.
               </p>
             ) : null}
-
-            {canRender && intent ? (
-              kind === "image" ? (
-                <img
-                  className="preview-media"
-                  src={intent.preview_url}
-                  alt={`Aperçu de ${item.display_name}`}
-                />
-              ) : kind === "audio" ? (
-                <audio
-                  className="preview-audio"
-                  src={intent.preview_url}
-                  controls
-                  preload="metadata"
-                >
-                  Votre navigateur ne peut pas lire cet audio.
-                </audio>
-              ) : (
-                <iframe
-                  className="preview-frame"
-                  src={intent.preview_url}
-                  title={`Aperçu PDF de ${item.display_name}`}
-                />
-              )
+            {kind === "image" ? (
+              <img
+                className="preview-media"
+                src={intent.preview_url}
+                alt={`Aperçu de ${item.display_name}`}
+              />
+            ) : kind === "audio" ? (
+              <audio className="preview-audio" src={intent.preview_url} controls preload="metadata">
+                Votre navigateur ne peut pas lire cet audio.
+              </audio>
             ) : (
-              <div className="preview-fallback">
-                <p className="muted">
-                  {intent?.fallback
-                    ? "Ce serveur n'expose pas l'aperçu en ligne. Téléchargez le fichier pour le consulter."
-                    : "Ce type de fichier ne peut pas être affiché dans le navigateur."}
-                </p>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() => onDownload(item)}
-                >
-                  Télécharger
-                </button>
-              </div>
+              <iframe
+                className="preview-frame"
+                src={intent.preview_url}
+                title={`Aperçu PDF de ${item.display_name}`}
+                referrerPolicy="no-referrer"
+              />
             )}
           </>
         ) : null}

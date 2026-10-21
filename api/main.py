@@ -4,17 +4,15 @@ Catalogue metadata lives here; object bytes travel directly between the client
 and S3 through short-lived presigned URLs. The API never stores a browser session
 token in the response body and never puts S3 credentials in the frontend.
 """
-import logging
-import os
 import shutil
 import time
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, ids, netinfo, shares
+from . import authz, ids, netinfo
 from .audit import (
     audit_event,
     audit_path,
@@ -23,9 +21,8 @@ from .audit import (
     query_audit_log,
     recent_error_events,
     reset_request_context,
-    set_request_principal,
 )
-from .auth import hash_password, new_token, verify_dummy, verify_password
+from .auth import hash_password, new_token, verify_password
 from .authz import (
     ADMIN_READ,
     ADMIN_WRITE,
@@ -63,12 +60,6 @@ from .transfer import (
 )
 
 app = FastAPI(title="AURA Management API", version="0.2.0")
-# uvicorn installs handlers on its own loggers only and leaves the root logger
-# handler-free, so an INFO record from "api.main" is dropped by logging's
-# lastResort handler (WARNING). Verified locally: an "api.main" INFO line never
-# reached the process output, while "uvicorn.error" did. Route through the logger
-# uvicorn configures so commit timings are visible in `docker logs`.
-log = logging.getLogger("uvicorn.error")
 
 
 @app.middleware("http")
@@ -173,20 +164,12 @@ def _ensure_bootstrap_admin() -> None:
 
 _ensure_bootstrap_admin()
 
+# Verified against when the username is unknown (timing equalisation in login).
+_DUMMY_PASS_HASH = hash_password(new_token(32))
+
 
 def _as_dict(row) -> dict:
     return dict(row) if not isinstance(row, dict) else row
-
-
-def _upload_headers(content_type: str) -> dict:
-    """Headers the client must echo on a presigned PUT.
-
-    ``Content-Type`` and the SSE-S3 header are both part of the signed request
-    (see ``api/s3.presigned_put``); the browser has to resend them exactly or the
-    gateway rejects the upload. Returning them here keeps the value the API
-    signed and the value the client sends in lock-step.
-    """
-    return {"Content-Type": content_type, SSE_HEADER: SSE_ALGORITHM}
 
 
 def _canonical_id(value: str, field: str) -> str:
@@ -333,20 +316,6 @@ class UploadIntentIn(BaseModel):
     folder_id: Uuid4 | None = None
 
 
-class ShareIn(BaseModel):
-    """Create a public read-only share link for one object.
-
-    ``expires_in`` is optional but never unbounded: the server refuses anything
-    above ``AURA_SHARE_TTL_MAX``. ``max_uses`` turns the link into a
-    burn-after-N-read link.
-    """
-    model_config = ConfigDict(extra="forbid")
-    expires_in: int | None = Field(default=None, ge=60)
-    max_uses: int | None = Field(default=None, ge=1, le=1_000_000)
-    # `attachment` is the default so a share link downloads rather than renders.
-    content_disposition: Literal["attachment", "inline"] = "attachment"
-
-
 class ObjectPatchIn(BaseModel):
     # Object reassignment into a logical folder (#62). `model_fields_set`
     # distinguishes "not sent" from an explicit null (which unfiles the object
@@ -485,87 +454,6 @@ def ready():
         return JSONResponse(status_code=503, content={"status": "not ready"})
 
 
-# ---------------------------------------------------------------------------
-# Public share links
-# ---------------------------------------------------------------------------
-# Outside /api/v1 on purpose: this is the only unauthenticated route that serves
-# object data, and it must not be confused with the session/Bearer API surface.
-# It never returns bytes: it redirects to a short-lived presigned GET.
-def _share_not_found() -> HTTPException:
-    """One indistinguishable 404 for every share failure mode.
-
-    A factory rather than a shared instance: the same object raised from several
-    concurrent requests would carry competing tracebacks.
-    """
-    return HTTPException(status_code=404, detail="not found")
-
-
-@app.get("/s/{token}")
-def redeem_share(token: str):
-    """Redeem a share link: 302 to a short-lived presigned GET, or 404.
-
-    Every failure mode (malformed, unknown, expired, exhausted, revoked, object
-    gone) answers the same 404, so the route cannot be used to discover which
-    objects or shares exist. Success and denial are both audited by share id.
-    """
-    if not shares.is_well_formed(token):
-        raise _share_not_found()
-    found = repo.get_share_by_token_hash(shares.fingerprint(token))
-    now = int(time.time())
-    if found is None:
-        audit_event("share-access", None, "denied", {"reason": "unknown"})
-        raise _share_not_found()
-    row = _as_dict(found)
-    if row.get("revoked_at"):
-        audit_event("share-access", None, "denied",
-                    {"share_id": row["id"], "reason": "revoked"})
-        raise _share_not_found()
-    if int(row["expires_at"]) <= now:
-        audit_event("share-access", None, "denied",
-                    {"share_id": row["id"], "reason": "expired"})
-        raise _share_not_found()
-
-    # Tenant attribution for the audit trail: a public redemption has no
-    # principal, but the event still belongs to the object's space.
-    set_request_principal(row["space_id"], None)
-
-    target = repo.get_object(row["object_id"], space_id=row["space_id"])
-    if target is None or target["status"] != AVAILABLE:
-        audit_event("share-access", None, "denied",
-                    {"share_id": row["id"], "reason": "object_unavailable"})
-        raise _share_not_found()
-    obj = _as_dict(target)
-
-    # Atomic: re-checks revocation, expiry and max_uses in the same UPDATE, so
-    # concurrent redemptions cannot over-use a limited link.
-    if not repo.consume_share(row["id"], now):
-        audit_event("share-access", None, "denied",
-                    {"share_id": row["id"], "reason": "exhausted"})
-        raise _share_not_found()
-
-    url = presigned_get(
-        s3, obj["bucket"], obj["object_key"], settings.share_presign_ttl,
-        content_disposition=shares.content_disposition_header(
-            row["content_disposition"], obj["display_name"]
-        ),
-        # Pin the type so a renamed/retagged object cannot be rendered as
-        # something else at redemption time.
-        content_type=obj["content_type"],
-    )
-    audit_event("share-access", None, "success", {
-        "share_id": row["id"], "object_id": obj["id"],
-        "use_count": int(row["use_count"]) + 1,
-    })
-    return RedirectResponse(url, status_code=302, headers={
-        # The redirect target is a bearer URL: keep it out of caches, out of
-        # Referer headers sent to the storage host, and out of search indexes.
-        "Cache-Control": "no-store",
-        "Referrer-Policy": "no-referrer",
-        "X-Robots-Tag": "noindex, nofollow",
-        "X-Content-Type-Options": "nosniff",
-    })
-
-
 @app.post("/api/v1/login")
 def login(body: LoginIn, request: Request, response: Response):
     client_ip = _client_ip(request)
@@ -575,15 +463,10 @@ def login(body: LoginIn, request: Request, response: Response):
         raise HTTPException(status_code=429, detail="too many login attempts",
                             headers={"Retry-After": str(settings.login_rate_window)})
     row = repo.get_user_by_name(body.username)
-    if row is None:
-        # Unknown username: still perform one hash verification against a
-        # throwaway hash so the response time cannot reveal whether the user
-        # exists (no enumeration oracle).
-        verify_dummy()
-        valid = False
-    else:
-        valid = verify_password(row["pass_hash"], body.password)
-    if not valid:
+    # An unknown username still pays one argon2 verification, so response time
+    # does not reveal which usernames exist.
+    stored_hash = row["pass_hash"] if row is not None else _DUMMY_PASS_HASH
+    if not verify_password(stored_hash, body.password) or row is None:
         _login_record_failure(client_ip)
         audit_event("login", body.username, "failure")
         raise HTTPException(status_code=401, detail="invalid credentials")
@@ -755,10 +638,7 @@ def upload_intent(
 
 
 @app.post("/api/v1/objects/{oid}/commit")
-def commit_object(
-    oid: str, response: Response, principal: dict = Depends(authorize(OBJECTS_WRITE))
-):
-    started = time.perf_counter()
+def commit_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -781,12 +661,10 @@ def commit_object(
         audit_event("commit", principal["id"], "expired", {"object_id": oid})
         raise HTTPException(status_code=410, detail="upload intent expired")
 
-    head_started = time.perf_counter()
     try:
         head = s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
     except Exception:
         raise HTTPException(status_code=422, detail="upload not found at storage")
-    head_s = time.perf_counter() - head_started
 
     size = int(head.get("ContentLength", -1))
     if size < 0:
@@ -805,7 +683,6 @@ def commit_object(
         audit_event("commit", principal["id"], "unencrypted", {"object_id": oid})
         raise HTTPException(status_code=422, detail="object not encrypted at rest")
 
-    hash_started = time.perf_counter()
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
         total, digest = stream_sha256(
@@ -816,7 +693,6 @@ def commit_object(
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
     except Exception:
         raise HTTPException(status_code=422, detail="upload not readable at storage")
-    hash_s = time.perf_counter() - hash_started
 
     if total != size:
         # Truncated or mismatched upload is never marked available (#37).
@@ -825,17 +701,6 @@ def commit_object(
 
     repo.mark_available(oid, size, digest)
     audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
-    # Instrumentation only: timings for the pilot latency distribution. No
-    # behaviour change — the header and log line are the sole additions.
-    total_s = time.perf_counter() - started
-    head_ms = head_s * 1000.0
-    hash_ms = hash_s * 1000.0
-    total_ms = total_s * 1000.0
-    response.headers["Server-Timing"] = (
-        f"head;dur={head_ms:.1f}, hash;dur={hash_ms:.1f}, total;dur={total_ms:.1f}"
-    )
-    log.info("commit timings oid=%s bytes=%d head_ms=%.1f hash_ms=%.1f total_ms=%.1f",
-             oid, size, head_ms, hash_ms, total_ms)
     return {
         "id": oid, "status": "available", "size_bytes": size,
         "checksum_sha256": digest, "checksum_algorithm": "sha256",
@@ -940,6 +805,25 @@ def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DEL
     return {"id": oid, "status": "deleted"}
 
 
+@app.post("/api/v1/objects/{oid}/restore")
+def restore_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
+    # Undo a soft delete (trash). Same scope as the delete it reverses. Only a
+    # committed object can come back: a pending intent that was soft-deleted
+    # never received its bytes (size_bytes stays -1), so it is not restorable.
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != DELETED:
+        raise HTTPException(status_code=409, detail="object is not in the trash")
+    if row["size_bytes"] < 0:
+        raise HTTPException(status_code=409, detail="object was never uploaded")
+    repo.set_status(oid, AVAILABLE)
+    audit_event("restore", principal["id"], "success", {"object_id": oid})
+    return _object_public(repo.get_object(oid, **_object_scope(principal)))
+
+
 @app.patch("/api/v1/objects/{oid}")
 def update_object(
     oid: str, body: ObjectPatchIn,
@@ -964,138 +848,6 @@ def update_object(
         "object_id": oid, "folder_id": body.folder_id,
     })
     return _object_public(repo.get_object(oid, **_object_scope(principal)))
-
-
-@app.post("/api/v1/objects/{oid}/share")
-def create_object_share(
-    oid: str, body: ShareIn,
-    principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
-):
-    """Mint a public, read-only, revocable link for one object.
-
-    Human-only on purpose: a leaked machine token must not be able to mint
-    unauthenticated links. Everything about the link is bounded server-side --
-    expiry, an optional use ceiling and the content type that may render inline.
-    The token is returned once and never stored in clear text.
-    """
-    oid = _canonical_id(oid, "object id")
-    found = repo.get_object(oid, **_object_scope(principal))
-    if found is None:
-        # 404 (not 403) so a caller cannot probe for objects outside its scope.
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(found)
-    if row["status"] != AVAILABLE:
-        raise HTTPException(status_code=409, detail="object not available")
-
-    expires_in = (
-        settings.share_ttl_default if body.expires_in is None else body.expires_in
-    )
-    if expires_in > settings.share_ttl_max:
-        raise HTTPException(
-            status_code=422,
-            detail="expires_in exceeds the maximum share lifetime",
-        )
-    if body.content_disposition == "inline" and not shares.inline_allowed(row["content_type"]):
-        # Active documents (text/html, image/svg+xml, ...) stay download-only.
-        raise HTTPException(
-            status_code=422,
-            detail="inline is not allowed for this content type; use attachment",
-        )
-
-    token = shares.new_token()
-    expires_at = int(time.time()) + expires_in
-    sid = repo.create_share(
-        object_id=oid,
-        space_id=row["space_id"],
-        created_by=principal["id"],
-        created_by_kind=principal["kind"],
-        token_hash=shares.fingerprint(token),
-        expires_at=expires_at,
-        content_disposition=body.content_disposition,
-        max_uses=body.max_uses,
-    )
-    audit_event("share-create", principal["id"], "success", {
-        "object_id": oid, "share_id": sid, "expires_in": expires_in,
-        "max_uses": body.max_uses,
-        "content_disposition": body.content_disposition,
-    })
-    path = f"/s/{token}"
-    return {
-        "id": sid, "object_id": oid,
-        # Absolute when AURA_SHARE_BASE_URL is configured (never derived from the
-        # request Host header, which the client controls).
-        "url": f"{settings.share_base_url}{path}" if settings.share_base_url else path,
-        # Returned exactly once: the catalogue only keeps the SHA-256 fingerprint.
-        "token": token,
-        "expires_in": expires_in, "expires_at": expires_at,
-        "max_uses": body.max_uses,
-        "content_disposition": body.content_disposition,
-    }
-
-
-@app.get("/api/v1/objects/{oid}/shares")
-def list_object_shares(
-    oid: str, principal: dict = Depends(authorize(OBJECTS_READ)),
-):
-    """List the links created for an object (never the tokens themselves)."""
-    oid = _canonical_id(oid, "object id")
-    if repo.get_object(oid, **_object_scope(principal)) is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    now = int(time.time())
-    items = []
-    for row in repo.list_shares(oid):
-        row = _as_dict(row)
-        max_uses = row["max_uses"]
-        items.append({
-            "id": row["id"], "object_id": row["object_id"],
-            "created_by": row["created_by"], "created_by_kind": row["created_by_kind"],
-            "content_disposition": row["content_disposition"],
-            "created_at": row["created_at"], "expires_at": row["expires_at"],
-            "max_uses": max_uses, "use_count": row["use_count"],
-            "last_used_at": row["last_used_at"], "revoked_at": row["revoked_at"],
-            # Computed here so a client never re-implements the expiry,
-            # exhaustion and revocation rules and drifts from the server.
-            "active": (
-                row["revoked_at"] is None
-                and int(row["expires_at"]) > now
-                and (max_uses is None or int(row["use_count"]) < int(max_uses))
-            ),
-        })
-    return {"items": items}
-
-
-@app.delete("/api/v1/objects/{oid}/shares/{sid}")
-def revoke_object_share(
-    oid: str, sid: str,
-    principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
-):
-    """Revoke a share link immediately. Idempotent.
-
-    Only the creator may revoke. The object lookup above is already owner-scoped
-    for humans, so this is defence in depth: it keeps the rule explicit if object
-    visibility ever widens. Note that an admin cannot reach another user's
-    objects through this API (same rule as every other object route), so a
-    departing operator's links must be revoked before the account is closed.
-    """
-    oid = _canonical_id(oid, "object id")
-    sid = _canonical_id(sid, "share id")
-    if repo.get_object(oid, **_object_scope(principal)) is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    found = repo.get_share(sid)
-    if found is None or found["object_id"] != oid:
-        raise HTTPException(status_code=404, detail="share not found")
-    row = _as_dict(found)
-    if row["created_by"] != principal["id"]:
-        raise HTTPException(status_code=403, detail="forbidden")
-    if row["revoked_at"] is not None:
-        # Revoking twice is not an error and never rewrites the original time.
-        return {"id": sid, "revoked": True, "revoked_at": row["revoked_at"]}
-    now = int(time.time())
-    repo.revoke_share(sid, now)
-    audit_event("share-revoke", principal["id"], "success", {
-        "object_id": oid, "share_id": sid,
-    })
-    return {"id": sid, "revoked": True, "revoked_at": now}
 
 
 @app.post("/api/v1/objects/{oid}/purge")
@@ -1137,14 +889,32 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
     }
 
 
+# Media types that may be rendered in place. Anything that can carry script or
+# markup (text/html, image/svg+xml, xml, ...) is deliberately absent: a
+# user-uploaded file must never execute from the storage origin. Everything not
+# listed here is offered as a download instead (415 from preview-intent).
+PREVIEWABLE_CONTENT_TYPES = frozenset({
+    "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif",
+    "application/pdf",
+    "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg",
+    "audio/webm", "audio/mp4", "audio/aac", "audio/flac",
+})
+
+
+def is_previewable(content_type: str) -> bool:
+    """True when `content_type` (parameters ignored) may be previewed inline."""
+    return (content_type or "").split(";", 1)[0].strip().lower() in PREVIEWABLE_CONTENT_TYPES
+
+
 @app.post("/api/v1/objects/{oid}/preview-intent")
 def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
     # Mirror of download-intent: same scope, same 404 (foreign/unknown id is not
     # an existence oracle) and same 409 (only available objects are previewable).
     # The difference is the presigned GET is bound to ``Content-Disposition:
     # inline`` and the object's own content type, so the browser renders PDFs,
-    # images and audio in place; the frontend falls back to a download when the
-    # type is not renderable. No storage coordinates are echoed back.
+    # images and audio in place. Only the allow-listed types above are served
+    # inline (415 otherwise: the frontend offers a download). No storage
+    # coordinates are echoed back.
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -1152,6 +922,8 @@ def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)))
     row = _as_dict(row)
     if row["status"] != "available":
         raise HTTPException(status_code=409, detail="object not available")
+    if not is_previewable(row["content_type"]):
+        raise HTTPException(status_code=415, detail="preview not supported for this content type")
     url = presigned_get(
         s3, row["bucket"], row["object_key"], settings.intent_ttl,
         content_disposition="inline", content_type=row["content_type"],
@@ -1320,12 +1092,6 @@ def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, 
         raise HTTPException(status_code=409, detail="folder is not empty")
     if repo.folder_object_count(fid, owner_id=owner_id) > 0:
         raise HTTPException(status_code=409, detail="folder is not empty")
-    # Soft-deleted objects no longer block the delete (they are hidden from
-    # every listing); detach their folder reference before removing the folder
-    # so ``objects.folder_id`` is never left dangling on PostgreSQL. This is what
-    # lets the explorer's cascade flow finish: it soft-deletes the files first,
-    # then removes the now-empty folders from the leaves up.
-    repo.detach_soft_deleted_objects(fid, owner_id=owner_id)
     repo.delete_folder(fid, owner_id=owner_id)
     audit_event("folder.delete", principal["id"], "success", {"folder_id": fid})
     return {"id": fid, "status": "deleted"}
@@ -1537,11 +1303,7 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
     except Exception:
         components["storage"] = {"status": "down", "error": "unreachable"}
     try:
-        # Measure the volume that HOLDS the audit log, not the file itself:
-        # ``shutil.disk_usage`` stats the exact path, so a log not written yet
-        # (fresh container, no request audited) would wrongly report the disk as
-        # unreadable. ``audit_path()`` may be relative (dev), hence the "." fallback.
-        disk = shutil.disk_usage(os.path.dirname(audit_path()) or ".")
+        disk = shutil.disk_usage(audit_path())
         components["disk"] = {
             "status": "ok", "total_bytes": disk.total,
             "used_bytes": disk.used, "free_bytes": disk.free,
