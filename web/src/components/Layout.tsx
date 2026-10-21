@@ -44,6 +44,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   const canAdmin = hasAdminAccess(session.data?.role);
+  // Display name of the signed-in account (username for a human, identity
+  // name for a service). It must come from the session: an unbound `name`
+  // silently resolves to the global `window.name`, i.e. an empty string, and
+  // the top bar showed a blank name instead of the account.
+  const name = session.data?.name;
 
   // Usage réel pour l'indicateur de stockage (admin uniquement)
   const usageQuery = useQuery({
