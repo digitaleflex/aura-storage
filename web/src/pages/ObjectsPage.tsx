@@ -515,8 +515,8 @@ export function ObjectsPage() {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }
 
-  function notify(kind: Toast["kind"], text: string) {
-    setToasts((current) => [...current.slice(-4), makeToast(kind, text)]);
+  function notify(kind: Toast["kind"], text: string, action?: Toast["action"]) {
+    setToasts((current) => [...current.slice(-4), makeToast(kind, text, action)]);
   }
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -532,6 +532,13 @@ export function ObjectsPage() {
   // holds pending files, a queue or an error; a drop anywhere also opens it.
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [trayCollapsed, setTrayCollapsed] = useState(false);
+
+  // Auto-collapse la tray quand tous les fichiers sont terminés
+  useEffect(() => {
+    if (queue.finished && queue.items.length > 0) {
+      setTrayCollapsed(true);
+    }
+  }, [queue.finished, queue.items.length]);
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
     message: ReactNode;
@@ -670,6 +677,24 @@ export function ObjectsPage() {
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [transferActive]);
+
+  // Raccourcis clavier : / pour focus recherche
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      // Ignorer si on est dans un champ de saisie
+      const target = event.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+        return;
+      }
+      if (event.key === "/") {
+        event.preventDefault();
+        const searchInput = document.querySelector('input[name="filter"]') as HTMLInputElement;
+        if (searchInput) searchInput.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Keep the screen (and so the machine) awake while files are being sent.
   // Best effort: unsupported browsers or a refused lock change nothing.
@@ -986,9 +1011,12 @@ export function ObjectsPage() {
       if (!csrf) throw new Error("Session expirée.");
       return api.deleteObject(id, csrf);
     },
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       setDetails(null);
-      notify("ok", "Objet marqué comme supprimé. Les octets restent jusqu'à une purge.");
+      notify("ok", "Objet marqué comme supprimé. Les octets restent jusqu'à une purge.", {
+        label: "Annuler",
+        onClick: () => restoreMutation.mutate(id),
+      });
       invalidateLibrary();
     },
     onError: (err) => reportError(err, "Suppression impossible."),
@@ -1013,13 +1041,22 @@ export function ObjectsPage() {
       }
       return { deleted, failed };
     },
-    onSuccess: ({ deleted, failed }) => {
+    onSuccess: ({ deleted, failed }, ids) => {
       setSelectedIds(new Set());
       setDetails(null);
       if (failed.length === 0) {
         notify(
           "ok",
           `${deleted} objet(s) marqué(s) comme supprimé(s). Les octets restent jusqu'à une purge.`,
+          {
+            label: "Annuler",
+            onClick: () => {
+              if (!csrf) return;
+              for (const id of ids) {
+                void restoreMutation.mutate(id);
+              }
+            },
+          },
         );
       } else {
         notify(
@@ -1172,6 +1209,19 @@ export function ObjectsPage() {
     if (!csrf) {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
+    }
+    // Garde-fou taille client : vérifier max_object_bytes avant l'upload
+    const maxBytes = usageQuery.data?.limits?.max_object_bytes;
+    if (maxBytes && maxBytes > 0) {
+      const oversized = pendingFiles.filter((f) => f.size > maxBytes);
+      if (oversized.length > 0) {
+        const names = oversized.map((f) => f.name).join(", ");
+        setUploadError(
+          `Fichier(s) trop volumineux (max ${formatBytes(maxBytes)}) : ${names}. ` +
+            "Réduisez la taille ou contactez l'administrateur.",
+        );
+        return;
+      }
     }
     launchQueue(
       csrf,
