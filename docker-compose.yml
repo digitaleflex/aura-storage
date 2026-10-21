@@ -90,6 +90,14 @@ services:
       # derrière firewall/VPN. Plages privées par défaut; ajoute ton IP publique opérateur
       # via `SWAGGER_ADMIN_IP` dans .env (ex: 203.0.113.10/32) avant go-live si accès distant.
       - traefik.http.middlewares.api-docs-allowlist.ipallowlist.sourcerange=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${SWAGGER_ADMIN_IP:-127.0.0.2/32}
+      # `api-docs-auth`: BasicAuth in front of the documentation router. The
+      # allow-list above is a network control: it carries no identity, it is
+      # shared by every host behind the same NAT egress, and it cannot be
+      # revoked per person. This middleware is the credential, so access to the
+      # API surface exposed by Swagger "Try it" is attributable and revocable
+      # on its own. Same pattern as the dashboard's `dash-auth`, same bcrypt
+      # requirement ($2y$/$2b$).
+      - traefik.http.middlewares.api-docs-auth.basicauth.users=${DOCS_AUTH:?Set DOCS_AUTH in .env}
 
       # --- forwardAuth example: DISABLED (no verify endpoint exists today) ---
       # api/main.py exposes /api/v1/login, /api/v1/logout and /api/v1/me, and
@@ -402,7 +410,7 @@ services:
       - traefik.http.routers.aura-swagger.tls=true
       - traefik.http.routers.aura-swagger.tls.certresolver=le
       # Prepend `api-auth-forward` here once it is defined (see `traefik` labels).
-      - traefik.http.routers.aura-swagger.middlewares=api-docs-allowlist,api-ratelimit,api-secure-headers
+      - traefik.http.routers.aura-swagger.middlewares=api-docs-allowlist,api-docs-auth,api-ratelimit,api-secure-headers
       - traefik.http.services.aura-swagger.loadbalancer.server.port=8080
     # No host port, no storage network: the docs never bind a local port.
 

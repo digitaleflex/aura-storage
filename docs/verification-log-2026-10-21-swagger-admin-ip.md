@@ -100,21 +100,75 @@ The change is additive and touches no persistent data, so the rollback restores
 the previous behaviour exactly (403 for every public source). Expect the same
 ~30 s 404 window during the rollback restart.
 
+## Phase 2 — BasicAuth credential on the docs router (same session, 11:03–11:19 UTC)
+
+The IP allow-list is a **network** control: no identity, shared by every host
+behind the same NAT egress, not revocable per person, and once crossed it
+exposes the whole API surface through Swagger "Try it". A credential layer was
+added in front of the same router, mirroring the dashboard pattern
+(`dash-ipallow` then `dash-auth`).
+
+| Step | Result |
+|---|---|
+| Dedicated bcrypt credential generated in a throwaway venv under `/tmp` (cost 12, 32-char random password) | project `.venv` untouched; no `bcrypt` dependency added to the app |
+| `DOCS_AUTH` appended to `.env`; plaintext stored in `.env.docs-auth` | both files mode `0600`; `.env.docs-auth` is covered by `.gitignore` (`.env.*`) |
+| `api-docs-auth` basicauth middleware added, `aura-swagger` chain = `api-docs-allowlist,api-docs-auth,api-ratelimit,api-secure-headers` | shipped by recreating `aura-001-swagger-ui` only (see below) |
+
+### Two traps found and fixed
+
+1. **Compose mangles bcrypt hashes.** A bcrypt salt can begin with a valid
+   variable name (`$o9Grd…`); Compose interpolates the substituted `.env` value
+   and silently drops that segment, producing a hash that never matches
+   (`docs:$2b$12/o9Grd…` → `docs:$2b$12/…`). Symptom: `docker compose config`
+   warns `The "o9Grd" variable is not set`. Fix: escape every `$` of the hash as
+   `$$` in `.env` (documented in `.env.example`). The pre-existing
+   `DASHBOARD_AUTH` hash happens to be safe only because its salt does not start
+   with a name-like token.
+2. **The router labels live on `aura-001-swagger-ui`, not on Traefik.** The
+   `aura-swagger` router/middlewares chain is declared on the docs container's
+   labels; the middleware *definitions* live on the Traefik container. Recreating
+   only Traefik therefore left the old chain active (`allowlist` first, no
+   `api-docs-auth`) while looking "applied". The correct deploy is
+   `docker compose up -d --force-recreate --no-deps swagger-ui`, which also
+   avoids the edge-wide ~30 s 404 window entirely.
+
+### Verification of the two layers
+
+| Request | Result |
+|---|---|
+| Source outside the allow-list (VPS public IP `153.75.248.230`) | `403` with or without credentials — the network layer answers first |
+| Source inside the allow-list, no credentials | `401` + `www-authenticate: Basic realm="traefik"` |
+| Source inside the allow-list, correct credential | `200`, Swagger UI, HSTS + CSP + `x-frame-options: DENY` + nosniff |
+| Source inside the allow-list, wrong password | `401` |
+| `app` / S3 root after the change | `200` / `200` (untouched: only `aura-001-swagger-ui` was recreated) |
+
+Result: the docs host is no longer reachable on a network position alone; a
+credential is required on top of it, and that credential can be rotated
+independently of the dashboard's.
+
 ## Open items / risks
 
 - `SWAGGER_ADMIN_IP` is a single NAT egress address: if the operator's ISP
   re-assigns it, the docs stop being reachable and the entry must be updated.
-- Swagger UI's "Try it" performs **real mutations** against the API. The
-  allow-list grants the whole API surface to that address; it must stay an
-  operator-only address.
-- Durable fix remains the `forwardAuth` path described in docker-compose.yml
-  (lines 94-112): a dedicated `/api/v1/auth/verify` endpoint plus `api` on the
-  `edge` network, so the documentation is behind an authenticated session
-  instead of an IP list. Not implemented in this change.
+  The credential layer does not remove that constraint — it adds identity on top.
+- Swagger UI's "Try it" performs **real mutations** against the API. Access now
+  requires the credential, but the credential is **shared**: there is still no
+  per-person attribution, no per-person revocation and no application audit
+  entry for documentation access. That is what Phase 3 below adds.
+- `.env.docs-auth` holds the plaintext on the host (mode `0600`, git-ignored).
+  Rotate by regenerating the hash, updating `DOCS_AUTH` and recreating
+  `swagger-ui`; delete the plaintext file once the credential is in a password
+  manager.
+- **Phase 3 (not implemented):** `forwardAuth` — a `/api/v1/auth/verify`
+  endpoint, `api` attached to the `edge` network, and a docs-scoped login. The
+  platform session cookie is host-only on `app…`, so it is *not* sent to
+  `docs…`; widening it to `.aura-storage.eurinhash.com` would also send it to the
+  S3 host (hence to SeaweedFS), so the correct design is a docs-host login that
+  sets its own host-only cookie, role-checked (`operator`/`admin`) and audited.
 - Recreating only Traefik produces the ~30 s 404 window described above. A
   safer long-term layout would move the shared middleware definitions out of
   the Traefik container's own labels (file provider or a dedicated sidecar
   container), so the edge never loads routers whose middlewares are missing.
 - The host's `opencode.json` denies `docker compose up` for agents; the
-  authorized command was executed through the `docker` group wrapper
-  (`sg docker -c ...`) and is reported here rather than done silently.
+  authorized commands were executed through the `docker` group wrapper
+  (`sg docker -c ...`) and are reported here rather than done silently.
