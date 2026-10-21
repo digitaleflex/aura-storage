@@ -1592,6 +1592,7 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
         "display_name": row["display_name"], "content_type": row["content_type"],
         "size_bytes": row["size_bytes"], "checksum_sha256": row["checksum_sha256"],
         "checksum_algorithm": "sha256",
+        "range_supported": True, "accept_ranges": "bytes",
     }
 
 
