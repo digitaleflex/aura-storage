@@ -1,7 +1,19 @@
+import React from "react";
 import { Link, useNavigate, useLocation } from "@tanstack/react-router";
 import { useAuth, useSession } from "../lib/auth";
-import { hasAdminAccess } from "../lib/api";
+import { hasAdminAccess, api } from "../lib/api";
+import { useQuery } from "@tanstack/react-query";
 import { VaultMark } from "./VaultMark";
+
+/** Local copy of formatBytes to avoid circular import with ObjectsPage. */
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size < 0) return "taille inconnue";
+  if (size === 0) return "0 o";
+  const units = ["o", "Ko", "Mo", "Go", "To"];
+  const index = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
+  const value = size / 1024 ** index;
+  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
 
 /** Human label for a session role (the API stays authoritative on access). */
 function roleLabel(kind: string | undefined, role: string | null | undefined): string {
@@ -33,9 +45,35 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const canAdmin = hasAdminAccess(session.data?.role);
 
+  // Usage réel pour l'indicateur de stockage (admin uniquement)
+  const usageQuery = useQuery({
+    queryKey: ["admin", "usage"],
+    queryFn: () => api.adminUsage(),
+    enabled: canAdmin,
+    retry: false,
+  });
+
   // État collapsible : persistant en URL (?sidebar=collapsed|expanded)
   const urlParams = new URLSearchParams(location.search);
   const sidebarCollapsed = urlParams.get("sidebar") === "collapsed";
+
+  // Mobile drawer state
+  const [mobileOpen, setMobileOpen] = React.useState(false);
+
+  // Close mobile drawer on route change
+  React.useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
+  // Close mobile drawer on Escape
+  React.useEffect(() => {
+    if (!mobileOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMobileOpen(false);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [mobileOpen]);
 
   // Mise à jour de l'URL lors du toggle
   const toggleSidebar = (collapsed: boolean) => {
@@ -135,13 +173,125 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <path d="M8 11V8a4 4 0 0 1 8 0v3" />
           </svg>
           <span>
-            {/* TODO : remplacer par donnée usage réelle depuis /api/v1/admin/usage */}
-            Stockage : --:-- utilisé
+            {usageQuery.data
+              ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes)} utilisés`
+              : canAdmin
+                ? "Stockage : chargement…"
+                : "Chiffré au repos, intégrité vérifiée"}
           </span>
         </p>
       </aside>
+
+      {/* Mobile drawer overlay */}
+      {mobileOpen ? (
+        <>
+          <div
+            className="mobile-drawer-scrim"
+            onClick={() => setMobileOpen(false)}
+            aria-hidden="true"
+          />
+          <nav className="mobile-drawer" aria-label="Navigation mobile">
+            <div className="mobile-drawer-head">
+              <Link to="/" className="brand" onClick={() => setMobileOpen(false)}>
+                <VaultMark />
+                <span className="brand-name">AURA Vault</span>
+              </Link>
+              <button
+                className="btn btn-ghost btn-small"
+                aria-label="Fermer le menu"
+                onClick={() => setMobileOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="mobile-drawer-nav">
+              <Link
+                to="/"
+                activeOptions={{ exact: true }}
+                className={isFilesPage ? "nav-link nav-link-active" : "nav-link"}
+                onClick={() => setMobileOpen(false)}
+              >
+                <svg
+                  aria-hidden="true"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                >
+                  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                </svg>
+                Fichiers
+              </Link>
+              {canAdmin ? (
+                <Link
+                  to="/admin"
+                  activeOptions={{ exact: true }}
+                  className={
+                    location.pathname === "/admin" ? "nav-link nav-link-active" : "nav-link"
+                  }
+                  onClick={() => setMobileOpen(false)}
+                >
+                  <svg
+                    aria-hidden="true"
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                  >
+                    <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
+                  </svg>
+                  Administration
+                </Link>
+              ) : null}
+            </div>
+            <p className="sidebar-foot">
+              <svg
+                aria-hidden="true"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              >
+                <rect x="5" y="11" width="14" height="10" rx="2" />
+                <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+              </svg>
+              <span>
+                {usageQuery.data
+                  ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes)} utilisés`
+                  : "Chiffré au repos, intégrité vérifiée"}
+              </span>
+            </p>
+          </nav>
+        </>
+      ) : null}
+
       <div className="main">
         <header className="topbar">
+          {/* Bouton hamburger mobile */}
+          <button
+            className="btn btn-ghost btn-small topbar-mobile-toggle"
+            aria-label="Ouvrir le menu de navigation"
+            aria-expanded={mobileOpen}
+            onClick={() => setMobileOpen(true)}
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            >
+              <path d="M3 12h18M3 6h18M3 18h18" />
+            </svg>
+          </button>
           {/* Bouton de togglage sidebar uniquement sur grand écran */}
           {sidebarCollapsed ? null : (
             <button
