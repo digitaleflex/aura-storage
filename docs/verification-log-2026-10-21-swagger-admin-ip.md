@@ -172,3 +172,52 @@ independently of the dashboard's.
 - The host's `opencode.json` denies `docker compose up` for agents; the
   authorized commands were executed through the `docker` group wrapper
   (`sg docker -c ...`) and are reported here rather than done silently.
+
+## Same-origin "Try it" (2026-10-21, commit 881a030 + 8db0863)
+
+Problem confirmed before the change: the docs page called the API on `app…`
+cross-origin, and the API emits no `Access-Control-*` header. `OPTIONS
+/api/v1/me` with `Origin: https://docs.aura-storage.eurinhash.com` answered
+`405` with no CORS header, so "Try it" could never work from the docs host.
+
+Change: a dedicated **internal** network `aura-docs` (`internal=true`) shared by
+`traefik` and `api` only — deliberately not the public `edge` network, where
+`filer` and `app` live and could otherwise dial `api:8000` directly. It also
+keeps the API's current connectivity (no Internet), since it replaces nothing
+and `storage` is already internal. A second router on the docs host,
+`aura-swagger-api` (`Host && PathPrefix(/api/)`, priority `200`, i.e. above the
+docs catch-all at `100`), proxies `/api/*` to `api:8000` behind the *same two
+gates* as the UI (`api-docs-allowlist` then `api-docs-auth`, plus
+`api-ratelimit`, `api-secure-headers`).
+
+Deploy order actually used, least disruptive first: `--force-recreate --no-deps`
+for `api`, then `swagger-ui`, then `traefik` (the last one costs the known ~30 s
+edge window). `docker network inspect aura-docs` → `internal=true`,
+`containers=aura-001-api aura-001-traefik`.
+
+Observed after the change (from loopback, allow-listed source):
+
+| Request | Result |
+| --- | --- |
+| `GET /` on docs, no credential | `401` + `www-authenticate: Basic realm="traefik"` |
+| `GET /` on docs, correct credential | `200`, `<title>Swagger UI` |
+| `GET /api/v1/me` on docs, correct credential | `401` **`content-type: application/json`**, body `{"detail":"authentication required"}` → the API answered, not the static UI |
+| `GET /api/v1/me` on docs, no credential | `401` `text/plain`, `Basic realm="traefik"` → the allow-list/credential gates still precede the API |
+| `POST /api/v1/login` on docs, bad password | `401` (API reached, no session created) |
+| `GET /` on `app…` and on the S3 host | `200` / `200` (no regression) |
+
+The same run also confirmed the API proxy returns the security headers
+(`strict-transport-security`, `x-frame-options: DENY`) and that the served
+`openapi.yaml` is the new one (`openapi 3.1.0`, 42 operations,
+`servers: ['/', 'https://app.aura-storage.eurinhash.com']`, 7 tags).
+
+Traefik logged the usual startup race (`middleware "api-secure-headers@docker"
+does not exist` on five routers) **only** in the first seconds of the restart;
+`--since 1m` afterwards returned zero occurrences and every route above answers
+correctly. The file-provider fix for that race remains an open item.
+
+"Try it" caveat worth stating in the docs: because the API is proxied
+same-origin, the session cookie obtained through `POST /api/v1/login` **from the
+docs host** is host-only on `docs…`, so it does not overlap the platform session
+on `app…`. That is intentional (Phase 3 will make this an explicit, audited
+docs login), but it means the docs console is a separate session.
