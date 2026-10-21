@@ -1371,6 +1371,19 @@ select:focus-visible {
   overflow: hidden;
 }
 
+.tray-progress {
+  padding: 4px 16px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tray-progress-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .tray-head {
   display: flex;
   align-items: center;

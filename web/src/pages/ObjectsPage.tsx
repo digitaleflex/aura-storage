@@ -532,6 +532,7 @@ export function ObjectsPage() {
   // holds pending files, a queue or an error; a drop anywhere also opens it.
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [trayCollapsed, setTrayCollapsed] = useState(false);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   // Auto-collapse la tray quand tous les fichiers sont terminés
   useEffect(() => {
@@ -539,6 +540,9 @@ export function ObjectsPage() {
       setTrayCollapsed(true);
     }
   }, [queue.finished, queue.items.length]);
+
+  // Infinite scroll : charger automatiquement quand le bouton "Charger plus" est visible
+  // (defini apres objectsQuery pour eviter le TDZ)
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
     message: ReactNode;
@@ -864,6 +868,23 @@ export function ObjectsPage() {
         ? lastOffset + lastPage.items.length
         : undefined,
   });
+
+  // Infinite scroll : charger automatiquement quand le bouton "Charger plus" est visible
+  useEffect(() => {
+    if (!objectsQuery.hasNextPage) return;
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !objectsQuery.isFetchingNextPage) {
+          void objectsQuery.fetchNextPage();
+        }
+      },
+      { threshold: 0.1 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [objectsQuery.hasNextPage, objectsQuery.isFetchingNextPage]);
 
   const tree = treeQuery.data?.items ?? [];
   const byId = useMemo(() => new Map(tree.map((f) => [f.id, f])), [tree]);
@@ -2707,7 +2728,7 @@ export function ObjectsPage() {
           </>
         )}
         {objectsQuery.hasNextPage ? (
-          <div className="load-more">
+          <div className="load-more" ref={loadMoreRef}>
             <button
               type="button"
               className="btn"
@@ -3161,8 +3182,40 @@ export function ObjectsPage() {
               >
                 Effacer
               </button>
-            ) : null}
+            ) : queue.schedulerPaused ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => queueRef.current?.resumeAll()}
+              >
+                Reprendre
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => queueRef.current?.pauseAll()}
+              >
+                Pause
+              </button>
+            )}
           </div>
+          {/* Barre de progression globale */}
+          {(() => {
+            const totalBytes = queue.items.reduce((sum, item) => sum + item.sizeBytes, 0);
+            const uploadedBytes = queue.items.reduce((sum, item) => sum + item.state.transferredBytes, 0);
+            const pct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
+            return totalBytes > 0 ? (
+              <div className="tray-progress">
+                <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+                  <span className="progress-bar" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="tray-progress-label">
+                  {formatBytes(uploadedBytes)} / {formatBytes(totalBytes)} ({pct}%)
+                </span>
+              </div>
+            ) : null;
+          })()}
         <div
           className="transfer"
           data-testid="transfer-status"
