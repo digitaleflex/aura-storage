@@ -12,13 +12,7 @@
  * endpoint; this module calls it and never pretends to cancel server-side.
  */
 import { ApiError, PresignedUploadError } from "./api";
-import { describeError } from "./errors";
-import type {
-  CommitResponse,
-  MultipartPartUrls,
-  MultipartStatus,
-  UploadIntentResponse,
-} from "./api";
+import type { CommitResponse, UploadIntentResponse } from "./api";
 
 export type TransferPhase =
   /** No transfer in flight. */
@@ -45,13 +39,8 @@ export interface TransferState {
   attempts: number;
   intentId: string | null;
   error: string | null;
-  /**
-   * Why a failed transfer stopped. Only `retryable` is worth an automatic
-   * retry once the link comes back: `fatal` (rejected bytes, storage full),
-   * `expired` (URL renewed too many times) and `aborted` need a decision or
-   * a fresh submission, not a silent replay.
-   */
-  failureKind?: "retryable" | "expired" | "fatal" | "aborted";
+  /** Commit timing from the server (ms): head, hash, total */
+  commitTiming: { head_ms: number; hash_ms: number; total_ms: number } | null;
 }
 
 export interface TransferResult {
@@ -67,10 +56,6 @@ export interface TransferConfig {
   maxDelayMs: number;
   /** How many times an expired presigned URL may be replaced in one transfer. */
   maxIntentRefreshes: number;
-  /** Parts sent at once for one multipart file (#72). */
-  partConcurrency: number;
-  /** Attempts per part, including the first; a failed part only resends itself. */
-  partMaxAttempts: number;
 }
 
 export const DEFAULT_TRANSFER_CONFIG: TransferConfig = {
@@ -78,12 +63,7 @@ export const DEFAULT_TRANSFER_CONFIG: TransferConfig = {
   baseDelayMs: 500,
   maxDelayMs: 8000,
   maxIntentRefreshes: 2,
-  partConcurrency: 4,
-  partMaxAttempts: 6,
 };
-
-/** Part URLs requested per call (the API accepts up to 100). */
-const PART_URL_BATCH = 20;
 
 export interface TransferDeps {
   requestIntent: (input: {
@@ -95,7 +75,7 @@ export interface TransferDeps {
   }) => Promise<UploadIntentResponse>;
   upload: (
     url: string,
-    file: Blob,
+    file: File,
     opts: {
       headers: Record<string, string>;
       onProgress: (loaded: number, total: number) => void;
@@ -104,12 +84,6 @@ export interface TransferDeps {
   ) => Promise<void>;
   commit: (id: string) => Promise<CommitResponse>;
   abortIntent: (id: string) => Promise<void>;
-  /** Multipart (#72): parts already held, for a resumed upload. */
-  multipartStatus?: (id: string) => Promise<MultipartStatus>;
-  /** Multipart (#72): presigned PUTs for the given part numbers. */
-  partUrls?: (id: string, partNumbers: number[]) => Promise<MultipartPartUrls>;
-  /** Current object state, to follow an integrity check that runs after commit (N5). */
-  objectStatus?: (id: string) => Promise<{ status: string; checksum_sha256?: string }>;
   sleep: (ms: number) => Promise<void>;
   random: () => number;
 }
@@ -148,9 +122,6 @@ type Classification = "retryable" | "expired" | "aborted" | "fatal";
 
 function classifyHttp(status: number): Classification {
   if (status === 403) return "expired";
-  // 507: the server refused the upload because the storage is full. Retrying
-  // cannot help until space is freed.
-  if (status === 507) return "fatal";
   if (status === 408 || status === 410 || status === 425 || status === 429) return "retryable";
   if (status >= 500) return "retryable";
   return "fatal";
@@ -170,13 +141,9 @@ export function classifyError(err: unknown): Classification {
 }
 
 function messageOf(err: unknown): string {
-  const fallback =
-    err instanceof ApiError
-      ? err.detail
-      : err instanceof Error
-        ? err.message
-        : "Échec du transfert.";
-  return describeError(err, fallback);
+  if (err instanceof ApiError) return err.detail;
+  if (err instanceof Error) return err.message;
+  return "Échec du transfert.";
 }
 
 function isNearExpiry(intent: UploadIntentResponse, nowMs: number): boolean {
@@ -255,195 +222,9 @@ export async function runTransfer(
         await deps.sleep(delay);
         return requestIntent();
       }
-      emit({ phase: "failed", error: messageOf(err), failureKind: classifyError(err) });
+      emit({ phase: "failed", error: messageOf(err) });
       return null;
     }
-  };
-
-  /**
-   * Multipart upload (#72): ask which parts the storage already holds, send
-   * only the others with bounded parallelism, then commit. A failed part is
-   * retried alone (backoff + jitter); an expired part URL is re-requested. The
-   * server checks the part list itself at commit, and answers 409 if a part is
-   * still missing, which starts another round.
-   */
-  const runMultipart = async (current: UploadIntentResponse): Promise<TransferResult> => {
-    const plan = current.multipart;
-    if (!plan || !deps.multipartStatus || !deps.partUrls) {
-      emit({
-        phase: "failed",
-        error: "Envoi en plusieurs parties non pris en charge.",
-        failureKind: "fatal",
-      });
-      return { state, objectId: current.id };
-    }
-    const statusOf = deps.multipartStatus;
-    const urlsFor = deps.partUrls;
-    const partBytes = plan.part_size_bytes;
-    const lengthOf = (n: number) =>
-      Math.max(0, Math.min(partBytes, file.size - (n - 1) * partBytes));
-
-    // Control-plane calls (status, part URLs, commit) get the same bounded
-    // retry as the single-PUT intent request.
-    const withRetry = async <T>(call: () => Promise<T>): Promise<T> => {
-      for (let tries = 0; ; tries += 1) {
-        try {
-          return await call();
-        } catch (err) {
-          if (aborted() || classifyError(err) !== "retryable" || tries >= config.partMaxAttempts - 1) {
-            throw err;
-          }
-          attempts += 1;
-          emit({ attempts, error: messageOf(err) });
-          await deps.sleep(backoffDelay(tries, config, deps.random));
-        }
-      }
-    };
-
-    for (let round = 0; ; round += 1) {
-      if (aborted()) return cancel();
-      let held: number[];
-      try {
-        held = (await withRetry(() => statusOf(current.id))).uploaded_parts;
-      } catch (err) {
-        if (aborted()) return cancel();
-        emit({ phase: "failed", error: messageOf(err), failureKind: classifyError(err) });
-        return { state, objectId: current.id };
-      }
-      const heldSet = new Set(held);
-      const queue: number[] = [];
-      for (let n = 1; n <= plan.part_count; n += 1) if (!heldSet.has(n)) queue.push(n);
-
-      let doneBytes = held.reduce((sum, n) => sum + lengthOf(n), 0);
-      const inflight = new Map<number, number>();
-      const report = () => {
-        let moving = doneBytes;
-        for (const loaded of inflight.values()) moving += loaded;
-        emit({
-          phase: "uploading",
-          transferredBytes: moving,
-          progress: file.size > 0 ? Math.min(1, moving / file.size) : 1,
-        });
-      };
-      report();
-
-      const urls = new Map<number, string>();
-      let failure: unknown = null;
-      const worker = async (): Promise<void> => {
-        for (;;) {
-          if (failure !== null || aborted()) return;
-          const n = queue.shift();
-          if (n === undefined) return;
-          let tries = 0;
-          let refreshes = 0;
-          for (;;) {
-            if (aborted()) return;
-            try {
-              let url = urls.get(n);
-              if (!url) {
-                const batch = [n, ...queue.filter((m) => !urls.has(m)).slice(0, PART_URL_BATCH - 1)];
-                const got = await withRetry(() => urlsFor(current.id, batch));
-                for (const part of got.parts) urls.set(part.part_number, part.url);
-                url = urls.get(n);
-                if (!url) throw new Error("URL de partie manquante.");
-              }
-              const start = (n - 1) * partBytes;
-              await deps.upload(url, file.slice(start, start + lengthOf(n)), {
-                headers: {},
-                onProgress: (loaded) => {
-                  inflight.set(n, loaded);
-                  report();
-                },
-                signal: options.signal,
-              });
-              inflight.delete(n);
-              urls.delete(n);
-              doneBytes += lengthOf(n);
-              report();
-              break;
-            } catch (err) {
-              inflight.delete(n);
-              if (aborted() || classifyError(err) === "aborted") return;
-              const kind = classifyError(err);
-              if (kind === "expired" && refreshes < config.maxIntentRefreshes + 1) {
-                refreshes += 1;
-                urls.delete(n);
-                continue;
-              }
-              if (kind === "retryable" && tries < config.partMaxAttempts - 1) {
-                tries += 1;
-                attempts += 1;
-                emit({ attempts, error: messageOf(err) });
-                await deps.sleep(backoffDelay(tries - 1, config, deps.random));
-                continue;
-              }
-              failure = err;
-              return;
-            }
-          }
-        }
-      };
-      const workers = Math.max(1, Math.min(config.partConcurrency, queue.length));
-      await Promise.all(Array.from({ length: workers }, () => worker()));
-      if (aborted()) return cancel();
-      if (failure !== null) {
-        emit({ phase: "failed", error: messageOf(failure), failureKind: classifyError(failure) });
-        return { state, objectId: current.id };
-      }
-
-      emit({ phase: "validating", progress: 1, transferredBytes: file.size, error: null });
-      try {
-        const committed = await withRetry(() => deps.commit(current.id));
-        return settle(current.id, committed);
-      } catch (err) {
-        if (aborted()) return cancel();
-        // 409: a part is still missing at the storage (lost, or a size
-        // mismatch). Ask again and send what is missing, a bounded number of times.
-        if (err instanceof ApiError && err.status === 409 && round < 2) continue;
-        emit({ phase: "failed", error: messageOf(err), failureKind: classifyError(err) });
-        return { state, objectId: current.id };
-      }
-    }
-  };
-
-  /**
-   * A large object is checked after commit (202 "verifying", N5): follow its
-   * state until the server marks it available or failed. Never reports success
-   * before the server does.
-   */
-  const settle = async (
-    id: string,
-    committed: { status: string; checksum_sha256?: string },
-  ): Promise<TransferResult> => {
-    let current = committed;
-    for (let polls = 0; current.status === "verifying"; polls += 1) {
-      if (aborted()) return cancel();
-      if (!deps.objectStatus) break;
-      emit({ phase: "validating", error: null });
-      await deps.sleep(Math.min(15_000, 1_000 * 2 ** Math.min(polls, 4)));
-      try {
-        current = await deps.objectStatus(id);
-      } catch (err) {
-        if (classifyError(err) !== "retryable") {
-          emit({ phase: "failed", error: messageOf(err), failureKind: classifyError(err) });
-          return { state, objectId: id };
-        }
-      }
-    }
-    if (current.status !== "available") {
-      emit({
-        phase: "failed",
-        error:
-          current.status === "verifying"
-            ? "Vérification d'intégrité en cours côté serveur."
-            : "La vérification d'intégrité a échoué.",
-        // A server-side verdict does not change by retrying the same bytes.
-        failureKind: "fatal",
-      });
-      return { state, objectId: id };
-    }
-    emit({ phase: "available", error: null, intentId: id, progress: 1, transferredBytes: file.size });
-    return { state, objectId: id, checksum: current.checksum_sha256 };
   };
 
   emit({ phase: "requesting-intent" });
@@ -459,20 +240,6 @@ export async function runTransfer(
       if (aborted()) return cancel();
       return { state, objectId: null };
     }
-    // Already sent (a reload while the server was checking it): no new bytes.
-    if (current.status === "available" || current.status === "verifying") {
-      emit({ phase: "validating", progress: 1, transferredBytes: file.size });
-      return settle(current.id, { status: current.status });
-    }
-    if (current.upload_mode === "multipart") return runMultipart(current);
-    if (!current.upload_url) {
-      emit({
-        phase: "failed",
-        error: "Réponse d'envoi incomplète.",
-        failureKind: "retryable",
-      });
-      return { state, objectId: current.id };
-    }
 
     try {
       await deps.upload(current.upload_url, file, {
@@ -487,7 +254,18 @@ export async function runTransfer(
       });
       emit({ phase: "validating", progress: 1, transferredBytes: file.size });
       const committed = await deps.commit(current.id);
-      return settle(current.id, committed);
+      // Extract Server-Timing header values (ms)
+      const timing = committed.serverTiming
+        ? {
+            head_ms: Number(committed.serverTiming.head_ms),
+            hash_ms: Number(committed.serverTiming.hash_ms),
+            total_ms: Number(committed.serverTiming.total_ms),
+          }
+        : null;
+      // Store timing in state for UI display
+      state = { ...state, commitTiming: timing };
+      emit({ phase: "available", error: null, intentId: current.id });
+      return { state, objectId: current.id, checksum: committed.checksum_sha256 };
     } catch (err) {
       if (aborted() || classifyError(err) === "aborted") {
         return cancel();
@@ -500,7 +278,7 @@ export async function runTransfer(
           refreshes += 1;
           continue;
         }
-        emit({ phase: "failed", error: "URL expirée.", failureKind: "expired" });
+        emit({ phase: "failed", error: "URL expirée." });
         return { state, objectId: null };
       }
       if (kind === "retryable" && attempts < config.maxAttempts - 1) {
@@ -511,7 +289,7 @@ export async function runTransfer(
         if (isNearExpiry(current, now())) intent = null;
         continue;
       }
-      emit({ phase: "failed", error: messageOf(err), failureKind: kind });
+      emit({ phase: "failed", error: messageOf(err) });
       return { state, objectId: current.id };
     }
   }
@@ -534,8 +312,6 @@ export async function runTransfer(
 
 export interface QueueItem {
   id: string;
-  /** Caller-supplied identity (e.g. the upload journal fingerprint). */
-  key?: string;
   fileName: string;
   sizeBytes: number;
   state: TransferState;
@@ -585,12 +361,6 @@ export interface UploadQueue {
   resumeAll(): void;
   /** Re-queue the failed and cancelled files, keeping the success ones. */
   retryFailed(): void;
-  /**
-   * Re-queue only the files that failed for a transient (network/5xx) reason,
-   * e.g. because the link dropped mid-upload. Fatal rejections and user
-   * cancellations are left alone. Called automatically on `online`.
-   */
-  retryTransient(): void;
   /** Re-queue one failed or cancelled file as a fresh submission. */
   retryItem(id: string): void;
   /** Detach the window listeners; safe to call on unmount (idempotent). */
@@ -629,23 +399,6 @@ export interface QueueOptions {
    * aborted; only new scheduling is held. Set false to manage it manually.
    */
   autoPauseOnOffline?: boolean;
-  /**
-   * When true (default) every file that stopped on a transient error -- a
-   * network drop, a 5xx, an expired upload URL -- is put back in the queue
-   * automatically when the browser reports it is online again, instead of
-   * waiting for the user to click "Réessayer". Fatal failures (bytes
-   * rejected, storage full, integrity failure) and cancellations are never
-   * replayed. A per-file cap (`maxReconnectRetries`) stops a file that keeps
-   * breaking the link from looping forever.
-   */
-  autoRetryOnReconnect?: boolean;
-  /**
-   * How many times one file may be re-queued by a reconnect, in total.
-   * Default 3. The counter is reset by a manual retry.
-   */
-  maxReconnectRetries?: number;
-  /** Called after a reconnect re-queued files, with how many (for the UI). */
-  onAutoRetry?: (count: number) => void;
   signal?: AbortSignal;
   onUpdate?: (queue: QueueState) => void;
   config?: Partial<TransferConfig>;
@@ -719,13 +472,6 @@ export interface QueueInput {
   file: File;
   /** Target catalogue folder for this file (defaults to `options.folderId`). */
   folderId?: string | null;
-  /** Caller-supplied identity, echoed on the queue item. */
-  key?: string;
-  /**
-   * Stable idempotency key: the same multipart session is resumed (parts kept)
-   * across retries and page reloads. Omitted: a fresh key per run.
-   */
-  idempotencyKey?: string;
 }
 
 export function startUploadQueue(
@@ -749,8 +495,6 @@ export function startUploadQueue(
     options.recoveryThreshold ?? scaled.recoveryThreshold,
   );
   const autoPauseOnOffline = options.autoPauseOnOffline ?? true;
-  const autoRetryOnReconnect = options.autoRetryOnReconnect ?? true;
-  const maxReconnectRetries = Math.max(0, options.maxReconnectRetries ?? 3);
   const defaultFolder = options.folderId ?? null;
 
   // Effective parallelism, adapted at runtime (see adaptToOutcome). It never
@@ -763,8 +507,6 @@ export function startUploadQueue(
 
   interface Internal {
     id: string;
-    key: string | undefined;
-    idempotencyKey: string | undefined;
     file: File;
     folderId: string | null;
     state: TransferState;
@@ -774,16 +516,12 @@ export function startUploadQueue(
     reserved: boolean;
     /** Suspended: the scheduler must not start (nor restart) this file. */
     paused: boolean;
-    /** Automatic re-queues already granted by a reconnect. */
-    reconnectRetries: number;
   }
 
   const items: Internal[] = entries.map((entry) => {
     const input: QueueInput = "file" in entry ? entry : { file: entry };
     return {
       id: queueItemId(),
-      key: input.key,
-      idempotencyKey: input.idempotencyKey,
       file: input.file,
       folderId: input.folderId !== undefined ? input.folderId : defaultFolder,
       state: idleTransfer(input.file),
@@ -791,7 +529,6 @@ export function startUploadQueue(
       settled: false,
       reserved: false,
       paused: false,
-      reconnectRetries: 0,
     };
   });
 
@@ -807,7 +544,6 @@ export function startUploadQueue(
   const snapshot = (): QueueState => ({
     items: items.map((item) => ({
       id: item.id,
-      key: item.key,
       fileName: item.file.name,
       sizeBytes: item.file.size,
       state: item.state,
@@ -826,26 +562,10 @@ export function startUploadQueue(
 
   const emit = () => options.onUpdate?.(snapshot());
 
-  /**
-   * A file that stopped on a transient error is not really finished: the next
-   * `online` may restart it, so its listeners must stay attached. Without this
-   * the queue detaches them as soon as the last file settles and a network
-   * drop would leave the whole import failed until a manual retry.
-   */
-  const awaitingReconnect = (): boolean =>
-    autoRetryOnReconnect &&
-    maxReconnectRetries > 0 &&
-    items.some(
-      (item) =>
-        item.state.phase === "failed" &&
-        item.state.failureKind === "retryable" &&
-        item.reconnectRetries < maxReconnectRetries,
-    );
-
   const maybeFinish = () => {
     if (!finished && active === 0 && items.every((item) => item.settled)) {
       finished = true;
-      if (!awaitingReconnect()) detachListeners();
+      detachListeners();
       emit();
       resolveDone(snapshot());
     }
@@ -937,7 +657,7 @@ export function startUploadQueue(
     emit();
     runTransfer(item.file, tracked, {
       folderId: item.folderId,
-      idempotencyKey: item.idempotencyKey ?? queueItemId(),
+      idempotencyKey: queueItemId(),
       signal: controller.signal,
       config: options.config,
       onUpdate: (state) => {
@@ -1034,40 +754,6 @@ export function startUploadQueue(
     pump();
   };
 
-  /**
-   * Put back every file that stopped on a transient error (network drop, 5xx,
-   * renewed upload URL). This is what makes a cut recoverable without a click:
-   * the `online` event calls it, and the manual "Réessayer" button calls the
-   * broader `retryFailed`. Fatal rejections and cancellations never come back
-   * on their own, and a per-file cap bounds the automatic attempts.
-   */
-  const retryTransient = (): void => {
-    let requeued = 0;
-    for (const item of items) {
-      if (item.state.phase !== "failed") continue;
-      if (item.state.failureKind !== "retryable") continue;
-      if (item.reconnectRetries >= maxReconnectRetries) continue;
-      item.reconnectRetries += 1;
-      item.state = idleTransfer(item.file);
-      item.settled = false;
-      item.reserved = false;
-      item.paused = false;
-      requeued += 1;
-    }
-    if (requeued === 0) {
-      // Nothing left to replay (fatal failures only, or the cap is reached):
-      // stop holding the window listeners for a link that will not help.
-      if (!awaitingReconnect() && active === 0 && items.every((item) => item.settled)) {
-        detachListeners();
-      }
-      return;
-    }
-    finished = false;
-    emit();
-    pump();
-    options.onAutoRetry?.(requeued);
-  };
-
   // --- browser-lifecycle wiring (no setInterval anywhere) ------------------
   // Progress comes from XHR `upload.onprogress` events and the queue is driven
   // by promise continuations, so a background tab keeps making progress and
@@ -1084,19 +770,14 @@ export function startUploadQueue(
     }
   };
   const onOffline = (): void => pauseAll();
-  const onOnline = (): void => {
-    if (autoPauseOnOffline) resumeAll();
-    if (autoRetryOnReconnect) retryTransient();
-  };
+  const onOnline = (): void => resumeAll();
 
   const attachListeners = (): void => {
     if (!hasWindow || listenersAttached) return;
     listenersAttached = true;
     window.addEventListener("beforeunload", onBeforeUnload);
-    if (autoPauseOnOffline) window.addEventListener("offline", onOffline);
-    // The `online` listener also drives the automatic replay of transient
-    // failures, so it is attached even when the queue is not auto-pausing.
-    if (autoPauseOnOffline || autoRetryOnReconnect) {
+    if (autoPauseOnOffline) {
+      window.addEventListener("offline", onOffline);
       window.addEventListener("online", onOnline);
     }
   };
@@ -1165,7 +846,6 @@ export function startUploadQueue(
     },
     pauseAll,
     resumeAll,
-    retryTransient,
     retryFailed() {
       let requeued = false;
       for (const item of items) {
@@ -1174,7 +854,6 @@ export function startUploadQueue(
           item.settled = false;
           item.reserved = false;
           item.paused = false;
-          item.reconnectRetries = 0;
           requeued = true;
         }
       }
@@ -1190,7 +869,6 @@ export function startUploadQueue(
       // successes stay untouched.
       if (!item || item.controller !== null) return;
       if (item.state.phase !== "failed" && item.state.phase !== "cancelled") return;
-      item.reconnectRetries = 0;
       item.state = idleTransfer(item.file);
       item.settled = false;
       item.reserved = false;

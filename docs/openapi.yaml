@@ -69,14 +69,8 @@ tags:
       scopes, plus rotation and immediate revocation.
   - name: administration
     description: >-
-      Operators and administrators — statistics, usage, audit search and
+      Operator and administrator reads — statistics, usage, audit search and
       retention, orphan inspection, stale-intent reconciliation.
-  - name: sharing
-    description: >-
-      Public share links — an unauthenticated, revocable, read-only capability
-      for exactly one object. Creation is human-only and always bounded by an
-      expiry; redemption (`GET /s/{token}`) is a 302 to a short-lived presigned
-      GET, so bytes never pass through the API.
 paths:
   /health/live:
     get:
@@ -93,44 +87,6 @@ paths:
       responses:
         "200": { description: Dependencies ready }
         "503": { description: Not ready }
-  /s/{token}:
-    get:
-      summary: Redeem a public share link (unauthenticated)
-      tags: [sharing]
-      security: []
-      description: >-
-        The only unauthenticated route that serves object data. It answers 302
-        to a presigned S3 GET valid for about a minute, with `Cache-Control:
-        no-store`, `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex,
-        nofollow`. Malformed, unknown, expired, exhausted and revoked links all
-        answer the same 404, so the route cannot be used to discover which
-        objects or shares exist. It never returns object bytes itself.
-      parameters:
-        - name: token
-          in: path
-          required: true
-          schema:
-            type: string
-            minLength: 43
-            maxLength: 43
-            pattern: "^[A-Za-z0-9_-]{43}$"
-          description: >-
-            Opaque link token, shown once at creation. The catalogue stores only
-            its SHA-256 fingerprint, so it cannot be recovered or listed.
-      responses:
-        "302":
-          description: Redirect to a short-lived presigned GET (no byte proxying)
-          headers:
-            Location:
-              schema: { type: string, format: uri }
-              description: Presigned S3 URL bound to the object content type and disposition
-            Cache-Control:
-              schema: { type: string }
-              description: Always `no-store`
-        "404":
-          description: Unknown, expired, exhausted or revoked link (deliberately indistinguishable)
-        "429":
-          description: Rate limited at the edge (`api-ratelimit` middleware)
   /api/v1/login:
     post:
       summary: Create a human session (public, rate-limited)
@@ -350,7 +306,6 @@ paths:
         "403": { description: Bucket not allowed / not authorised }
         "422": { description: "Invalid request, disallowed content type, or empty/size over the cap" }
         "429": { description: Too many pending uploads }
-        "507": { description: "Storage capacity reached: the declared size would pass AURA_STORAGE_HIGH_WATERMARK of AURA_STORAGE_CAPACITY_BYTES (only when a capacity is configured)" }
   /api/v1/objects/{oid}/commit:
     post:
       summary: Validate an upload, stream SHA-256, mark available (objects:write)
@@ -376,8 +331,7 @@ paths:
         "409": { description: Object not committable (including aborted/expired/deleted) }
         "410": { description: Upload intent expired }
         "413": { description: Object exceeds the maximum allowed size }
-        "422": { description: "Upload missing, or stored size does not match the declared size (intent marked failed)" }
-        "504": { description: "Commit deadline (AURA_COMMIT_DEADLINE_S) exceeded (intent marked failed)" }
+        "422": { description: Upload missing or size mismatch }
   /api/v1/objects/{oid}/abort:
     post:
       summary: Cancel a pending upload intent (objects:write)
@@ -456,137 +410,6 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
-  /api/v1/objects/{oid}/share:
-    post:
-      summary: Create a public read-only share link (objects:read, human only)
-      tags: [sharing]
-      description: >-
-        Mints an unauthenticated, revocable link for exactly one object. The
-        token is returned **once**; the catalogue stores only its SHA-256
-        fingerprint. Redeeming the link (`GET /s/<token>`) is a 302 to a
-        short-lived presigned S3 GET, so object bytes never pass through the API
-        and the link carries no S3 credential.
-
-        Human-only by design: a leaked machine identity token must not be able to
-        mint links that outlive its own revocation. Expiry is mandatory and
-        bounded by `AURA_SHARE_TTL_MAX`; `max_uses` is enforced atomically, so
-        concurrent redemptions cannot exceed it. `inline` is refused for types a
-        browser would execute (`text/html`, `image/svg+xml`, ...).
-      parameters:
-        - $ref: "#/components/parameters/ObjectId"
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ShareCreateRequest" }
-            examples:
-              sevenDays:
-                summary: Default 7-day download link
-                value: {}
-              burnAfterOneRead:
-                summary: 48 h, single use, forced download
-                value: { expires_in: 172800, max_uses: 1, content_disposition: attachment }
-      responses:
-        "200":
-          description: >-
-            The share, including the single-use `token` and the absolute `url`
-            when `AURA_SHARE_BASE_URL` is configured.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Share" }
-              examples:
-                created:
-                  value:
-                    id: b2f7c1d4-8e35-4a09-9c67-1f0a2d5e8b43
-                    object_id: 7c63c78d-d790-498e-acb5-870d53cfc0fd
-                    token: qY7m2Xb9tK4vR1sL0pN6wZ3cH8jF5dGaE7uI9oP2xS4
-                    url: https://app.aura-storage.eurinhash.com/s/qY7m2Xb9tK4vR1sL0pN6wZ3cH8jF5dGaE7uI9oP2xS4
-                    expires_in: 604800
-                    expires_at: 1761734400
-                    max_uses: null
-                    content_disposition: attachment
-        "401": { description: Authentication required }
-        "403": { description: "Machine identities cannot create shares, or CSRF validation failed" }
-        "404": { description: Object not found or not visible }
-        "409": { description: Object not available }
-        "422": { description: "expires_in above the maximum, or inline requested for an active content type" }
-  /api/v1/objects/{oid}/shares:
-    get:
-      summary: List an object's share links (objects:read)
-      tags: [sharing]
-      description: >-
-        One entry per link ever created for this object, never the tokens.
-        `active` is computed server-side from revocation, expiry and `max_uses`,
-        so a client never re-implements those rules and drifts.
-      parameters:
-        - $ref: "#/components/parameters/ObjectId"
-      responses:
-        "200":
-          description: Share links for the object, newest first
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [items]
-                properties:
-                  items:
-                    type: array
-                    items: { $ref: "#/components/schemas/ShareSummary" }
-              examples:
-                list:
-                  value:
-                    items:
-                      - id: b2f7c1d4-8e35-4a09-9c67-1f0a2d5e8b43
-                        object_id: 7c63c78d-d790-498e-acb5-870d53cfc0fd
-                        created_by: 3f1c2a94-6d0b-4a7e-9f52-1b8c0d4e77aa
-                        created_by_kind: user
-                        content_disposition: attachment
-                        created_at: 1761129600
-                        expires_at: 1761734400
-                        max_uses: 1
-                        use_count: 1
-                        last_used_at: 1761129800
-                        revoked_at: null
-                        active: false
-        "401": { description: Authentication required }
-        "404": { description: Object not found or not visible }
-  /api/v1/objects/{oid}/shares/{sid}:
-    delete:
-      summary: Revoke a share link immediately (objects:read, human only)
-      tags: [sharing]
-      description: >-
-        Revocation takes effect on the next redemption and is idempotent: a
-        second call returns the original `revoked_at` instead of rewriting it.
-        Only the creator may revoke; object visibility is already owner-scoped,
-        and an admin cannot reach another user's objects through this API.
-      parameters:
-        - $ref: "#/components/parameters/ObjectId"
-        - name: sid
-          in: path
-          required: true
-          schema: { $ref: "#/components/schemas/Uuid4" }
-          description: Share identifier returned at creation (never the token).
-      responses:
-        "200":
-          description: Revoked (or already revoked)
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [id, revoked, revoked_at]
-                properties:
-                  id: { $ref: "#/components/schemas/Uuid4" }
-                  revoked: { type: boolean }
-                  revoked_at: { type: integer, description: Epoch seconds of the (first) revocation }
-              examples:
-                revoked:
-                  value:
-                    id: b2f7c1d4-8e35-4a09-9c67-1f0a2d5e8b43
-                    revoked: true
-                    revoked_at: 1761130000
-        "401": { description: Authentication required }
-        "403": { description: "Not the creator, or CSRF validation failed" }
-        "404": { description: Object or share not found or not visible }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)
@@ -707,30 +530,6 @@ paths:
           description: Bounded sweep, oldest first; repeat until expired is 0 (server clamps to 1..5000)
       responses:
         "200": { description: "Reconcile counts (expired, storage_deletes_attempted, storage_failures); failed storage deletes keep the intent pending" }
-        "401": { description: Authentication required }
-        "403": { description: Not authorised }
-  /api/v1/admin/reconcile-terminal:
-    post:
-      summary: Clean up bytes for terminal rows (admin:write)
-      tags: [administration]
-      parameters:
-        - in: query
-          name: limit
-          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
-      responses:
-        "200": { description: "Counts (cleaned, storage_deletes_attempted, storage_failures)" }
-        "401": { description: Authentication required }
-        "403": { description: Not authorised }
-  /api/v1/admin/reconcile-reverse:
-    post:
-      summary: Storage-to-catalogue reverse orphan sweep (admin:write)
-      tags: [administration]
-      parameters:
-        - in: query
-          name: dry_run
-          schema: { type: boolean, default: true }
-      responses:
-        "200": { description: "Counts (scanned, orphans, deleted, failures)" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
   /api/v1/admin/stats:
@@ -1108,200 +907,6 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Bucket not found }
         "422": { description: Invalid or missing body field }
-  /api/v1/admin/integrity:
-    get:
-      tags: [administration]
-      summary: Periodic integrity scrub results (admin:read)
-      description: >-
-        Counts of available objects per scrub result (ok, mismatch, missing,
-        unchecked) and the objects at fault. Read-only; nothing is changed
-        automatically — a mismatch or missing object calls for a restore.
-      parameters:
-        - in: query
-          name: limit
-          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
-          description: Problems listed (server clamps to 1..500)
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "interval_days, results {result: {count, oldest}}, problems" }
-        "403": { description: Not authorised }
-
-  /api/v1/admin/integrity/scrub:
-    post:
-      tags: [administration]
-      summary: Run one bounded scrub pass now (admin:write)
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "Counts of this pass: ok, mismatch, missing, error, bytes" }
-        "403": { description: Not authorised }
-
-  /api/v1/admin/storage-orphans:
-    get:
-      tags: [administration]
-      summary: Read-only storage bytes the catalogue does not account for (admin:read)
-      description: >-
-        Keys in registered buckets with no catalogue row (no_row) or whose row is
-        aborted/expired/failed (terminal), plus unfinished multipart uploads no
-        pending row owns. Soft-deleted objects (trash) are not orphans. Anything
-        younger than AURA_ORPHAN_GRACE_SECONDS is ignored. Bounded and resumable.
-      parameters:
-        - in: query
-          name: bucket
-          schema: { type: string, maxLength: 63 }
-          description: One registered bucket; omitted = all registered buckets
-        - in: query
-          name: start_after
-          schema: { type: string, maxLength: 1024 }
-          description: Resume after this key (next_start_after of a previous call)
-        - in: query
-          name: max_keys
-          schema: { type: integer, minimum: 1, maximum: 50000, default: 5000 }
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "grace_seconds, buckets[{bucket, scanned, orphans, orphan_bytes, stale_uploads, next_start_after}]" }
-        "403": { description: Not authorised }
-        "404": { description: Bucket not registered }
-
-  /api/v1/admin/storage-orphans/cleanup:
-    post:
-      tags: [administration]
-      summary: Remove listed orphan keys and abort listed stale uploads (admin:write, destructive)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [bucket]
-              properties:
-                bucket: { type: string, maxLength: 63 }
-                keys: { type: array, maxItems: 100, items: { type: string } }
-                uploads:
-                  type: array
-                  maxItems: 100
-                  items:
-                    type: object
-                    additionalProperties: false
-                    required: [key, upload_id]
-                    properties:
-                      key: { type: string }
-                      upload_id: { type: string }
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "removed, aborted_uploads, skipped[{key, reason}] — each item re-checked before acting" }
-        "403": { description: Not authorised }
-        "404": { description: Bucket not registered }
-
-  /api/v1/me/master-mode:
-    post:
-      tags: [auth]
-      summary: Enter master mode by re-entering the password (objects:purge, human session)
-      description: >-
-        Short, session-bound elevation (AURA_MASTER_MODE_SECONDS, default 900)
-        for bulk destructive actions without a confirmation per item. Wrong
-        passwords count against the login rate limit. Audited.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [password]
-              properties:
-                password: { type: string }
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "master_until (epoch seconds)" }
-        "403": { description: "Not authorised, or the password does not match" }
-        "429": { description: Too many attempts }
-    delete:
-      tags: [auth]
-      summary: Leave master mode now
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "master_until null" }
-
-  /api/v1/objects/bulk-purge:
-    post:
-      tags: [objects]
-      summary: Master mode only — purge up to AURA_MASTER_BULK_MAX objects in one call (objects:purge)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [ids]
-              properties:
-                ids: { type: array, minItems: 1, items: { type: string } }
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "purged, not_found (or outside the caller's scope), failed (storage error; catalogue reference kept)" }
-        "403": { description: "Not authorised, or master mode not active" }
-        "422": { description: Too many ids }
-
-  /api/v1/objects/trash/empty:
-    post:
-      tags: [objects]
-      summary: Master mode only — purge the caller's trash, up to AURA_MASTER_BULK_MAX per call (objects:purge)
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "purged, not_found, failed, more (true when another call is needed)" }
-        "403": { description: "Not authorised, or master mode not active" }
-
-  /api/v1/objects/{oid}/restore:
-    post:
-      tags: [objects]
-      summary: Restore a soft-deleted object from the trash (objects:delete)
-      parameters:
-        - $ref: "#/components/parameters/ObjectId"
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "Object metadata, status available again" }
-        "404": { description: Object not found or not visible }
-        "409": { description: "Object is not in the trash, or was deleted before its upload completed (nothing to restore)" }
-
-  /api/v1/objects/{oid}/multipart:
-    get:
-      tags: [objects]
-      summary: Multipart plan and parts already held (objects:write); a resumed upload sends only the rest
-      parameters:
-        - $ref: "#/components/parameters/ObjectId"
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "size_bytes, part_size_bytes, part_count and uploaded_parts (part numbers whose size matches the plan)" }
-        "404": { description: Object not found or not visible }
-        "409": { description: No multipart upload in progress for this object }
-        "410": { description: Upload intent or multipart session expired }
-        "502": { description: Storage unavailable }
-
-  /api/v1/objects/{oid}/multipart/parts:
-    post:
-      tags: [objects]
-      summary: Short-lived presigned PUTs for up to 100 part numbers (objects:write)
-      parameters:
-        - $ref: "#/components/parameters/ObjectId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [part_numbers]
-              properties:
-                part_numbers: { type: array, minItems: 1, maxItems: 100, items: { type: integer, minimum: 1 } }
-      responses:
-        "401": { description: Authentication required }
-        "200": { description: "One URL per part, each bound to the part's exact Content-Length" }
-        "404": { description: Object not found or not visible }
-        "409": { description: No multipart upload in progress for this object }
-        "410": { description: Upload intent expired }
-        "422": { description: Part number out of range }
-
 components:
   schemas:
     Uuid4:
@@ -1312,70 +917,6 @@ components:
         Canonical identifier: a canonical UUID v4 (lowercase, 8-4-4-4-12).
         Alternate spellings are normalized; anything else is refused with 422.
         See docs/DATA-MODEL.md.
-    ShareCreateRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        expires_in:
-          type: integer
-          minimum: 60
-          description: >-
-            Lifetime in seconds. Defaults to AURA_SHARE_TTL_DEFAULT (7 days) and
-            is refused above AURA_SHARE_TTL_MAX (30 days) rather than clamped.
-        max_uses:
-          type: integer
-          minimum: 1
-          maximum: 1000000
-          description: >-
-            Optional use ceiling. Enforced inside the catalogue UPDATE, so
-            concurrent redemptions cannot exceed it. Omitted/null means unlimited
-            until expiry.
-        content_disposition:
-          type: string
-          enum: [attachment, inline]
-          default: attachment
-          description: >-
-            `inline` renders in the browser and is limited to non-executable
-            types (PDF, PNG/JPEG/WebP/GIF, text/plain). Active types such as
-            text/html and image/svg+xml are refused with 422.
-    Share:
-      type: object
-      required: [id, object_id, token, url, expires_in, expires_at, content_disposition]
-      properties:
-        id: { $ref: "#/components/schemas/Uuid4" }
-        object_id: { $ref: "#/components/schemas/Uuid4" }
-        token:
-          type: string
-          description: >-
-            The link credential. Returned exactly once: only its SHA-256
-            fingerprint is stored, so it cannot be listed or recovered later.
-        url:
-          type: string
-          description: >-
-            Absolute link when AURA_SHARE_BASE_URL is configured, otherwise the
-            relative path `/s/<token>`.
-        expires_in: { type: integer }
-        expires_at: { type: integer }
-        max_uses: { type: [integer, "null"] }
-        content_disposition: { type: string, enum: [attachment, inline] }
-    ShareSummary:
-      type: object
-      required: [id, object_id, created_at, expires_at, use_count, active]
-      properties:
-        id: { $ref: "#/components/schemas/Uuid4" }
-        object_id: { $ref: "#/components/schemas/Uuid4" }
-        created_by: { $ref: "#/components/schemas/Uuid4" }
-        created_by_kind: { type: string, enum: [user] }
-        content_disposition: { type: string, enum: [attachment, inline] }
-        created_at: { type: integer }
-        expires_at: { type: integer }
-        max_uses: { type: [integer, "null"] }
-        use_count: { type: integer }
-        last_used_at: { type: [integer, "null"] }
-        revoked_at: { type: [integer, "null"] }
-        active:
-          type: boolean
-          description: Not revoked, not expired, and uses remaining.
     LoginRequest:
       type: object
       additionalProperties: false
