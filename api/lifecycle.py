@@ -1,6 +1,9 @@
 """Lifecycle: reconcile stale pending uploads, soft-delete, purge (#19 follow-up)."""
 import time
 
+from .s3 import is_no_such_upload
+from .transfer import PURGING
+
 
 class StorageDeleteError(RuntimeError):
     """Raised when the storage backend refuses a delete (M06).
@@ -11,7 +14,8 @@ class StorageDeleteError(RuntimeError):
 
 
 def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
-                      limit: int = 500) -> dict:
+                      limit: int = 500,
+                      multipart_expired_before: int | None = None) -> dict:
     """Expire pending objects older than the grace period.
 
     Administrative sweep across every space; the route that calls it requires
@@ -25,9 +29,23 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
     expired = 0
     storage_deletes = 0
     storage_failures = 0
-    for r in repo.list_pending_before(cutoff, limit=max(1, limit)):
+    if multipart_expired_before is None:
+        multipart_expired_before = int(time.time())
+    for r in repo.list_pending_before(
+        cutoff, limit=max(1, limit), multipart_expired_before=multipart_expired_before,
+    ):
         row = dict(r) if not isinstance(r, dict) else r
         try:
+            if row.get("multipart_upload_id"):
+                # Free the parts of an abandoned multipart upload (#72).
+                try:
+                    s3ops.abort_multipart_upload(
+                        Bucket=row["bucket"], Key=row["object_key"],
+                        UploadId=row["multipart_upload_id"],
+                    )
+                except Exception as exc:
+                    if not is_no_such_upload(exc):
+                        raise
             s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
         except Exception:
             # Keep the pending reference so the next sweep retries; never
@@ -52,17 +70,50 @@ def purge_object(repo, s3ops, oid: str, *, space_id: str,
     single human owner. The route requires the ``objects:purge`` capability.
     A storage failure raises :class:`StorageDeleteError` and the catalogue row
     is kept, so the reference is never lost (M06); the route maps this to 502.
+
+    Two phases, so a crash never leaves the catalogue lying: the row is first
+    marked ``purging`` (hidden, not downloadable), then the bytes are deleted,
+    then the row. A failed delete puts the row back as it was; a process that
+    dies between the steps leaves a ``purging`` row that
+    :func:`resume_purges` finishes.
     """
     row = repo.get_object(oid, space_id=space_id, owner_id=owner_id)
     if row is None:
         return False
     row = dict(row) if not isinstance(row, dict) else row
+    previous = row["status"]
+    if previous != PURGING:
+        repo.set_status(oid, PURGING)
     try:
         s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
     except Exception as exc:
+        if previous != PURGING:
+            repo.set_status(oid, previous)
         raise StorageDeleteError(f"storage delete failed for {oid}") from exc
     # Share links die with the object: they are dropped first so no dangling row
     # can ever be redeemed, and so no constraint blocks the object deletion.
     repo.delete_shares_for_object(oid)
     repo.delete_object_row(oid)
     return True
+
+
+def resume_purges(repo, s3ops, *, older_than_s: int = 300, limit: int = 500,
+                  now=time.time) -> dict:
+    """Finish purges interrupted between their steps (process crash).
+
+    A ``purging`` row older than ``older_than_s`` belongs to no live request:
+    delete its bytes (deleting a key that is already gone succeeds on S3) and
+    then the row. A storage failure keeps the row for the next sweep.
+    """
+    cutoff = int(now()) - older_than_s
+    done = failures = 0
+    for r in repo.list_status_before(PURGING, cutoff, limit=max(1, limit)):
+        row = dict(r) if not isinstance(r, dict) else r
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            failures += 1
+            continue
+        repo.delete_object_row(row["id"])
+        done += 1
+    return {"purges_completed": done, "purge_failures": failures}

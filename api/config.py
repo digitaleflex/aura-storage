@@ -100,6 +100,54 @@ class Settings:
     # multipart workflow is implemented and compatibility-tested; see
     # docs/TRANSFER-ENGINE.md. The default equals that limit on purpose.
     max_object_bytes: int = _int("AURA_MAX_OBJECT_BYTES", 5 * 1024 * 1024 * 1024)
+    # Multipart upload (#72). Off by default until the compatibility gate in
+    # docs/MULTIPART-UPLOAD-PLAN.md is recorded on the pinned SeaweedFS image.
+    # When on, files at or above the threshold are sent as independently
+    # retried parts and may exceed ``max_object_bytes`` up to the multipart cap.
+    multipart_enabled: bool = os.environ.get("AURA_MULTIPART_ENABLED", "0") == "1"
+    multipart_threshold_bytes: int = _int("AURA_MULTIPART_THRESHOLD_BYTES", 100 * 1024 * 1024)
+    # Each part is one request through the edge proxy: keep part / slowest
+    # supported rate well under Traefik's readTimeout (see the plan).
+    multipart_part_bytes: int = _int("AURA_MULTIPART_PART_BYTES", 16 * 1024 * 1024)
+    multipart_max_object_bytes: int = _int(
+        "AURA_MULTIPART_MAX_OBJECT_BYTES", 1024 * 1024 * 1024 * 1024
+    )
+    # A multipart session outlives a single-PUT intent: a large upload may be
+    # paused (reload, sleep, network loss) and resumed within this window.
+    multipart_session_ttl: int = _int("AURA_MULTIPART_SESSION_TTL", 7 * 24 * 3600)
+    # Asynchronous integrity check (N5). At or above this size, commit answers
+    # 202 'verifying' and a worker hashes the object outside the request.
+    verify_async_threshold_bytes: int = _int(
+        "AURA_VERIFY_ASYNC_THRESHOLD_BYTES", 256 * 1024 * 1024
+    )
+    # "inline": a worker thread inside the API process (default). "off": run
+    # `python -m api.verifier` as its own process instead.
+    verify_worker: str = os.environ.get("AURA_VERIFY_WORKER", "inline")
+    verify_lease_s: int = _int("AURA_VERIFY_LEASE_SECONDS", 300)
+    verify_heartbeat_bytes: int = _int("AURA_VERIFY_HEARTBEAT_BYTES", 256 * 1024 * 1024)
+    verify_max_attempts: int = _int("AURA_VERIFY_MAX_ATTEMPTS", 8)
+    verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
+    # Master mode: how long a password-confirmed elevation for bulk purges
+    # lasts on one session (seconds), and the most objects one call may purge.
+    master_mode_ttl: int = _int("AURA_MASTER_MODE_SECONDS", 900)
+    master_bulk_max: int = _int("AURA_MASTER_BULK_MAX", 500)
+    # Capacity guard: the usable object-store capacity in bytes (0 = off) and
+    # the fill level, in percent, above which new uploads are refused (507).
+    # Every upload reserves its declared size from the moment its intent is
+    # issued, so concurrent imports cannot overfill the single disk.
+    storage_capacity_bytes: int = _int("AURA_STORAGE_CAPACITY_BYTES", 0)
+    storage_high_watermark_pct: int = _int("AURA_STORAGE_HIGH_WATERMARK", 90)
+    # Periodic integrity scrub (api/scrubber.py): every available object is
+    # re-hashed at least once per interval, oldest check first, within a byte
+    # budget per run so the disk is never saturated. Read-only: it reports,
+    # it never deletes or rewrites.
+    scrub_enabled: bool = os.environ.get("AURA_SCRUB_ENABLED", "1") == "1"
+    scrub_interval_days: int = _int("AURA_SCRUB_INTERVAL_DAYS", 30)
+    scrub_bytes_per_run: int = _int("AURA_SCRUB_BYTES_PER_RUN", 10 * 1024 ** 3)
+    scrub_period_s: int = _int("AURA_SCRUB_PERIOD_SECONDS", 3600)
+    # Storage orphans (api/storage_reconcile.py): bytes younger than this are
+    # never reported or removed, so an upload in flight is never mistaken for one.
+    orphan_grace_s: int = _int("AURA_ORPHAN_GRACE_SECONDS", 86400)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
     # Zero-byte objects are refused by default: an empty upload is usually a

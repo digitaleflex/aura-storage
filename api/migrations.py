@@ -60,6 +60,26 @@ ADDED_COLUMNS = {
         # client idempotency key dedupes accidental double submits.
         ("expected_size_bytes", "INTEGER"),
         ("idempotency_key", "TEXT"),
+        # Multipart session (#72): backend upload id while parts are being
+        # sent (cleared once completed) and the server-chosen part size.
+        ("multipart_upload_id", "TEXT"),
+        ("multipart_part_bytes", "INTEGER"),
+        # Asynchronous integrity check (N5): the object waits in 'verifying'
+        # until a worker holding the lease has hashed it. The ETag seen at
+        # commit detects bytes replaced before or during hashing.
+        ("verify_etag", "TEXT"),
+        ("verify_lease_until", "INTEGER"),
+        ("verify_attempts", "INTEGER DEFAULT 0"),
+        # Periodic integrity scrub: when the stored bytes were last re-hashed,
+        # what that found ('ok', 'mismatch', 'missing') and the scrub lease.
+        ("scrubbed_at", "INTEGER"),
+        ("scrub_result", "TEXT"),
+        ("scrub_lease_until", "INTEGER"),
+    ],
+    # Master mode: a session-bound, short-lived elevation for bulk destructive
+    # actions, granted only after re-entering the password (step-up).
+    "sessions": [
+        ("master_until", "INTEGER"),
     ],
     # #M04: a space is soft-disabled, never deleted. Pre-existing spaces are
     # backfilled to 'active' in `_seed`.

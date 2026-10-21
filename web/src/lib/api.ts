@@ -171,6 +171,15 @@ export interface UsageResponse {
     intent_ttl: number;
     allow_empty_objects: boolean;
   };
+  /** Capacity guard; null when no capacity is configured. */
+  capacity?: {
+    capacity_bytes: number;
+    high_watermark_pct: number;
+    accept_until_bytes: number;
+    stored_bytes: number;
+    reserved_bytes: number;
+    free_for_uploads_bytes: number;
+  } | null;
   totals: {
     objects_by_status: Record<string, number>;
     available_count: number;
@@ -224,6 +233,46 @@ export interface OrphanScanResponse {
   checked_at: number;
 }
 
+export interface StorageOrphan {
+  key: string;
+  size_bytes: number;
+  last_modified: number;
+  reason: "no_row" | "terminal";
+  object_id: string | null;
+}
+
+export interface StorageOrphanBucket {
+  bucket: string;
+  scanned?: number;
+  orphans?: StorageOrphan[];
+  orphan_bytes?: number;
+  stale_uploads?: Array<{ key: string; upload_id: string; initiated: number }>;
+  next_start_after?: string | null;
+  error?: string;
+}
+
+export interface StorageOrphanReport {
+  grace_seconds: number;
+  buckets: StorageOrphanBucket[];
+  checked_at: number;
+}
+
+export interface IntegrityProblem {
+  id: string;
+  space_id: string;
+  display_name: string;
+  size_bytes: number;
+  scrub_result: "mismatch" | "missing";
+  scrubbed_at: number;
+}
+
+export interface IntegrityReport {
+  interval_days: number;
+  /** Count (and oldest check) per result: ok, mismatch, missing, unchecked. */
+  results: Record<string, { count: number; oldest: number | null }>;
+  problems: IntegrityProblem[];
+}
+
 export interface ReconcileResponse {
   expired: number;
   storage_deletes_attempted: number;
@@ -259,7 +308,11 @@ export interface UploadIntentResponse {
   status: string;
   /** Data-plane method the browser must use. */
   method: string;
-  upload_url: string;
+  /** Single presigned PUT; null for a multipart upload (parts are requested). */
+  upload_url: string | null;
+  /** "multipart" when the server chose part-level upload (#72). */
+  upload_mode?: "single" | "multipart";
+  multipart?: { part_size_bytes: number; part_count: number };
   /** Headers to send with the presigned PUT (Content-Type is signed). */
   headers: Record<string, string>;
   /** Server-normalized media type actually stored/authorized. */
@@ -289,6 +342,20 @@ export interface PreviewIntentResponse {
   display_name: string;
   content_type: string;
   size_bytes: number;
+}
+
+export interface MultipartStatus {
+  id: string;
+  size_bytes: number;
+  part_size_bytes: number;
+  part_count: number;
+  uploaded_parts: number[];
+}
+
+export interface MultipartPartUrls {
+  id: string;
+  expires_in: number;
+  parts: Array<{ part_number: number; size_bytes: number; url: string }>;
 }
 
 export interface DownloadIntentResponse {
@@ -322,6 +389,16 @@ export interface SessionInfo {
    * re-hydrate the in-memory CSRF token after a reload/new tab.
    */
   csrf_token: string | null;
+  /** Master mode expiry (epoch seconds) while active on this session, else null. */
+  master_until?: number | null;
+}
+
+export interface BulkPurgeResult {
+  purged: string[];
+  not_found: string[];
+  failed: string[];
+  /** Empty trash only: true when another call is needed. */
+  more?: boolean;
 }
 
 /** True when a role may read the administration console (`admin:read`). */
@@ -583,6 +660,53 @@ export const api = {
     });
   },
 
+  /** Multipart plan and the parts the storage already holds (resume). */
+  multipartStatus(id: string): Promise<MultipartStatus> {
+    return request<MultipartStatus>(`/api/v1/objects/${encodeURIComponent(id)}/multipart`);
+  },
+
+  /** Short-lived presigned PUTs for up to 100 parts. */
+  multipartPartUrls(
+    id: string,
+    partNumbers: number[],
+    csrf: string,
+  ): Promise<MultipartPartUrls> {
+    return request<MultipartPartUrls>(
+      `/api/v1/objects/${encodeURIComponent(id)}/multipart/parts`,
+      { method: "POST", csrf, body: { part_numbers: partNumbers } },
+    );
+  },
+
+  /** Enter master mode by re-entering the password (objects:purge). */
+  enableMasterMode(password: string, csrf: string): Promise<{ master_until: number }> {
+    return request<{ master_until: number }>("/api/v1/me/master-mode", {
+      method: "POST",
+      csrf,
+      body: { password },
+    });
+  },
+
+  disableMasterMode(csrf: string): Promise<{ master_until: null }> {
+    return request<{ master_until: null }>("/api/v1/me/master-mode", {
+      method: "DELETE",
+      csrf,
+    });
+  },
+
+  /** Master mode: purge many objects in one call. */
+  bulkPurge(ids: string[], csrf: string): Promise<BulkPurgeResult> {
+    return request<BulkPurgeResult>("/api/v1/objects/bulk-purge", {
+      method: "POST",
+      csrf,
+      body: { ids },
+    });
+  },
+
+  /** Master mode: purge the trash (call again while `more`). */
+  emptyTrash(csrf: string): Promise<BulkPurgeResult> {
+    return request<BulkPurgeResult>("/api/v1/objects/trash/empty", { method: "POST", csrf });
+  },
+
   /** Soft-delete an object (objects:delete). */
   deleteObject(id: string, csrf: string): Promise<{ id: string; status: string }> {
     return request<{ id: string; status: string }>(
@@ -710,6 +834,16 @@ export const api = {
     return request<OrphanScanResponse>(
       `/api/v1/admin/orphans?limit=${encodeURIComponent(String(limit))}`,
     );
+  },
+
+  /** Storage bytes the catalogue does not account for (admin:read, read-only). */
+  adminStorageOrphans(): Promise<StorageOrphanReport> {
+    return request<StorageOrphanReport>("/api/v1/admin/storage-orphans");
+  },
+
+  /** Periodic integrity scrub results (admin:read). */
+  adminIntegrity(): Promise<IntegrityReport> {
+    return request<IntegrityReport>("/api/v1/admin/integrity");
   },
 
   // --- Administration mutations (`admin:write`) ---
@@ -864,7 +998,7 @@ export interface PutOptions {
  */
 export function putToPresignedUrl(
   url: string,
-  file: File,
+  file: Blob,
   options: PutOptions = {},
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {

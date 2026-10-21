@@ -170,6 +170,8 @@ def test_m06_other_space_and_application_are_isolated():
         ("post", f"/api/v1/objects/{oid}/download-intent", {}),
         ("post", f"/api/v1/objects/{oid}/preview-intent", {}),
         ("post", f"/api/v1/objects/{oid}/purge", {}),
+        ("get", f"/api/v1/objects/{oid}/multipart", {}),
+        ("post", f"/api/v1/objects/{oid}/multipart/parts", {"json": {"part_numbers": [1]}}),
         ("post", f"/api/v1/objects/{oid}/restore", {}),
         ("delete", f"/api/v1/objects/{oid}", {}),
     ]:
@@ -246,6 +248,8 @@ def test_m06_unauthenticated_is_denied():
         ("post", f"/api/v1/objects/{oid}/download-intent", {}),
         ("post", f"/api/v1/objects/{oid}/preview-intent", {}),
         ("post", f"/api/v1/objects/{oid}/purge", {}),
+        ("get", f"/api/v1/objects/{oid}/multipart", {}),
+        ("post", f"/api/v1/objects/{oid}/multipart/parts", {"json": {"part_numbers": [1]}}),
         ("post", f"/api/v1/objects/{oid}/restore", {}),
         ("delete", f"/api/v1/objects/{oid}", {}),
         ("patch", f"/api/v1/objects/{oid}", {"json": {"folder_id": None}}),

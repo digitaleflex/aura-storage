@@ -100,7 +100,7 @@ paths:
           name: status
           schema:
             type: string
-            enum: [pending, available, deleted, expired, failed, aborted]
+            enum: [pending, verifying, available, deleted, expired, failed, aborted, purging]
           description: Exact catalogue status.
         - in: query
           name: content_type
@@ -174,9 +174,10 @@ paths:
                 size_bytes: { type: integer, minimum: 0, description: "Declared upload size; bound into the presigned URL as a signed Content-Length and capped at the configured maximum object size. 0 is accepted only when empty objects are enabled." }
                 folder_id: { $ref: "#/components/schemas/Uuid4", nullable: true }
       responses:
-        "200": { description: "Upload intent (id, status, method, presigned upload_url, required headers, content_type, size_bytes, expiry)" }
+        "200": { description: "Upload intent (id, status, method, presigned upload_url, required headers, content_type, size_bytes, expiry). With AURA_MULTIPART_ENABLED=1 and a size at or above the threshold: upload_mode multipart, upload_url null and multipart {part_size_bytes, part_count}; parts are then requested from /multipart/parts" }
         "403": { description: Bucket not allowed / not authorised }
         "422": { description: Invalid request, disallowed content type, or empty/size over the cap }
+        "507": { description: "Storage capacity reached: the declared size would pass AURA_STORAGE_HIGH_WATERMARK of AURA_STORAGE_CAPACITY_BYTES (only when a capacity is configured)" }
         "429": { description: Too many pending uploads }
   /api/v1/objects/{oid}/commit:
     post:
@@ -185,9 +186,11 @@ paths:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: Object available with checksum_sha256 (algorithm sha256); idempotent on repeat }
+        "202": { description: "Large object (>= AURA_VERIFY_ASYNC_THRESHOLD_BYTES): status verifying; a worker computes the SHA-256 and marks it available or failed. Follow GET /objects/{oid}. Idempotent on repeat" }
         "404": { description: Object not found or not visible }
-        "409": { description: Object not committable (including aborted/expired/deleted) }
+        "409": { description: Object not committable (including aborted/expired/deleted), or multipart parts still missing }
         "410": { description: Upload intent expired }
+        "502": { description: Storage could not assemble the multipart parts }
         "413": { description: Object exceeds the maximum allowed size }
         "422": { description: Upload missing or size mismatch }
   /api/v1/objects/{oid}/abort:
@@ -257,6 +260,38 @@ paths:
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
         "415": { description: Content type is not on the inline allow-list (images except SVG, PDF, audio); offer a download instead }
+  /api/v1/objects/{oid}/multipart:
+    get:
+      summary: Multipart plan and parts already held (objects:write); a resumed upload sends only the rest
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: "size_bytes, part_size_bytes, part_count and uploaded_parts (part numbers whose size matches the plan)" }
+        "404": { description: Object not found or not visible }
+        "409": { description: No multipart upload in progress for this object }
+        "410": { description: Upload intent or multipart session expired }
+        "502": { description: Storage unavailable }
+  /api/v1/objects/{oid}/multipart/parts:
+    post:
+      summary: Short-lived presigned PUTs for up to 100 part numbers (objects:write)
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [part_numbers]
+              properties:
+                part_numbers: { type: array, minItems: 1, maxItems: 100, items: { type: integer, minimum: 1 } }
+      responses:
+        "200": { description: "One URL per part, each bound to the part's exact Content-Length" }
+        "404": { description: Object not found or not visible }
+        "409": { description: No multipart upload in progress for this object }
+        "410": { description: Upload intent expired }
+        "422": { description: Part number out of range }
   /api/v1/objects/{oid}/restore:
     post:
       summary: Restore a soft-deleted object from the trash (objects:delete)
@@ -266,6 +301,54 @@ paths:
         "200": { description: Object metadata, status available again }
         "404": { description: Object not found or not visible }
         "409": { description: Object is not in the trash, or was deleted before its upload completed (nothing to restore) }
+  /api/v1/me/master-mode:
+    post:
+      summary: Enter master mode by re-entering the password (objects:purge, human session)
+      description: >-
+        Short, session-bound elevation (AURA_MASTER_MODE_SECONDS, default 900)
+        for bulk destructive actions without a confirmation per item. Wrong
+        passwords count against the login rate limit. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        "200": { description: "master_until (epoch seconds)" }
+        "403": { description: Not authorised, or the password does not match }
+        "429": { description: Too many attempts }
+    delete:
+      summary: Leave master mode now
+      responses:
+        "200": { description: "master_until null" }
+  /api/v1/objects/bulk-purge:
+    post:
+      summary: Master mode only — purge up to AURA_MASTER_BULK_MAX objects in one call (objects:purge)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ids]
+              properties:
+                ids: { type: array, minItems: 1, items: { type: string } }
+      responses:
+        "200": { description: "purged, not_found (or outside the caller's scope), failed (storage error; catalogue reference kept)" }
+        "403": { description: Not authorised, or master mode not active }
+        "422": { description: Too many ids }
+  /api/v1/objects/trash/empty:
+    post:
+      summary: Master mode only — purge the caller's trash, up to AURA_MASTER_BULK_MAX per call (objects:purge)
+      responses:
+        "200": { description: "purged, not_found, failed, more (true when another call is needed)" }
+        "403": { description: Not authorised, or master mode not active }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)
@@ -430,6 +513,79 @@ paths:
         "401": { description: Authentication required }
         "403": { description: Not authorised }
         "503": { description: Audit log rewrite failed (the file itself is still readable) }
+  /api/v1/admin/integrity:
+    get:
+      summary: Periodic integrity scrub results (admin:read)
+      description: >-
+        Counts of available objects per scrub result (ok, mismatch, missing,
+        unchecked) and the objects at fault. Read-only; nothing is changed
+        automatically — a mismatch or missing object calls for a restore.
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+          description: Problems listed (server clamps to 1..500)
+      responses:
+        "200": { description: "interval_days, results {result: {count, oldest}}, problems" }
+        "403": { description: Not authorised }
+  /api/v1/admin/integrity/scrub:
+    post:
+      summary: Run one bounded scrub pass now (admin:write)
+      responses:
+        "200": { description: "Counts of this pass: ok, mismatch, missing, error, bytes" }
+        "403": { description: Not authorised }
+  /api/v1/admin/storage-orphans:
+    get:
+      summary: Read-only storage bytes the catalogue does not account for (admin:read)
+      description: >-
+        Keys in registered buckets with no catalogue row (no_row) or whose row is
+        aborted/expired/failed (terminal), plus unfinished multipart uploads no
+        pending row owns. Soft-deleted objects (trash) are not orphans. Anything
+        younger than AURA_ORPHAN_GRACE_SECONDS is ignored. Bounded and resumable.
+      parameters:
+        - in: query
+          name: bucket
+          schema: { type: string, maxLength: 63 }
+          description: One registered bucket; omitted = all registered buckets
+        - in: query
+          name: start_after
+          schema: { type: string, maxLength: 1024 }
+          description: Resume after this key (next_start_after of a previous call)
+        - in: query
+          name: max_keys
+          schema: { type: integer, minimum: 1, maximum: 50000, default: 5000 }
+      responses:
+        "200": { description: "grace_seconds, buckets[{bucket, scanned, orphans, orphan_bytes, stale_uploads, next_start_after}]" }
+        "403": { description: Not authorised }
+        "404": { description: Bucket not registered }
+  /api/v1/admin/storage-orphans/cleanup:
+    post:
+      summary: Remove listed orphan keys and abort listed stale uploads (admin:write, destructive)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [bucket]
+              properties:
+                bucket: { type: string, maxLength: 63 }
+                keys: { type: array, maxItems: 100, items: { type: string } }
+                uploads:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [key, upload_id]
+                    properties:
+                      key: { type: string }
+                      upload_id: { type: string }
+      responses:
+        "200": { description: "removed, aborted_uploads, skipped[{key, reason}] — each item re-checked before acting" }
+        "403": { description: Not authorised }
+        "404": { description: Bucket not registered }
   /api/v1/admin/orphans:
     get:
       summary: Read-only orphan candidates, available rows missing at storage (admin:read)

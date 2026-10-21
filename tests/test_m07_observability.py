@@ -338,12 +338,24 @@ def test_m07_health_ok_when_dependencies_answer(monkeypatch):
         def list_buckets(self):
             return {"Buckets": []}
 
-    monkeypatch.setattr(main, "s3ops", HealthyS3())
+    # Supervision probes the storage with its own fast-failing client.
+    monkeypatch.setattr(main, "s3probe", HealthyS3())
     c, headers = _admin()
     body = c.get("/api/v1/admin/health", headers=headers).json()
     assert body["status"] == "ok"
     assert body["components"]["storage"]["status"] == "ok"
     assert "latency_ms" in body["components"]["storage"]
+
+
+def test_m07_health_answers_fast_when_storage_is_down():
+    # The real probe client against an unreachable endpoint (127.0.0.1:9):
+    # one attempt with a short timeout, not botocore's default retries.
+    import time as _time
+    c, headers = _admin()
+    start = _time.monotonic()
+    body = c.get("/api/v1/admin/health", headers=headers).json()
+    assert body["components"]["storage"]["status"] == "down"
+    assert _time.monotonic() - start < 4
 
 
 # ---------------------------------------------------------------------------
@@ -627,9 +639,11 @@ def test_m07_reconcile_uses_the_derived_intent_window(monkeypatch):
     c, headers = _admin()
     captured = {}
 
-    def _spy(repo_, s3_, *, expire_after_s, limit):
+    def _spy(repo_, s3_, *, expire_after_s, limit, multipart_expired_before):
         captured["expire_after_s"] = expire_after_s
         captured["limit"] = limit
+        # A multipart session (#72) is only swept after its own expiry + grace.
+        captured["multipart_expired_before"] = multipart_expired_before
         return {"expired": 0, "storage_deletes_attempted": 0, "storage_failures": 0}
 
     monkeypatch.setattr(main, "reconcile_pending", _spy)
@@ -638,3 +652,4 @@ def test_m07_reconcile_uses_the_derived_intent_window(monkeypatch):
     assert captured["expire_after_s"] == (
         main.settings.intent_ttl + main.settings.intent_grace_s
     )
+    assert captured["multipart_expired_before"] <= int(time.time()) - main.settings.intent_grace_s

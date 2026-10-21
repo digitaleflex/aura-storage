@@ -1,8 +1,24 @@
-# Follow-up proposal — S3 multipart upload for large objects (not implemented)
+# S3 multipart upload for large objects (#72)
 
-**Status:** proposal / issue draft. **Nothing here is implemented.** The M03
-transfer engine deliberately ships single presigned PUT only; no multipart or
-resumable behaviour is simulated. See [Vault transfer engine](TRANSFER-ENGINE.md)
+**Status (2026-10-20): implemented in code behind `AURA_MULTIPART_ENABLED`
+(default off); the compatibility gate below has NOT been run.** What exists:
+two additive columns on `objects` (`multipart_upload_id`,
+`multipart_part_bytes`), `GET /api/v1/objects/{oid}/multipart` (plan + parts
+held, read from the backend with `ListParts`), `POST .../multipart/parts`
+(≤100 presigned part PUTs, each with a signed exact length), completion inside
+`commit` followed by the unchanged full-object SHA-256, abort/soft-delete/
+reconcile aborting the session, and the browser engine in
+`web/src/lib/transfer.ts` (bounded part concurrency, per-part retry, URL
+renewal, resume from the parts held; the upload journal keeps the idempotency
+key so a reload resumes the same session). Offline tests:
+`tests/test_multipart.py`, `web/e2e/multipart-engine.spec.ts`,
+`web/e2e/multipart-resume.spec.ts`. Deviation from the draft below: no
+`multipart_parts` table — the backend part list is authoritative and read at
+status/commit time. Enable only after items 1–6 of the gate are recorded.
+
+Original proposal follows.
+
+The M03 transfer engine originally shipped single presigned PUT only. See [Vault transfer engine](TRANSFER-ENGINE.md)
 for what exists today and [Secure and Efficient Bulk Transfers](SECURE-BULK-TRANSFERS.md)
 for the broader plan. This document turns the "large files" gap into a concrete,
 testable work item.

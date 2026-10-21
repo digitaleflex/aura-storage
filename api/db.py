@@ -138,6 +138,11 @@ class Repository:
         self.conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
         self.conn.commit()
 
+    def set_session_master(self, sid: str, until: Optional[int]) -> None:
+        """Grant (epoch seconds) or end (None) master mode on one session."""
+        self.conn.execute("UPDATE sessions SET master_until = ? WHERE id = ?", (until, sid))
+        self.conn.commit()
+
     # -- applications / spaces / buckets (#35) ----------------------------
     def create_application(self, name: str) -> str:
         aid = self.new_id()
@@ -531,6 +536,152 @@ class Repository:
             (actor_id, idempotency_key, space_id),
         ).fetchone()
 
+    # -- asynchronous verification (N5) ------------------------------------
+    def mark_verifying(self, oid: str, etag: Optional[str]) -> None:
+        """Hand an uploaded object to the verification worker."""
+        self.conn.execute(
+            "UPDATE objects SET status = 'verifying', verify_etag = ?, "
+            "verify_lease_until = NULL, verify_attempts = 0, updated_at = ? "
+            "WHERE id = ? AND status = 'pending'",
+            (etag, self.now(), oid),
+        )
+        self.conn.commit()
+
+    def claim_verification(self, now: int, lease_until: int):
+        """Take the oldest verifying object nobody holds, under a lease.
+
+        Compare-and-set on the lease, so two workers (threads or processes)
+        never hash the same object at once; a crashed worker's lease simply
+        runs out and the object is taken again.
+        """
+        row = self.conn.execute(
+            "SELECT id FROM objects WHERE status = 'verifying' "
+            "AND (verify_lease_until IS NULL OR verify_lease_until < ?) "
+            "ORDER BY updated_at ASC LIMIT 1",
+            (now,),
+        ).fetchone()
+        if row is None:
+            return None
+        cur = self.conn.execute(
+            "UPDATE objects SET verify_lease_until = ?, "
+            "verify_attempts = COALESCE(verify_attempts, 0) + 1 "
+            "WHERE id = ? AND status = 'verifying' "
+            "AND (verify_lease_until IS NULL OR verify_lease_until < ?)",
+            (lease_until, row["id"], now),
+        )
+        self.conn.commit()
+        if cur.rowcount != 1:
+            return None
+        return self.conn.execute("SELECT * FROM objects WHERE id = ?", (row["id"],)).fetchone()
+
+    def extend_verification(self, oid: str, lease_until: int) -> None:
+        """Push the lease (heartbeat while hashing, or a retry delay)."""
+        self.conn.execute(
+            "UPDATE objects SET verify_lease_until = ? WHERE id = ? AND status = 'verifying'",
+            (lease_until, oid),
+        )
+        self.conn.commit()
+
+    def get_by_idempotency(
+        self, *, actor_id: str, idempotency_key: str, space_id: str,
+    ):
+        """Newest object of any status for an ``Idempotency-Key`` + actor."""
+        return self.conn.execute(
+            "SELECT * FROM objects WHERE actor_id = ? AND idempotency_key = ? "
+            "AND space_id = ? ORDER BY created_at DESC LIMIT 1",
+            (actor_id, idempotency_key, space_id),
+        ).fetchone()
+
+    def storage_commitment(self) -> dict:
+        """Bytes the object store holds or has promised, across every space.
+
+        ``stored``: verified bytes still on disk (available, trash, purge in
+        progress). ``reserved``: declared sizes of uploads not yet verified
+        (pending, verifying) — counted from the moment the intent is issued.
+        """
+        row = self.conn.execute(
+            "SELECT "
+            "COALESCE(SUM(CASE WHEN status IN ('available', 'deleted', 'purging') "
+            "AND size_bytes > 0 THEN size_bytes ELSE 0 END), 0) AS stored, "
+            "COALESCE(SUM(CASE WHEN status IN ('pending', 'verifying') "
+            "AND expected_size_bytes > 0 THEN expected_size_bytes ELSE 0 END), 0) AS reserved "
+            "FROM objects"
+        ).fetchone()
+        return {"stored": int(row["stored"]), "reserved": int(row["reserved"])}
+    # -- periodic integrity scrub ------------------------------------------
+    def claim_scrub(self, now: int, lease_until: int, checked_before: int):
+        """Take the available object checked longest ago (never-checked first),
+        under a lease, if it is due (checked before ``checked_before``)."""
+        row = self.conn.execute(
+            "SELECT id FROM objects WHERE status = 'available' "
+            "AND (scrubbed_at IS NULL OR scrubbed_at < ?) "
+            "AND (scrub_lease_until IS NULL OR scrub_lease_until < ?) "
+            "ORDER BY COALESCE(scrubbed_at, 0) ASC, created_at ASC LIMIT 1",
+            (checked_before, now),
+        ).fetchone()
+        if row is None:
+            return None
+        cur = self.conn.execute(
+            "UPDATE objects SET scrub_lease_until = ? WHERE id = ? "
+            "AND (scrub_lease_until IS NULL OR scrub_lease_until < ?)",
+            (lease_until, row["id"], now),
+        )
+        self.conn.commit()
+        if cur.rowcount != 1:
+            return None
+        return self.conn.execute("SELECT * FROM objects WHERE id = ?", (row["id"],)).fetchone()
+
+    def record_scrub(self, oid: str, result: str, at: int) -> None:
+        self.conn.execute(
+            "UPDATE objects SET scrubbed_at = ?, scrub_result = ?, scrub_lease_until = NULL "
+            "WHERE id = ?",
+            (at, result, oid),
+        )
+        self.conn.commit()
+
+    def release_scrub(self, oid: str) -> None:
+        """Give the object back unchecked (storage outage): retried next run."""
+        self.conn.execute("UPDATE objects SET scrub_lease_until = NULL WHERE id = ?", (oid,))
+        self.conn.commit()
+
+    def integrity_summary(self) -> dict:
+        rows = self.conn.execute(
+            "SELECT COALESCE(scrub_result, 'unchecked') AS result, COUNT(*) AS n, "
+            "MIN(scrubbed_at) AS oldest FROM objects WHERE status = 'available' "
+            "GROUP BY COALESCE(scrub_result, 'unchecked')"
+        ).fetchall()
+        return {r["result"]: {"count": int(r["n"]), "oldest": r["oldest"]} for r in rows}
+
+    def list_integrity_problems(self, limit: int = 100):
+        return self.conn.execute(
+            "SELECT id, space_id, display_name, size_bytes, scrub_result, scrubbed_at "
+            "FROM objects WHERE status = 'available' "
+            "AND scrub_result IN ('mismatch', 'missing') "
+            "ORDER BY scrubbed_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    def object_states_for_keys(self, bucket: str, keys: list) -> dict:
+        """Catalogue state of storage keys: ``{key: {id, status, multipart_upload_id}}``.
+
+        Keys without a row are absent from the result (storage orphans).
+        """
+        out: dict = {}
+        for i in range(0, len(keys), 500):
+            chunk = list(keys[i:i + 500])
+            if not chunk:
+                continue
+            marks = ",".join("?" for _ in chunk)
+            for r in self.conn.execute(
+                f"SELECT id, object_key, status, multipart_upload_id FROM objects "
+                f"WHERE bucket = ? AND object_key IN ({marks})",
+                (bucket, *chunk),
+            ).fetchall():
+                out[r["object_key"]] = {
+                    "id": r["id"], "status": r["status"],
+                    "multipart_upload_id": r["multipart_upload_id"],
+                }
+        return out
+
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
         self.conn.execute(
             "UPDATE objects SET status = 'available', size_bytes = ?, checksum_sha256 = ?, updated_at = ? WHERE id = ?",
@@ -538,11 +689,26 @@ class Repository:
         )
         self.conn.commit()
 
-    def list_pending_before(self, cutoff: int, limit: int = 500):
+    def set_multipart(self, oid: str, upload_id: Optional[str],
+                      part_bytes: Optional[int]) -> None:
+        """Record (or clear, with ``upload_id=None``) a multipart session (#72)."""
+        self.conn.execute(
+            "UPDATE objects SET multipart_upload_id = ?, multipart_part_bytes = ?, "
+            "updated_at = ? WHERE id = ?",
+            (upload_id, part_bytes, self.now(), oid),
+        )
+        self.conn.commit()
+
+    def list_pending_before(self, cutoff: int, limit: int = 500,
+                            multipart_expired_before: Optional[int] = None):
+        # A multipart session lives longer than a single-PUT intent: it is only
+        # stale once its own expiry has passed, whatever its creation time.
+        mp_cut = multipart_expired_before if multipart_expired_before is not None else cutoff
         return self.conn.execute(
             "SELECT * FROM objects WHERE status = 'pending' AND created_at < ? "
+            "AND (multipart_upload_id IS NULL OR intent_expires_at < ?) "
             "ORDER BY created_at ASC LIMIT ?",
-            (cutoff, limit),
+            (cutoff, mp_cut, limit),
         ).fetchall()
 
     def list_available(self, limit: int = 500):
@@ -559,6 +725,14 @@ class Repository:
             (status, self.now(), oid),
         )
         self.conn.commit()
+
+    def list_status_before(self, status: str, cutoff: int, limit: int = 500):
+        """Rows in ``status`` not updated since ``cutoff``, oldest first."""
+        return self.conn.execute(
+            "SELECT * FROM objects WHERE status = ? AND updated_at < ? "
+            "ORDER BY updated_at ASC LIMIT ?",
+            (status, cutoff, limit),
+        ).fetchall()
 
     def delete_object_row(self, oid: str) -> None:
         self.conn.execute("DELETE FROM objects WHERE id = ?", (oid,))

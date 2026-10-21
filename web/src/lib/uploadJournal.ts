@@ -17,6 +17,11 @@ export interface JournalEntry {
   rel: string;
   size: number;
   folderId: string | null;
+  /**
+   * Idempotency key of the upload: resuming with it reopens the same server
+   * session, so a large (multipart) file keeps the parts already sent.
+   */
+  idempotencyKey?: string;
 }
 
 const DB_NAME = "aura-upload-journal";

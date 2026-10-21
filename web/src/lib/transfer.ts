@@ -12,7 +12,13 @@
  * endpoint; this module calls it and never pretends to cancel server-side.
  */
 import { ApiError, PresignedUploadError } from "./api";
-import type { CommitResponse, UploadIntentResponse } from "./api";
+import { describeError } from "./errors";
+import type {
+  CommitResponse,
+  MultipartPartUrls,
+  MultipartStatus,
+  UploadIntentResponse,
+} from "./api";
 
 export type TransferPhase =
   /** No transfer in flight. */
@@ -54,6 +60,10 @@ export interface TransferConfig {
   maxDelayMs: number;
   /** How many times an expired presigned URL may be replaced in one transfer. */
   maxIntentRefreshes: number;
+  /** Parts sent at once for one multipart file (#72). */
+  partConcurrency: number;
+  /** Attempts per part, including the first; a failed part only resends itself. */
+  partMaxAttempts: number;
 }
 
 export const DEFAULT_TRANSFER_CONFIG: TransferConfig = {
@@ -61,7 +71,12 @@ export const DEFAULT_TRANSFER_CONFIG: TransferConfig = {
   baseDelayMs: 500,
   maxDelayMs: 8000,
   maxIntentRefreshes: 2,
+  partConcurrency: 4,
+  partMaxAttempts: 6,
 };
+
+/** Part URLs requested per call (the API accepts up to 100). */
+const PART_URL_BATCH = 20;
 
 export interface TransferDeps {
   requestIntent: (input: {
@@ -73,7 +88,7 @@ export interface TransferDeps {
   }) => Promise<UploadIntentResponse>;
   upload: (
     url: string,
-    file: File,
+    file: Blob,
     opts: {
       headers: Record<string, string>;
       onProgress: (loaded: number, total: number) => void;
@@ -82,6 +97,12 @@ export interface TransferDeps {
   ) => Promise<void>;
   commit: (id: string) => Promise<CommitResponse>;
   abortIntent: (id: string) => Promise<void>;
+  /** Multipart (#72): parts already held, for a resumed upload. */
+  multipartStatus?: (id: string) => Promise<MultipartStatus>;
+  /** Multipart (#72): presigned PUTs for the given part numbers. */
+  partUrls?: (id: string, partNumbers: number[]) => Promise<MultipartPartUrls>;
+  /** Current object state, to follow an integrity check that runs after commit (N5). */
+  objectStatus?: (id: string) => Promise<{ status: string; checksum_sha256?: string }>;
   sleep: (ms: number) => Promise<void>;
   random: () => number;
 }
@@ -120,6 +141,9 @@ type Classification = "retryable" | "expired" | "aborted" | "fatal";
 
 function classifyHttp(status: number): Classification {
   if (status === 403) return "expired";
+  // 507: the server refused the upload because the storage is full. Retrying
+  // cannot help until space is freed.
+  if (status === 507) return "fatal";
   if (status === 408 || status === 410 || status === 425 || status === 429) return "retryable";
   if (status >= 500) return "retryable";
   return "fatal";
@@ -139,6 +163,16 @@ export function classifyError(err: unknown): Classification {
 }
 
 function messageOf(err: unknown): string {
+  const fallback =
+    err instanceof ApiError
+      ? err.detail
+      : err instanceof Error
+        ? err.message
+        : "Échec du transfert.";
+  return describeError(err, fallback);
+  if (err instanceof ApiError && err.status === 507) {
+    return "Espace de stockage plein : import refusé. Libérez de la place ou contactez l'administrateur.";
+  }
   if (err instanceof ApiError) return err.detail;
   if (err instanceof Error) return err.message;
   return "Échec du transfert.";
@@ -225,6 +259,186 @@ export async function runTransfer(
     }
   };
 
+  /**
+   * Multipart upload (#72): ask which parts the storage already holds, send
+   * only the others with bounded parallelism, then commit. A failed part is
+   * retried alone (backoff + jitter); an expired part URL is re-requested. The
+   * server checks the part list itself at commit, and answers 409 if a part is
+   * still missing, which starts another round.
+   */
+  const runMultipart = async (current: UploadIntentResponse): Promise<TransferResult> => {
+    const plan = current.multipart;
+    if (!plan || !deps.multipartStatus || !deps.partUrls) {
+      emit({ phase: "failed", error: "Envoi en plusieurs parties non pris en charge." });
+      return { state, objectId: current.id };
+    }
+    const statusOf = deps.multipartStatus;
+    const urlsFor = deps.partUrls;
+    const partBytes = plan.part_size_bytes;
+    const lengthOf = (n: number) =>
+      Math.max(0, Math.min(partBytes, file.size - (n - 1) * partBytes));
+
+    // Control-plane calls (status, part URLs, commit) get the same bounded
+    // retry as the single-PUT intent request.
+    const withRetry = async <T>(call: () => Promise<T>): Promise<T> => {
+      for (let tries = 0; ; tries += 1) {
+        try {
+          return await call();
+        } catch (err) {
+          if (aborted() || classifyError(err) !== "retryable" || tries >= config.partMaxAttempts - 1) {
+            throw err;
+          }
+          attempts += 1;
+          emit({ attempts, error: messageOf(err) });
+          await deps.sleep(backoffDelay(tries, config, deps.random));
+        }
+      }
+    };
+
+    for (let round = 0; ; round += 1) {
+      if (aborted()) return cancel();
+      let held: number[];
+      try {
+        held = (await withRetry(() => statusOf(current.id))).uploaded_parts;
+      } catch (err) {
+        if (aborted()) return cancel();
+        emit({ phase: "failed", error: messageOf(err) });
+        return { state, objectId: current.id };
+      }
+      const heldSet = new Set(held);
+      const queue: number[] = [];
+      for (let n = 1; n <= plan.part_count; n += 1) if (!heldSet.has(n)) queue.push(n);
+
+      let doneBytes = held.reduce((sum, n) => sum + lengthOf(n), 0);
+      const inflight = new Map<number, number>();
+      const report = () => {
+        let moving = doneBytes;
+        for (const loaded of inflight.values()) moving += loaded;
+        emit({
+          phase: "uploading",
+          transferredBytes: moving,
+          progress: file.size > 0 ? Math.min(1, moving / file.size) : 1,
+        });
+      };
+      report();
+
+      const urls = new Map<number, string>();
+      let failure: unknown = null;
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          if (failure !== null || aborted()) return;
+          const n = queue.shift();
+          if (n === undefined) return;
+          let tries = 0;
+          let refreshes = 0;
+          for (;;) {
+            if (aborted()) return;
+            try {
+              let url = urls.get(n);
+              if (!url) {
+                const batch = [n, ...queue.filter((m) => !urls.has(m)).slice(0, PART_URL_BATCH - 1)];
+                const got = await withRetry(() => urlsFor(current.id, batch));
+                for (const part of got.parts) urls.set(part.part_number, part.url);
+                url = urls.get(n);
+                if (!url) throw new Error("URL de partie manquante.");
+              }
+              const start = (n - 1) * partBytes;
+              await deps.upload(url, file.slice(start, start + lengthOf(n)), {
+                headers: {},
+                onProgress: (loaded) => {
+                  inflight.set(n, loaded);
+                  report();
+                },
+                signal: options.signal,
+              });
+              inflight.delete(n);
+              urls.delete(n);
+              doneBytes += lengthOf(n);
+              report();
+              break;
+            } catch (err) {
+              inflight.delete(n);
+              if (aborted() || classifyError(err) === "aborted") return;
+              const kind = classifyError(err);
+              if (kind === "expired" && refreshes < config.maxIntentRefreshes + 1) {
+                refreshes += 1;
+                urls.delete(n);
+                continue;
+              }
+              if (kind === "retryable" && tries < config.partMaxAttempts - 1) {
+                tries += 1;
+                attempts += 1;
+                emit({ attempts, error: messageOf(err) });
+                await deps.sleep(backoffDelay(tries - 1, config, deps.random));
+                continue;
+              }
+              failure = err;
+              return;
+            }
+          }
+        }
+      };
+      const workers = Math.max(1, Math.min(config.partConcurrency, queue.length));
+      await Promise.all(Array.from({ length: workers }, () => worker()));
+      if (aborted()) return cancel();
+      if (failure !== null) {
+        emit({ phase: "failed", error: messageOf(failure) });
+        return { state, objectId: current.id };
+      }
+
+      emit({ phase: "validating", progress: 1, transferredBytes: file.size, error: null });
+      try {
+        const committed = await withRetry(() => deps.commit(current.id));
+        return settle(current.id, committed);
+      } catch (err) {
+        if (aborted()) return cancel();
+        // 409: a part is still missing at the storage (lost, or a size
+        // mismatch). Ask again and send what is missing, a bounded number of times.
+        if (err instanceof ApiError && err.status === 409 && round < 2) continue;
+        emit({ phase: "failed", error: messageOf(err) });
+        return { state, objectId: current.id };
+      }
+    }
+  };
+
+  /**
+   * A large object is checked after commit (202 "verifying", N5): follow its
+   * state until the server marks it available or failed. Never reports success
+   * before the server does.
+   */
+  const settle = async (
+    id: string,
+    committed: { status: string; checksum_sha256?: string },
+  ): Promise<TransferResult> => {
+    let current = committed;
+    for (let polls = 0; current.status === "verifying"; polls += 1) {
+      if (aborted()) return cancel();
+      if (!deps.objectStatus) break;
+      emit({ phase: "validating", error: null });
+      await deps.sleep(Math.min(15_000, 1_000 * 2 ** Math.min(polls, 4)));
+      try {
+        current = await deps.objectStatus(id);
+      } catch (err) {
+        if (classifyError(err) !== "retryable") {
+          emit({ phase: "failed", error: messageOf(err) });
+          return { state, objectId: id };
+        }
+      }
+    }
+    if (current.status !== "available") {
+      emit({
+        phase: "failed",
+        error:
+          current.status === "verifying"
+            ? "Vérification d'intégrité en cours côté serveur."
+            : "La vérification d'intégrité a échoué.",
+      });
+      return { state, objectId: id };
+    }
+    emit({ phase: "available", error: null, intentId: id, progress: 1, transferredBytes: file.size });
+    return { state, objectId: id, checksum: current.checksum_sha256 };
+  };
+
   emit({ phase: "requesting-intent" });
 
   // Sequential state machine: each iteration is one upload attempt.
@@ -237,6 +451,16 @@ export async function runTransfer(
       // otherwise there is no live intent to reference.
       if (aborted()) return cancel();
       return { state, objectId: null };
+    }
+    // Already sent (a reload while the server was checking it): no new bytes.
+    if (current.status === "available" || current.status === "verifying") {
+      emit({ phase: "validating", progress: 1, transferredBytes: file.size });
+      return settle(current.id, { status: current.status });
+    }
+    if (current.upload_mode === "multipart") return runMultipart(current);
+    if (!current.upload_url) {
+      emit({ phase: "failed", error: "Réponse d'envoi incomplète." });
+      return { state, objectId: current.id };
     }
 
     try {
@@ -252,8 +476,7 @@ export async function runTransfer(
       });
       emit({ phase: "validating", progress: 1, transferredBytes: file.size });
       const committed = await deps.commit(current.id);
-      emit({ phase: "available", error: null, intentId: current.id });
-      return { state, objectId: current.id, checksum: committed.checksum_sha256 };
+      return settle(current.id, committed);
     } catch (err) {
       if (aborted() || classifyError(err) === "aborted") {
         return cancel();
@@ -464,6 +687,11 @@ export interface QueueInput {
   folderId?: string | null;
   /** Caller-supplied identity, echoed on the queue item. */
   key?: string;
+  /**
+   * Stable idempotency key: the same multipart session is resumed (parts kept)
+   * across retries and page reloads. Omitted: a fresh key per run.
+   */
+  idempotencyKey?: string;
 }
 
 export function startUploadQueue(
@@ -500,6 +728,7 @@ export function startUploadQueue(
   interface Internal {
     id: string;
     key: string | undefined;
+    idempotencyKey: string | undefined;
     file: File;
     folderId: string | null;
     state: TransferState;
@@ -516,6 +745,7 @@ export function startUploadQueue(
     return {
       id: queueItemId(),
       key: input.key,
+      idempotencyKey: input.idempotencyKey,
       file: input.file,
       folderId: input.folderId !== undefined ? input.folderId : defaultFolder,
       state: idleTransfer(input.file),
@@ -652,7 +882,7 @@ export function startUploadQueue(
     emit();
     runTransfer(item.file, tracked, {
       folderId: item.folderId,
-      idempotencyKey: queueItemId(),
+      idempotencyKey: item.idempotencyKey ?? queueItemId(),
       signal: controller.signal,
       config: options.config,
       onUpdate: (state) => {
