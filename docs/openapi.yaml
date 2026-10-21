@@ -15,22 +15,74 @@ info:
     Identifiers are canonical UUID v4 values (`docs/DATA-MODEL.md`); a malformed
     identifier in a path, query parameter or request body is refused with 422.
 
-    Validated locally (offline tests) and by CI; not yet validated on the pilot VPS.
+    **Where to call it.** The API has no public hostname of its own. Production
+    traffic reaches it through the app proxy: `https://<APP_DOMAIN>/api/v1/...`.
+    The documentation host serves the same API same-origin at `/api/v1/...`,
+    behind a source allow-list and a BasicAuth credential, which is what makes
+    "Try it" work with no CORS configuration. The API never emits
+    `Access-Control-Allow-*`, so a browser call from any other origin is blocked
+    by design — machine callers should use curl or a Bearer token instead.
+
+    **Access to this documentation.** `docs.aura-storage.eurinhash.com` is not
+    public: the router admits an operator IP allow-list first, then requires the
+    BasicAuth credential. "Try it" performs real mutations against the catalogue,
+    so point it at disposable objects only.
+
+    Validated by the offline contract tests in CI (`tests/test_openapi_contract.py`)
+    and exercised on the pilot VPS; each release records what was actually
+    observed in `docs/verification-log-*.md`.
 servers:
+  # Same-origin first: on the docs host, "Try it" then works with no CORS and
+  # keeps the session cookie + CSRF header same-origin.
+  - url: /
+    description: >-
+      Same origin as this documentation UI. Preferred when browsing the docs
+      host: requests go to /api/v1/... on the same host, behind the docs
+      allow-list and credential.
   - url: https://app.aura-storage.eurinhash.com
+    description: >-
+      App host (production entry point). Cross-origin from the docs host, so
+      browser calls are blocked: use curl or a machine (Bearer) token.
 security:
   - cookieAuth: []
   - bearerAuth: []
+tags:
+  - name: health
+    description: Liveness and readiness probes — public and unauthenticated.
+  - name: auth
+    description: Human session lifecycle — login, logout, principal introspection.
+  - name: objects
+    description: >-
+      Object catalogue and transfer intents. Bytes never pass through the API:
+      every upload and download is a short-lived presigned S3 URL.
+  - name: folders
+    description: >-
+      Logical folders in the catalogue. Folders never change the storage layout;
+      they are an organisational view over the same objects.
+  - name: platform
+    description: >-
+      Platform registry — applications, spaces and buckets. Creating tenancy
+      requires `admin:write`, which a machine identity can never hold.
+  - name: identities
+    description: >-
+      Machine-to-machine identities (Bearer tokens) with explicit, minimal object
+      scopes, plus rotation and immediate revocation.
+  - name: administration
+    description: >-
+      Operator and administrator reads — statistics, usage, audit search and
+      retention, orphan inspection, stale-intent reconciliation.
 paths:
   /health/live:
     get:
       summary: Liveness probe
+      tags: [health]
       security: []
       responses:
         "200": { description: Process is alive }
   /health/ready:
     get:
       summary: Readiness probe
+      tags: [health]
       security: []
       responses:
         "200": { description: Dependencies ready }
@@ -38,25 +90,33 @@ paths:
   /api/v1/login:
     post:
       summary: Create a human session (public, rate-limited)
+      tags: [auth]
       security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [username, password]
-              properties:
-                username: { type: string }
-                password: { type: string }
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+            examples:
+              human:
+                summary: Sign in as a human operator
+                value: { username: admin, password: REPLACE_WITH_THE_ACCOUNT_PASSWORD }
       responses:
-        "200": { description: Returns the CSRF token; sets the session cookie }
+        "200":
+          description: Returns the CSRF token; sets the session cookie
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+              examples:
+                success:
+                  summary: Store csrf_token in memory; the cookie is HttpOnly
+                  value: { csrf_token: 6Qk2m0oT1s9Vx3rB4nJ8wA }
         "401": { description: Invalid credentials }
         "429": { description: Too many attempts }
   /api/v1/logout:
     post:
       summary: Delete the current session (human only)
+      tags: [auth]
       responses:
         "200": { description: Logged out }
         "401": { description: Authentication required }
@@ -64,6 +124,7 @@ paths:
   /api/v1/me:
     get:
       summary: Introspect the current principal
+      tags: [auth]
       responses:
         "200":
           description: >-
@@ -71,10 +132,35 @@ paths:
             human session, `csrf_token` re-exposes the token issued at login so
             the client can recover it after a refresh without a new login; it is
             always `null` for service (Bearer) principals.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Principal" }
+              examples:
+                humanSession:
+                  value:
+                    id: 3f1c2a94-6d0b-4a7e-9f52-1b8c0d4e77aa
+                    kind: user
+                    name: admin
+                    role: admin
+                    space_id: 8b2e5f10-73c9-4d61-a0f4-2c9d6e8b1a37
+                    application_id: 5c7d9e20-1a4b-4f83-9d62-7e0b3a5c8f41
+                    scopes: [admin:read, admin:write, objects:delete, objects:purge, objects:read, objects:write]
+                    csrf_token: 6Qk2m0oT1s9Vx3rB4nJ8wA
+                serviceIdentity:
+                  value:
+                    id: 1d4e6f80-2b7a-4c35-8e91-6a3f0b2d5c79
+                    kind: service
+                    name: ingest-worker
+                    role: service
+                    space_id: 8b2e5f10-73c9-4d61-a0f4-2c9d6e8b1a37
+                    application_id: 5c7d9e20-1a4b-4f83-9d62-7e0b3a5c8f41
+                    scopes: [objects:read, objects:write]
+                    csrf_token: null
         "401": { description: Authentication required }
   /api/v1/objects:
     get:
       summary: List objects visible to the caller
+      tags: [objects]
       parameters:
         - in: query
           name: limit
@@ -143,12 +229,38 @@ paths:
             updated_at; internal storage coordinates (bucket, object_key) are
             never returned. Soft-deleted rows are hidden unless status=deleted
             is passed explicitly.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ObjectSummary" }
+              examples:
+                page:
+                  summary: One committed object, unfiled (root)
+                  value:
+                    items:
+                      - id: 7c63c78d-d790-498e-acb5-870d53cfc0fd
+                        display_name: contrat-2026.pdf
+                        content_type: application/pdf
+                        size_bytes: 482133
+                        expected_size_bytes: 482133
+                        checksum_sha256: 9f2c41a7d0b8e6534c1f9a2b7d8e0c3f5a6b9d2e8c1f4a7b0d3e6c9f2a5b8d1e
+                        checksum_algorithm: sha256
+                        status: available
+                        folder_id: null
+                        created_at: 1761129600
+                        updated_at: 1761129650
         "401": { description: Authentication required }
         "403": { description: Access denied }
-        "422": { description: Malformed folder_id, or an unsupported status/sort/order value }
+        "422": { description: "Malformed folder_id, or an unsupported status/sort/order value" }
   /api/v1/objects/upload-intents:
     post:
       summary: Create a short-lived upload intent (capability objects:write)
+      tags: [objects]
       parameters:
         - in: header
           name: Idempotency-Key
@@ -163,28 +275,58 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [display_name, size_bytes]
-              properties:
-                bucket: { type: string, maxLength: 63, description: Must be registered to the caller's space; omitted = space default }
-                display_name: { type: string, minLength: 1, maxLength: 255 }
-                content_type: { type: string, maxLength: 127, default: application/octet-stream, description: Normalized server-side; refused with 422 when the deployment sets an allow-list that excludes it }
-                size_bytes: { type: integer, minimum: 0, description: "Declared upload size; bound into the presigned URL as a signed Content-Length and capped at the configured maximum object size. 0 is accepted only when empty objects are enabled." }
-                folder_id: { $ref: "#/components/schemas/Uuid4", nullable: true }
+            schema: { $ref: "#/components/schemas/UploadIntentRequest" }
+            examples:
+              pdf:
+                summary: Declare a 482 KB PDF; the response carries the presigned PUT
+                value: { display_name: contrat-2026.pdf, content_type: application/pdf, size_bytes: 482133 }
       responses:
-        "200": { description: "Upload intent (id, status, method, presigned upload_url, required headers, content_type, size_bytes, expiry)" }
+        "200":
+          description: Upload intent (id, status, method, presigned upload_url, required headers, content_type, size_bytes, expiry)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UploadIntent" }
+              examples:
+                created:
+                  summary: PUT the bytes to upload_url with exactly these headers
+                  value:
+                    id: 7c63c78d-d790-498e-acb5-870d53cfc0fd
+                    status: pending
+                    method: PUT
+                    upload_url: https://aura-storage.eurinhash.com/spaces/aura/objects/7c63c78d-d790-498e-acb5-870d53cfc0fd/x-amz-signature-redacted
+                    headers:
+                      Content-Type: application/pdf
+                      x-amz-server-side-encryption: AES256
+                    content_type: application/pdf
+                    size_bytes: 482133
+                    expires_in: 900
+                    expires_at: 1761130500
+                    idempotent_replay: false
+        "401": { description: Authentication required }
         "403": { description: Bucket not allowed / not authorised }
-        "422": { description: Invalid request, disallowed content type, or empty/size over the cap }
+        "422": { description: "Invalid request, disallowed content type, or empty/size over the cap" }
         "429": { description: Too many pending uploads }
   /api/v1/objects/{oid}/commit:
     post:
       summary: Validate an upload, stream SHA-256, mark available (objects:write)
+      tags: [objects]
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: Object available with checksum_sha256 (algorithm sha256); idempotent on repeat }
+        "200":
+          description: Object available with checksum_sha256 (algorithm sha256); idempotent on repeat
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CommitResult" }
+              examples:
+                committed:
+                  value:
+                    id: 7c63c78d-d790-498e-acb5-870d53cfc0fd
+                    status: available
+                    size_bytes: 482133
+                    checksum_sha256: 9f2c41a7d0b8e6534c1f9a2b7d8e0c3f5a6b9d2e8c1f4a7b0d3e6c9f2a5b8d1e
+                    checksum_algorithm: sha256
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not committable (including aborted/expired/deleted) }
         "410": { description: Upload intent expired }
@@ -193,6 +335,7 @@ paths:
   /api/v1/objects/{oid}/abort:
     post:
       summary: Cancel a pending upload intent (objects:write)
+      tags: [objects]
       description: >-
         Best-effort deletes the partial bytes and marks the intent aborted.
         Idempotent for an already aborted/expired intent; a committed (available)
@@ -202,18 +345,22 @@ paths:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: Intent aborted (or already in a terminal pending state) }
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not abortable }
   /api/v1/objects/{oid}:
     get:
       summary: Get object metadata
+      tags: [objects]
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: Object metadata (size_bytes is -1 until verified; expected_size_bytes carries the declared size) }
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
     patch:
       summary: File or unfile an object in a logical folder (objects:write, human only)
+      tags: [objects]
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       requestBody:
@@ -228,47 +375,57 @@ paths:
                 folder_id: { $ref: "#/components/schemas/Uuid4", nullable: true, description: Folder owned by the caller; null unfiles the object (root level) }
       responses:
         "200": { description: Object metadata with its new folder_id }
+        "401": { description: Authentication required }
         "404": { description: Object or target folder not found or not visible }
-        "422": { description: No fields supplied, or malformed folder id }
+        "422": { description: "No fields supplied, or malformed folder id" }
     delete:
       summary: Soft-delete an object (objects:delete)
+      tags: [objects]
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: Object marked deleted }
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not deletable }
   /api/v1/objects/{oid}/download-intent:
     post:
       summary: Create a short-lived download intent (objects:read)
+      tags: [objects]
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: Presigned GET URL plus display_name, content_type, size_bytes and checksum_sha256 for progress/verification display }
+        "200": { description: "Presigned GET URL plus display_name, content_type, size_bytes and checksum_sha256 for progress/verification display" }
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
   /api/v1/objects/{oid}/preview-intent:
     post:
       summary: Create a short-lived inline-preview intent (objects:read)
+      tags: [objects]
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: Presigned GET URL bound to Content-Disposition inline and the object content type, plus display_name, content_type and size_bytes; the client falls back to a download when the type is not renderable }
+        "200": { description: "Presigned GET URL bound to Content-Disposition inline and the object content type, plus display_name, content_type and size_bytes; the client falls back to a download when the type is not renderable" }
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)
+      tags: [objects]
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: Object purged }
+        "401": { description: Authentication required }
         "403": { description: Not authorised }
         "404": { description: Object not found or not visible }
         "502": { description: Storage delete failed; the catalogue reference is kept }
   /api/v1/folders:
     get:
       summary: List folders owned by the caller (objects:read, human only)
+      tags: [folders]
       parameters:
         - in: query
           name: parent_id
@@ -282,41 +439,57 @@ paths:
             (each item still carries parent_id) in a single request. Cannot be
             combined with parent_id (refused with 422).
       responses:
-        "200": { description: Folders directly under the requested parent, or the full flat tree when all=true }
+        "200": { description: "Folders directly under the requested parent, or the full flat tree when all=true" }
         "401": { description: Authentication required }
         "403": { description: Access denied }
         "404": { description: Parent folder not found or not visible }
         "422": { description: all combined with parent_id }
     post:
       summary: Create a logical folder (objects:write, human only)
+      tags: [folders]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [name]
-              properties:
-                name: { type: string, minLength: 1, maxLength: 255, description: Flat label; no path separators or control characters }
-                parent_id: { $ref: "#/components/schemas/Uuid4", nullable: true, description: Existing folder owned by the caller; omitted/null = root }
+            schema: { $ref: "#/components/schemas/FolderCreateRequest" }
+            examples:
+              root:
+                summary: Folder at the root level
+                value: { name: Contrats 2026 }
+              nested:
+                summary: Child of an existing folder
+                value: { name: Signés, parent_id: 0d1f7b3c-9a2e-4e58-b6d7-2f8c1a4e6b90 }
       responses:
-        "200": { description: Folder created }
+        "200":
+          description: Folder created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Folder" }
+              examples:
+                created:
+                  value:
+                    id: 0d1f7b3c-9a2e-4e58-b6d7-2f8c1a4e6b90
+                    name: Contrats 2026
+                    parent_id: null
+                    created_at: 1761129600
         "401": { description: Authentication required }
         "403": { description: Access denied }
         "404": { description: Parent folder not found or not visible }
-        "409": { description: Duplicate name at this level, or depth limit reached }
+        "409": { description: "Duplicate name at this level, or depth limit reached" }
         "422": { description: Invalid folder name }
   /api/v1/folders/{fid}:
     get:
       summary: Get folder metadata (objects:read, human only)
+      tags: [folders]
       parameters:
         - $ref: "#/components/parameters/FolderId"
       responses:
         "200": { description: Folder metadata }
+        "401": { description: Authentication required }
         "404": { description: Folder not found or not visible }
     patch:
       summary: Rename or move a folder (objects:write, human only)
+      tags: [folders]
       parameters:
         - $ref: "#/components/parameters/FolderId"
       requestBody:
@@ -332,20 +505,24 @@ paths:
                 parent_id: { $ref: "#/components/schemas/Uuid4", nullable: true }
       responses:
         "200": { description: Folder updated }
+        "401": { description: Authentication required }
         "404": { description: Folder or target parent not found or not visible }
-        "409": { description: Duplicate name, cycle, or depth limit reached }
-        "422": { description: No fields supplied, or invalid name }
+        "409": { description: "Duplicate name, cycle, or depth limit reached" }
+        "422": { description: "No fields supplied, or invalid name" }
     delete:
       summary: Delete an empty folder (objects:delete, human only)
+      tags: [folders]
       parameters:
         - $ref: "#/components/parameters/FolderId"
       responses:
         "200": { description: Folder deleted }
+        "401": { description: Authentication required }
         "404": { description: Folder not found or not visible }
         "409": { description: Folder is not empty }
   /api/v1/admin/reconcile:
     post:
       summary: Expire stale pending uploads (admin:write)
+      tags: [administration]
       parameters:
         - in: query
           name: limit
@@ -353,16 +530,33 @@ paths:
           description: Bounded sweep, oldest first; repeat until expired is 0 (server clamps to 1..5000)
       responses:
         "200": { description: "Reconcile counts (expired, storage_deletes_attempted, storage_failures); failed storage deletes keep the intent pending" }
+        "401": { description: Authentication required }
         "403": { description: Not authorised }
   /api/v1/admin/stats:
     get:
       summary: Aggregate counts (admin:read)
+      tags: [administration]
       responses:
-        "200": { description: Counts by status/application/space/identity }
+        "200":
+          description: Counts by status/application/space/identity
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Stats" }
+              examples:
+                snapshot:
+                  value:
+                    objects_by_status: { available: 1284, deleted: 17, pending: 3 }
+                    applications: 2
+                    spaces: 5
+                    buckets: 6
+                    service_identities: 4
+                    active_service_identities: 3
+        "401": { description: Authentication required }
         "403": { description: Not authorised }
   /api/v1/admin/audit:
     get:
       summary: Search the audit log newest-first (admin:read)
+      tags: [administration]
       parameters:
         - in: query
           name: since
@@ -408,21 +602,23 @@ paths:
         "200": { description: "Matching events newest-first (items, total in window, truncated flag, scanned lines, retention_days, queried_at)" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
-        "422": { description: Malformed id, or since exceeding until }
+        "422": { description: "Malformed id, or since exceeding until" }
   /api/v1/admin/audit/prune:
     post:
       summary: Drop audit lines older than the retention window (admin:write)
+      tags: [administration]
       description: >-
         Enforces AURA_AUDIT_RETENTION_DAYS (default 90). Lines without a valid
         timestamp are kept, so audit data is never deleted silently.
       responses:
-        "200": { description: Prune counts (kept, dropped, cutoff, retention_days); a missing log file yields zeros }
+        "200": { description: "Prune counts (kept, dropped, cutoff, retention_days); a missing log file yields zeros" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
         "503": { description: Audit log rewrite failed (the file itself is still readable) }
   /api/v1/admin/orphans:
     get:
       summary: Read-only orphan candidates, available rows missing at storage (admin:read)
+      tags: [administration]
       description: >-
         Candidates only — nothing is ever deleted on this signal alone, since a
         transient outage also produces candidates. Bounded scan, oldest first.
@@ -432,12 +628,13 @@ paths:
           schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
           description: Rows scanned (server clamps to 1..1000)
       responses:
-        "200": { description: Checked count, candidate rows and check time }
+        "200": { description: "Checked count, candidate rows and check time" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
   /api/v1/admin/usage:
     get:
       summary: Real consumption per space plus configured limits (admin:read)
+      tags: [administration]
       description: >-
         Verified bytes count available objects only; measured_at is the live
         query time. No bandwidth or capacity figures exist — see
@@ -448,7 +645,7 @@ paths:
           schema: { $ref: "#/components/schemas/Uuid4" }
           description: Restrict to one space; omitted = every space plus totals
       responses:
-        "200": { description: Limits, totals and per-space usage (bytes are verified available bytes) }
+        "200": { description: "Limits, totals and per-space usage (bytes are verified available bytes)" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
         "404": { description: Space not found }
@@ -456,17 +653,19 @@ paths:
   /api/v1/admin/health:
     get:
       summary: Supervision snapshot for api, database, storage and disk (admin:read)
+      tags: [administration]
       description: >-
         Always 200 with per-component ok/down statuses; top-level degraded when
         any dependency fails. The storage check proves S3 reachability, not a
         full upload/download round-trip.
       responses:
-        "200": { description: Component statuses, recent non-success audit events, operator notes }
+        "200": { description: "Component statuses, recent non-success audit events, operator notes" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
   /api/v1/admin/applications:
     post:
       summary: Register an application (admin:write)
+      tags: [platform]
       requestBody:
         required: true
         content:
@@ -479,14 +678,18 @@ paths:
                 name: { type: string, minLength: 1, maxLength: 63 }
       responses:
         "200": { description: Application created }
+        "401": { description: Authentication required }
         "409": { description: Application already exists }
     get:
       summary: List applications (admin:read)
+      tags: [platform]
       responses:
         "200": { description: Applications }
+        "401": { description: Authentication required }
   /api/v1/admin/spaces:
     post:
       summary: Create a space and its default bucket (admin:write)
+      tags: [platform]
       requestBody:
         required: true
         content:
@@ -502,16 +705,20 @@ paths:
                 default_bucket: { type: string, maxLength: 63, nullable: true, description: Must be a valid S3 bucket name; omitted = derived from name and environment (also validated) }
       responses:
         "200": { description: Space created }
+        "401": { description: Authentication required }
         "404": { description: Application not found }
-        "409": { description: Duplicate (application_id, name, environment), inactive application, or bucket name already in use }
+        "409": { description: "Duplicate (application_id, name, environment), inactive application, or bucket name already in use" }
         "422": { description: Invalid bucket name }
     get:
       summary: List spaces (admin:read)
+      tags: [platform]
       responses:
         "200": { description: Spaces }
+        "401": { description: Authentication required }
   /api/v1/admin/identities:
     post:
       summary: Create a machine-to-machine identity (admin:write)
+      tags: [identities]
       description: The token is returned exactly once; only its fingerprint is stored.
       requestBody:
         required: true
@@ -532,43 +739,53 @@ paths:
                 ttl_seconds: { type: integer, minimum: 1, nullable: true }
       responses:
         "200": { description: Identity created; response contains the one-time token }
+        "401": { description: Authentication required }
         "404": { description: Space not found }
-        "422": { description: Unknown scope, or an admin scope requested for a service identity }
+        "422": { description: "Unknown scope, or an admin scope requested for a service identity" }
     get:
       summary: List identities without secrets (admin:read)
+      tags: [identities]
       parameters:
         - in: query
           name: space_id
           schema: { $ref: "#/components/schemas/Uuid4" }
       responses:
         "200": { description: Identity metadata (never secret material) }
+        "401": { description: Authentication required }
   /api/v1/admin/identities/{iid}/rotate:
     post:
       summary: Rotate an identity secret (admin:write)
+      tags: [identities]
       parameters:
         - $ref: "#/components/parameters/IdentityId"
       responses:
         "200": { description: New one-time token; old secret invalid immediately }
+        "401": { description: Authentication required }
         "404": { description: Identity not found or revoked }
   /api/v1/admin/identities/{iid}/revoke:
     post:
       summary: Revoke an identity (admin:write)
+      tags: [identities]
       parameters:
         - $ref: "#/components/parameters/IdentityId"
       responses:
         "200": { description: Identity revoked }
+        "401": { description: Authentication required }
         "404": { description: Identity not found }
   /api/v1/admin/applications/{aid}:
     get:
       summary: Application detail with its stable id and space count (admin:read)
+      tags: [platform]
       parameters:
         - $ref: "#/components/parameters/ApplicationId"
       responses:
-        "200": { description: Application with name, status, stable id and space count }
+        "200": { description: "Application with name, status, stable id and space count" }
+        "401": { description: Authentication required }
         "404": { description: Application not found }
         "422": { description: Identifier is not a canonical UUID v4 }
     patch:
       summary: Rename or activate/deactivate an application (admin:write)
+      tags: [platform]
       description: >-
         Soft lifecycle only: an application is never deleted. Deactivating it
         blocks new spaces from being attached while existing ones stay readable.
@@ -586,20 +803,24 @@ paths:
                 status: { type: string, enum: [active, disabled] }
       responses:
         "200": { description: Application updated }
+        "401": { description: Authentication required }
         "404": { description: Application not found }
         "409": { description: Application name already exists }
-        "422": { description: No field, an explicit null, or an invalid status }
+        "422": { description: "No field, an explicit null, or an invalid status" }
   /api/v1/admin/spaces/{sid}:
     get:
       summary: Space detail with buckets and attachment counts (admin:read)
+      tags: [platform]
       parameters:
         - $ref: "#/components/parameters/SpaceId"
       responses:
-        "200": { description: Space with its application, buckets and counts }
+        "200": { description: "Space with its application, buckets and counts" }
+        "401": { description: Authentication required }
         "404": { description: Space not found }
         "422": { description: Identifier is not a canonical UUID v4 }
     patch:
       summary: Rename, re-environment or activate/deactivate a space (admin:write)
+      tags: [platform]
       description: >-
         `application_id` is immutable — a space is never moved to another
         application. `name`/`environment` must stay unique within the
@@ -620,12 +841,14 @@ paths:
                 status: { type: string, enum: [active, disabled] }
       responses:
         "200": { description: Space updated }
+        "401": { description: Authentication required }
         "404": { description: Space not found }
-        "409": { description: Duplicate (application_id, name, environment) }
-        "422": { description: No field, an explicit null, or an invalid status }
+        "409": { description: "Duplicate (application_id, name, environment)" }
+        "422": { description: "No field, an explicit null, or an invalid status" }
   /api/v1/admin/spaces/{sid}/buckets:
     post:
       summary: Register an additional bucket for a space (admin:write)
+      tags: [platform]
       description: >-
         Additive and non-destructive: the bucket is created in the catalogue and
         the S3 name rules are enforced. It is not made the default here and no
@@ -648,17 +871,21 @@ paths:
                   description: Must be a valid S3 bucket name.
       responses:
         "200": { description: Bucket registered (not the space default) }
+        "401": { description: Authentication required }
         "404": { description: Space not found }
         "409": { description: Bucket name already in use }
         "422": { description: Invalid bucket name }
   /api/v1/admin/buckets:
     get:
       summary: List every bucket with its space/application attachment (admin:read)
+      tags: [platform]
       responses:
         "200": { description: Buckets and their attachment; never any S3 credential }
+        "401": { description: Authentication required }
   /api/v1/admin/buckets/{bid}:
     patch:
       summary: Set or clear a bucket's default flag (admin:write)
+      tags: [platform]
       description: >-
         Setting a bucket default clears the flag on the other buckets of the
         same space, so exactly one default is possible. Existing objects keep
@@ -677,6 +904,7 @@ paths:
                 is_default: { type: boolean }
       responses:
         "200": { description: Bucket default flag updated }
+        "401": { description: Authentication required }
         "404": { description: Bucket not found }
         "422": { description: Invalid or missing body field }
 components:
@@ -689,6 +917,129 @@ components:
         Canonical identifier: a canonical UUID v4 (lowercase, 8-4-4-4-12).
         Alternate spellings are normalized; anything else is refused with 422.
         See docs/DATA-MODEL.md.
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+    LoginResponse:
+      type: object
+      required: [csrf_token]
+      properties:
+        csrf_token:
+          type: string
+          description: >-
+            Double-submit CSRF token, to send as `X-CSRF-Token` on every mutating
+            call. The session itself is the HttpOnly `aura_session` cookie set by
+            the same response; it is never part of the body.
+    Principal:
+      type: object
+      required: [id, kind, role]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        kind: { type: string, enum: [user, service] }
+        name: { type: [string, "null"], description: Username (human) or identity name (service) }
+        role: { type: string, enum: [user, operator, admin, service] }
+        space_id: { $ref: "#/components/schemas/Uuid4" }
+        application_id: { $ref: "#/components/schemas/Uuid4" }
+        scopes:
+          type: array
+          items: { type: string }
+          description: Effective capabilities; empty for a human session (the role map decides)
+        csrf_token:
+          type: [string, "null"]
+          description: Always null for a service (Bearer) principal
+    UploadIntentRequest:
+      type: object
+      additionalProperties: false
+      required: [display_name, size_bytes]
+      properties:
+        bucket: { type: string, maxLength: 63 }
+        display_name: { type: string, minLength: 1, maxLength: 255 }
+        content_type: { type: string, maxLength: 127, default: application/octet-stream }
+        size_bytes: { type: integer, minimum: 0 }
+        folder_id: { $ref: "#/components/schemas/Uuid4" }
+    UploadIntent:
+      type: object
+      required: [id, status, method, upload_url, headers, content_type, size_bytes]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        status: { type: string, enum: [pending] }
+        method: { type: string, enum: [PUT] }
+        upload_url:
+          type: string
+          description: >-
+            Presigned S3 URL. PUT the bytes there directly — the API never proxies
+            them. It is bound to Content-Length, the content type and SSE-S3.
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: Headers the client must send with the presigned PUT (both are signed)
+        content_type: { type: string }
+        size_bytes: { type: integer }
+        expires_in: { type: integer, description: Seconds of validity }
+        expires_at: { type: integer, description: Epoch seconds }
+        idempotent_replay:
+          type: boolean
+          description: True when a repeated Idempotency-Key returned this same pending intent
+    CommitResult:
+      type: object
+      required: [id, status, size_bytes, checksum_sha256, checksum_algorithm]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        status: { type: string, enum: [available] }
+        size_bytes: { type: integer }
+        checksum_sha256: { type: string, description: Hex SHA-256 streamed server-side }
+        checksum_algorithm: { type: string, enum: [sha256] }
+    ObjectSummary:
+      type: object
+      required: [id, display_name, content_type, size_bytes, status, created_at, updated_at]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        display_name: { type: string }
+        content_type: { type: string }
+        size_bytes:
+          type: integer
+          description: Committed size; -1 while the upload is only pending
+        expected_size_bytes: { type: [integer, "null"], description: Declared size at intent time }
+        checksum_sha256: { type: [string, "null"] }
+        checksum_algorithm: { type: string, enum: [sha256] }
+        status:
+          type: string
+          enum: [pending, available, deleted, expired, failed, aborted]
+        folder_id: { $ref: "#/components/schemas/Uuid4" }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+    Folder:
+      type: object
+      required: [id, name, parent_id, created_at]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        name: { type: string }
+        parent_id: { $ref: "#/components/schemas/Uuid4" }
+        created_at: { type: integer }
+    FolderCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        parent_id: { $ref: "#/components/schemas/Uuid4" }
+    Stats:
+      type: object
+      required: [objects_by_status, applications, spaces, buckets, service_identities]
+      properties:
+        objects_by_status:
+          type: object
+          additionalProperties: { type: integer }
+          description: Count per catalogue status (only statuses that occur)
+        applications: { type: integer }
+        spaces: { type: integer }
+        buckets: { type: integer }
+        service_identities: { type: integer }
+        active_service_identities: { type: integer }
   parameters:
     ObjectId:
       in: path

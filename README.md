@@ -31,6 +31,13 @@
 - [Operations playbook](docs/OPERATIONS-PLAYBOOK.md)
 - [Backup and restore](docs/BACKUP-RESTORE.md)
 - [Traefik configuration notes](config/traefik/README.md)
+- [API routes audit (real routes vs OpenAPI)](docs/API-ROUTES-AUDIT.md)
+- [Transfer engine formal audit](docs/TRANSFER-ENGINE-AUDIT.md)
+- [QA-01 validation checklist and release gate](docs/QA-01-CHECKLIST.md)
+- [Decision: defer Better Auth + Google OAuth](docs/DECISION-BETTER-AUTH.md)
+- [Decision: defer independent backup](docs/DECISION-BACKUP-DEFERRED.md)
+- [Decision: advanced transfer features deferred](docs/DECISION-ADVANCED-TRANSFER-FEATURES.md)
+- [Padding audit report](docs/DESIGN-PADDING-AUDIT.md)
 
 ## Intended topology
 
@@ -74,7 +81,9 @@ Changing `S3_DOMAIN` changes the hostname Traefik routes; it does not automatica
 - The VPS is not a backup; use a separate destination and test restoration.
 - Validate S3 policy syntax/actions and image flags against the exact selected SeaweedFS release.
 
-No repository license has been selected. Do not assume reuse rights until a license is deliberately chosen.
+This repository is proprietary; all rights reserved (see [LICENSE](LICENSE) and
+[ADR-006](docs/DECISIONS.md)). Third-party components keep their own licenses —
+see [THIRD-PARTY.md](THIRD-PARTY.md).
 
 ## Encryption gate for the pilot
 

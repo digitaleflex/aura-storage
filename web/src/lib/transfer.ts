@@ -39,6 +39,8 @@ export interface TransferState {
   attempts: number;
   intentId: string | null;
   error: string | null;
+  /** Commit timing from the server (ms): head, hash, total */
+  commitTiming: { head_ms: number; hash_ms: number; total_ms: number } | null;
 }
 
 export interface TransferResult {
@@ -252,6 +254,16 @@ export async function runTransfer(
       });
       emit({ phase: "validating", progress: 1, transferredBytes: file.size });
       const committed = await deps.commit(current.id);
+      // Extract Server-Timing header values (ms)
+      const timing = committed.serverTiming
+        ? {
+            head_ms: Number(committed.serverTiming.head_ms),
+            hash_ms: Number(committed.serverTiming.hash_ms),
+            total_ms: Number(committed.serverTiming.total_ms),
+          }
+        : null;
+      // Store timing in state for UI display
+      state = { ...state, commitTiming: timing };
       emit({ phase: "available", error: null, intentId: current.id });
       return { state, objectId: current.id, checksum: committed.checksum_sha256 };
     } catch (err) {

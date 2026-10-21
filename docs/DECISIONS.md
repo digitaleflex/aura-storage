@@ -37,3 +37,28 @@ serializes every operation with a per-instance re-entrant lock (`api/dblock.py`)
   autocommit. The lock is not the bottleneck at pilot scale (CPU-bound Python
   in one process is), so the pool was not adopted. Revisit with a remote
   database or several workers (which first needs shared rate-limiter state).
+
+## ADR-006 — Proprietary license, private API-only deployment (Accepted)
+
+AURA is licensed as proprietary software, all rights reserved (`LICENSE`). It is
+operated for its owner on a private VPS. External services consume it only
+through its HTTP/S3 API; they never receive, link or embed AURA's source. The
+repository is not a distribution of reusable code, and no open-source rights are
+granted.
+
+- Reason: an outbound license only governs what others may do with the code. It
+  has no effect on integrations, which depend on *how* a component is used
+  (separate unmodified service vs in-tree import). A permissive license such as
+  Apache-2.0 would grant reuse rights the owner does not intend to grant.
+- Reason: nothing is distributed, so no copyleft obligation is triggered for
+  AURA's own code. AGPL/GPL components may still be run as separate, unmodified
+  services (ClamAV planned; MinIO/Garage/SFTPGo explicitly out of scope).
+- Constraint: no AGPL-3.0 code may enter the repository. If a component must be
+  patched, ADR-006 must be revisited before that patch is committed.
+- Consequence: while the owner is the sole copyright holder, no CLA is needed.
+  Any external contributor must sign a written copyright assignment, otherwise
+  their contribution cannot be relicensed later.
+- Revisit if: AURA is distributed, offered to third parties, opened to external
+  contributors, or a component must be modified in-tree. The easiest pivot at
+  that point is Apache-2.0 (patent grant, permissive) or AGPL-3.0 (network
+  copyleft) — see `docs/engineering/issues-2026-10-18/N9-license.md`.

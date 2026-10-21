@@ -100,6 +100,22 @@ so the format is enforced in code, not in DDL.
 ### Folder
 - `id`, `owner_id`, `parent_id`, `name`, `created_at`.
 
+### ObjectShare (implemented)
+- `id`: canonical UUID v4 primary key.
+- `object_id`: the shared object. **No foreign key on purpose**: `objects:purge`
+  removes the object row, and a share must then be a harmless dangling row that
+  answers 404 rather than a constraint that blocks a purge. `api/lifecycle.py`
+  deletes the share rows explicitly, before the object row.
+- `token_hash`: SHA-256 of the link token. The token itself is never stored, so a
+  catalogue dump cannot be replayed as working links.
+- `space_id`, `created_by`, `created_by_kind`: attribution and audit scope,
+  copied at creation for the unauthenticated redemption path (no principal).
+- `content_disposition`: `attachment` (default) or `inline` (non-executable types
+  only).
+- `expires_at` (mandatory), `max_uses` (nullable), `use_count`, `revoked_at`,
+  `last_used_at`, `created_at`. `max_uses` is enforced inside the redemption
+  UPDATE, so concurrent redemptions cannot exceed it.
+
 ## Proposal (not implemented)
 
 ### ImportJob

@@ -280,6 +280,20 @@ export interface CommitResponse {
   checksum_algorithm?: string;
 }
 
+/**
+ * Commit response augmented with Server-Timing header values (ms).
+ */
+export interface CommitWithTimingResponse {
+  id: string;
+  status: string;
+  size_bytes: number;
+  checksum_sha256: string;
+  checksum_algorithm?: string;
+  /** Parsed Server-Timing: head;dur=<ms>, hash;dur=<ms>, total;dur=<ms> */
+  head_ms: number;
+  hash_ms: number;
+  total_ms: number;
+}
 export interface DownloadIntentResponse {
   id: string;
   download_url: string;
@@ -550,11 +564,12 @@ export const api = {
       headers,
     });
   },
-
-  commitObject(id: string, csrf: string): Promise<CommitResponse> {
-    return request<CommitResponse>(`/api/v1/objects/${encodeURIComponent(id)}/commit`, {
+  commitObject(id: string, csrf: string): Promise<CommitWithTimingResponse> {
+    return request<CommitWithTimingResponse>(\`/api/v1/objects/\${encodeURIComponent(id)}/commit\`, {
       method: "POST",
       csrf,
+    });
+  },
     });
   },
 

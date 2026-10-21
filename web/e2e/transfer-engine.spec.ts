@@ -209,7 +209,7 @@ test("a validation error fails without retry or success", async () => {
   });
   const result = await runTransfer(FILE, deps, { folderId: null, idempotencyKey: "k-422" });
   expect(result.state.phase).toBe("failed");
-  expect(result.state.error).toContain("does not match");
+  expect(result.state.error).toContain("incomplet ou différent de l'original");
   expect(rec.commits).toBe(1);
 });
 
@@ -568,7 +568,7 @@ test("queue restores parallelism after sustained success", async () => {
   const deps: TransferDeps = {
     requestIntent: async (input) => queueIntent(input),
     upload: async (_url, file) => {
-      if (file.name.startsWith("bad")) {
+      if ((file as File).name.startsWith("bad")) {
         throw new PresignedUploadError("network", 0, "Réseau interrompu.");
       }
       await okGate;
@@ -680,7 +680,7 @@ test("retryItem re-runs only the chosen failed file with a fresh key", async () 
       return queueIntent(input);
     },
     upload: async (_url, file) => {
-      if (file.name === "bad.bin") {
+      if ((file as File).name === "bad.bin") {
         badUploads += 1;
         // Fail every internal attempt of the first submission only.
         if (badUploads <= 3) throw new PresignedUploadError("network", 0, "Réseau interrompu.");
@@ -723,7 +723,7 @@ test("retryItem ignores unknown, active and successful files", async () => {
   const deps: TransferDeps = {
     requestIntent: async (input) => queueIntent(input),
     upload: async (_url, file) => {
-      if (file.name === "bad.bin") {
+      if ((file as File).name === "bad.bin") {
         badUploads += 1;
         throw new PresignedUploadError("network", 0, "Réseau interrompu.");
       }
@@ -786,4 +786,242 @@ test("snapshots expose the configured ceiling next to the effective value", asyn
   expect(final.concurrency).toBe(3);
   expect(final.maxConcurrency).toBe(3);
   expect(states.every((s) => s.maxConcurrency === 3)).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Automatic replay after a connectivity loss
+// ---------------------------------------------------------------------------
+test("a failed transfer records why it stopped", async () => {
+  const down = makeDeps({
+    upload: () => {
+      throw new PresignedUploadError("network", 0, "Réseau interrompu.");
+    },
+  });
+  const dropped = await runTransfer(FILE, down.deps, {
+    folderId: null,
+    idempotencyKey: "k-drop",
+  });
+  expect(dropped.state.phase).toBe("failed");
+  expect(dropped.state.failureKind).toBe("retryable");
+
+  const refused = makeDeps({
+    commit: () => {
+      throw new ApiError(507, "storage capacity reached");
+    },
+  });
+  const full = await runTransfer(FILE, refused.deps, {
+    folderId: null,
+    idempotencyKey: "k-full",
+  });
+  expect(full.state.phase).toBe("failed");
+  expect(full.state.failureKind).toBe("fatal");
+});
+
+test("retryTransient replays transient failures only, and reports the count", async () => {
+  const files = [fakeFile("drop.bin"), fakeFile("full.bin")];
+  let linkDown = true;
+  const autoRetried: number[] = [];
+  const states: QueueState[] = [];
+  const deps: TransferDeps = {
+    requestIntent: async (input) => ({
+      id: input.fileName,
+      status: "pending",
+      method: "PUT",
+      upload_url: `https://s3.example/put/${input.fileName}`,
+      headers: { "Content-Type": "application/octet-stream" },
+      content_type: "application/octet-stream",
+      size_bytes: input.sizeBytes,
+      expires_in: 900,
+      expires_at: null,
+      idempotent_replay: false,
+    }),
+    upload: async (url) => {
+      if (linkDown && url.endsWith("/drop.bin")) {
+        throw new PresignedUploadError("network", 0, "Réseau interrompu.");
+      }
+    },
+    commit: async (id) => {
+      if (id === "full.bin") throw new ApiError(507, "storage capacity reached");
+      return { id, status: "available", size_bytes: 10, checksum_sha256: "x" };
+    },
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const queue = startUploadQueue(files, deps, {
+    folderId: null,
+    concurrency: 2,
+    onUpdate: (state) => states.push(state),
+    onAutoRetry: (count) => autoRetried.push(count),
+  });
+
+  const first = await queue.done;
+  expect(first.done).toBe(0);
+  expect(first.failed).toBe(2);
+  expect(
+    first.items.find((item) => item.fileName === "drop.bin")?.state.failureKind,
+  ).toBe("retryable");
+  expect(
+    first.items.find((item) => item.fileName === "full.bin")?.state.failureKind,
+  ).toBe("fatal");
+
+  // The link is back: only the network failure is replayed; the rejected one
+  // would fail identically and stays in the tray for a human decision.
+  linkDown = false;
+  queue.retryTransient();
+  await waitFor(() => states[states.length - 1]?.done === 1 && states[states.length - 1]?.active === 0);
+
+  const last = states[states.length - 1]!;
+  expect(last.done).toBe(1);
+  expect(last.failed).toBe(1);
+  expect(last.items.find((item) => item.fileName === "drop.bin")?.state.phase).toBe(
+    "available",
+  );
+  expect(last.items.find((item) => item.fileName === "full.bin")?.state.phase).toBe(
+    "failed",
+  );
+  expect(autoRetried).toEqual([1]);
+});
+
+test("retryTransient stops after maxReconnectRetries for the same file", async () => {
+  const states: QueueState[] = [];
+  let uploads = 0;
+  const deps: TransferDeps = {
+    requestIntent: async (input) => ({
+      id: input.fileName,
+      status: "pending",
+      method: "PUT",
+      upload_url: `https://s3.example/put/${input.fileName}`,
+      headers: { "Content-Type": "application/octet-stream" },
+      content_type: "application/octet-stream",
+      size_bytes: input.sizeBytes,
+      expires_in: 900,
+      expires_at: null,
+      idempotent_replay: false,
+    }),
+    upload: async () => {
+      uploads += 1;
+      throw new PresignedUploadError("network", 0, "Réseau interrompu.");
+    },
+    commit: async (id) => ({
+      id,
+      status: "available",
+      size_bytes: 10,
+      checksum_sha256: "x",
+    }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+
+  const queue = startUploadQueue([fakeFile("drop.bin")], deps, {
+    folderId: null,
+    maxReconnectRetries: 2,
+    onUpdate: (state) => states.push(state),
+  });
+  await queue.done;
+  // One run = maxAttempts PUTs (default 3).
+  expect(uploads).toBe(3);
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    queue.retryTransient();
+    await waitFor(
+      () =>
+        states[states.length - 1]?.active === 0 &&
+        states[states.length - 1]?.items[0]?.state.phase === "failed",
+    );
+  }
+  expect(uploads).toBe(9); // 3 runs, then the cap holds
+
+  // A manual retry resets the budget and runs again.
+  queue.retryFailed();
+  await waitFor(() => states[states.length - 1]?.active === 0 && uploads === 12);
+  expect(uploads).toBe(12);
+});
+
+test("the online event replays a transient failure without any click", async () => {
+  // Node has no `window`: install the smallest event target the queue uses so
+  // the browser-lifecycle wiring (offline pause, online replay) is exercised
+  // exactly as in the page. The page-level twin lives in upload-reconnect.spec.ts.
+  const listeners = new Map<string, Array<() => void>>();
+  const fakeWindow = {
+    addEventListener: (type: string, handler: () => void) => {
+      listeners.set(type, [...(listeners.get(type) ?? []), handler]);
+    },
+    removeEventListener: (type: string, handler: () => void) => {
+      listeners.set(type, (listeners.get(type) ?? []).filter((h) => h !== handler));
+    },
+  };
+  const globals = globalThis as unknown as { window?: unknown };
+  const hadWindow = "window" in globals;
+  const previousWindow = globals.window;
+  globals.window = fakeWindow;
+
+  try {
+    let linkDown = true;
+    const autoRetried: number[] = [];
+    const states: QueueState[] = [];
+    const deps: TransferDeps = {
+      requestIntent: async (input) => ({
+        id: input.fileName,
+        status: "pending",
+        method: "PUT",
+        upload_url: `https://s3.example/put/${input.fileName}`,
+        headers: { "Content-Type": "application/octet-stream" },
+        content_type: "application/octet-stream",
+        size_bytes: input.sizeBytes,
+        expires_in: 900,
+        expires_at: null,
+        idempotent_replay: false,
+      }),
+      upload: async () => {
+        if (linkDown) throw new PresignedUploadError("network", 0, "Réseau interrompu.");
+      },
+      commit: async (id) => ({
+        id,
+        status: "available",
+        size_bytes: 10,
+        checksum_sha256: "x",
+      }),
+      abortIntent: async () => undefined,
+      sleep: async () => undefined,
+      random: () => 0,
+    };
+
+    const queue = startUploadQueue([fakeFile("drop.bin")], deps, {
+      folderId: null,
+      onUpdate: (state) => states.push(state),
+      onAutoRetry: (count) => autoRetried.push(count),
+    });
+
+    const first = await queue.done;
+    expect(first.failed).toBe(1);
+    // The queue is "finished" but must keep listening: a cut is recoverable.
+    expect(listeners.get("online")?.length ?? 0).toBeGreaterThan(0);
+
+    const fire = (type: string) => {
+      for (const handler of listeners.get(type) ?? []) handler();
+    };
+
+    fire("offline");
+    expect(states[states.length - 1]?.schedulerPaused).toBe(true);
+
+    linkDown = false;
+    fire("online");
+    await waitFor(
+      () =>
+        states[states.length - 1]?.active === 0 &&
+        states[states.length - 1]?.done === 1,
+    );
+
+    const last = states[states.length - 1]!;
+    expect(last.done).toBe(1);
+    expect(last.failed).toBe(0);
+    expect(autoRetried).toEqual([1]);
+    expect(states.some((state) => state.schedulerPaused)).toBe(true);
+  } finally {
+    if (hadWindow) globals.window = previousWindow;
+    else delete globals.window;
+  }
 });

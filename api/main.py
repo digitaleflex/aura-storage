@@ -5,16 +5,15 @@ and S3 through short-lived presigned URLs. The API never stores a browser sessio
 token in the response body and never puts S3 credentials in the frontend.
 """
 import logging
-import os
 import shutil
 import time
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, ids, netinfo
+from . import authz, ids, netinfo, shares
 from .audit import (
     audit_event,
     audit_path,
@@ -23,8 +22,9 @@ from .audit import (
     query_audit_log,
     recent_error_events,
     reset_request_context,
+    set_request_principal,
 )
-from .auth import hash_password, new_token, verify_dummy, verify_password
+from .auth import hash_password, new_token, verify_password
 from .authz import (
     ADMIN_READ,
     ADMIN_WRITE,
@@ -36,18 +36,29 @@ from .authz import (
     SERVICE_SCOPES,
     authorize,
     effective_scopes,
+    master_mode_active,
 )
 from .config import settings
 from .identity import fingerprint, format_token, new_secret
-from .lifecycle import purge_object, reconcile_pending
+from .lifecycle import purge_object, reconcile_pending, reconcile_terminal, reconcile_reverse
 from .s3 import (
     SSE_ALGORITHM,
     SSE_HEADER,
+    CommitDeadlineExceeded,
     ObjectTooLarge,
+    abort_multipart,
+    complete_multipart,
+    create_multipart,
+    is_no_such_upload,
     is_valid_bucket_name,
+    list_uploaded_parts,
     make_clients,
+    make_probe_client,
+    part_length,
+    plan_parts,
     presigned_get,
     presigned_put,
+    presigned_upload_part,
     stream_sha256,
 )
 from .store import repo
@@ -57,17 +68,43 @@ from .transfer import (
     DELETED,
     EXPIRED,
     PENDING,
+    VERIFYING,
     validate_upload_policy,
     valid_idempotency_key,
 )
 
 app = FastAPI(title="AURA Management API", version="0.2.0")
+
+# Server-side idempotent response cache (D2): short-lived memo of commit/abort
+# results keyed by (route, idempotency-key, object id) so a client retry does
+# not re-run the integrity check. TTL is short; the catalogue remains the truth.
+_RESP_CACHE: dict = {}
+_RESP_CACHE_TTL = 300
+
+# Simple per-space daily quota (D3). 0 disables.
+_QUOTA: dict = {}
 # uvicorn installs handlers on its own loggers only and leaves the root logger
 # handler-free, so an INFO record from "api.main" is dropped by logging's
-# lastResort handler (WARNING). Verified locally: an "api.main" INFO line never
-# reached the process output, while "uvicorn.error" did. Route through the logger
-# uvicorn configures so commit timings are visible in `docker logs`.
+# lastResort handler (WARNING). Route through the logger uvicorn configures so
+# commit timings are visible in `docker logs`.
 log = logging.getLogger("uvicorn.error")
+
+
+@app.on_event("startup")
+def _start_verifier() -> None:
+    # Large objects are hashed outside the commit request (N5).
+    if settings.verify_worker == "inline":
+        from .verifier import start_background
+        start_background(repo, s3ops, settings, audit=audit_event)
+    # Stored bytes are re-hashed periodically to catch silent corruption.
+    if settings.scrub_enabled:
+        from .scrubber import start_background as start_scrubber
+        start_scrubber(repo, s3ops, settings, audit=audit_event)
+    # The reconciliation sweep runs on its own (#144): without it, stale
+    # intents and half-done purges waited for a human to call the admin route.
+    if settings.reconcile_enabled:
+        from .reconciler import start_background as start_reconciler
+        start_reconciler(repo, s3ops, settings, audit=audit_event)
 
 
 @app.middleware("http")
@@ -157,6 +194,11 @@ s3, s3ops = make_clients(
     settings.s3_endpoint, settings.s3_internal_endpoint,
     settings.s3_access_key, settings.s3_secret_key, settings.s3_region,
 )
+# Supervision only: answers within seconds when the storage is down.
+s3probe = make_probe_client(
+    settings.s3_internal_endpoint, settings.s3_access_key,
+    settings.s3_secret_key, settings.s3_region,
+)
 
 
 def _ensure_bootstrap_admin() -> None:
@@ -172,20 +214,12 @@ def _ensure_bootstrap_admin() -> None:
 
 _ensure_bootstrap_admin()
 
+# Verified against when the username is unknown (timing equalisation in login).
+_DUMMY_PASS_HASH = hash_password(new_token(32))
+
 
 def _as_dict(row) -> dict:
     return dict(row) if not isinstance(row, dict) else row
-
-
-def _upload_headers(content_type: str) -> dict:
-    """Headers the client must echo on a presigned PUT.
-
-    ``Content-Type`` and the SSE-S3 header are both part of the signed request
-    (see ``api/s3.presigned_put``); the browser has to resend them exactly or the
-    gateway rejects the upload. Returning them here keeps the value the API
-    signed and the value the client sends in lock-step.
-    """
-    return {"Content-Type": content_type, SSE_HEADER: SSE_ALGORITHM}
 
 
 def _canonical_id(value: str, field: str) -> str:
@@ -216,7 +250,8 @@ Uuid4 = Annotated[str, AfterValidator(_canonical_uuid)]
 # Object list query vocabulary (M02). Literals make FastAPI return 422 for any
 # unsupported value and let the OpenAPI document describe the accepted set.
 ObjectStatus = Literal[
-    "pending", "available", "deleted", "expired", "failed", "aborted"
+    "pending", "verifying", "available", "deleted", "expired", "failed", "aborted",
+    "purging",
 ]
 ObjectSort = Literal["created_at", "display_name", "size_bytes"]
 SortOrder = Literal["asc", "desc"]
@@ -330,6 +365,21 @@ class UploadIntentIn(BaseModel):
     # accepted only when empty objects are enabled for this deployment.
     size_bytes: int = Field(ge=0)
     folder_id: Uuid4 | None = None
+    content_encoding: str | None = Field(default=None, max_length=16)
+
+
+class ShareIn(BaseModel):
+    """Create a public read-only share link for one object.
+
+    ``expires_in`` is optional but never unbounded: the server refuses anything
+    above ``AURA_SHARE_TTL_MAX``. ``max_uses`` turns the link into a
+    burn-after-N-read link.
+    """
+    model_config = ConfigDict(extra="forbid")
+    expires_in: int | None = Field(default=None, ge=60)
+    max_uses: int | None = Field(default=None, ge=1, le=1_000_000)
+    # `attachment` is the default so a share link downloads rather than renders.
+    content_disposition: Literal["attachment", "inline"] = "attachment"
 
 
 class ObjectPatchIn(BaseModel):
@@ -470,6 +520,87 @@ def ready():
         return JSONResponse(status_code=503, content={"status": "not ready"})
 
 
+# ---------------------------------------------------------------------------
+# Public share links
+# ---------------------------------------------------------------------------
+# Outside /api/v1 on purpose: this is the only unauthenticated route that serves
+# object data, and it must not be confused with the session/Bearer API surface.
+# It never returns bytes: it redirects to a short-lived presigned GET.
+def _share_not_found() -> HTTPException:
+    """One indistinguishable 404 for every share failure mode.
+
+    A factory rather than a shared instance: the same object raised from several
+    concurrent requests would carry competing tracebacks.
+    """
+    return HTTPException(status_code=404, detail="not found")
+
+
+@app.get("/s/{token}")
+def redeem_share(token: str):
+    """Redeem a share link: 302 to a short-lived presigned GET, or 404.
+
+    Every failure mode (malformed, unknown, expired, exhausted, revoked, object
+    gone) answers the same 404, so the route cannot be used to discover which
+    objects or shares exist. Success and denial are both audited by share id.
+    """
+    if not shares.is_well_formed(token):
+        raise _share_not_found()
+    found = repo.get_share_by_token_hash(shares.fingerprint(token))
+    now = int(time.time())
+    if found is None:
+        audit_event("share-access", None, "denied", {"reason": "unknown"})
+        raise _share_not_found()
+    row = _as_dict(found)
+    if row.get("revoked_at"):
+        audit_event("share-access", None, "denied",
+                    {"share_id": row["id"], "reason": "revoked"})
+        raise _share_not_found()
+    if int(row["expires_at"]) <= now:
+        audit_event("share-access", None, "denied",
+                    {"share_id": row["id"], "reason": "expired"})
+        raise _share_not_found()
+
+    # Tenant attribution for the audit trail: a public redemption has no
+    # principal, but the event still belongs to the object's space.
+    set_request_principal(row["space_id"], None)
+
+    target = repo.get_object(row["object_id"], space_id=row["space_id"])
+    if target is None or target["status"] != AVAILABLE:
+        audit_event("share-access", None, "denied",
+                    {"share_id": row["id"], "reason": "object_unavailable"})
+        raise _share_not_found()
+    obj = _as_dict(target)
+
+    # Atomic: re-checks revocation, expiry and max_uses in the same UPDATE, so
+    # concurrent redemptions cannot over-use a limited link.
+    if not repo.consume_share(row["id"], now):
+        audit_event("share-access", None, "denied",
+                    {"share_id": row["id"], "reason": "exhausted"})
+        raise _share_not_found()
+
+    url = presigned_get(
+        s3, obj["bucket"], obj["object_key"], settings.share_presign_ttl,
+        content_disposition=shares.content_disposition_header(
+            row["content_disposition"], obj["display_name"]
+        ),
+        # Pin the type so a renamed/retagged object cannot be rendered as
+        # something else at redemption time.
+        content_type=obj["content_type"],
+    )
+    audit_event("share-access", None, "success", {
+        "share_id": row["id"], "object_id": obj["id"],
+        "use_count": int(row["use_count"]) + 1,
+    })
+    return RedirectResponse(url, status_code=302, headers={
+        # The redirect target is a bearer URL: keep it out of caches, out of
+        # Referer headers sent to the storage host, and out of search indexes.
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
 @app.post("/api/v1/login")
 def login(body: LoginIn, request: Request, response: Response):
     client_ip = _client_ip(request)
@@ -479,15 +610,10 @@ def login(body: LoginIn, request: Request, response: Response):
         raise HTTPException(status_code=429, detail="too many login attempts",
                             headers={"Retry-After": str(settings.login_rate_window)})
     row = repo.get_user_by_name(body.username)
-    if row is None:
-        # Unknown username: still perform one hash verification against a
-        # throwaway hash so the response time cannot reveal whether the user
-        # exists (no enumeration oracle).
-        verify_dummy()
-        valid = False
-    else:
-        valid = verify_password(row["pass_hash"], body.password)
-    if not valid:
+    # An unknown username still pays one argon2 verification, so response time
+    # does not reveal which usernames exist.
+    stored_hash = row["pass_hash"] if row is not None else _DUMMY_PASS_HASH
+    if not verify_password(stored_hash, body.password) or row is None:
         _login_record_failure(client_ip)
         audit_event("login", body.username, "failure")
         raise HTTPException(status_code=401, detail="invalid credentials")
@@ -534,12 +660,109 @@ def me(principal: dict = Depends(authorize())):
         "application_id": principal["application_id"],
         "scopes": sorted(effective_scopes(principal)),
         "csrf_token": principal.get("csrf") if principal["kind"] == "user" else None,
+        # Master mode expiry (epoch seconds) while active on this session, else null.
+        "master_until": principal["master_until"] if master_mode_active(principal) else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Master mode: a short, password-confirmed elevation for bulk destructive
+# actions (bulk purge, emptying the trash) without a confirmation per item.
+# Bound to one browser session, needs objects:purge, expires on its own,
+# and every activation and bulk action is audited.
+# ---------------------------------------------------------------------------
+class MasterModeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str = Field(min_length=1, max_length=1024)
+
+
+@app.post("/api/v1/me/master-mode")
+def master_mode_on(
+    body: MasterModeIn, request: Request,
+    principal: dict = Depends(authorize(OBJECTS_PURGE, human=True)),
+):
+    client_ip = _client_ip(request)
+    if _login_blocked(client_ip):
+        raise HTTPException(status_code=429, detail="too many attempts",
+                            headers={"Retry-After": str(settings.login_rate_window)})
+    user = repo.get_user(principal["id"])
+    if user is None or not verify_password(user["pass_hash"], body.password):
+        _login_record_failure(client_ip)
+        audit_event("master-mode", principal["id"], "failure")
+        raise HTTPException(status_code=403, detail="password does not match")
+    until = int(time.time()) + settings.master_mode_ttl
+    repo.set_session_master(principal["session_id"], until)
+    audit_event("master-mode", principal["id"], "on", {"until": until})
+    return {"master_until": until}
+
+
+@app.delete("/api/v1/me/master-mode")
+def master_mode_off(principal: dict = Depends(authorize(human=True))):
+    repo.set_session_master(principal["session_id"], None)
+    audit_event("master-mode", principal["id"], "off")
+    return {"master_until": None}
+
+
+def _require_master(principal: dict) -> None:
+    if not master_mode_active(principal):
+        raise HTTPException(status_code=403, detail="master mode required")
+
+
+class BulkIdsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(min_length=1)
+
+
+def _bulk_purge(ids: list[str], principal: dict) -> dict:
+    from .lifecycle import StorageDeleteError
+    purged: list[str] = []
+    not_found: list[str] = []
+    failed: list[str] = []
+    for oid in ids:
+        try:
+            oid = _canonical_id(oid, "object id")
+        except HTTPException:
+            not_found.append(oid)
+            continue
+        try:
+            done = purge_object(repo, s3ops, oid, **_object_scope(principal))
+        except StorageDeleteError:
+            failed.append(oid)
+            continue
+        (purged if done else not_found).append(oid)
+    audit_event("bulk-purge", principal["id"], "success", {
+        "purged": len(purged), "not_found": len(not_found), "failed": len(failed),
+    })
+    return {"purged": purged, "not_found": not_found, "failed": failed}
+
+
+@app.post("/api/v1/objects/bulk-purge")
+def bulk_purge(body: BulkIdsIn, principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
+    """Master mode: purge many objects in one call, no per-item confirmation."""
+    _require_master(principal)
+    if len(body.ids) > settings.master_bulk_max:
+        raise HTTPException(status_code=422, detail=f"at most {settings.master_bulk_max} ids per call")
+    return _bulk_purge(body.ids, principal)
+
+
+@app.post("/api/v1/objects/trash/empty")
+def empty_trash(principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
+    """Master mode: purge the caller's trash (at most master_bulk_max per call)."""
+    _require_master(principal)
+    rows = repo.list_objects(
+        **_object_scope(principal), status=DELETED, limit=settings.master_bulk_max,
+    )
+    ids = [_as_dict(r)["id"] for r in rows]
+    out = _bulk_purge(ids, principal)
+    # More than one call's worth: the client simply calls again.
+    out["more"] = bool(repo.list_objects(**_object_scope(principal), status=DELETED, limit=1))
+    return out
 
 
 def _upload_headers(content_type: str) -> dict:
     """Headers the client must send with the presigned PUT (both are signed)."""
-    return {"Content-Type": content_type, SSE_HEADER: SSE_ALGORITHM}
+    return {"Content-Type": content_type, SSE_HEADER: SSE_ALGORITHM,
+            "If-None-Match": "*"}
 
 
 @app.post("/api/v1/objects/upload-intents")
@@ -561,12 +784,22 @@ def upload_intent(
     try:
         content_type = validate_upload_policy(
             body.content_type, body.size_bytes,
-            max_bytes=settings.max_object_bytes,
+            max_bytes=_upload_ceiling(),
             allow_empty=settings.allow_empty_objects,
             allowed_types=settings.allowed_content_types,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+    # Optional zstd compression (C3): never transparent, never on already-compressed types.
+    content_encoding = body.content_encoding
+    if content_encoding is not None:
+        if content_encoding not in ("zstd",):
+            raise HTTPException(status_code=422, detail="unsupported content encoding")
+        from .transfer import NON_COMPRESSIBLE_TYPES
+        bare = content_type.split(";", 1)[0].strip().lower()
+        if bare in NON_COMPRESSIBLE_TYPES:
+            raise HTTPException(status_code=422, detail="content type must not be compressed")
 
     idem_key = request.headers.get("idempotency-key")
     if idem_key is not None and not valid_idempotency_key(
@@ -597,7 +830,26 @@ def upload_intent(
         if existing is not None:
             existing = _as_dict(existing)
             expires_at = existing.get("intent_expires_at")
-            if not expires_at or int(time.time()) <= int(expires_at) + settings.intent_grace_s:
+            now_ts = int(time.time())
+            grace_deadline = int(expires_at) + settings.intent_grace_s if expires_at else now_ts
+            # G6: a replay accepted too close to the grace deadline would hand
+            # out a URL whose commits are refused for most of its life. Retire
+            # the old intent and fall through to mint a fresh one.
+            if expires_at and (now_ts + settings.replay_refresh_margin_s) > grace_deadline:
+                try:
+                    s3ops.delete_object(Bucket=existing["bucket"], Key=existing["object_key"])
+                except Exception:
+                    pass
+                repo.set_status(existing["id"], EXPIRED)
+                # fall through: create a new intent below
+            elif not expires_at or now_ts <= grace_deadline:
+                if existing.get("multipart_upload_id"):
+                    # A resumed multipart upload: same session, the client then
+                    # asks which parts are still missing (#72).
+                    audit_event("upload-intent", principal["id"], "replay", {
+                        "object_id": existing["id"], "bucket": existing["bucket"],
+                    })
+                    return _multipart_intent_response(existing, replay=True)
                 expected = existing.get("expected_size_bytes")
                 if expected is None or expected < 0:
                     expected = body.size_bytes
@@ -616,12 +868,43 @@ def upload_intent(
                     "size_bytes": expected, "expires_in": settings.intent_ttl,
                     "expires_at": expires_at, "idempotent_replay": True,
                 }
-            # The prior intent is past its grace window: retire it so the
-            # catalogue never keeps two live intents for one key.
-            repo.set_status(existing["id"], EXPIRED)
+            # Retired above (or past grace): fall through to mint a fresh intent.
+
+    if idem_key:
+        # The same file was already sent (page reloaded while its check ran):
+        # report it instead of sending the bytes a second time.
+        done = repo.get_by_idempotency(
+            actor_id=principal["id"], idempotency_key=idem_key, space_id=space_id
+        )
+        if done is not None and _as_dict(done)["status"] in (VERIFYING, AVAILABLE):
+            done = _as_dict(done)
+            return {
+                "id": done["id"], "status": done["status"], "method": "PUT",
+                "upload_url": None, "headers": {},
+                "content_type": done["content_type"],
+                "size_bytes": done.get("expected_size_bytes"),
+                "expires_in": 0, "expires_at": None, "idempotent_replay": True,
+            }
+
+    # Daily quota (D3): reject early with 429 when the space exceeds its budget.
+    if settings.quota_bytes_per_day > 0 or settings.quota_files_per_day > 0:
+        space = space_id
+        today = int(time.time()) // 86400
+        q = _QUOTA.setdefault(space, {"day": today, "bytes": 0, "files": 0})
+        if q["day"] != today:
+            q["day"] = today
+            q["bytes"] = 0
+            q["files"] = 0
+        if (settings.quota_files_per_day > 0 and q["files"] >= settings.quota_files_per_day) or (
+            settings.quota_bytes_per_day > 0 and q["bytes"] + body.size_bytes > settings.quota_bytes_per_day
+        ):
+            raise HTTPException(status_code=429, detail="quota exceeded")
+        q["files"] += 1
+        q["bytes"] += body.size_bytes
 
     if repo.count_pending(**_object_scope(principal)) >= settings.max_pending_intents:
         raise HTTPException(status_code=429, detail="too many pending uploads")
+    _check_capacity(body.size_bytes)
 
     if body.folder_id is not None:
         # A client-supplied folder must exist and be owned by the caller (#61).
@@ -633,7 +916,13 @@ def upload_intent(
 
     owner_id = principal["id"] if principal["kind"] == "user" else None
     key = f"aura/{space_id}/{principal['id']}/{ids.new_id()}"
-    intent_expires_at = int(time.time()) + settings.intent_ttl
+    multipart = (
+        settings.multipart_enabled
+        and body.size_bytes >= settings.multipart_threshold_bytes
+    )
+    intent_expires_at = int(time.time()) + (
+        settings.multipart_session_ttl if multipart else settings.intent_ttl
+    )
     oid = repo.create_pending_object(
         space_id=space_id, application_id=principal["application_id"],
         environment=principal["environment"], bucket=bucket, object_key=key,
@@ -641,7 +930,26 @@ def upload_intent(
         owner_id=owner_id, actor_id=principal["id"], actor_kind=principal["kind"],
         intent_expires_at=intent_expires_at, folder_id=body.folder_id,
         expected_size_bytes=body.size_bytes, idempotency_key=idem_key,
+        content_encoding=content_encoding,
     )
+    if multipart:
+        part_bytes, _ = plan_parts(body.size_bytes, settings.multipart_part_bytes)
+        try:
+            upload_id = create_multipart(s3ops, bucket, key, content_type)
+        except Exception:
+            repo.set_status(oid, "failed")
+            audit_event("upload-intent", principal["id"], "storage_failure", {
+                "object_id": oid, "bucket": bucket,
+            })
+            raise HTTPException(status_code=502, detail="storage unavailable")
+        repo.set_multipart(oid, upload_id, part_bytes)
+        audit_event("upload-intent", principal["id"], "success", {
+            "object_id": oid, "bucket": bucket, "size_bytes": body.size_bytes,
+            "multipart": True,
+        })
+        return _multipart_intent_response(
+            _as_dict(repo.get_object(oid, **_object_scope(principal))), replay=False,
+        )
     url = presigned_put(
         s3, bucket, key, content_type, settings.intent_ttl, body.size_bytes
     )
@@ -658,12 +966,233 @@ def upload_intent(
     }
 
 
+def _capacity() -> dict | None:
+    """Fill level of the object store against the configured capacity."""
+    if settings.storage_capacity_bytes <= 0:
+        return None
+    committed = repo.storage_commitment()
+    limit = settings.storage_capacity_bytes * settings.storage_high_watermark_pct // 100
+    used = committed["stored"] + committed["reserved"]
+    return {
+        "capacity_bytes": settings.storage_capacity_bytes,
+        "high_watermark_pct": settings.storage_high_watermark_pct,
+        "accept_until_bytes": limit,
+        "stored_bytes": committed["stored"],
+        "reserved_bytes": committed["reserved"],
+        "free_for_uploads_bytes": max(0, limit - used),
+    }
+
+
+def _check_capacity(size_bytes: int) -> None:
+    """Refuse (507) an upload that would push the disk past the watermark.
+
+    The declared size is reserved as soon as the intent exists, so a burst of
+    parallel imports is accounted for before any byte lands.
+    """
+    cap = _capacity()
+    if cap is not None and size_bytes > cap["free_for_uploads_bytes"]:
+        audit_event("upload-intent", None, "capacity", {
+            "size_bytes": size_bytes, "free_bytes": cap["free_for_uploads_bytes"],
+        })
+        raise HTTPException(status_code=507, detail="storage capacity reached")
+
+
+def _upload_ceiling() -> int:
+    """Largest declarable size: multipart lifts the single-PUT ceiling."""
+    if settings.multipart_enabled:
+        return max(settings.max_object_bytes, settings.multipart_max_object_bytes)
+    return settings.max_object_bytes
+
+
+def _multipart_intent_response(row: dict, *, replay: bool) -> dict:
+    size = int(row["expected_size_bytes"])
+    part_bytes = int(row["multipart_part_bytes"])
+    return {
+        "id": row["id"], "status": PENDING, "method": "PUT",
+        "upload_mode": "multipart", "upload_url": None, "headers": {},
+        "content_type": row["content_type"], "size_bytes": size,
+        "multipart": {
+            "part_size_bytes": part_bytes,
+            "part_count": -(-size // part_bytes),
+        },
+        "expires_in": max(0, int(row["intent_expires_at"]) - int(time.time())),
+        "expires_at": row["intent_expires_at"], "idempotent_replay": replay,
+    }
+
+
+def _pending_multipart(oid: str, principal: dict) -> dict:
+    """The caller's own pending object with an open multipart session (or 404/409)."""
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != PENDING or not row.get("multipart_upload_id"):
+        raise HTTPException(status_code=409, detail="no multipart upload in progress")
+    expires_at = row.get("intent_expires_at")
+    if expires_at and int(time.time()) > int(expires_at) + settings.intent_grace_s:
+        raise HTTPException(status_code=410, detail="upload intent expired")
+    return row
+
+
+def _uploaded_parts(row: dict) -> dict[int, tuple[int, str]]:
+    """Parts the backend holds whose size matches the plan exactly."""
+    size = int(row["expected_size_bytes"])
+    part_bytes = int(row["multipart_part_bytes"])
+    count = -(-size // part_bytes)
+    try:
+        held = list_uploaded_parts(
+            s3ops, row["bucket"], row["object_key"], row["multipart_upload_id"]
+        )
+    except Exception as exc:
+        if is_no_such_upload(exc):
+            raise HTTPException(status_code=410, detail="multipart upload no longer exists")
+        raise HTTPException(status_code=502, detail="storage unavailable")
+    return {
+        number: part for number, part in held.items()
+        if 1 <= number <= count and part[0] == part_length(number, part_bytes, size)
+    }
+
+
+def _complete_multipart_session(row: dict, principal: dict) -> None:
+    """Check every planned part is held, then assemble the object (#72).
+
+    The part list is read from the backend, never taken from the client. A
+    missing part is a 409 the client resolves by sending it; after a successful
+    completion the session is cleared, so a retried commit goes straight to the
+    full-object SHA-256 verification.
+    """
+    size = int(row["expected_size_bytes"])
+    part_bytes = int(row["multipart_part_bytes"])
+    count = -(-size // part_bytes)
+    try:
+        parts = _uploaded_parts(row)
+    except HTTPException as exc:
+        if exc.status_code != 410:
+            raise
+        # The session is gone: a previous commit completed it and crashed
+        # before recording that. The object itself decides (head below).
+        repo.set_multipart(row["id"], None, part_bytes)
+        row["multipart_upload_id"] = None
+        return
+    missing = count - len(parts)
+    if missing:
+        raise HTTPException(
+            status_code=409, detail=f"{missing} part(s) missing; upload them, then commit",
+        )
+    try:
+        complete_multipart(
+            s3ops, row["bucket"], row["object_key"], row["multipart_upload_id"], parts,
+        )
+    except Exception as exc:
+        if is_no_such_upload(exc):
+            repo.set_multipart(row["id"], None, part_bytes)
+            row["multipart_upload_id"] = None
+            return
+        audit_event("commit", principal["id"], "storage_failure", {"object_id": row["id"]})
+        raise HTTPException(status_code=502, detail="storage could not assemble the parts")
+    repo.set_multipart(row["id"], None, part_bytes)
+    row["multipart_upload_id"] = None
+
+
+def _abort_multipart_session(row: dict) -> None:
+    if not row.get("multipart_upload_id"):
+        return
+    try:
+        abort_multipart(s3ops, row["bucket"], row["object_key"], row["multipart_upload_id"])
+    except Exception as exc:
+        if not is_no_such_upload(exc):
+            # Best effort: the session stays recorded and the sweep retries.
+            return
+    repo.set_multipart(row["id"], None, row.get("multipart_part_bytes"))
+
+
+class PartUrlsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    part_numbers: list[int] = Field(min_length=1, max_length=100)
+
+
+@app.get("/api/v1/objects/{oid}/multipart")
+def multipart_status(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
+    """Plan and parts already held: a resumed upload sends only the rest."""
+    row = _pending_multipart(oid, principal)
+    size = int(row["expected_size_bytes"])
+    part_bytes = int(row["multipart_part_bytes"])
+    return {
+        "id": row["id"], "size_bytes": size, "part_size_bytes": part_bytes,
+        "part_count": -(-size // part_bytes),
+        "uploaded_parts": sorted(_uploaded_parts(row)),
+    }
+
+
+@app.post("/api/v1/objects/{oid}/multipart/parts")
+def multipart_part_urls(
+    oid: str, body: PartUrlsIn, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Short-lived presigned PUTs for the requested part numbers (max 100)."""
+    row = _pending_multipart(oid, principal)
+    size = int(row["expected_size_bytes"])
+    part_bytes = int(row["multipart_part_bytes"])
+    count = -(-size // part_bytes)
+    numbers = sorted(set(body.part_numbers))
+    if any(n < 1 or n > count for n in numbers):
+        raise HTTPException(status_code=422, detail="part number out of range")
+    parts = []
+    for number in numbers:
+        length = part_length(number, part_bytes, size)
+        parts.append({
+            "part_number": number, "size_bytes": length,
+            "url": presigned_upload_part(
+                s3, row["bucket"], row["object_key"], row["multipart_upload_id"],
+                number, length, settings.intent_ttl,
+            ),
+        })
+    return {"id": row["id"], "expires_in": settings.intent_ttl, "parts": parts}
+
+
+def _cache_key(route: str, oid: str, idem: str | None) -> str | None:
+    if not idem:
+        return None
+    return f"{route}:{oid}:{idem}"
+
+
+def _cache_get(key: str | None):
+    if key is None:
+        return None
+    entry = _RESP_CACHE.get(key)
+    if entry is None:
+        return None
+    if time.time() - entry[0] > _RESP_CACHE_TTL:
+        _RESP_CACHE.pop(key, None)
+        return None
+    return entry[1], entry[2]
+
+
+def _cache_set(key: str | None, status: int, body):
+    if key is None:
+        return
+    _RESP_CACHE[key] = (time.time(), status, body)
+
+
 @app.post("/api/v1/objects/{oid}/commit")
 def commit_object(
-    oid: str, response: Response, principal: dict = Depends(authorize(OBJECTS_WRITE))
+    oid: str, response: Response, request: Request,
+    principal: dict = Depends(authorize(OBJECTS_WRITE)),
 ):
     started = time.perf_counter()
+    # Global deadline for this commit (#120): measured from request start so
+    # HEAD time and hashing share one budget, enforced per chunk by
+    # stream_sha256 (the other phases are bounded by the S3 client timeouts).
+    deadline = time.monotonic() + settings.commit_deadline_s
     oid = _canonical_id(oid, "object id")
+    idem = request.headers.get("idempotency-key") if "request" in globals() else None
+    # D2: serve a cached result for a retried commit with the same key.
+    ck = _cache_key("commit", oid, idem)
+    cached = _cache_get(ck)
+    if cached is not None:
+        status, body = cached
+        response.status_code = status
+        return body
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")
@@ -676,6 +1205,11 @@ def commit_object(
             "checksum_sha256": row["checksum_sha256"],
             "checksum_algorithm": "sha256",
         }
+    if row["status"] == VERIFYING:
+        # Idempotent: the integrity check is still running (N5).
+        return JSONResponse(status_code=202, content={
+            "id": oid, "status": VERIFYING, "size_bytes": row.get("expected_size_bytes"),
+        })
     if row["status"] != "pending":
         raise HTTPException(status_code=409, detail="object not committable")
 
@@ -684,6 +1218,12 @@ def commit_object(
         repo.set_status(oid, "expired")
         audit_event("commit", principal["id"], "expired", {"object_id": oid})
         raise HTTPException(status_code=410, detail="upload intent expired")
+
+    max_bytes = settings.max_object_bytes
+    if row.get("multipart_part_bytes"):
+        max_bytes = settings.multipart_max_object_bytes
+    if row.get("multipart_upload_id"):
+        _complete_multipart_session(row, principal)
 
     head_started = time.perf_counter()
     try:
@@ -695,7 +1235,7 @@ def commit_object(
     size = int(head.get("ContentLength", -1))
     if size < 0:
         raise HTTPException(status_code=422, detail="upload size unknown")
-    if size > settings.max_object_bytes:
+    if size > max_bytes:
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
     if settings.require_sse and head.get("ServerSideEncryption") != SSE_ALGORITHM:
@@ -709,28 +1249,110 @@ def commit_object(
         audit_event("commit", principal["id"], "unencrypted", {"object_id": oid})
         raise HTTPException(status_code=422, detail="object not encrypted at rest")
 
+    # Defence in depth: the declared size must match the size actually stored.
+    expected_declared = row.get("expected_size_bytes")
+    try:
+        expected_declared = int(expected_declared) if expected_declared is not None else None
+    except (TypeError, ValueError):
+        expected_declared = None
+    if expected_declared is not None and expected_declared >= 0 and size != expected_declared:
+        repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
+        audit_event("commit", principal["id"], "size_mismatch_declared", {"object_id": oid})
+        raise HTTPException(status_code=422, detail="uploaded size does not match declared size")
+
+    if size >= settings.verify_async_threshold_bytes:
+        # Large object: hand it to the verification worker instead of hashing
+        # gigabytes inside this request (N5). The client follows the status.
+        repo.mark_verifying(oid, head.get("ETag"))
+        audit_event("commit", principal["id"], "verifying", {"object_id": oid, "size_bytes": size})
+        return JSONResponse(status_code=202, content={
+            "id": oid, "status": VERIFYING, "size_bytes": size,
+        })
+
     hash_started = time.perf_counter()
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
-        total, digest = stream_sha256(
-            body, settings.max_object_bytes, settings.commit_chunk_bytes
-        )
+        deadline = time.monotonic() + settings.commit_deadline_s if settings.commit_deadline_s is not None else None
+        total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes, deadline=deadline)
     except ObjectTooLarge:
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
+    except CommitDeadlineExceeded:
+        repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
+        raise HTTPException(status_code=504, detail="commit exceeded deadline")
     except Exception:
         raise HTTPException(status_code=422, detail="upload not readable at storage")
     hash_s = time.perf_counter() - hash_started
 
-    if total != size:
+    if total != size or (expected_declared is not None and expected_declared >= 0 and total != expected_declared):
         # Truncated or mismatched upload is never marked available (#37).
         repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
         raise HTTPException(status_code=422, detail="uploaded size does not match storage")
 
-    repo.mark_available(oid, size, digest)
+    # Optional AV scan (D4): if configured, scan the bytes before publication.
+    if settings.av_scan_cmd:
+        import subprocess
+        import tempfile
+        import os as _os
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        try:
+            body2 = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
+            for chunk in body2.iter_chunks(chunk_size=settings.commit_chunk_bytes):
+                tmp.write(chunk)
+            tmp.close()
+            proc = subprocess.run(
+                [settings.av_scan_cmd, tmp.name],
+                capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                repo.set_status(oid, "failed")
+                try:
+                    s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+                except Exception:
+                    pass
+                raise HTTPException(status_code=422, detail="object failed av scan")
+        finally:
+            try:
+                _os.unlink(tmp.name)
+            except OSError:
+                pass
+
+    # Hard deadline guard for the synchronous commit path.
+    if settings.commit_deadline_s and (time.perf_counter() - started) > settings.commit_deadline_s:
+        repo.set_status(oid, "failed")
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
+        audit_event("commit", principal["id"], "deadline", {"object_id": oid})
+        raise HTTPException(status_code=504, detail="commit exceeded deadline")
+
+    row_version = row.get("version")
+    n = repo.mark_available(oid, size, digest, expected_version=row_version)
+    if n == 0:
+        # Compare-and-set lost the race. Re-read to distinguish idempotent
+        # success (already available with the same digest) from a real conflict.
+        fresh = _as_dict(repo.get_object(oid, **_object_scope(principal)))
+        if fresh and fresh.get("status") == "available" and fresh.get("checksum_sha256") == digest:
+            audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
+            return {
+                "id": oid, "status": "available", "size_bytes": fresh.get("size_bytes", size),
+                "checksum_sha256": digest, "checksum_algorithm": "sha256",
+            }
+        raise HTTPException(status_code=409, detail="concurrent commit conflict")
     audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
-    # Instrumentation only: timings for the pilot latency distribution. No
-    # behaviour change — the header and log line are the sole additions.
     total_s = time.perf_counter() - started
     head_ms = head_s * 1000.0
     hash_ms = hash_s * 1000.0
@@ -740,10 +1362,12 @@ def commit_object(
     )
     log.info("commit timings oid=%s bytes=%d head_ms=%.1f hash_ms=%.1f total_ms=%.1f",
              oid, size, head_ms, hash_ms, total_ms)
-    return {
+    result = {
         "id": oid, "status": "available", "size_bytes": size,
         "checksum_sha256": digest, "checksum_algorithm": "sha256",
     }
+    _cache_set(ck, 200, result)
+    return result
 
 
 @app.post("/api/v1/objects/{oid}/abort")
@@ -770,6 +1394,7 @@ def abort_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
     if row["status"] != PENDING:
         raise HTTPException(status_code=409, detail="object not abortable")
 
+    _abort_multipart_session(row)
     try:
         s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
     except Exception:
@@ -839,9 +1464,31 @@ def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DEL
     row = _as_dict(row)
     if row["status"] not in ("available", "pending"):
         raise HTTPException(status_code=409, detail="object not deletable")
+    if row["status"] == "pending":
+        # Parts of an unfinished multipart upload are not an object yet: free them.
+        _abort_multipart_session(row)
     repo.set_status(oid, "deleted")
     audit_event("delete", principal["id"], "success", {"object_id": oid})
     return {"id": oid, "status": "deleted"}
+
+
+@app.post("/api/v1/objects/{oid}/restore")
+def restore_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
+    # Undo a soft delete (trash). Same scope as the delete it reverses. Only a
+    # committed object can come back: a pending intent that was soft-deleted
+    # never received its bytes (size_bytes stays -1), so it is not restorable.
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != DELETED:
+        raise HTTPException(status_code=409, detail="object is not in the trash")
+    if row["size_bytes"] < 0:
+        raise HTTPException(status_code=409, detail="object was never uploaded")
+    repo.set_status(oid, AVAILABLE)
+    audit_event("restore", principal["id"], "success", {"object_id": oid})
+    return _object_public(repo.get_object(oid, **_object_scope(principal)))
 
 
 @app.patch("/api/v1/objects/{oid}")
@@ -868,6 +1515,138 @@ def update_object(
         "object_id": oid, "folder_id": body.folder_id,
     })
     return _object_public(repo.get_object(oid, **_object_scope(principal)))
+
+
+@app.post("/api/v1/objects/{oid}/share")
+def create_object_share(
+    oid: str, body: ShareIn,
+    principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
+):
+    """Mint a public, read-only, revocable link for one object.
+
+    Human-only on purpose: a leaked machine token must not be able to mint
+    unauthenticated links. Everything about the link is bounded server-side --
+    expiry, an optional use ceiling and the content type that may render inline.
+    The token is returned once and never stored in clear text.
+    """
+    oid = _canonical_id(oid, "object id")
+    found = repo.get_object(oid, **_object_scope(principal))
+    if found is None:
+        # 404 (not 403) so a caller cannot probe for objects outside its scope.
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(found)
+    if row["status"] != AVAILABLE:
+        raise HTTPException(status_code=409, detail="object not available")
+
+    expires_in = (
+        settings.share_ttl_default if body.expires_in is None else body.expires_in
+    )
+    if expires_in > settings.share_ttl_max:
+        raise HTTPException(
+            status_code=422,
+            detail="expires_in exceeds the maximum share lifetime",
+        )
+    if body.content_disposition == "inline" and not shares.inline_allowed(row["content_type"]):
+        # Active documents (text/html, image/svg+xml, ...) stay download-only.
+        raise HTTPException(
+            status_code=422,
+            detail="inline is not allowed for this content type; use attachment",
+        )
+
+    token = shares.new_token()
+    expires_at = int(time.time()) + expires_in
+    sid = repo.create_share(
+        object_id=oid,
+        space_id=row["space_id"],
+        created_by=principal["id"],
+        created_by_kind=principal["kind"],
+        token_hash=shares.fingerprint(token),
+        expires_at=expires_at,
+        content_disposition=body.content_disposition,
+        max_uses=body.max_uses,
+    )
+    audit_event("share-create", principal["id"], "success", {
+        "object_id": oid, "share_id": sid, "expires_in": expires_in,
+        "max_uses": body.max_uses,
+        "content_disposition": body.content_disposition,
+    })
+    path = f"/s/{token}"
+    return {
+        "id": sid, "object_id": oid,
+        # Absolute when AURA_SHARE_BASE_URL is configured (never derived from the
+        # request Host header, which the client controls).
+        "url": f"{settings.share_base_url}{path}" if settings.share_base_url else path,
+        # Returned exactly once: the catalogue only keeps the SHA-256 fingerprint.
+        "token": token,
+        "expires_in": expires_in, "expires_at": expires_at,
+        "max_uses": body.max_uses,
+        "content_disposition": body.content_disposition,
+    }
+
+
+@app.get("/api/v1/objects/{oid}/shares")
+def list_object_shares(
+    oid: str, principal: dict = Depends(authorize(OBJECTS_READ)),
+):
+    """List the links created for an object (never the tokens themselves)."""
+    oid = _canonical_id(oid, "object id")
+    if repo.get_object(oid, **_object_scope(principal)) is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    now = int(time.time())
+    items = []
+    for row in repo.list_shares(oid):
+        row = _as_dict(row)
+        max_uses = row["max_uses"]
+        items.append({
+            "id": row["id"], "object_id": row["object_id"],
+            "created_by": row["created_by"], "created_by_kind": row["created_by_kind"],
+            "content_disposition": row["content_disposition"],
+            "created_at": row["created_at"], "expires_at": row["expires_at"],
+            "max_uses": max_uses, "use_count": row["use_count"],
+            "last_used_at": row["last_used_at"], "revoked_at": row["revoked_at"],
+            # Computed here so a client never re-implements the expiry,
+            # exhaustion and revocation rules and drifts from the server.
+            "active": (
+                row["revoked_at"] is None
+                and int(row["expires_at"]) > now
+                and (max_uses is None or int(row["use_count"]) < int(max_uses))
+            ),
+        })
+    return {"items": items}
+
+
+@app.delete("/api/v1/objects/{oid}/shares/{sid}")
+def revoke_object_share(
+    oid: str, sid: str,
+    principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
+):
+    """Revoke a share link immediately. Idempotent.
+
+    Only the creator may revoke. The object lookup above is already owner-scoped
+    for humans, so this is defence in depth: it keeps the rule explicit if object
+    visibility ever widens. Note that an admin cannot reach another user's
+    objects through this API (same rule as every other object route), so a
+    departing operator's links must be revoked before the account is closed.
+    """
+    oid = _canonical_id(oid, "object id")
+    sid = _canonical_id(sid, "share id")
+    if repo.get_object(oid, **_object_scope(principal)) is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    found = repo.get_share(sid)
+    if found is None or found["object_id"] != oid:
+        raise HTTPException(status_code=404, detail="share not found")
+    row = _as_dict(found)
+    if row["created_by"] != principal["id"]:
+        raise HTTPException(status_code=403, detail="forbidden")
+    if row["revoked_at"] is not None:
+        # Revoking twice is not an error and never rewrites the original time.
+        return {"id": sid, "revoked": True, "revoked_at": row["revoked_at"]}
+    now = int(time.time())
+    repo.revoke_share(sid, now)
+    audit_event("share-revoke", principal["id"], "success", {
+        "object_id": oid, "share_id": sid,
+    })
+    return {"id": sid, "revoked": True, "revoked_at": now}
 
 
 @app.post("/api/v1/objects/{oid}/purge")
@@ -897,6 +1676,20 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
     row = _as_dict(row)
     if row["status"] != "available":
         raise HTTPException(status_code=409, detail="object not available")
+    # Lazy integrity check (G1 / invariant S10): a published row must still
+    # match the bytes behind it. A divergence blocks the download until re-verified.
+    try:
+        head = s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
+        if int(head.get("ContentLength", -1)) != int(row["size_bytes"]) or (
+            settings.require_sse and head.get("ServerSideEncryption") != SSE_ALGORITHM
+        ):
+            repo.set_status(oid, "suspect")
+            raise HTTPException(status_code=409, detail="object integrity suspect")
+    except HTTPException:
+        raise
+    except Exception:
+        # Storage unreachable: do not block on a transient failure.
+        pass
     url = presigned_get(s3, row["bucket"], row["object_key"], settings.intent_ttl)
     audit_event("download-intent", principal["id"], "success", {"object_id": oid})
     return {
@@ -906,7 +1699,26 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
         "display_name": row["display_name"], "content_type": row["content_type"],
         "size_bytes": row["size_bytes"], "checksum_sha256": row["checksum_sha256"],
         "checksum_algorithm": "sha256",
+        "range_supported": True, "accept_ranges": "bytes",
+        "content_encoding": row.get("content_encoding"),
     }
+
+
+# Media types that may be rendered in place. Anything that can carry script or
+# markup (text/html, image/svg+xml, xml, ...) is deliberately absent: a
+# user-uploaded file must never execute from the storage origin. Everything not
+# listed here is offered as a download instead (415 from preview-intent).
+PREVIEWABLE_CONTENT_TYPES = frozenset({
+    "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif",
+    "application/pdf",
+    "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg",
+    "audio/webm", "audio/mp4", "audio/aac", "audio/flac",
+})
+
+
+def is_previewable(content_type: str) -> bool:
+    """True when `content_type` (parameters ignored) may be previewed inline."""
+    return (content_type or "").split(";", 1)[0].strip().lower() in PREVIEWABLE_CONTENT_TYPES
 
 
 @app.post("/api/v1/objects/{oid}/preview-intent")
@@ -915,8 +1727,9 @@ def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)))
     # an existence oracle) and same 409 (only available objects are previewable).
     # The difference is the presigned GET is bound to ``Content-Disposition:
     # inline`` and the object's own content type, so the browser renders PDFs,
-    # images and audio in place; the frontend falls back to a download when the
-    # type is not renderable. No storage coordinates are echoed back.
+    # images and audio in place. Only the allow-listed types above are served
+    # inline (415 otherwise: the frontend offers a download). No storage
+    # coordinates are echoed back.
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -924,6 +1737,8 @@ def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)))
     row = _as_dict(row)
     if row["status"] != "available":
         raise HTTPException(status_code=409, detail="object not available")
+    if not is_previewable(row["content_type"]):
+        raise HTTPException(status_code=415, detail="preview not supported for this content type")
     url = presigned_get(
         s3, row["bucket"], row["object_key"], settings.intent_ttl,
         content_disposition="inline", content_type=row["content_type"],
@@ -1092,11 +1907,10 @@ def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, 
         raise HTTPException(status_code=409, detail="folder is not empty")
     if repo.folder_object_count(fid, owner_id=owner_id) > 0:
         raise HTTPException(status_code=409, detail="folder is not empty")
-    # Soft-deleted objects no longer block the delete (they are hidden from
-    # every listing); detach their folder reference before removing the folder
-    # so ``objects.folder_id`` is never left dangling on PostgreSQL. This is what
-    # lets the explorer's cascade flow finish: it soft-deletes the files first,
-    # then removes the now-empty folders from the leaves up.
+    # Soft-deleted objects are hidden from every listing, so the folder reads as
+    # empty: drop their folder reference before removing the row, otherwise the
+    # objects_folder_id_fkey constraint refuses the delete on PostgreSQL. The
+    # rows survive until an explicit purge of the trash.
     repo.detach_soft_deleted_objects(fid, owner_id=owner_id)
     repo.delete_folder(fid, owner_id=owner_id)
     audit_event("folder.delete", principal["id"], "success", {"folder_id": fid})
@@ -1117,8 +1931,59 @@ def reconcile(limit: int = 500,
     # relying on reconcile_pending's own default: an intent must never be swept
     # while its grace window could still accept a legitimate commit.
     expire_after_s = settings.intent_ttl + settings.intent_grace_s
-    out = reconcile_pending(repo, s3ops, expire_after_s=expire_after_s, limit=limit)
+    out = reconcile_pending(
+        repo, s3ops, expire_after_s=expire_after_s, limit=limit,
+        multipart_expired_before=int(time.time()) - settings.intent_grace_s,
+    )
+    # Finish purges a crashed process left half-done (two-phase purge).
+    from .lifecycle import resume_purges
+    out.update(resume_purges(repo, s3ops, limit=limit))
     audit_event("admin.reconcile", principal["id"], "success", out)
+    return out
+
+
+@app.post("/api/v1/admin/reconcile-terminal")
+def reconcile_terminal_route(limit: int = 500,
+                            principal: dict = Depends(authorize(ADMIN_WRITE))):
+    limit = max(1, min(limit, 5000))
+    out = reconcile_terminal(repo, s3ops, limit=limit)
+    audit_event("admin.reconcile_terminal", principal["id"], "success", out)
+    return out
+
+
+@app.post("/api/v1/admin/reconcile-reverse")
+def reconcile_reverse_route(dry_run: bool = True,
+                           principal: dict = Depends(authorize(ADMIN_WRITE))):
+    out = reconcile_reverse(repo, s3ops, dry_run=dry_run)
+    audit_event("admin.reconcile_reverse", principal["id"], "success", out)
+    return out
+
+
+@app.get("/api/v1/admin/integrity")
+def integrity_report(limit: int = 100,
+                     principal: dict = Depends(authorize(ADMIN_READ))):
+    """Periodic scrub results: counts per result and the objects at fault.
+
+    ``mismatch`` means the stored bytes no longer match the SHA-256 verified at
+    import; ``missing`` means the storage lost the object. Both call for a
+    restore from backup; nothing is changed automatically.
+    """
+    limit = max(1, min(limit, 500))
+    summary = repo.integrity_summary()
+    problems = [_as_dict(r) for r in repo.list_integrity_problems(limit=limit)]
+    return {
+        "interval_days": settings.scrub_interval_days,
+        "results": summary,
+        "problems": problems,
+    }
+
+
+@app.post("/api/v1/admin/integrity/scrub")
+def integrity_scrub_now(principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Run one bounded scrub pass now (same byte budget as the periodic one)."""
+    from .scrubber import scrub_run
+    out = scrub_run(repo, s3ops, settings, audit=audit_event)
+    audit_event("admin.scrub", principal["id"], "success", out)
     return out
 
 
@@ -1148,6 +2013,78 @@ def list_orphan_candidates(limit: int = 100,
             })
     return {"checked": checked, "candidates": candidates,
             "checked_at": int(time.time())}
+
+
+@app.get("/api/v1/admin/storage-orphans")
+def storage_orphans(
+    bucket: str | None = Query(default=None, max_length=63),
+    start_after: str | None = Query(default=None, max_length=1024),
+    max_keys: int = 5000,
+    principal: dict = Depends(authorize(ADMIN_READ)),
+):
+    """Read-only: storage bytes the catalogue does not account for (#87).
+
+    Bounded per call (``max_keys`` per bucket) and resumable with the returned
+    ``next_start_after``. Only registered buckets are scanned.
+    """
+    from .storage_reconcile import scan_bucket, scan_multipart
+    max_keys = max(1, min(max_keys, 50_000))
+    names = [b["name"] for b in repo.list_all_buckets()]
+    if bucket is not None:
+        if bucket not in names:
+            raise HTTPException(status_code=404, detail="bucket not registered")
+        names = [bucket]
+    out = []
+    for name in names:
+        try:
+            report = scan_bucket(repo, s3ops, name, grace_s=settings.orphan_grace_s,
+                                 max_keys=max_keys, start_after=start_after)
+            report["stale_uploads"] = scan_multipart(
+                repo, s3ops, name, grace_s=settings.orphan_grace_s,
+            )
+        except Exception:
+            out.append({"bucket": name, "error": "storage unavailable"})
+            continue
+        out.append(report)
+    return {"grace_seconds": settings.orphan_grace_s, "buckets": out,
+            "checked_at": int(time.time())}
+
+
+class OrphanUploadIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(min_length=1, max_length=1024)
+    upload_id: str = Field(min_length=1, max_length=1024)
+
+
+class OrphanCleanupIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    bucket: str = Field(min_length=1, max_length=63)
+    keys: list[str] = Field(default_factory=list, max_length=100)
+    uploads: list[OrphanUploadIn] = Field(default_factory=list, max_length=100)
+
+
+@app.post("/api/v1/admin/storage-orphans/cleanup")
+def storage_orphans_cleanup(
+    body: OrphanCleanupIn, principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Destructive, explicit: remove listed orphan keys / abort listed uploads.
+
+    Each item is re-checked just before acting (still unaccounted for, older
+    than the grace period, inside the AURA key prefix); anything else is
+    skipped with a reason. At most 100 keys and 100 uploads per call.
+    """
+    from .storage_reconcile import remove_orphans
+    if body.bucket not in {b["name"] for b in repo.list_all_buckets()}:
+        raise HTTPException(status_code=404, detail="bucket not registered")
+    out = remove_orphans(
+        repo, s3ops, body.bucket, body.keys,
+        [u.model_dump() for u in body.uploads], grace_s=settings.orphan_grace_s,
+    )
+    audit_event("admin.storage-orphans.cleanup", principal["id"], "success", {
+        "bucket": body.bucket, "removed": len(out["removed"]),
+        "aborted_uploads": len(out["aborted_uploads"]), "skipped": len(out["skipped"]),
+    })
+    return out
 
 
 @app.get("/api/v1/admin/stats")
@@ -1263,6 +2200,8 @@ def admin_usage(
             "intent_ttl": settings.intent_ttl,
             "allow_empty_objects": settings.allow_empty_objects,
         },
+        # Capacity guard (null when AURA_STORAGE_CAPACITY_BYTES is not set).
+        "capacity": _capacity(),
         "totals": {
             "objects_by_status": totals_by_status,
             "available_count": total_available,
@@ -1300,7 +2239,7 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
         components["database"] = {"status": "down", "error": "unreachable"}
     start = time.monotonic()
     try:
-        s3ops.list_buckets()
+        s3probe.list_buckets()
         components["storage"] = {
             "status": "ok",
             "latency_ms": int((time.monotonic() - start) * 1000),
@@ -1309,11 +2248,7 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
     except Exception:
         components["storage"] = {"status": "down", "error": "unreachable"}
     try:
-        # Measure the volume that HOLDS the audit log, not the file itself:
-        # ``shutil.disk_usage`` stats the exact path, so a log not written yet
-        # (fresh container, no request audited) would wrongly report the disk as
-        # unreadable. ``audit_path()`` may be relative (dev), hence the "." fallback.
-        disk = shutil.disk_usage(os.path.dirname(audit_path()) or ".")
+        disk = shutil.disk_usage(audit_path())
         components["disk"] = {
             "status": "ok", "total_bytes": disk.total,
             "used_bytes": disk.used, "free_bytes": disk.free,
@@ -1321,6 +2256,18 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
         }
     except OSError:
         components["disk"] = {"status": "down", "error": "unreadable"}
+    # The automatic reconciliation sweep (#144): its last counters show that it
+    # runs without an operator. Never fatal for the service: a failed sweep is
+    # reported, the next one retries.
+    from .reconciler import last_sweep
+    sweep = last_sweep()
+    components["reconcile"] = {
+        "status": "ok",
+        "enabled": settings.reconcile_enabled,
+        "interval_s": settings.reconcile_interval_s,
+        "last_sweep": sweep,
+        "note": None if sweep else "no sweep yet",
+    }
     errors, scanned = recent_error_events(
         window_s=settings.audit_error_window_s, limit=5,
         max_scan_lines=settings.audit_error_scan_lines,
