@@ -169,3 +169,12 @@ test("the mobile drawer traps focus and returns it to the menu button", async ({
   await expect(drawer).toHaveCount(0);
   await expect(opener).toBeFocused();
 });
+
+test("the skip link moves focus to main content", async ({ page }) => {
+  await setup(page);
+  await page.keyboard.press("Tab");
+  const skip = page.getByRole("link", { name: "Aller au contenu principal" });
+  await expect(skip).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#main-content")).toBeFocused();
+});
