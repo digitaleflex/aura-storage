@@ -70,16 +70,18 @@ def test_login_cookie_is_not_the_stored_id():
 
 def test_unknown_username_still_verifies_a_hash(monkeypatch):
     main.reset_login_attempts()
-    dummy_calls = []
-    real_calls = []
+    verified = []
+    real_verify = main.verify_password
 
-    monkeypatch.setattr(main, "verify_dummy", lambda: dummy_calls.append(True))
-    monkeypatch.setattr(main, "verify_password",
-                        lambda *a, **k: real_calls.append(a) or False)
+    def spy(stored_hash, password):
+        verified.append(stored_hash)
+        return real_verify(stored_hash, password)
+
+    monkeypatch.setattr(main, "verify_password", spy)
     c = TestClient(main.app)
     r = c.post("/api/v1/login", json={"username": "no-such-user", "password": "x"})
     assert r.status_code == 401
-    # One dummy verification, and no stored hash is touched.
-    assert dummy_calls == [True]
-    assert real_calls == []
+    # Exactly one verification, against the throwaway hash: an unknown username
+    # costs the same argon2 work as a known one and no stored hash is touched.
+    assert verified == [main._DUMMY_PASS_HASH]
     main.reset_login_attempts()
