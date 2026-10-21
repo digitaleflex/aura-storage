@@ -147,7 +147,7 @@ test("upload shows name/size and confirms success only after commit", async ({ p
   await chooseFile(page, "rapport.pdf");
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
-  const status = page.getByTestId("transfer-status");
+  const status = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
   await expect(status).toContainText("rapport.pdf");
   await expect(status).toContainText("11 o");
   await expect(status).toContainText("Disponible");
@@ -168,7 +168,7 @@ test("blocks an accidental double submission", async ({ page }) => {
   // control is offered, so a second submit cannot create a second intent.
   await expect(page.getByRole("button", { name: "Annuler" })).toBeVisible();
   await expect(submit).toBeDisabled();
-  await expect(page.getByTestId("transfer-status")).toContainText("Disponible");
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status")).toContainText("Disponible");
 
   expect(mocks.intentCount()).toBe(1);
 });
@@ -196,7 +196,7 @@ test("recovers from an expired presigned URL with a fresh intent", async ({ page
   await chooseFile(page);
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
-  await expect(page.getByTestId("transfer-status")).toContainText("Disponible");
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status")).toContainText("Disponible");
   expect(mocks.calls.filter((call) => call === "intent")).toHaveLength(2);
   expect(mocks.calls.filter((call) => call === "put")).toHaveLength(1);
 });
