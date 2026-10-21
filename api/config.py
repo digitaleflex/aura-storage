@@ -81,6 +81,8 @@ class Settings:
     login_rate_window: int = _int("AURA_LOGIN_RATE_WINDOW", 60)
     # Machine-to-machine authentication failure rate limit (per client IP; #38).
     m2m_rate_limit: int = _int("AURA_M2M_RATE_LIMIT", 60)
+    quota_bytes_per_day: int = _int("AURA_QUOTA_BYTES_PER_DAY", 0)
+    quota_files_per_day: int = _int("AURA_QUOTA_FILES_PER_DAY", 0)
     m2m_rate_window: int = _int("AURA_M2M_RATE_WINDOW", 60)
     # Reverse proxies trusted to set X-Forwarded-For when resolving the client
     # IP for the rate limiters (#35/#38). Comma-separated IPs or CIDRs; defaults

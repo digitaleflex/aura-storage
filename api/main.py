@@ -74,6 +74,15 @@ from .transfer import (
 )
 
 app = FastAPI(title="AURA Management API", version="0.2.0")
+
+# Server-side idempotent response cache (D2): short-lived memo of commit/abort
+# results keyed by (route, idempotency-key, object id) so a client retry does
+# not re-run the integrity check. TTL is short; the catalogue remains the truth.
+_RESP_CACHE: dict = {}
+_RESP_CACHE_TTL = 300
+
+# Simple per-space daily quota (D3). 0 disables.
+_QUOTA: dict = {}
 # uvicorn installs handlers on its own loggers only and leaves the root logger
 # handler-free, so an INFO record from "api.main" is dropped by logging's
 # lastResort handler (WARNING). Route through the logger uvicorn configures so
@@ -872,6 +881,22 @@ def upload_intent(
                 "expires_in": 0, "expires_at": None, "idempotent_replay": True,
             }
 
+    # Daily quota (D3): reject early with 429 when the space exceeds its budget.
+    if settings.quota_bytes_per_day > 0 or settings.quota_files_per_day > 0:
+        space = space_id
+        today = int(time.time()) // 86400
+        q = _QUOTA.setdefault(space, {"day": today, "bytes": 0, "files": 0})
+        if q["day"] != today:
+            q["day"] = today
+            q["bytes"] = 0
+            q["files"] = 0
+        if (settings.quota_files_per_day > 0 and q["files"] >= settings.quota_files_per_day) or (
+            settings.quota_bytes_per_day > 0 and q["bytes"] + body.size_bytes > settings.quota_bytes_per_day
+        ):
+            raise HTTPException(status_code=429, detail="quota exceeded")
+        q["files"] += 1
+        q["bytes"] += body.size_bytes
+
     if repo.count_pending(**_object_scope(principal)) >= settings.max_pending_intents:
         raise HTTPException(status_code=429, detail="too many pending uploads")
     _check_capacity(body.size_bytes)
@@ -1120,15 +1145,45 @@ def multipart_part_urls(
     return {"id": row["id"], "expires_in": settings.intent_ttl, "parts": parts}
 
 
+def _cache_key(route: str, oid: str, idem: str | None) -> str | None:
+    if not idem:
+        return None
+    return f"{route}:{oid}:{idem}"
+
+
+def _cache_get(key: str | None):
+    if key is None:
+        return None
+    entry = _RESP_CACHE.get(key)
+    if entry is None:
+        return None
+    if time.time() - entry[0] > _RESP_CACHE_TTL:
+        _RESP_CACHE.pop(key, None)
+        return None
+    return entry[1], entry[2]
+
+
+def _cache_set(key: str | None, status: int, body):
+    if key is None:
+        return
+    _RESP_CACHE[key] = (time.time(), status, body)
+
+
 @app.post("/api/v1/objects/{oid}/commit")
 def commit_object(
-    oid: str, response: Response,
+    oid: str, response: Response, request: Request,
     principal: dict = Depends(authorize(OBJECTS_WRITE)),
 ):
-    # Instrumentation only: timings for the pilot latency distribution. No
-    # behaviour change -- the header and log line are the sole additions.
     started = time.perf_counter()
     oid = _canonical_id(oid, "object id")
+    idem = request.headers.get("idempotency-key") if "request" in globals() else None
+    # D2: serve a cached result for a retried commit with the same key.
+    ck = _cache_key("commit", oid, idem)
+    cached = _cache_get(ck)
+    if cached is not None:
+        status, body = cached
+        response.status_code = status
+        return body
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")
@@ -1269,10 +1324,12 @@ def commit_object(
     )
     log.info("commit timings oid=%s bytes=%d head_ms=%.1f hash_ms=%.1f total_ms=%.1f",
              oid, size, head_ms, hash_ms, total_ms)
-    return {
+    result = {
         "id": oid, "status": "available", "size_bytes": size,
         "checksum_sha256": digest, "checksum_algorithm": "sha256",
     }
+    _cache_set(ck, 200, result)
+    return result
 
 
 @app.post("/api/v1/objects/{oid}/abort")
