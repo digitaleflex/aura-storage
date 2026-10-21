@@ -147,7 +147,22 @@ def authenticate(request: Request) -> dict:
         "space_status": space.get("status") if space else None,
         "session_id": session["id"],
         "csrf": session["csrf"],
+        "master_until": _row_get(session, "master_until"),
     }
+
+
+def _row_get(row, key: str):
+    """Column of a sqlite3.Row or a dict, None when absent (pre-migration row)."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def master_mode_active(principal: dict, now: float | None = None) -> bool:
+    """True while the caller's session holds a password-confirmed elevation."""
+    until = principal.get("master_until")
+    return bool(until) and int(until) > int(now if now is not None else time.time())
 
 
 def effective_scopes(principal: dict) -> frozenset:

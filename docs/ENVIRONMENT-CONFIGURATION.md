@@ -8,20 +8,12 @@ Environment-specific values belong in the local `.env`. Keep service topology an
 
 - `AURA_INSTANCE_ID`: local container name prefix, e.g. `aura-001`.
 - `TZ`: container timezone.
-- `TRAEFIK_IMAGE`, `SEAWEEDFS_IMAGE`, `POSTGRES_IMAGE`: reviewed image references.
+- `TRAEFIK_IMAGE`, `SEAWEEDFS_IMAGE`: reviewed image references.
 - `S3_DOMAIN`: public hostname routed to the S3 gateway.
 - `ACME_EMAIL`: certificate notifications.
 - `AURA_DATA_DIR`: persistent data root. Prefer an absolute path on the intended filesystem.
 - `SEAWEED_VOLUME_SIZE_LIMIT_MB`, `SEAWEED_VOLUME_MAX`: SeaweedFS capacity controls.
 - `S3_ACCESS_KEY`, `S3_SECRET_KEY`: initial S3 credentials injected into generated local config.
-- `APP_DOMAIN`: public hostname serving the app (nginx) at the domain root; nginx proxies `/api/` to the API service.
-- `DASHBOARD_DOMAIN`: public hostname routing the Traefik dashboard.
-- `DASHBOARD_AUTH`: dashboard BasicAuth entry in `user:bcrypt-hash` format; generate locally with an htpasswd-style tool and never commit it.
-- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`: catalogue database name, user and password (internal network only, no published ports).
-- `AURA_API_ADMIN_USER`, `AURA_API_ADMIN_PASSWORD`: bootstrap API administrator; the password is hashed with argon2 on first boot.
-- `WEED_S3_SSE_KEK`: 64-hex-character SSE-S3 key. Critical gate: loss may make encrypted objects unrecoverable; keep an offline copy (see the SSE-S3 section below).
-
-The `api` service also receives the local `.env` as its `env_file`, so the `AURA_*` tuning variables can be set there; explicit values in the Compose `environment:` block still take precedence over `env_file`.
 
 ## First setup
 
@@ -38,25 +30,15 @@ The generator creates `config/seaweedfs/s3.json` from the tracked example and lo
 
 The generator currently injects the configured credentials into the placeholder credential fields in the example identity. Review the example's permissions and confirm policy/action syntax for the exact SeaweedFS release. Do not use a broad Admin identity for routine application access; create least-privilege identities as the service evolves.
 
-### Restricted S3 identity (not activated)
-
-`config/seaweedfs/s3-restricted.json.example` sketches a bucket/prefix-scoped
-identity (e.g. `Read/Write/List:aura-api-test`) for the least-privilege runtime
-identity promised above. It is **example only and not wired**: it is referenced
-by no script or Compose service, and `scripts/generate-config.sh` still generates
-a single Admin identity from `config/seaweedfs/s3.json.example`. Treat it as
-specified-but-not-implemented and validate the action/bucket scoping syntax
-against the exact SeaweedFS release before any use.
-
 ## Management API configuration
 
 The API container reads its own settings from Compose/environment (see `docker-compose.yml` and `api/config.py`). Secrets (`AURA_API_ADMIN_PASSWORD`, `S3_ACCESS_KEY`/`S3_SECRET_KEY`, `POSTGRES_PASSWORD`, the SSE-S3 key) live only in the local `.env`.
 
 - `AURA_API_ADMIN_USER` / `AURA_API_ADMIN_PASSWORD`: bootstrap administrator, created on first boot with an argon2-hashed password.
 - `AURA_API_BACKEND` / `AURA_API_DSN`: catalogue backend; the Compose stack uses PostgreSQL.
-- `AURA_SESSION_TTL`: human session cookie lifetime in seconds. Default `28800` (8 hours) in the Docker Compose stack (explicitly pinned in the `api` service) and in the runtime configuration; the expiry is fixed at login and the cookie is HttpOnly, `Secure` and `SameSite=Strict`. Lengthen it in `.env` for lower-value deployments if necessary (e.g. `2592000` for 30 days), weighing the wider theft window.
-- `AURA_AUDIT_LOG`: absolute path of the JSON-lines audit trail. The Compose stack pins `/var/lib/aura/audit/aura-audit.jsonl` on the persistent `api-audit` volume, so events survive container recreations; `api/config.py` defaults to a relative path for local/dev runs. The `/admin/health` disk probe measures the containing directory, not the file, so a not-yet-written log never reports the disk as unreadable.
-- Optional guard rails (sensible defaults in `api/config.py`; uncomment in `.env` to override): `AURA_SESSION_TTL`, `AURA_INTENT_TTL`, `AURA_INTENT_GRACE_SECONDS`, `AURA_MAX_OBJECT_BYTES`, `AURA_COMMIT_CHUNK_BYTES`, `AURA_MAX_PENDING_INTENTS`, `AURA_M2M_RATE_LIMIT`, `AURA_M2M_RATE_WINDOW`, `AURA_LOGIN_RATE_LIMIT`, `AURA_LOGIN_RATE_WINDOW`.
+- `AURA_SESSION_TTL`: human session cookie lifetime in seconds. Default `7776000` (90 days); the expiry is fixed at login and the cookie is HttpOnly, `Secure` and `SameSite=Strict`. Shorten it for higher-value deployments.
+- Optional guard rails (sensible defaults in `api/config.py`; uncomment in `.env` to override): `AURA_SESSION_TTL`, `AURA_INTENT_TTL`, `AURA_INTENT_GRACE_SECONDS`, `AURA_MAX_OBJECT_BYTES`, `AURA_COMMIT_CHUNK_BYTES`, `AURA_MAX_PENDING_INTENTS`, `AURA_M2M_RATE_LIMIT`, `AURA_M2M_RATE_WINDOW`, `AURA_LOGIN_RATE_LIMIT`, `AURA_LOGIN_RATE_WINDOW`, and the multipart settings `AURA_MULTIPART_ENABLED` (default `0`), `AURA_MULTIPART_THRESHOLD_BYTES`, `AURA_MULTIPART_PART_BYTES`, `AURA_MULTIPART_MAX_OBJECT_BYTES`, `AURA_MULTIPART_SESSION_TTL` (see `docs/MULTIPART-UPLOAD-PLAN.md`), and the integrity worker settings `AURA_VERIFY_ASYNC_THRESHOLD_BYTES` (default 256 MiB), `AURA_VERIFY_WORKER` (`inline` or `off`), `AURA_VERIFY_LEASE_SECONDS`, `AURA_VERIFY_HEARTBEAT_BYTES`, `AURA_VERIFY_MAX_ATTEMPTS`, `AURA_VERIFY_POLL_SECONDS` (see `api/verifier.py`), and master mode `AURA_MASTER_MODE_SECONDS` (default 900) / `AURA_MASTER_BULK_MAX` (default 500).
+- Optional guard rails (sensible defaults in `api/config.py`; uncomment in `.env` to override): `AURA_SESSION_TTL`, `AURA_INTENT_TTL`, `AURA_INTENT_GRACE_SECONDS`, `AURA_MAX_OBJECT_BYTES`, `AURA_COMMIT_CHUNK_BYTES`, `AURA_MAX_PENDING_INTENTS`, `AURA_M2M_RATE_LIMIT`, `AURA_M2M_RATE_WINDOW`, `AURA_LOGIN_RATE_LIMIT`, `AURA_LOGIN_RATE_WINDOW`, and the multipart settings `AURA_MULTIPART_ENABLED` (default `0`), `AURA_MULTIPART_THRESHOLD_BYTES`, `AURA_MULTIPART_PART_BYTES`, `AURA_MULTIPART_MAX_OBJECT_BYTES`, `AURA_MULTIPART_SESSION_TTL` (see `docs/MULTIPART-UPLOAD-PLAN.md`), and the integrity worker settings `AURA_VERIFY_ASYNC_THRESHOLD_BYTES` (default 256 MiB), `AURA_VERIFY_WORKER` (`inline` or `off`), `AURA_VERIFY_LEASE_SECONDS`, `AURA_VERIFY_HEARTBEAT_BYTES`, `AURA_VERIFY_MAX_ATTEMPTS`, `AURA_VERIFY_POLL_SECONDS` (see `api/verifier.py`), and the capacity guard `AURA_STORAGE_CAPACITY_BYTES` (default `0` = off) / `AURA_STORAGE_HIGH_WATERMARK` (default 90 %): uploads reserve their declared size and are refused with 507 beyond the watermark, the periodic integrity scrub `AURA_SCRUB_ENABLED` (default `1`), `AURA_SCRUB_INTERVAL_DAYS` (default 30), `AURA_SCRUB_BYTES_PER_RUN` (default 10 GiB), `AURA_SCRUB_PERIOD_SECONDS` (default 3600) (see `api/scrubber.py`), and `AURA_ORPHAN_GRACE_SECONDS` (default 86400; storage orphans younger than this are ignored, see `api/storage_reconcile.py`).
 - `AURA_TRUSTED_PROXIES`: comma-separated IPs/CIDRs whose `X-Forwarded-For` is trusted when resolving the client IP for the rate limiters. Defaults to loopback + RFC1918 (the internal Docker network). The API is only reachable through Traefik and nginx; a client-supplied `X-Forwarded-For` is ignored unless the immediate peer is trusted. The API container runs uvicorn with `--no-proxy-headers` so this in-app resolution owns the client IP; do not enable `--forwarded-allow-ips=*`.
 
 These are technical safety limits, not billing or subscription policy. API authorization, provisioning, rotation and revocation are documented in `docs/AUTHORIZATION-MATRIX.md`.

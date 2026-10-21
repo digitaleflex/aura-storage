@@ -37,6 +37,9 @@ services:
       - traefik-acme:/letsencrypt
     networks:
       - edge
+      # Shared with `api` only, so the docs host can proxy /api/* to the API
+      # without the API joining the public `edge` network.
+      - docs
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -90,6 +93,14 @@ services:
       # derrière firewall/VPN. Plages privées par défaut; ajoute ton IP publique opérateur
       # via `SWAGGER_ADMIN_IP` dans .env (ex: 203.0.113.10/32) avant go-live si accès distant.
       - traefik.http.middlewares.api-docs-allowlist.ipallowlist.sourcerange=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${SWAGGER_ADMIN_IP:-127.0.0.2/32}
+      # `api-docs-auth`: BasicAuth in front of the documentation router. The
+      # allow-list above is a network control: it carries no identity, it is
+      # shared by every host behind the same NAT egress, and it cannot be
+      # revoked per person. This middleware is the credential, so access to the
+      # API surface exposed by Swagger "Try it" is attributable and revocable
+      # on its own. Same pattern as the dashboard's `dash-auth`, same bcrypt
+      # requirement ($2y$/$2b$).
+      - traefik.http.middlewares.api-docs-auth.basicauth.users=${DOCS_AUTH:?Set DOCS_AUTH in .env}
 
       # --- forwardAuth example: DISABLED (no verify endpoint exists today) ---
       # api/main.py exposes /api/v1/login, /api/v1/logout and /api/v1/me, and
@@ -240,22 +251,52 @@ services:
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
       AURA_COOKIE_SECURE: "1"
-      # Human session cookie lifetime (seconds): 8h. Deliberately tighter than the
-      # 90-day value previously pinned on main (deploy/session-90d): a long-lived
-      # cookie widens the theft window for an Internet-facing app. Operators can
-      # still raise it in .env (e.g. 2592000 = 30 days) if a longer session is
-      # required; the expiry is fixed at login (no renewal).
-      AURA_SESSION_TTL: ${AURA_SESSION_TTL:-28800}
-      # Persistent audit log (JSONL) stored on the api-audit volume below, so the
-      # trail survives container recreation and the 90-day retention promise
-      # holds. `api/config.py` defaults to a relative path for dev runs; the
-      # Compose stack pins this absolute one.
+      # Human session cookie lifetime (seconds): 90 days. Pinned here so the
+      # deployed stack matches the documented default (api/config.py). Override
+      # in .env only deliberately; the expiry is fixed at login (no renewal).
+      AURA_SESSION_TTL: "7776000"
+      # Audit trail on a named volume: it must survive image rebuilds and
+      # container recreation (the default path is inside the container).
       AURA_AUDIT_LOG: /var/lib/aura/audit/aura-audit.jsonl
+      # Multipart upload (#72): off until the compatibility gate in
+      # docs/MULTIPART-UPLOAD-PLAN.md passes on the pinned SeaweedFS image.
+      AURA_MULTIPART_ENABLED: ${AURA_MULTIPART_ENABLED:-0}
+      AURA_MULTIPART_THRESHOLD_BYTES: ${AURA_MULTIPART_THRESHOLD_BYTES:-104857600}
+      AURA_MULTIPART_PART_BYTES: ${AURA_MULTIPART_PART_BYTES:-16777216}
+      AURA_MULTIPART_MAX_OBJECT_BYTES: ${AURA_MULTIPART_MAX_OBJECT_BYTES:-1099511627776}
+      AURA_MULTIPART_SESSION_TTL: ${AURA_MULTIPART_SESSION_TTL:-604800}
+      # Asynchronous integrity check (N5): objects at or above the threshold are
+      # hashed by a worker thread in this container, outside the commit request.
+      AURA_VERIFY_ASYNC_THRESHOLD_BYTES: ${AURA_VERIFY_ASYNC_THRESHOLD_BYTES:-268435456}
+      AURA_VERIFY_WORKER: ${AURA_VERIFY_WORKER:-inline}
+      # Master mode: password-confirmed elevation for bulk purges (seconds) and
+      # the most objects one bulk call may purge.
+      AURA_MASTER_MODE_SECONDS: ${AURA_MASTER_MODE_SECONDS:-900}
+      AURA_MASTER_BULK_MAX: ${AURA_MASTER_BULK_MAX:-500}
+      # Capacity guard: usable object-store bytes (0 = off) and the fill level
+      # (%) above which new uploads are refused with 507.
+      AURA_STORAGE_CAPACITY_BYTES: ${AURA_STORAGE_CAPACITY_BYTES:-0}
+      AURA_STORAGE_HIGH_WATERMARK: ${AURA_STORAGE_HIGH_WATERMARK:-90}
+      # Periodic integrity scrub (api/scrubber.py): read-only re-hash of stored
+      # objects, at least once per interval, within a byte budget per hour.
+      AURA_SCRUB_ENABLED: ${AURA_SCRUB_ENABLED:-1}
+      AURA_SCRUB_INTERVAL_DAYS: ${AURA_SCRUB_INTERVAL_DAYS:-30}
+      AURA_SCRUB_BYTES_PER_RUN: ${AURA_SCRUB_BYTES_PER_RUN:-10737418240}
+      # Storage orphans: bytes younger than this are never reported or removed.
+      AURA_ORPHAN_GRACE_SECONDS: ${AURA_ORPHAN_GRACE_SECONDS:-86400}
       # Remaining tunables read by api/config.py (defaults are its exact
       # defaults). Uncomment/override any of them in .env as needed.
       AURA_API_DB: ${AURA_API_DB:-aura-catalogue.db}
       AURA_INTENT_TTL: ${AURA_INTENT_TTL:-900}
       AURA_INTENT_GRACE_SECONDS: ${AURA_INTENT_GRACE_SECONDS:-300}
+      # Public share links (/s/<token>). The base URL is built from APP_DOMAIN,
+      # the same required variable as the app router, so the absolute link
+      # matches the host that actually serves it -- and never comes from a
+      # client-supplied Host header.
+      AURA_SHARE_BASE_URL: https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      AURA_SHARE_TTL_DEFAULT: ${AURA_SHARE_TTL_DEFAULT:-604800}
+      AURA_SHARE_TTL_MAX: ${AURA_SHARE_TTL_MAX:-2592000}
+      AURA_SHARE_PRESIGN_TTL: ${AURA_SHARE_PRESIGN_TTL:-60}
       AURA_AUDIT_RETENTION_DAYS: ${AURA_AUDIT_RETENTION_DAYS:-90}
       AURA_AUDIT_MAX_SCAN_LINES: ${AURA_AUDIT_MAX_SCAN_LINES:-20000}
       AURA_AUDIT_ERROR_SCAN_LINES: ${AURA_AUDIT_ERROR_SCAN_LINES:-5000}
@@ -267,21 +308,65 @@ services:
       AURA_TRUSTED_PROXIES: ${AURA_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       AURA_MAX_OBJECT_BYTES: ${AURA_MAX_OBJECT_BYTES:-5368709120}
       AURA_COMMIT_CHUNK_BYTES: ${AURA_COMMIT_CHUNK_BYTES:-1048576}
+      # Commit deadline (#120). Must stay below the app proxy's read timeout
+      # for the commit route (app/nginx.conf, 310 s) so the API's structured
+      # 504 reaches the client; change both together.
+      AURA_COMMIT_DEADLINE_S: ${AURA_COMMIT_DEADLINE_S:-300}
+      # Automatic reconciliation sweep (#144): stale intents and half-done
+      # purges are cleaned without an operator.
+      AURA_RECONCILE_ENABLED: ${AURA_RECONCILE_ENABLED:-1}
+      AURA_RECONCILE_INTERVAL_SECONDS: ${AURA_RECONCILE_INTERVAL_SECONDS:-300}
+      AURA_RECONCILE_LIMIT: ${AURA_RECONCILE_LIMIT:-500}
+      AURA_RECONCILE_EXTRA_GRACE_SECONDS: ${AURA_RECONCILE_EXTRA_GRACE_SECONDS:-3600}
       AURA_MAX_PENDING_INTENTS: ${AURA_MAX_PENDING_INTENTS:-100}
       AURA_ALLOW_EMPTY_OBJECTS: ${AURA_ALLOW_EMPTY_OBJECTS:-0}
       AURA_ALLOWED_CONTENT_TYPES: "${AURA_ALLOWED_CONTENT_TYPES:-}"
       AURA_IDEMPOTENCY_KEY_MAX: ${AURA_IDEMPOTENCY_KEY_MAX:-200}
-      # No origin/CORS allow-list here on purpose: the api has no Traefik route
-      # and is reached same-origin through the app proxy (app/nginx.conf proxies
-      # /api/ to this service). Browser uploads go straight to SeaweedFS via
-      # presigned URLs, so any CORS belongs to the SeaweedFS S3 gateway.
+      # No origin/CORS allow-list here on purpose: the api is reached same-origin
+      # through two *proxies* — the app proxy (`app/nginx.conf` forwards /api/) and,
+      # for the documentation UI only, the `aura-swagger-api` router on the docs
+      # host. Both keep the browser on one origin, so Swagger "Try it" needs no
+      # CORS at all. Browser uploads go straight to SeaweedFS via presigned URLs,
+      # so any CORS belongs to the SeaweedFS S3 gateway.
     volumes:
-      # The audit trail lives outside the container layer (named volume), so it
-      # survives recreation and upgrades. Bounded by AURA_AUDIT_RETENTION_DAYS;
-      # never mount this into another service.
-      - api-audit:/var/lib/aura/audit
+      - audit-log:/var/lib/aura/audit
     networks:
       - storage
+      # `docs` is a dedicated internal network shared with Traefik only. It lets
+      # the docs host proxy /api/* here (same-origin "Try it") without attaching
+      # the API to the public `edge` network, where SeaweedFS and the app
+      # containers could dial it directly. Internal like `storage`, so the API
+      # keeps its current (no Internet) connectivity.
+      - docs
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aura-docs
+      # Same-origin API for the documentation host. The docs page is served from
+      # `${SWAGGER_DOMAIN}` and calls /api/... there, so the session cookie and
+      # the CSRF header stay same-origin and no CORS allow-list is needed.
+      - traefik.http.routers.aura-swagger-api.rule=Host(`${SWAGGER_DOMAIN:-docs.aura-storage.eurinhash.com}`) && PathPrefix(`/api/`)
+      # Higher than the docs catch-all router (priority 100) so /api/* reaches the
+      # API, not the static Swagger UI.
+      - traefik.http.routers.aura-swagger-api.priority=200
+      - traefik.http.routers.aura-swagger-api.entrypoints=websecure
+      - traefik.http.routers.aura-swagger-api.tls=true
+      - traefik.http.routers.aura-swagger-api.tls.certresolver=le
+      # Same two gates as the docs UI: network allow-list first, then credential.
+      - traefik.http.routers.aura-swagger-api.middlewares=api-docs-allowlist,api-docs-auth,api-ratelimit,api-secure-headers
+      - traefik.http.services.aura-swagger-api.loadbalancer.server.port=8000
+      # Public share links: Host(APP_DOMAIN) + /s/* goes straight to the API,
+      # never through the SPA. Priority 200 beats the app catch-all router so
+      # nginx never sees these requests and cannot answer with index.html.
+      # This is the ONLY unauthenticated API surface; the token is the
+      # credential, so the guard here is the edge rate limit rather than a
+      # second factor. No CORS: a share link is navigated, not fetched.
+      - traefik.http.routers.aura-share.rule=Host(`${APP_DOMAIN:?Set APP_DOMAIN in .env}`) && PathPrefix(`/s/`)
+      - traefik.http.routers.aura-share.priority=200
+      - traefik.http.routers.aura-share.entrypoints=websecure
+      - traefik.http.routers.aura-share.tls=true
+      - traefik.http.routers.aura-share.tls.certresolver=le
+      - traefik.http.routers.aura-share.middlewares=api-ratelimit,api-secure-headers
+      - traefik.http.services.aura-share.loadbalancer.server.port=8000
     depends_on:
       postgres:
         condition: service_healthy
@@ -294,7 +379,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    # No host ports, no Traefik route: reachable only via the app proxy.
+    # No host ports. Reachable through the app proxy and, for the documentation
+    # UI only, through the authenticated docs-host router above.
 
   app:
     image: nginx:1.28.3-alpine
@@ -398,17 +484,26 @@ services:
       - traefik.enable=true
       - traefik.docker.network=aura-edge
       - traefik.http.routers.aura-swagger.rule=Host(`${SWAGGER_DOMAIN:-docs.aura-storage.eurinhash.com}`)
+      # Lower than the /api/* router (priority 200) defined on the `api` service:
+      # everything that is not an API call stays on the static Swagger UI.
+      - traefik.http.routers.aura-swagger.priority=100
       - traefik.http.routers.aura-swagger.entrypoints=websecure
       - traefik.http.routers.aura-swagger.tls=true
       - traefik.http.routers.aura-swagger.tls.certresolver=le
       # Prepend `api-auth-forward` here once it is defined (see `traefik` labels).
-      - traefik.http.routers.aura-swagger.middlewares=api-docs-allowlist,api-ratelimit,api-secure-headers
+      - traefik.http.routers.aura-swagger.middlewares=api-docs-allowlist,api-docs-auth,api-ratelimit,api-secure-headers
       - traefik.http.services.aura-swagger.loadbalancer.server.port=8080
     # No host port, no storage network: the docs never bind a local port.
 
 networks:
   edge:
     name: aura-edge
+  docs:
+    # Dedicated to the docs host: Traefik + api only. Internal, so the API keeps
+    # exactly its current connectivity (no Internet) while staying unreachable
+    # from the SeaweedFS/app containers that share the public `edge` network.
+    name: aura-docs
+    internal: true
   storage:
     name: aura-storage-internal
     internal: true
@@ -416,4 +511,4 @@ networks:
 volumes:
   traefik-acme:
   pgdata:
-  api-audit:
+  audit-log:

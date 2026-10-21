@@ -55,3 +55,6 @@ web/dist.bak-*/
 
 # Off-site backup destination and crypt keys
 /config/backup.env
+
+# Deepwork session state (local, never committed)
+.slim/deepwork/

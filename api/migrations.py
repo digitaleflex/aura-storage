@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0003_space_status"
+SCHEMA_VERSION = "0004_transfer_cas"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -60,6 +60,32 @@ ADDED_COLUMNS = {
         # client idempotency key dedupes accidental double submits.
         ("expected_size_bytes", "INTEGER"),
         ("idempotency_key", "TEXT"),
+        # Multipart session (#72): backend upload id while parts are being
+        # sent (cleared once completed) and the server-chosen part size.
+        ("multipart_upload_id", "TEXT"),
+        ("multipart_part_bytes", "INTEGER"),
+        # Transfer booster S5: optional zstd compression (never transparent).
+        ("content_encoding", "TEXT"),
+        # Asynchronous integrity check (N5): the object waits in 'verifying'
+        # until a worker holding the lease has hashed it. The ETag seen at
+        # commit detects bytes replaced before or during hashing.
+        ("verify_etag", "TEXT"),
+        ("verify_lease_until", "INTEGER"),
+        ("verify_attempts", "INTEGER DEFAULT 0"),
+        # Periodic integrity scrub: when the stored bytes were last re-hashed,
+        # what that found ('ok', 'mismatch', 'missing') and the scrub lease.
+        ("scrubbed_at", "INTEGER"),
+        ("scrub_result", "TEXT"),
+        ("scrub_lease_until", "INTEGER"),
+        # Transfer booster S2: compare-and-set versioning + terminal-since for
+        # automatic cleanup of terminal statuses.
+        ("version", "INTEGER NOT NULL DEFAULT 1"),
+        ("terminal_since", "INTEGER"),
+    ],
+    # Master mode: a session-bound, short-lived elevation for bulk destructive
+    # actions, granted only after re-entering the password (step-up).
+    "sessions": [
+        ("master_until", "INTEGER"),
     ],
     # #M04: a space is soft-disabled, never deleted. Pre-existing spaces are
     # backfilled to 'active' in `_seed`.

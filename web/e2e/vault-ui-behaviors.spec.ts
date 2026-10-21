@@ -248,7 +248,7 @@ test("a drop during a transfer is buffered as a backlog, never swallowed", async
   ).toBeVisible();
 
   // The drop never started a second intent: only the first file was submitted.
-  await expect(page.getByTestId("transfer-status")).toContainText("en-cours.pdf");
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status")).toContainText("en-cours.pdf");
 });
 
 // -- 2. actionable 409 folder-delete retry ---------------------------------
@@ -324,11 +324,11 @@ test("the SHA-256 chip only appears once a file is available", async ({ page }) 
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
   // While the file is still moving the checksum is not (yet) claimed.
-  await expect(page.getByTestId("transfer-status")).toContainText("Envoi…");
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status")).toContainText("Envoi…");
   await expect(page.getByText("SHA-256 vérifié", { exact: true })).toHaveCount(0);
 
   // Once committed and available, the verified chip is shown.
-  await expect(page.getByTestId("transfer-status")).toContainText("Disponible");
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status")).toContainText("Disponible");
   await expect(page.getByText("SHA-256 vérifié", { exact: true })).toBeVisible();
 });
 

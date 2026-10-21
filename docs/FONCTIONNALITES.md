@@ -117,7 +117,7 @@ routes exigent un principal humain ; une identité service ne gère pas de dossi
 | `GET /api/v1/folders/{fid}` | `objects:read` | 404 hors de l'arbre du propriétaire |
 | `POST /api/v1/folders` | `objects:write` | Nom plat (pas de `/`, `\`, contrôle), unique par propriétaire+parent, profondeur ≤ 32 |
 | `PATCH /api/v1/folders/{fid}` | `objects:write` | Renomme/déplace ; refus du cycle et du dépassement de profondeur (409) |
-| `DELETE /api/v1/folders/{fid}` | `objects:delete` | Refuse un dossier non vide (409) |
+| `DELETE /api/v1/folders/{fid}` | `objects:delete` | 409 si enfants ou objets **vivants** ; les objets soft-deleted sont ignorés et détachés avant suppression (la ligne survit jusqu'au purge) |
 
 Tous les accès filtrent par `owner_id` du demandeur : un dossier d'autrui est un
 **404**, jamais un 403 (pas de fuite d'existence).
