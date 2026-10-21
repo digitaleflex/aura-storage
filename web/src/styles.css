@@ -237,12 +237,28 @@ h3 {
   background: var(--steel-0);
 }
 
-/* Sidebar collapsed: icône seule, largeur réduite */
-.sidebar-collapsed {
-  width: 56px;
+/* Sidebar: base styling */
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  flex: none;
+  width: var(--side-w);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 20px 14px;
   background: var(--side);
   color: var(--side-ink);
-  flex-shrink: 0;
+  transition: width var(--dur-slow) var(--ease-std);
+  overflow: hidden;
+}
+
+/* Sidebar collapsed: icône seule, largeur réduite */
+.sidebar.sidebar-collapsed {
+  width: 56px;
+  transition: width var(--dur-slow) var(--ease-std);
+  overflow: hidden;
 }
 
 .sidebar-collapsed .nav {
@@ -296,6 +312,11 @@ h3 {
 
 .brand-name-hidden {
   display: none;
+}
+
+/* Bouton de togglage sidebar dans la topbar */
+.topbar-sidebar-toggle {
+  margin-right: var(--space-2);
 }
 
 /* État actif du lien nav */
