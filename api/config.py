@@ -133,6 +133,7 @@ class Settings:
     # Hard deadline for a single commit response (seconds). Objects above the
     # async threshold return 202 quickly; this guards the synchronous path.
     commit_deadline_s: int = _int("AURA_COMMIT_DEADLINE_SECONDS", 300)
+    av_scan_cmd: str = os.environ.get("AURA_AV_SCAN_CMD", "")
     # Master mode: how long a password-confirmed elevation for bulk purges
     # lasts on one session (seconds), and the most objects one call may purge.
     master_mode_ttl: int = _int("AURA_MASTER_MODE_SECONDS", 900)

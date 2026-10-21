@@ -1292,6 +1292,34 @@ def commit_object(
             pass
         raise HTTPException(status_code=422, detail="uploaded size does not match storage")
 
+    # Optional AV scan (D4): if configured, scan the bytes before publication.
+    if settings.av_scan_cmd:
+        import subprocess
+        import tempfile
+        import os as _os
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        try:
+            body2 = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
+            for chunk in body2.iter_chunks(chunk_size=settings.commit_chunk_bytes):
+                tmp.write(chunk)
+            tmp.close()
+            proc = subprocess.run(
+                [settings.av_scan_cmd, tmp.name],
+                capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                repo.set_status(oid, "failed")
+                try:
+                    s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+                except Exception:
+                    pass
+                raise HTTPException(status_code=422, detail="object failed av scan")
+        finally:
+            try:
+                _os.unlink(tmp.name)
+            except OSError:
+                pass
+
     # Hard deadline guard for the synchronous commit path.
     if settings.commit_deadline_s and (time.perf_counter() - started) > settings.commit_deadline_s:
         repo.set_status(oid, "failed")
