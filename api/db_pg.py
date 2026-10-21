@@ -347,6 +347,61 @@ class Repository:
             "UPDATE service_identities SET last_used_at = %s WHERE id = %s", (ts, iid)
         )
 
+    # -- object shares ----------------------------------------------------
+    def create_share(
+        self, object_id: str, space_id: str, created_by: str,
+        created_by_kind: str, token_hash: str, expires_at: int,
+        content_disposition: str = "attachment",
+        max_uses: Optional[int] = None,
+    ) -> str:
+        sid = self.new_id()
+        self._run(
+            "INSERT INTO object_shares (id, object_id, space_id, created_by, "
+            "created_by_kind, token_hash, content_disposition, expires_at, "
+            "max_uses, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (sid, object_id, space_id, created_by, created_by_kind, token_hash,
+             content_disposition, expires_at, max_uses, self.now()),
+        )
+        return sid
+
+    def get_share(self, sid: str) -> Optional[dict]:
+        return self._one("SELECT * FROM object_shares WHERE id = %s", (sid,))
+
+    def get_share_by_token_hash(self, token_hash: str) -> Optional[dict]:
+        return self._one(
+            "SELECT * FROM object_shares WHERE token_hash = %s", (token_hash,)
+        )
+
+    def list_shares(self, object_id: str) -> list:
+        return self._all(
+            "SELECT * FROM object_shares WHERE object_id = %s "
+            "ORDER BY created_at DESC, id",
+            (object_id,),
+        )
+
+    def consume_share(self, sid: str, now: int) -> bool:
+        # See api/db.py: the guard is part of the UPDATE so a last use cannot be
+        # redeemed twice by concurrent requests.
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE object_shares SET use_count = use_count + 1, "
+                "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
+                "AND expires_at > %s "
+                "AND (max_uses IS NULL OR use_count < max_uses)",
+                (now, sid, now),
+            )
+            return cur.rowcount == 1
+
+    def revoke_share(self, sid: str, now: int) -> None:
+        self._run(
+            "UPDATE object_shares SET revoked_at = %s "
+            "WHERE id = %s AND revoked_at IS NULL",
+            (now, sid),
+        )
+
+    def delete_shares_for_object(self, object_id: str) -> None:
+        self._run("DELETE FROM object_shares WHERE object_id = %s", (object_id,))
+
     # -- objects ----------------------------------------------------------
     def create_pending_object(
         self, *, space_id: str, application_id: Optional[str], environment: Optional[str],
