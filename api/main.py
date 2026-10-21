@@ -44,6 +44,7 @@ from .lifecycle import purge_object, reconcile_pending
 from .s3 import (
     SSE_ALGORITHM,
     SSE_HEADER,
+    CommitDeadlineExceeded,
     ObjectTooLarge,
     abort_multipart,
     complete_multipart,
@@ -1096,6 +1097,19 @@ def multipart_part_urls(
     return {"id": row["id"], "expires_in": settings.intent_ttl, "parts": parts}
 
 
+def _drop_bytes_best_effort(bucket: str, key: str) -> None:
+    """Delete the bytes of a commit that just failed its integrity contract.
+
+    Shared by the SSE, declared-size and deadline failure branches: a failed
+    intent is terminal, so its bytes are unreachable through the API and must
+    not linger. Best-effort — the reconciliation sweep retries a failed delete.
+    """
+    try:
+        s3ops.delete_object(Bucket=bucket, Key=key)
+    except Exception:
+        pass
+
+
 @app.post("/api/v1/objects/{oid}/commit")
 def commit_object(
     oid: str, response: Response,
@@ -1104,6 +1118,10 @@ def commit_object(
     # Instrumentation only: timings for the pilot latency distribution. No
     # behaviour change -- the header and log line are the sole additions.
     started = time.perf_counter()
+    # Global deadline for this commit (#120): measured from request start so
+    # HEAD time and hashing share one budget, enforced per chunk by
+    # stream_sha256 (the other phases are bounded by the S3 client timeouts).
+    deadline = time.monotonic() + settings.commit_deadline_s
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -1154,12 +1172,24 @@ def commit_object(
         # Never mark plaintext-at-rest bytes available; drop them best-effort
         # (the reconciliation sweep retries a failed delete).
         repo.set_status(oid, "failed")
-        try:
-            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
-        except Exception:
-            pass
+        _drop_bytes_best_effort(row["bucket"], row["object_key"])
         audit_event("commit", principal["id"], "unencrypted", {"object_id": oid})
         raise HTTPException(status_code=422, detail="object not encrypted at rest")
+
+    expected = row.get("expected_size_bytes")
+    if expected is not None and int(expected) >= 0 and size != int(expected):
+        # The size the API authorised at intent time must match what the
+        # gateway actually stored (#119): the signed Content-Length is only
+        # enforced by the gateway, and that control is verified live, not
+        # offline, so the catalogue cross-checks it here.
+        repo.set_status(oid, "failed")
+        _drop_bytes_best_effort(row["bucket"], row["object_key"])
+        audit_event("commit", principal["id"], "size_mismatch", {
+            "object_id": oid, "expected_size_bytes": int(expected),
+            "stored_size_bytes": size,
+        })
+        raise HTTPException(
+            status_code=422, detail="uploaded size does not match the declared size")
 
     if size >= settings.verify_async_threshold_bytes:
         # Large object: hand it to the verification worker instead of hashing
@@ -1173,7 +1203,16 @@ def commit_object(
     hash_started = time.perf_counter()
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
-        total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes)
+        total, digest = stream_sha256(
+            body, max_bytes, settings.commit_chunk_bytes, deadline=deadline,
+        )
+    except CommitDeadlineExceeded:
+        # A commit slower than its global deadline never hangs the request
+        # slot (#120): terminal failure + 504, and the bytes are dropped.
+        repo.set_status(oid, "failed")
+        _drop_bytes_best_effort(row["bucket"], row["object_key"])
+        audit_event("commit", principal["id"], "deadline", {"object_id": oid})
+        raise HTTPException(status_code=504, detail="commit deadline exceeded")
     except ObjectTooLarge:
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
@@ -1185,6 +1224,12 @@ def commit_object(
         # Truncated or mismatched upload is never marked available (#37).
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=422, detail="uploaded size does not match storage")
+    if expected is not None and int(expected) >= 0 and total != int(expected):
+        # Belt and braces (#119): the streamed total must also equal the
+        # declared size, in case HEAD and the body ever disagree.
+        repo.set_status(oid, "failed")
+        raise HTTPException(
+            status_code=422, detail="streamed size does not match the declared size")
 
     repo.mark_available(oid, size, digest)
     audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
