@@ -30,7 +30,7 @@ export function ToastStack({
   onDismiss: (id: number) => void;
 }) {
   return (
-    <div className="toasts" role="region" aria-label="Notifications">
+    <div className="toasts" role="region" aria-label="Notifications" aria-live="polite" aria-atomic="false">
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />
       ))}

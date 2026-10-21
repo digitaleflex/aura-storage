@@ -64,6 +64,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   // Mobile drawer state
   const [mobileOpen, setMobileOpen] = React.useState(false);
+  const touchStartX = React.useRef<number | null>(null);
 
   // Densité d'affichage (compact/confortable)
   const [density, setDensity] = React.useState<"comfortable" | "compact">(() => {
@@ -159,6 +160,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="shell">
+      <a className="skip-link" href="#main-content">
+        Aller au contenu principal
+      </a>
       <aside
         className={`sidebar${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
         aria-label="Barre latérale AURA Vault"
@@ -234,7 +238,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <rect x="5" y="11" width="14" height="10" rx="2" />
             <path d="M8 11V8a4 4 0 0 1 8 0v3" />
           </svg>
-          <span>
+          <span aria-live="polite" aria-atomic="true">
             {usageQuery.data
               ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes).replace(" ", "")} utilisés`
               : canAdmin
@@ -259,6 +263,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
             role="dialog"
             aria-modal="true"
             aria-label="Navigation mobile"
+            onTouchStart={(event) => {
+              touchStartX.current = event.touches[0]?.clientX ?? null;
+            }}
+            onTouchEnd={(event) => {
+              const start = touchStartX.current;
+              touchStartX.current = null;
+              if (start === null) return;
+              const end = event.changedTouches[0]?.clientX ?? start;
+              if (start - end > 60) closeMobile();
+            }}
           >
             <div className="mobile-drawer-head">
               <Link to="/" className="brand" onClick={() => closeMobile(false)}>
@@ -331,7 +345,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <rect x="5" y="11" width="14" height="10" rx="2" />
                 <path d="M8 11V8a4 4 0 0 1 8 0v3" />
               </svg>
-              <span>
+              <span aria-live="polite" aria-atomic="true">
                 {usageQuery.data
                   ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes)} utilisés`
                   : "Chiffré au repos, intégrité vérifiée"}
@@ -418,7 +432,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
             )}
           </div>
         </header>
-        <main className="content">{children}</main>
+        <main id="main-content" className="content" tabIndex={-1}>
+          {children}
+        </main>
       </div>
     </div>
   );
