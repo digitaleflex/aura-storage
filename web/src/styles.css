@@ -57,6 +57,7 @@
   --steel-1: #ffffff;
   --steel-2: #eef0f3;
   --steel-3: #e3e6eb;
+  --steel-raised: #ffffff;
 
   --ink: #172033;
   --ink-2: #3d4654;
@@ -147,6 +148,7 @@
   --shadow-3: 0 20px 50px rgba(15, 21, 29, 0.30);       /* modale */
   --shadow-tray: 0 12px 32px rgba(15, 21, 29, 0.18);    /* plateau flottant */
   --shadow-toast: 0 8px 24px rgb(0 0 0 / 0.18);
+  --shadow-focus: 0 0 0 3px color-mix(in srgb, var(--signal) 35%, transparent);
 
   /* PROFONDEUR (z-index) : échelle exclusive du produit, une valeur par
      couche, jamais de nombre nu dans les composants. */
@@ -156,10 +158,12 @@
   --z-toast: 60;    /* toasts, overlay de dépôt */
 
   /* TRANSITIONS : press plus court que settle. */
-  --dur-fast: 70ms;
-  --dur-std: 110ms;
-  --dur-slow: 160ms;
-  --ease-std: ease;
+  --dur-fast: 120ms;
+  --dur-std: 180ms;
+  --dur-slow: 260ms;
+  --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
   --ease-press: cubic-bezier(0.2, 0.9, 0.3, 1); /* settle léger overshoot */
 
   /* ÉCHELLE TYPOGRAPHIQUE : les tailles effectives d'aujourd'hui, nommées
@@ -170,13 +174,26 @@
   --fs-md: 14px;    /* corps */
   --fs-lg: 16px;    /* titres de section */
   --fs-xl: 26px;    /* titre de page */
+  --fs-2xl: 20px;   /* sous-section / carte */
   --lh-tight: 1.15;
   --lh-std: 1.5;
+  --lh-display: 1.2;
+  --lh-mono: 1.4;
   --track-tight: -0.012em;
+  --track-loose: 0.06em;
+  /* Poids typographiques (IBM Plex Sans 400–600). */
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Chiffres tabulaires pour les colonnes numériques / dates. */
+.mono, code, .size, .date, td, th, table {
+  font-variant-numeric: tabular-nums;
 }
 
 body {
@@ -187,6 +204,8 @@ body {
   font-size: var(--fs-md);
   line-height: var(--lh-std);
   -webkit-font-smoothing: antialiased;
+  transition: background-color var(--dur-std) var(--ease-std),
+    color var(--dur-std) var(--ease-std);
 }
 
 /* Type roles: heavy sans for titles, mono for anything you compare. */
@@ -404,6 +423,22 @@ h3 {
     display: none;
   }
 
+  /* Cibles tactiles minimales (44px) sur mobile. */
+  .btn, button, .nav-link, .mobile-drawer-nav a {
+    min-height: 44px;
+  }
+
+  /* Éviter le débordement du whoami sur petit écran. */
+  .whoami-text {
+    max-width: 110px;
+    overflow: hidden;
+  }
+  .whoami-role {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   /* Masquer le sidebar desktop sur mobile */
   .sidebar {
     display: none;
@@ -601,6 +636,10 @@ h3 {
   .content {
     animation: none;
   }
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -636,8 +675,8 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 2px solid var(--signal);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 .btn:disabled {
@@ -1023,9 +1062,6 @@ select:focus-visible {
   padding: 10px 8px;
   border-bottom: 1px solid var(--steel-2);
   transition: background 120ms ease;
-  /* Virtualisation native : le navigateur ne rend que les lignes visibles. */
-  content-visibility: auto;
-  contain-intrinsic-size: 0 48px;
 }
 
 .ledger-row:hover {
@@ -2419,6 +2455,32 @@ p .chip {
 }
 
 /* ------------------------------------------------------------------ */
+/* Tablette : sidebar réduite aux icônes (760–1024px).               */
+/* ------------------------------------------------------------------ */
+@media (min-width: 761px) and (max-width: 1024px) {
+  .sidebar {
+    width: 64px;
+  }
+  .brand span,
+  .nav a {
+    font-size: 0;
+  }
+  .nav a {
+    justify-content: center;
+    padding: 10px;
+  }
+  .nav a svg {
+    margin: 0;
+  }
+  .sidebar-foot {
+    display: none;
+  }
+  .sidebar-section .section-title {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Narrow screens: the rail becomes a shelf, rows stack.              */
 /* ------------------------------------------------------------------ */
 @media (max-width: 760px) {
@@ -2795,4 +2857,37 @@ p .chip {
   from {
     opacity: 0;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Contraste élevé : bordures plus marquées pour les utilisateurs       */
+/* qui demandent plus de contraste (prefers-contrast: more).           */
+/* ------------------------------------------------------------------ */
+@media (prefers-contrast: more) {
+  :root {
+    --line: #9aa3af;
+    --line-2: #7a8390;
+    --field-line: #5b6472;
+  }
+  .btn, input, select, textarea {
+    border-width: 2px;
+  }
+}
+
+/* Skip link (accessibilité clavier). */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 8px;
+  z-index: var(--z-toast);
+  padding: 8px 12px;
+  background: var(--signal);
+  color: var(--on-signal);
+  border-radius: var(--radius-small);
+  font-weight: var(--fw-semibold);
+  text-decoration: none;
+  transition: top var(--dur-fast) var(--ease-out);
+}
+.skip-link:focus {
+  top: 8px;
 }
