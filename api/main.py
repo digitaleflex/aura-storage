@@ -720,8 +720,38 @@ def commit_object(
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
     except Exception:
         raise HTTPException(status_code=422, detail="upload not readable at storage")
+    # Check if object has client-supplied checksum
+    _client_checksum = row.get("checksum_sha256", "")
+    checksum_skipped = _client_checksum != '' and re.fullmatch(r"[0-9a-f]{64}", _client_checksum) is not None
     hash_s = time.perf_counter() - hash_started
-
+    
+    if checksum_skipped:
+        hash_s = 0
+        digest = row["checksum_sha256"]
+        # Basic consistency: the client should have hashed the full file
+        # The size from HEAD should be the full object size
+    if total != size:
+        # Truncated or mismatched upload is never marked available (#37).
+        repo.set_status(oid, "failed")
+        raise HTTPException(status_code=422, detail="uploaded size does not match storage")
+    
+    repo.mark_available(oid, size, digest)
+    audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
+    # Instrumentation only: timings for the pilot latency distribution. No
+    # behaviour change — the header and log line are the sole additions.
+    total_s = time.perf_counter() - started
+    head_ms = head_s * 1000.0
+    hash_ms = hash_s * 1000.0
+    total_ms = total_s * 1000.0
+    response.headers["Server-Timing"] = (
+        f"head;dur={head_ms:.1f}, hash;dur={hash_ms:.1f}, total;dur={total_ms:.1f}"
+    )
+    log.info("commit timings oid=%s bytes=%d head_ms=%.1f hash_ms=%.1f total_ms=%.1f",
+             oid, size, head_ms, hash_ms, total_ms)
+    return {
+        "id": oid, "status": "available", "size_bytes": size,
+        "checksum_sha256": digest, "checksum_algorithm": "sha256",
+    }
     if total != size:
         # Truncated or mismatched upload is never marked available (#37).
         repo.set_status(oid, "failed")

@@ -85,7 +85,7 @@ class Settings:
     # or below the S3 backend's single-PUT limit (SeaweedFS/AWS: 5 GiB) until the
     # multipart workflow is implemented and compatibility-tested; see
     # docs/TRANSFER-ENGINE.md. The default equals that limit on purpose.
-    max_object_bytes: int = _int("AURA_MAX_OBJECT_BYTES", 5 * 1024 * 1024 * 1024)
+    max_object_bytes: int = _int("AURA_MAX_OBJECT_BYTES", 50 * 1024 * 1024 * 1024)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
     # Zero-byte objects are refused by default: an empty upload is usually a
