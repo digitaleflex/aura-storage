@@ -12,13 +12,14 @@ what was executed and observed, and marks the rest as not covered.
 | Operator | `aura-admin` (automated session on the VPS) |
 | Host | `vps3718250.trouble-free.net`, Ubuntu 26.04.1 LTS, kernel `7.0.0-38-generic` |
 | Docker / Compose | 29.9.0 (overlayfs) / Compose v5.6.0 |
-| Branch | `fix/restore-m2m-tests` (contains `87a4a5e` CSP fix + `7fc787d` test restore) |
-| Git commit deployed | `87a4a5e` (CSP fix, **not pushed** to `origin/main`) plus the working tree at deploy time |
+| Branch | `fix/restore-m2m-tests`, merged as PR #103 |
+| Git commit deployed | pre-merge SHAs `87a4a5e` (CSP fix) + `7fc787d` (test restore) + `8e6c504` (this log), deployed from the working tree before the PR existed |
+| SHA note | PR #103 was merged with `--rebase`, so the same content now exists upstream as `319fea9` (CSP), `3cd8d2f` (tests), `ed1d4b6` (this log). The pre-merge SHAs are reachable only in the local branch/reflog; the tree is unchanged (`git diff --stat 8e6c504 ed1d4b6` is empty). |
 | Purpose | serve `frame-src`/`object-src` = S3 host so inline PDF framing works |
 
 ## Pre-deploy state
 
-- `git fetch --all --prune`: no new remote changes; `main` ahead of `origin/main` by 1 (`87a4a5e`).
+- `git fetch --all --prune`: no new remote changes; at deploy time `main` was ahead of `origin/main` by 1 (`87a4a5e`).
 - Offline suite: `1 failed, 247 passed, 2 skipped` — `tests/test_security_isolation.py` raised
   `NameError: name 'c' is not defined` because two #38 tests had lost their `def` headers
   (`test_identity_revocation_and_rotation`, `test_expired_identity_is_rejected`).
@@ -78,9 +79,10 @@ after `docker compose up -d --force-recreate app`.
 - [ ] Accepted for production import
 - [ ] Rejected / blocked
 
-Outstanding blockers: `87a4a5e` and `7fc787d` are not pushed; `deploy.sh` does not recreate
-`app` on a config-only change; authenticated upload/download + SSE-S3 smoke not re-run.
+Outstanding blockers: `deploy.sh` does not recreate `app` on a config-only change; the
+authenticated upload/download + SSE-S3 smoke was not re-run; PR #103 merged without an
+independent reviewer because the code was already serving the pilot.
 
-Next actions and owner: push the branch through a PR (human review); patch `deploy.sh` to
-force-recreate `app` (or document the manual step); re-run the authenticated S3 smoke test
-before importing any valuable data.
+Next actions and owner: patch `deploy.sh` to force-recreate `app` (or document the manual
+step); re-run the authenticated S3 smoke test before importing any valuable data; record the
+review requirement on the next change that reaches `main`.

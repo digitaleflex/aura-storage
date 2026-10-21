@@ -57,22 +57,33 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | GET | `/api/v1/objects/{oid}` | `objects:read` | 404 if outside the caller's scope |
 | PATCH | `/api/v1/objects/{oid}` | `objects:write` | **human only**; file/unfile an object into an owned folder |
 | POST | `/api/v1/objects/upload-intents` | `objects:write` | server picks the object key; server enforces type/size/empty policy; optional `Idempotency-Key` dedupes double submits |
-| POST | `/api/v1/objects/{oid}/commit` | `objects:write` | streaming SHA-256, idempotent |
+| POST | `/api/v1/objects/{oid}/commit` | `objects:write` | streaming SHA-256, idempotent; **202 `verifying`** for large objects, hashed by the verification worker (N5) |
 | POST | `/api/v1/objects/{oid}/abort` | `objects:write` | cancel a pending intent (best-effort delete); idempotent; refused on available/deleted |
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
-| POST | `/api/v1/objects/{oid}/preview-intent` | `objects:read` | presigned GET bound to `Content-Disposition: inline` (PDF/image/audio preview); same 404/409 as download-intent; scoped |
+| POST | `/api/v1/objects/{oid}/preview-intent` | `objects:read` | presigned GET bound to `Content-Disposition: inline` (PDF/image/audio preview); same 404/409 as download-intent, plus **415** for types outside the inline allow-list (images except SVG, PDF, audio: never HTML/SVG/XML); scoped |
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |
+| POST | `/api/v1/me/master-mode` | `objects:purge`, **human only** + password re-entry | enter master mode for `AURA_MASTER_MODE_SECONDS` (900 s) on this session; failures count against the login rate limit; audited |
+| DELETE | `/api/v1/me/master-mode` | authenticated **human** | leave master mode |
+| POST | `/api/v1/objects/bulk-purge` | `objects:purge`, **human**, **master mode active** | destructive: purge up to `AURA_MASTER_BULK_MAX` (500) objects of the caller's scope in one call; audited |
+| POST | `/api/v1/objects/trash/empty` | `objects:purge`, **human**, **master mode active** | destructive: purge the caller's trash (≤500 per call, `more` says to call again); audited |
+| GET | `/api/v1/objects/{oid}/multipart` | `objects:write` | multipart plan and parts already held (resume); only when `AURA_MULTIPART_ENABLED=1` created the session |
+| POST | `/api/v1/objects/{oid}/multipart/parts` | `objects:write` | presigned part PUTs (≤100 per call, exact signed length per part) |
+| POST | `/api/v1/objects/{oid}/restore` | `objects:delete` | undo a soft delete (trash); 409 unless the object is `deleted` and was fully uploaded |
 | POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin; a storage failure keeps the catalogue row and returns **502** (M06) |
 | GET | `/api/v1/folders` | `objects:read` | **human only**; owner-scoped, root, `?parent_id=`, or `?all=true` (flat tree) |
 | POST | `/api/v1/folders` | `objects:write` | **human only**; logical folder, no host directory |
 | GET | `/api/v1/folders/{fid}` | `objects:read` | **human only**; 404 outside the owner's tree |
 | PATCH | `/api/v1/folders/{fid}` | `objects:write` | **human only**; rename/move, cycle-refused |
-| DELETE | `/api/v1/folders/{fid}` | `objects:delete` | **human only**; refuses a non-empty folder |
+| DELETE | `/api/v1/folders/{fid}` | `objects:delete` | **human only**; 409 if the folder still has children or live objects; soft-deleted objects are ignored and detached before removal |
 | POST | `/api/v1/admin/reconcile` | `admin:write` | bounded global sweep of stale intents (`limit` 1..5000, oldest first; repeat until 0); returns `{expired, storage_deletes_attempted, storage_failures}` — a storage failure keeps the intent `pending` for the next sweep and is counted in `storage_failures`, never as cleaned (M06) |
 | GET | `/api/v1/admin/stats` | `admin:read` | aggregate counts, no content |
 | GET | `/api/v1/admin/audit` | `admin:read` | audit search newest-first (period/actor/action/result/space/application/request filters, `limit` 1..500 + `offset`); `total` counts window matches, `truncated` warns of older history (M07) |
-| POST | `/api/v1/admin/audit/prune` | `admin:write` | enforce `AURA_AUDIT_RETENTION_DAYS` (default 90); timestamp-less lines kept (M07) |
-| GET | `/api/v1/admin/orphans` | `admin:read` | read-only orphan candidates (available rows missing at storage); never deletes (M07/#87) |
+| POST | `/api/v1/admin/audit/prune` | `admin:write` | enforce `AURA_AUDIT_RETENTION_DAYS`
+| GET | `/api/v1/admin/storage-orphans` | `admin:read` | read-only: storage keys with no catalogue row or a terminal row, and stale multipart uploads; trash excluded; grace period; bounded, resumable |
+| POST | `/api/v1/admin/storage-orphans/cleanup` | `admin:write` | **destructive**: remove listed orphan keys / abort listed uploads (≤100 each), each re-checked just before acting |
+| GET | `/api/v1/admin/integrity` | `admin:read` | periodic scrub results: counts per result and objects whose bytes no longer match (`mismatch`) or are gone (`missing`); read-only |
+| POST | `/api/v1/admin/integrity/scrub` | `admin:write` | run one bounded scrub pass now (same byte budget as the periodic pass) |
+| GET | `/api/v1/admin/orphans` | `admin:read` | read-only orphan candidates (available rows missing at storage); never deletes (M07/#87) | (default 90); timestamp-less lines kept (M07) |
 | GET | `/api/v1/admin/usage` | `admin:read` | real per-space consumption (verified available bytes + counts) with `measured_at` and configured limits; optional `space_id` filter (M07) |
 | GET | `/api/v1/admin/health` | `admin:read` | supervision snapshot (api/database/storage/disk + recent errors); always 200, top-level `degraded` on dependency failure (M07) |
 | POST/GET | `/api/v1/admin/applications` | `admin:write` / `admin:read` | platform registry |
@@ -125,11 +136,13 @@ never counts as closed — it would let an auth-less route pass if its body were
   them. Listing, reading, moving or deleting a folder filters by the caller's
   `owner_id`; a folder owned by someone else is a 404, never a 403 (no existence leak).
   A move that would place a folder inside its own subtree is refused (409), and a
-  folder that still has children or objects cannot be deleted (409). Filing an
-  **object** into a folder (`PATCH /api/v1/objects/{oid}`) is likewise human-only and
-  owner-scoped: the object is read with the caller's space/owner filter, and the target
-  folder must be owned by the caller, otherwise 404. Space-scoped folders for service
-  identities are a follow-up tied to `#35`.
+  folder that still has children or **live** objects cannot be deleted (409);
+  soft-deleted objects are ignored by that check and their `folder_id` is detached
+  before the folder row is removed (the rows survive until an explicit purge).
+  Filing an **object** into a folder (`PATCH /api/v1/objects/{oid}`) is likewise
+  human-only and owner-scoped: the object is read with the caller's space/owner
+  filter, and the target folder must be owned by the caller, otherwise 404.
+  Space-scoped folders for service identities are a follow-up tied to `#35`.
 - 401 (not authenticated) and 403 (not permitted) never reveal whether an object
   exists; cross-scope reads return 404.
 

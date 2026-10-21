@@ -87,11 +87,40 @@ CREATE TABLE IF NOT EXISTS service_identities (
   revoked_at INTEGER,
   rotated_at INTEGER
 );
+-- Public share links: an unauthenticated, revocable, read-only capability for
+-- exactly one object. Only the SHA-256 fingerprint of the link token is stored,
+-- so a catalogue dump cannot be replayed as working links. `space_id` is copied
+-- from the object at creation so the redemption path can attribute the access to
+-- a tenant without a join, and `created_by` keeps attribution even if the creator
+-- later loses the role. Rows are never deleted -- revocation is a timestamp, so
+-- an audit entry always resolves to a real row. `max_uses` is enforced atomically
+-- by Repository.consume_share.
+--
+-- No foreign key on object_id on purpose: `objects:purge` removes the object row
+-- (api/lifecycle.py) and a share must then be a harmless dangling row that
+-- answers 404, never a constraint that blocks a purge. Lifecycle deletes the
+-- share rows explicitly, before the object row.
+CREATE TABLE IF NOT EXISTS object_shares (
+  id TEXT PRIMARY KEY,
+  object_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_by_kind TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  content_disposition TEXT NOT NULL DEFAULT 'attachment',
+  expires_at INTEGER NOT NULL,
+  max_uses INTEGER,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  revoked_at INTEGER,
+  last_used_at INTEGER,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS schema_migrations (
   id TEXT PRIMARY KEY,
   applied_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_objects_owner ON objects(owner_id, status);
 CREATE INDEX IF NOT EXISTS idx_identities_space ON service_identities(space_id);
+CREATE INDEX IF NOT EXISTS idx_shares_object ON object_shares(object_id);
 -- idx_objects_space is created by api/migrations.py, after the additive
 -- `space_id` column exists on upgraded catalogues.

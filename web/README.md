@@ -77,6 +77,9 @@ expiry, cancellation, never-fake-success); it needs no browser or servers.
 `e2e/upload-flow.spec.ts` mocks the API and the presigned endpoint to check
 progress/phase display, the double-submit guard, server-error surfacing,
 expired-URL recovery and real cancellation.
+`e2e/ui-keyboard-a11y.spec.ts` mocks the API to check the `?` legend, `/` and
+`Suppr` shortcuts, row-menu Arrow/Escape focus handling and the mobile drawer's
+focus trap.
 (All use the local admin password below.)
 
 ```bash
