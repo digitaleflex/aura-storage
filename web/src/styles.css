@@ -1058,6 +1058,18 @@ select:focus-visible {
   text-underline-offset: 3px;
 }
 
+.link-button:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: var(--radius-small);
+}
+
+.crumb:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: var(--radius-small);
+}
+
 /* Status: a dot plus a word — never colour alone. */
 .status {
   display: inline-flex;
@@ -2269,6 +2281,68 @@ p .chip {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Dark mode : respecte les preferences systeme.                      */
+/* ------------------------------------------------------------------ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --side: #0a0e14;
+    --side-2: #141a22;
+    --side-3: #1c2430;
+    --side-ink: #d5dbe3;
+    --side-muted: #8e99a8;
+
+    --steel-0: #0f1419;
+    --steel-1: #1a2028;
+    --steel-2: #222a34;
+    --steel-3: #2a3442;
+
+    --ink: #e8ecf2;
+    --ink-2: #b8c1cd;
+    --muted: #8e99a8;
+    --faint: #6b7480;
+
+    --line: #2a3442;
+    --line-2: #3a4654;
+    --field-line: #4a5664;
+
+    --signal: #c48a2a;
+    --signal-2: #a06e1a;
+    --signal-soft: #2a2010;
+    --signal-line: #4a3a1a;
+    --signal-bright: #e0a33a;
+
+    --ok: #4ade80;
+    --ok-bg: #0a2a14;
+    --run: #60a5fa;
+    --run-bg: #0a1a2a;
+    --warn: #fbbf24;
+    --warn-bg: #2a2008;
+    --danger: #f87171;
+    --danger-bg: #2a0a0a;
+    --danger-strong: #dc2626;
+  }
+
+  body {
+    background: var(--steel-0);
+    color: var(--ink);
+  }
+
+  .topbar {
+    background: var(--steel-1);
+    border-bottom-color: var(--line);
+  }
+
+  .dialog::backdrop {
+    background: rgba(0, 0, 0, 0.6);
+  }
+
+  .toast {
+    background: var(--steel-1);
+    border-color: var(--line-2);
   }
 }
 

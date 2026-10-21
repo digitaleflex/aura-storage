@@ -700,6 +700,22 @@ export function ObjectsPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // Coller-pour-importer (Ctrl+V / Cmd+V)
+  useEffect(() => {
+    function onPaste(event: ClipboardEvent) {
+      const files = event.clipboardData?.files;
+      if (!files || files.length === 0) return;
+      // Ignorer si on est dans un champ de saisie
+      const target = event.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      event.preventDefault();
+      setPendingFiles((prev) => [...prev, ...Array.from(files)]);
+      setIntakeOpen(true);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
   // Keep the screen (and so the machine) awake while files are being sent.
   // Best effort: unsupported browsers or a refused lock change nothing.
   useEffect(() => {
