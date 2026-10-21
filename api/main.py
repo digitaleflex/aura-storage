@@ -45,6 +45,7 @@ from .s3 import (
     CommitDeadlineExceeded,
     SSE_ALGORITHM,
     SSE_HEADER,
+    CommitDeadlineExceeded,
     ObjectTooLarge,
     abort_multipart,
     complete_multipart,
@@ -1175,6 +1176,10 @@ def commit_object(
     principal: dict = Depends(authorize(OBJECTS_WRITE)),
 ):
     started = time.perf_counter()
+    # Global deadline for this commit (#120): measured from request start so
+    # HEAD time and hashing share one budget, enforced per chunk by
+    # stream_sha256 (the other phases are bounded by the S3 client timeouts).
+    deadline = time.monotonic() + settings.commit_deadline_s
     oid = _canonical_id(oid, "object id")
     idem = request.headers.get("idempotency-key") if "request" in globals() else None
     # D2: serve a cached result for a retried commit with the same key.
@@ -1327,6 +1332,7 @@ def commit_object(
             s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
         except Exception:
             pass
+        audit_event("commit", principal["id"], "deadline", {"object_id": oid})
         raise HTTPException(status_code=504, detail="commit exceeded deadline")
 
     row_version = row.get("version")
