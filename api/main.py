@@ -491,7 +491,13 @@ def ready():
 # Outside /api/v1 on purpose: this is the only unauthenticated route that serves
 # object data, and it must not be confused with the session/Bearer API surface.
 # It never returns bytes: it redirects to a short-lived presigned GET.
-SHARE_NOT_FOUND = HTTPException(status_code=404, detail="not found")
+def _share_not_found() -> HTTPException:
+    """One indistinguishable 404 for every share failure mode.
+
+    A factory rather than a shared instance: the same object raised from several
+    concurrent requests would carry competing tracebacks.
+    """
+    return HTTPException(status_code=404, detail="not found")
 
 
 @app.get("/s/{token}")
@@ -503,21 +509,21 @@ def redeem_share(token: str):
     objects or shares exist. Success and denial are both audited by share id.
     """
     if not shares.is_well_formed(token):
-        raise SHARE_NOT_FOUND
+        raise _share_not_found()
     found = repo.get_share_by_token_hash(shares.fingerprint(token))
     now = int(time.time())
     if found is None:
         audit_event("share-access", None, "denied", {"reason": "unknown"})
-        raise SHARE_NOT_FOUND
+        raise _share_not_found()
     row = _as_dict(found)
     if row.get("revoked_at"):
         audit_event("share-access", None, "denied",
                     {"share_id": row["id"], "reason": "revoked"})
-        raise SHARE_NOT_FOUND
+        raise _share_not_found()
     if int(row["expires_at"]) <= now:
         audit_event("share-access", None, "denied",
                     {"share_id": row["id"], "reason": "expired"})
-        raise SHARE_NOT_FOUND
+        raise _share_not_found()
 
     # Tenant attribution for the audit trail: a public redemption has no
     # principal, but the event still belongs to the object's space.
@@ -527,7 +533,7 @@ def redeem_share(token: str):
     if target is None or target["status"] != AVAILABLE:
         audit_event("share-access", None, "denied",
                     {"share_id": row["id"], "reason": "object_unavailable"})
-        raise SHARE_NOT_FOUND
+        raise _share_not_found()
     obj = _as_dict(target)
 
     # Atomic: re-checks revocation, expiry and max_uses in the same UPDATE, so
@@ -535,7 +541,7 @@ def redeem_share(token: str):
     if not repo.consume_share(row["id"], now):
         audit_event("share-access", None, "denied",
                     {"share_id": row["id"], "reason": "exhausted"})
-        raise SHARE_NOT_FOUND
+        raise _share_not_found()
 
     url = presigned_get(
         s3, obj["bucket"], obj["object_key"], settings.share_presign_ttl,
