@@ -42,7 +42,6 @@ from .config import settings
 from .identity import fingerprint, format_token, new_secret
 from .lifecycle import purge_object, reconcile_pending, reconcile_terminal, reconcile_reverse
 from .s3 import (
-    CommitDeadlineExceeded,
     SSE_ALGORITHM,
     SSE_HEADER,
     CommitDeadlineExceeded,
@@ -101,6 +100,11 @@ def _start_verifier() -> None:
     if settings.scrub_enabled:
         from .scrubber import start_background as start_scrubber
         start_scrubber(repo, s3ops, settings, audit=audit_event)
+    # The reconciliation sweep runs on its own (#144): without it, stale
+    # intents and half-done purges waited for a human to call the admin route.
+    if settings.reconcile_enabled:
+        from .reconciler import start_background as start_reconciler
+        start_reconciler(repo, s3ops, settings, audit=audit_event)
 
 
 @app.middleware("http")
@@ -2252,6 +2256,18 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
         }
     except OSError:
         components["disk"] = {"status": "down", "error": "unreadable"}
+    # The automatic reconciliation sweep (#144): its last counters show that it
+    # runs without an operator. Never fatal for the service: a failed sweep is
+    # reported, the next one retries.
+    from .reconciler import last_sweep
+    sweep = last_sweep()
+    components["reconcile"] = {
+        "status": "ok",
+        "enabled": settings.reconcile_enabled,
+        "interval_s": settings.reconcile_interval_s,
+        "last_sweep": sweep,
+        "note": None if sweep else "no sweep yet",
+    }
     errors, scanned = recent_error_events(
         window_s=settings.audit_error_window_s, limit=5,
         max_scan_lines=settings.audit_error_scan_lines,

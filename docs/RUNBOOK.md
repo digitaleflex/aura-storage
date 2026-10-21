@@ -255,3 +255,31 @@ renouvellement des certificats, fraîcheur des sauvegardes — **VÉRIFIÉ**
 
 Consigner chaque preuve datée (sans secrets) dans `docs/verification-log-template.md`
 avant de demander le passage à GO.
+
+## 11. Balayage de réconciliation automatique (#144)
+
+Le balayage de réconciliation (expiration des intents périmés, fin des purges
+interrompues) ne dépend plus d'un appel humain : il tourne dans un thread
+démon du processus API, comme le vérificateur et le scrubber.
+
+| Réglage | Défaut | Rôle |
+|---|---|---|
+| `AURA_RECONCILE_ENABLED` | `1` | `0` désactive le balayage automatique (la route admin reste). |
+| `AURA_RECONCILE_INTERVAL_SECONDS` | `300` | Période entre deux balayages (refus au boot si < 30). |
+| `AURA_RECONCILE_LIMIT` | `500` | Nombre maximal d'intents traités par passage. |
+| `AURA_RECONCILE_EXTRA_GRACE_SECONDS` | `3600` | Marge ajoutée à la durée de vie d'un intent : le balayage automatique n'expire un intent **que** bien après sa fenêtre de grâce, pour qu'un upload lent en cours ne perde pas ses octets. |
+
+Points d'exploitation :
+
+- Le balayage est **borné** et **jamais optimiste** : un octet non supprimé du
+  stockage laisse l'intent `pending` et compte dans `storage_failures` ; le
+  passage suivant réessaie. Aucun état « expiré » n'est posé sur une suppression
+  échouée.
+- Le balayage automatique est **global** (tous les espaces), comme la route
+  `POST /api/v1/admin/reconcile` : il n'est pas borné à un espace.
+- **Contrôle** : `GET /api/v1/admin/health` expose
+  `components.reconcile.last_sweep` (date, compteurs, durée) — la preuve que le
+  balayage tourne sans lire les journaux.
+- Une panne du stockage n'arrête pas la boucle : l'échec est journalisé et le
+  passage suivant réessaie.
+
