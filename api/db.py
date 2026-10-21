@@ -542,7 +542,7 @@ class Repository:
         self.conn.execute(
             "UPDATE objects SET status = 'verifying', verify_etag = ?, "
             "verify_lease_until = NULL, verify_attempts = 0, updated_at = ? "
-            "WHERE id = ? AND status = 'pending'",
+            "WHERE id = ? AND status IN ('pending', 'verifying')",
             (etag, self.now(), oid),
         )
         self.conn.commit()
@@ -690,14 +690,14 @@ class Repository:
             cur = self.conn.execute(
                 "UPDATE objects SET status = 'available', size_bytes = ?, "
                 "checksum_sha256 = ?, version = version + 1, updated_at = ? "
-                "WHERE id = ? AND status = 'pending'",
+                "WHERE id = ? AND status IN ('pending', 'verifying')",
                 (size_bytes, checksum_sha256, self.now(), oid),
             )
         else:
             cur = self.conn.execute(
                 "UPDATE objects SET status = 'available', size_bytes = ?, "
                 "checksum_sha256 = ?, version = version + 1, updated_at = ? "
-                "WHERE id = ? AND status = 'pending' AND version = ?",
+                "WHERE id = ? AND status IN ('pending', 'verifying') AND version = ?",
                 (size_bytes, checksum_sha256, self.now(), oid, expected_version),
             )
         self.conn.commit()

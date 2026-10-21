@@ -709,6 +709,18 @@ paths:
         "200": { description: "Reconcile counts (expired, storage_deletes_attempted, storage_failures); failed storage deletes keep the intent pending" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
+  /api/v1/admin/reconcile-terminal:
+    post:
+      summary: Clean up bytes for terminal rows (admin:write)
+      tags: [administration]
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
+      responses:
+        "200": { description: "Counts (cleaned, storage_deletes_attempted, storage_failures)" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
   /api/v1/admin/stats:
     get:
       summary: Aggregate counts (admin:read)

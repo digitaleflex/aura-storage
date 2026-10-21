@@ -490,7 +490,7 @@ class Repository:
         self._run(
             "UPDATE objects SET status = 'verifying', verify_etag = %s, "
             "verify_lease_until = NULL, verify_attempts = 0, updated_at = %s "
-            "WHERE id = %s AND status = 'pending'",
+            "WHERE id = %s AND status IN ('pending', 'verifying')",
             (etag, self.now(), oid),
         )
 
@@ -612,13 +612,13 @@ class Repository:
             return self._run(
                 "UPDATE objects SET status = 'available', size_bytes = %s, "
                 "checksum_sha256 = %s, version = version + 1, updated_at = %s "
-                "WHERE id = %s AND status = 'pending'",
+                "WHERE id = %s AND status IN ('pending', 'verifying')",
                 (size_bytes, checksum_sha256, self.now(), oid),
             )
         return self._run(
             "UPDATE objects SET status = 'available', size_bytes = %s, "
             "checksum_sha256 = %s, version = version + 1, updated_at = %s "
-            "WHERE id = %s AND status = 'pending' AND version = %s",
+            "WHERE id = %s AND status IN ('pending', 'verifying') AND version = %s",
             (size_bytes, checksum_sha256, self.now(), oid, expected_version),
         )
 
