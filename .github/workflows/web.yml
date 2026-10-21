@@ -13,7 +13,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # The web dependencies live in web/ (web/package-lock.json). Run there:
+      # `npm ci` at the repository root had no lockfile to install from and
+      # failed every run, so the PR gate was red on every branch.
       - run: npm ci --no-audit --no-fund
+        working-directory: web
       - run: python3 -m pip install -r api/requirements-dev.txt
       - run: |
           AURA_API_ADMIN_PASSWORD=ci-dummy-password \

@@ -124,7 +124,9 @@ def test_commit_is_idempotent(monkeypatch):
     data = b"idempotent-payload"
     monkeypatch.setattr(main, "s3ops", DummyS3(data))
     c, headers = _admin_headers()
-    oid = _intent(c, headers)
+    # The declared size must match the stored bytes: the commit cross-checks
+    # the size authorised at intent time against what the gateway stored (#119).
+    oid = _intent(c, headers, size_bytes=len(data))
     first = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
     second = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
     assert first.status_code == 200 and second.status_code == 200
@@ -135,7 +137,9 @@ def test_truncated_upload_is_rejected_and_not_available(monkeypatch):
     data = b"short"
     monkeypatch.setattr(main, "s3ops", DummyS3(data, declared_size=len(data) + 50))
     c, headers = _admin_headers()
-    oid = _intent(c, headers, "truncated.bin")
+    # The intent declares what HEAD reports (55 bytes); the body streams only
+    # 5, so it is the streamed-vs-declared comparison that must catch it (#119).
+    oid = _intent(c, headers, "truncated.bin", size_bytes=len(data) + 50)
     r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
     assert r.status_code == 422, r.text
     assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "failed"
@@ -182,7 +186,7 @@ def test_commit_emits_server_timing(monkeypatch, caplog):
     data = b"timed-payload"
     monkeypatch.setattr(main, "s3ops", DummyS3(data))
     c, headers = _admin_headers()
-    oid = _intent(c, headers, "timed.bin")
+    oid = _intent(c, headers, "timed.bin", size_bytes=len(data))
 
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
         r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)

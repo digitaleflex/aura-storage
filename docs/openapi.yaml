@@ -376,7 +376,8 @@ paths:
         "409": { description: Object not committable (including aborted/expired/deleted) }
         "410": { description: Upload intent expired }
         "413": { description: Object exceeds the maximum allowed size }
-        "422": { description: Upload missing or size mismatch }
+        "422": { description: "Upload missing, or stored size does not match the declared size (intent marked failed)" }
+        "504": { description: "Commit deadline (AURA_COMMIT_DEADLINE_S) exceeded (intent marked failed)" }
   /api/v1/objects/{oid}/abort:
     post:
       summary: Cancel a pending upload intent (objects:write)
