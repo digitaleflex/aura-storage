@@ -10,12 +10,18 @@ import re
 # state an upload intent creates; the object only becomes ``available`` after the
 # commit endpoint verifies size and SHA-256. See docs/TRANSFER-ENGINE.md.
 PENDING = "pending"
+# Uploaded and being hashed by the verification worker (N5, api/verifier.py).
 VERIFYING = "verifying"
 AVAILABLE = "available"
+# Published row whose bytes no longer match the stored checksum (G1).
+SUSPECT = "suspect"
 FAILED = "failed"
 EXPIRED = "expired"
 ABORTED = "aborted"
 DELETED = "deleted"
+# Purge in progress (two-phase delete, api/lifecycle.py): hidden and not
+# downloadable; a row left in this state by a crash is finished by the sweep.
+PURGING = "purging"
 
 # Conservative RFC 6838 media-type shape. Parameters (everything after ``;``)
 # are allowed but ignored for the allow-list comparison.
@@ -89,6 +95,13 @@ def validate_upload_policy(
         raise ValueError("size_bytes exceeds the maximum allowed object size")
     return normalized
 
+
+# Media types that are already compressed: never re-compress them (wasted CPU).
+NON_COMPRESSIBLE_TYPES = {
+    "application/pdf", "application/zip", "application/gzip",
+    "image/jpeg", "image/png", "image/webp", "image/gif",
+    "video/mp4", "video/webm", "audio/mpeg", "audio/ogg",
+}
 
 def valid_idempotency_key(value: str, *, max_length: int) -> bool:
     """True when a client ``Idempotency-Key`` is usable as an opaque dedupe key.

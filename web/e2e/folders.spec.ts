@@ -17,7 +17,7 @@ async function login(page: import("@playwright/test").Page) {
   await page.getByLabel("Identifiant").fill("admin");
   await page.getByLabel("Mot de passe").fill("local-smoke-test-password");
   await page.getByRole("button", { name: "Se connecter", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
 }
 
 test("create, rename, open and delete a folder", async ({ page }) => {
@@ -46,17 +46,16 @@ test("create, rename, open and delete a folder", async ({ page }) => {
   await page.getByRole("dialog").getByRole("button", { name: "Renommer" }).click();
   await expect(open(renamed)).toBeVisible();
 
-  // Open it: the object panel now targets that folder.
+  // Open it: the page title now names that folder.
   await open(renamed).click();
   await expect(
-    page.getByRole("heading", { name: new RegExp(`Objets — ${renamed}`) }),
+    page.getByRole("heading", { level: 1, name: renamed }),
   ).toBeVisible();
 
-  // Back to the root via the breadcrumb. Scoped to the breadcrumb because the
-  // folder rail offers a root control of its own.
+  // Back to the root via the breadcrumb.
   await page
     .getByRole("navigation", { name: "Fil d'Ariane" })
-    .getByRole("button", { name: "Racine" })
+    .getByRole("button", { name: "Mes fichiers" })
     .click();
   await expect(open(renamed)).toBeVisible();
 

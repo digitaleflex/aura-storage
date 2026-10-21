@@ -7,7 +7,7 @@ The Compose file defines Traefik via static CLI arguments and discovers the Seaw
 - Only ports 80 and 443 are published on the host.
 - Docker provider uses `exposedByDefault=false`; a service must explicitly opt in with labels.
 - ACME uses the HTTP-01 challenge. The DNS A/AAAA record for `S3_DOMAIN` must resolve to this VPS, port 80 must be reachable, and no conflicting proxy should intercept the challenge unexpectedly.
-- The dashboard API is enabled internally but no public router is defined. Do not add a public dashboard route without authentication and network restrictions.
+- The dashboard API (`api@internal`) is routed on `DASHBOARD_DOMAIN` over HTTPS and always protected by the `dash-auth` BasicAuth middleware (`DASHBOARD_AUTH`). The router and the middleware already exist in the Compose labels; do not expose the router without both `DASHBOARD_DOMAIN` and `DASHBOARD_AUTH`, and keep port 8080 unpublished.
 - The `aura-s3-landing` router answers only an unsigned `GET /` on `S3_DOMAIN` with a static page; signed requests and every other path stay on the `aura-s3` router (`docs/S3-ROOT-LANDING.md`).
 - The `aura-swagger` router serves the committed contract (`docs/openapi.yaml`) through the `swagger-ui` service on `SWAGGER_DOMAIN`. No host port is published and the service is on the `edge` network only.
 - Shared middlewares live as labels on the `traefik` service: `api-ratelimit` (30/s, burst 60) and `api-secure-headers`. The `aura-swagger` router uses both. `api-auth-forward` is documented but commented out: no verify endpoint exists yet (see `api/main.py` / `api/authz.py`), so keep `SWAGGER_DOMAIN` behind operator-side access control until forwardAuth is wired.

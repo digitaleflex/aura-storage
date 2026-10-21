@@ -13,6 +13,7 @@ route that is not classified stays closed because no dependency grants access.
 Unauthenticated calls yield 401, insufficient rights yield 403, and neither
 reveals whether an object exists.
 """
+import secrets
 import time
 
 from fastapi import Header, HTTPException, Request
@@ -114,6 +115,7 @@ def authenticate(request: Request) -> dict:
         return {
             "kind": "service",
             "id": row["id"],
+            "name": row.get("name"),
             "role": row.get("role") or "service",
             "scopes": scopes,
             "space_id": row["space_id"],
@@ -136,6 +138,7 @@ def authenticate(request: Request) -> dict:
     return {
         "kind": "user",
         "id": user["id"],
+        "name": user["username"],
         "role": user["role"] or "user",
         "scopes": set(),
         "space_id": user["space_id"],
@@ -144,7 +147,22 @@ def authenticate(request: Request) -> dict:
         "space_status": space.get("status") if space else None,
         "session_id": session["id"],
         "csrf": session["csrf"],
+        "master_until": _row_get(session, "master_until"),
     }
+
+
+def _row_get(row, key: str):
+    """Column of a sqlite3.Row or a dict, None when absent (pre-migration row)."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def master_mode_active(principal: dict, now: float | None = None) -> bool:
+    """True while the caller's session holds a password-confirmed elevation."""
+    until = principal.get("master_until")
+    return bool(until) and int(until) > int(now if now is not None else time.time())
 
 
 def effective_scopes(principal: dict) -> frozenset:
@@ -182,7 +200,9 @@ def authorize(scope: str | None = None, human: bool = False):
             raise HTTPException(status_code=403, detail="forbidden")
         if principal["kind"] == "user":
             if request.method not in SAFE_METHODS:
-                if not x_csrf_token or x_csrf_token != principal["csrf"]:
+                if not x_csrf_token or not secrets.compare_digest(
+                    x_csrf_token, principal["csrf"]
+                ):
                     raise HTTPException(status_code=403, detail="csrf validation failed")
         if scope is not None and not has_scope(principal, scope):
             raise HTTPException(status_code=403, detail="forbidden")

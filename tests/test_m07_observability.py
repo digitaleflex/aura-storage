@@ -23,6 +23,7 @@ os.environ.setdefault("AURA_M2M_RATE_LIMIT", "100000")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import api.main as main  # noqa: E402
+from tests import catalogue_sql  # noqa: E402
 from api import authz  # noqa: E402
 from api.auth import hash_password  # noqa: E402
 from api.config import settings  # noqa: E402
@@ -337,12 +338,24 @@ def test_m07_health_ok_when_dependencies_answer(monkeypatch):
         def list_buckets(self):
             return {"Buckets": []}
 
-    monkeypatch.setattr(main, "s3ops", HealthyS3())
+    # Supervision probes the storage with its own fast-failing client.
+    monkeypatch.setattr(main, "s3probe", HealthyS3())
     c, headers = _admin()
     body = c.get("/api/v1/admin/health", headers=headers).json()
     assert body["status"] == "ok"
     assert body["components"]["storage"]["status"] == "ok"
     assert "latency_ms" in body["components"]["storage"]
+
+
+def test_m07_health_answers_fast_when_storage_is_down():
+    # The real probe client against an unreachable endpoint (127.0.0.1:9):
+    # one attempt with a short timeout, not botocore's default retries.
+    import time as _time
+    c, headers = _admin()
+    start = _time.monotonic()
+    body = c.get("/api/v1/admin/health", headers=headers).json()
+    assert body["components"]["storage"]["status"] == "down"
+    assert _time.monotonic() - start < 4
 
 
 # ---------------------------------------------------------------------------
@@ -600,11 +613,10 @@ def test_m07_reconcile_sweep_is_bounded(monkeypatch):
                    json={"display_name": f"stale-{i}.bin", "size_bytes": 1},
                    headers=_svc(token)).json()["id"] for i in range(3)]
     for oid in oids:
-        main.repo.conn.execute(
+        catalogue_sql.execute(
             "UPDATE objects SET created_at = ? WHERE id = ?",
             (main.repo.now() - 7200, oid),
         )
-    main.repo.conn.commit()
 
     class HealthyS3:
         def delete_object(self, Bucket, Key):
@@ -617,3 +629,27 @@ def test_m07_reconcile_sweep_is_bounded(monkeypatch):
     assert first.json()["expired"] == 2
     second = c.post("/api/v1/admin/reconcile", headers=headers)
     assert second.json()["expired"] == 1
+
+
+def test_m07_reconcile_uses_the_derived_intent_window(monkeypatch):
+    # The sweep window must be derived from the same settings that govern intent
+    # death (intent_ttl + intent_grace_s), never reconcile_pending's own default:
+    # otherwise a commit arriving inside the grace window could be swept out from
+    # under the uploader.
+    c, headers = _admin()
+    captured = {}
+
+    def _spy(repo_, s3_, *, expire_after_s, limit, multipart_expired_before):
+        captured["expire_after_s"] = expire_after_s
+        captured["limit"] = limit
+        # A multipart session (#72) is only swept after its own expiry + grace.
+        captured["multipart_expired_before"] = multipart_expired_before
+        return {"expired": 0, "storage_deletes_attempted": 0, "storage_failures": 0}
+
+    monkeypatch.setattr(main, "reconcile_pending", _spy)
+    r = c.post("/api/v1/admin/reconcile", headers=headers)
+    assert r.status_code == 200, r.text
+    assert captured["expire_after_s"] == (
+        main.settings.intent_ttl + main.settings.intent_grace_s
+    )
+    assert captured["multipart_expired_before"] <= int(time.time()) - main.settings.intent_grace_s

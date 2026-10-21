@@ -76,7 +76,7 @@ async function login(page: Page): Promise<void> {
   await page.getByLabel("Identifiant").fill("admin");
   await page.getByLabel("Mot de passe").fill("pw");
   await page.getByRole("button", { name: "Se connecter" }).click();
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
 }
 
 test("queues several files, isolates one failure and retries only it", async ({ page }) => {
@@ -95,7 +95,7 @@ test("queues several files, isolates one failure and retries only it", async ({ 
 
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
-  const status = page.getByTestId("transfer-status");
+  const status = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
   await expect(status).toContainText("alpha.pdf");
   await expect(status).toContainText("bad.pdf");
   await expect(status).toContainText("gamma.pdf");
@@ -103,7 +103,10 @@ test("queues several files, isolates one failure and retries only it", async ({ 
   // Two succeed, one fails, and the failure is surfaced with its detail.
   await expect(status.getByText("Disponible", { exact: true })).toHaveCount(2);
   await expect(status.getByText("Échec", { exact: true })).toHaveCount(1);
-  await expect(page.getByRole("alert")).toContainText("does not match");
+  // Scoped to the import panel: the page can show other alerts (e.g. storage usage).
+  await expect(
+    page.getByRole("region", { name: "Importer" }).getByRole("alert"),
+  ).toContainText("incomplet ou différent de l'original");
 
   // Retry only the failed file; the two successes are not re-uploaded.
   state.failBad = false;

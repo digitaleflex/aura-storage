@@ -8,6 +8,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from . import ids
+from .auth import new_token, session_key
 from .dblock import synchronized
 from .migrations import (
     DEFAULT_APPLICATION_NAME,
@@ -49,9 +50,10 @@ class Repository:
             cur.execute(sql, params)
             return cur.fetchall()
 
-    def _run(self, sql: str, params: tuple = ()) -> None:
+    def _run(self, sql: str, params: tuple = ()) -> int:
         with self.conn.cursor() as cur:
             cur.execute(sql, params)
+            return cur.rowcount
 
     # -- users ------------------------------------------------------------
     def get_user_by_name(self, username: str) -> Optional[dict]:
@@ -115,21 +117,34 @@ class Repository:
 
     # -- sessions ---------------------------------------------------------
     def create_session(self, user_id: str, csrf: str, expires_at: int) -> str:
-        sid = self.new_id()
+        """Create a session and return its opaque cookie token.
+
+        Only ``session_key(token)`` is stored (row ``id``); the clear token
+        exists solely in the returned value and the client cookie. Expired rows
+        are pruned here so the table cannot grow without bound.
+        """
+        token = new_token(32)
+        self._run("DELETE FROM sessions WHERE expires_at <= %s", (self.now(),))
         self._run(
             "INSERT INTO sessions (id, user_id, csrf, expires_at) VALUES (%s, %s, %s, %s)",
-            (sid, user_id, csrf, expires_at),
+            (session_key(token), user_id, csrf, expires_at),
         )
-        return sid
+        return token
 
-    def get_session(self, sid: str) -> Optional[dict]:
+    def get_session(self, token: str) -> Optional[dict]:
+        """Look a session up by its cookie token (hashed before the query)."""
         return self._one(
             "SELECT * FROM sessions WHERE id = %s AND expires_at > %s",
-            (sid, self.now()),
+            (session_key(token), self.now()),
         )
 
     def delete_session(self, sid: str) -> None:
+        """Delete by stored row id (``session["id"]``, i.e. the digest)."""
         self._run("DELETE FROM sessions WHERE id = %s", (sid,))
+
+    def set_session_master(self, sid: str, until: Optional[int]) -> None:
+        """Grant (epoch seconds) or end (None) master mode on one session."""
+        self._run("UPDATE sessions SET master_until = %s WHERE id = %s", (until, sid))
 
     # -- applications / spaces / buckets (#35) ----------------------------
     def create_application(self, name: str) -> str:
@@ -277,6 +292,13 @@ class Repository:
             "SELECT * FROM buckets WHERE space_id = %s ORDER BY created_at", (space_id,)
         )
 
+    def has_object(self, bucket: str, object_key: str) -> bool:
+        row = self._one(
+            "SELECT 1 AS x FROM objects WHERE bucket = %s AND object_key = %s LIMIT 1",
+            (bucket, object_key),
+        )
+        return row is not None
+
     def list_all_buckets(self) -> list:
         # Every registered bucket, oldest first; the API joins space/application
         # names so a bucket is never shown without its attachment (#M04).
@@ -337,6 +359,61 @@ class Repository:
             "UPDATE service_identities SET last_used_at = %s WHERE id = %s", (ts, iid)
         )
 
+    # -- object shares ----------------------------------------------------
+    def create_share(
+        self, object_id: str, space_id: str, created_by: str,
+        created_by_kind: str, token_hash: str, expires_at: int,
+        content_disposition: str = "attachment",
+        max_uses: Optional[int] = None,
+    ) -> str:
+        sid = self.new_id()
+        self._run(
+            "INSERT INTO object_shares (id, object_id, space_id, created_by, "
+            "created_by_kind, token_hash, content_disposition, expires_at, "
+            "max_uses, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (sid, object_id, space_id, created_by, created_by_kind, token_hash,
+             content_disposition, expires_at, max_uses, self.now()),
+        )
+        return sid
+
+    def get_share(self, sid: str) -> Optional[dict]:
+        return self._one("SELECT * FROM object_shares WHERE id = %s", (sid,))
+
+    def get_share_by_token_hash(self, token_hash: str) -> Optional[dict]:
+        return self._one(
+            "SELECT * FROM object_shares WHERE token_hash = %s", (token_hash,)
+        )
+
+    def list_shares(self, object_id: str) -> list:
+        return self._all(
+            "SELECT * FROM object_shares WHERE object_id = %s "
+            "ORDER BY created_at DESC, id",
+            (object_id,),
+        )
+
+    def consume_share(self, sid: str, now: int) -> bool:
+        # See api/db.py: the guard is part of the UPDATE so a last use cannot be
+        # redeemed twice by concurrent requests.
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE object_shares SET use_count = use_count + 1, "
+                "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
+                "AND expires_at > %s "
+                "AND (max_uses IS NULL OR use_count < max_uses)",
+                (now, sid, now),
+            )
+            return cur.rowcount == 1
+
+    def revoke_share(self, sid: str, now: int) -> None:
+        self._run(
+            "UPDATE object_shares SET revoked_at = %s "
+            "WHERE id = %s AND revoked_at IS NULL",
+            (now, sid),
+        )
+
+    def delete_shares_for_object(self, object_id: str) -> None:
+        self._run("DELETE FROM object_shares WHERE object_id = %s", (object_id,))
+
     # -- objects ----------------------------------------------------------
     def create_pending_object(
         self, *, space_id: str, application_id: Optional[str], environment: Optional[str],
@@ -345,6 +422,7 @@ class Repository:
         intent_expires_at: Optional[int], folder_id: Optional[str] = None,
         expected_size_bytes: Optional[int] = None,
         idempotency_key: Optional[str] = None,
+        content_encoding: Optional[str] = None,
     ) -> str:
         oid = self.new_id()
         now = self.now()
@@ -352,12 +430,13 @@ class Repository:
             """INSERT INTO objects (id, bucket, object_key, display_name, content_type,
                size_bytes, checksum_sha256, folder_id, owner_id, visibility, status,
                created_at, updated_at, actor_kind, actor_id, application_id, space_id,
-               environment, intent_expires_at, expected_size_bytes, idempotency_key)
+               environment, intent_expires_at, expected_size_bytes, idempotency_key,
+               content_encoding)
                VALUES (%s, %s, %s, %s, %s, -1, '', %s, %s, 'private', 'pending', %s, %s,
-                       %s, %s, %s, %s, %s, %s, %s, %s)""",
+                       %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (oid, bucket, object_key, display_name, content_type, folder_id, owner_id,
              now, now, actor_kind, actor_id, application_id, space_id, environment,
-             intent_expires_at, expected_size_bytes, idempotency_key),
+             intent_expires_at, expected_size_bytes, idempotency_key, content_encoding),
         )
         return oid
 
@@ -414,17 +493,163 @@ class Repository:
             (actor_id, idempotency_key, space_id),
         )
 
-    def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str) -> None:
+    # -- asynchronous verification (N5) ------------------------------------
+    def mark_verifying(self, oid: str, etag: Optional[str]) -> None:
+        """Hand an uploaded object to the verification worker."""
         self._run(
-            "UPDATE objects SET status = 'available', size_bytes = %s, checksum_sha256 = %s, updated_at = %s WHERE id = %s",
-            (size_bytes, checksum_sha256, self.now(), oid),
+            "UPDATE objects SET status = 'verifying', verify_etag = %s, "
+            "verify_lease_until = NULL, verify_attempts = 0, updated_at = %s "
+            "WHERE id = %s AND status IN ('pending', 'verifying')",
+            (etag, self.now(), oid),
         )
 
-    def list_pending_before(self, cutoff: int, limit: int = 500):
+    def claim_verification(self, now: int, lease_until: int):
+        """Take the oldest verifying object nobody holds, under a lease.
+
+        ``FOR UPDATE SKIP LOCKED`` lets several workers claim in parallel
+        without blocking or taking the same row; a crashed worker's lease
+        simply runs out and the object is taken again.
+        """
+        return self._one(
+            "UPDATE objects SET verify_lease_until = %s, "
+            "verify_attempts = COALESCE(verify_attempts, 0) + 1 "
+            "WHERE id = (SELECT id FROM objects WHERE status = 'verifying' "
+            "AND (verify_lease_until IS NULL OR verify_lease_until < %s) "
+            "ORDER BY updated_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED) "
+            "RETURNING *",
+            (lease_until, now),
+        )
+
+    def extend_verification(self, oid: str, lease_until: int) -> None:
+        """Push the lease (heartbeat while hashing, or a retry delay)."""
+        self._run(
+            "UPDATE objects SET verify_lease_until = %s WHERE id = %s AND status = 'verifying'",
+            (lease_until, oid),
+        )
+
+    def get_by_idempotency(
+        self, *, actor_id: str, idempotency_key: str, space_id: str,
+    ):
+        """Newest object of any status for an ``Idempotency-Key`` + actor."""
+        return self._one(
+            "SELECT * FROM objects WHERE actor_id = %s AND idempotency_key = %s "
+            "AND space_id = %s ORDER BY created_at DESC LIMIT 1",
+            (actor_id, idempotency_key, space_id),
+        )
+
+    def storage_commitment(self) -> dict:
+        """Bytes the object store holds or has promised, across every space.
+
+        ``stored``: verified bytes still on disk (available, trash, purge in
+        progress). ``reserved``: declared sizes of uploads not yet verified
+        (pending, verifying) — counted from the moment the intent is issued.
+        """
+        row = self._one(
+            "SELECT "
+            "COALESCE(SUM(CASE WHEN status IN ('available', 'deleted', 'purging') "
+            "AND size_bytes > 0 THEN size_bytes ELSE 0 END), 0) AS stored, "
+            "COALESCE(SUM(CASE WHEN status IN ('pending', 'verifying') "
+            "AND expected_size_bytes > 0 THEN expected_size_bytes ELSE 0 END), 0) AS reserved "
+            "FROM objects"
+        )
+        return {"stored": int(row["stored"]), "reserved": int(row["reserved"])}
+    # -- periodic integrity scrub ------------------------------------------
+    def claim_scrub(self, now: int, lease_until: int, checked_before: int):
+        """Take the available object checked longest ago (never-checked first),
+        under a lease, if it is due (checked before ``checked_before``)."""
+        return self._one(
+            "UPDATE objects SET scrub_lease_until = %s WHERE id = ("
+            "SELECT id FROM objects WHERE status = 'available' "
+            "AND (scrubbed_at IS NULL OR scrubbed_at < %s) "
+            "AND (scrub_lease_until IS NULL OR scrub_lease_until < %s) "
+            "ORDER BY COALESCE(scrubbed_at, 0) ASC, created_at ASC LIMIT 1 "
+            "FOR UPDATE SKIP LOCKED) RETURNING *",
+            (lease_until, checked_before, now),
+        )
+
+    def record_scrub(self, oid: str, result: str, at: int) -> None:
+        self._run(
+            "UPDATE objects SET scrubbed_at = %s, scrub_result = %s, scrub_lease_until = NULL "
+            "WHERE id = %s",
+            (at, result, oid),
+        )
+
+    def release_scrub(self, oid: str) -> None:
+        """Give the object back unchecked (storage outage): retried next run."""
+        self._run("UPDATE objects SET scrub_lease_until = NULL WHERE id = %s", (oid,))
+
+    def integrity_summary(self) -> dict:
+        rows = self._all(
+            "SELECT COALESCE(scrub_result, 'unchecked') AS result, COUNT(*) AS n, "
+            "MIN(scrubbed_at) AS oldest FROM objects WHERE status = 'available' "
+            "GROUP BY COALESCE(scrub_result, 'unchecked')"
+        )
+        return {r["result"]: {"count": int(r["n"]), "oldest": r["oldest"]} for r in rows}
+
+    def list_integrity_problems(self, limit: int = 100):
+        return self._all(
+            "SELECT id, space_id, display_name, size_bytes, scrub_result, scrubbed_at "
+            "FROM objects WHERE status = 'available' "
+            "AND scrub_result IN ('mismatch', 'missing') "
+            "ORDER BY scrubbed_at DESC LIMIT %s",
+            (limit,),
+        )
+    def object_states_for_keys(self, bucket: str, keys: list) -> dict:
+        """Catalogue state of storage keys: ``{key: {id, status, multipart_upload_id}}``.
+
+        Keys without a row are absent from the result (storage orphans).
+        """
+        out: dict = {}
+        if not keys:
+            return out
+        for r in self._all(
+            "SELECT id, object_key, status, multipart_upload_id FROM objects "
+            "WHERE bucket = %s AND object_key = ANY(%s)",
+            (bucket, list(keys)),
+        ):
+            out[r["object_key"]] = {
+                "id": r["id"], "status": r["status"],
+                "multipart_upload_id": r["multipart_upload_id"],
+            }
+        return out
+
+    TERMINAL_STATUSES = {"failed", "expired", "aborted", "deleted"}
+
+    def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str,
+                       expected_version=None) -> int:
+        if expected_version is None:
+            return self._run(
+                "UPDATE objects SET status = 'available', size_bytes = %s, "
+                "checksum_sha256 = %s, version = version + 1, updated_at = %s "
+                "WHERE id = %s AND status IN ('pending', 'verifying')",
+                (size_bytes, checksum_sha256, self.now(), oid),
+            )
+        return self._run(
+            "UPDATE objects SET status = 'available', size_bytes = %s, "
+            "checksum_sha256 = %s, version = version + 1, updated_at = %s "
+            "WHERE id = %s AND status IN ('pending', 'verifying') AND version = %s",
+            (size_bytes, checksum_sha256, self.now(), oid, expected_version),
+        )
+
+    def set_multipart(self, oid: str, upload_id: Optional[str],
+                      part_bytes: Optional[int]) -> None:
+        """Record (or clear, with ``upload_id=None``) a multipart session (#72)."""
+        self._run(
+            "UPDATE objects SET multipart_upload_id = %s, multipart_part_bytes = %s, "
+            "updated_at = %s WHERE id = %s",
+            (upload_id, part_bytes, self.now(), oid),
+        )
+
+    def list_pending_before(self, cutoff: int, limit: int = 500,
+                            multipart_expired_before: Optional[int] = None):
+        # A multipart session lives longer than a single-PUT intent: it is only
+        # stale once its own expiry has passed, whatever its creation time.
+        mp_cut = multipart_expired_before if multipart_expired_before is not None else cutoff
         return self._all(
             "SELECT * FROM objects WHERE status = 'pending' AND created_at < %s "
+            "AND (multipart_upload_id IS NULL OR intent_expires_at < %s) "
             "ORDER BY created_at ASC LIMIT %s",
-            (cutoff, limit),
+            (cutoff, mp_cut, limit),
         )
 
     def list_available(self, limit: int = 500):
@@ -435,10 +660,30 @@ class Repository:
             (limit,),
         )
 
-    def set_status(self, oid: str, status: str) -> None:
-        self._run(
-            "UPDATE objects SET status = %s, updated_at = %s WHERE id = %s",
-            (status, self.now(), oid),
+    def set_status(self, oid: str, status: str, *,
+                   expected_version=None, allowed_from=None) -> int:
+        clauses = ["status = %s", "version = version + 1", "updated_at = %s"]
+        params = [status, self.now()]
+        where = ["id = %s"]
+        params2 = [oid]
+        if allowed_from:
+            where.append("status IN (%s)" % ",".join("%%s" for _ in allowed_from))
+            params2.extend(allowed_from)
+        if expected_version is not None:
+            where.append("version = %s")
+            params2.append(expected_version)
+        if status in self.TERMINAL_STATUSES:
+            clauses.append("terminal_since = COALESCE(terminal_since, %s)")
+            params.insert(1, self.now())
+        sql = "UPDATE objects SET " + ", ".join(clauses) + " WHERE " + " AND ".join(where)
+        return self._run(sql, params + params2)
+
+    def list_status_before(self, status: str, cutoff: int, limit: int = 500):
+        """Rows in ``status`` not updated since ``cutoff``, oldest first."""
+        return self._all(
+            "SELECT * FROM objects WHERE status = %s AND updated_at < %s "
+            "ORDER BY updated_at ASC LIMIT %s",
+            (status, cutoff, limit),
         )
 
     def delete_object_row(self, oid: str) -> None:
@@ -466,11 +711,12 @@ class Repository:
         if parent_id is None:
             return self._all(
                 "SELECT * FROM folders WHERE owner_id = %s AND parent_id IS NULL "
-                "ORDER BY name",
+                'ORDER BY name COLLATE "C"',
                 (owner_id,),
             )
         return self._all(
-            "SELECT * FROM folders WHERE owner_id = %s AND parent_id = %s ORDER BY name",
+            "SELECT * FROM folders WHERE owner_id = %s AND parent_id = %s "
+            'ORDER BY name COLLATE "C"',
             (owner_id, parent_id),
         )
 
@@ -478,8 +724,11 @@ class Repository:
         # Flat listing of the owner's whole tree in one query (#62 follow-up).
         # Ordered by name for a deterministic payload; the client rebuilds the
         # hierarchy from parent_id. Owner-scoped, so no cross-user leak.
+        # COLLATE "C": byte order, same as SQLite, whatever the database locale
+        # (an en_US.utf8 cluster would put "d10-x" before "d1-x").
         return self._all(
-            "SELECT * FROM folders WHERE owner_id = %s ORDER BY name, id", (owner_id,)
+            'SELECT * FROM folders WHERE owner_id = %s ORDER BY name COLLATE "C", id',
+            (owner_id,),
         )
 
     def folder_name_exists(

@@ -28,6 +28,7 @@ os.environ.setdefault("AURA_M2M_RATE_LIMIT", "100000")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import api.main as main  # noqa: E402
+from tests import catalogue_sql  # noqa: E402
 from api import authz  # noqa: E402
 from api.auth import hash_password  # noqa: E402
 from api.config import settings  # noqa: E402
@@ -169,6 +170,9 @@ def test_m06_other_space_and_application_are_isolated():
         ("post", f"/api/v1/objects/{oid}/download-intent", {}),
         ("post", f"/api/v1/objects/{oid}/preview-intent", {}),
         ("post", f"/api/v1/objects/{oid}/purge", {}),
+        ("get", f"/api/v1/objects/{oid}/multipart", {}),
+        ("post", f"/api/v1/objects/{oid}/multipart/parts", {"json": {"part_numbers": [1]}}),
+        ("post", f"/api/v1/objects/{oid}/restore", {}),
         ("delete", f"/api/v1/objects/{oid}", {}),
     ]:
         r = c.request(method, path, headers=hb, **kwargs)
@@ -244,6 +248,9 @@ def test_m06_unauthenticated_is_denied():
         ("post", f"/api/v1/objects/{oid}/download-intent", {}),
         ("post", f"/api/v1/objects/{oid}/preview-intent", {}),
         ("post", f"/api/v1/objects/{oid}/purge", {}),
+        ("get", f"/api/v1/objects/{oid}/multipart", {}),
+        ("post", f"/api/v1/objects/{oid}/multipart/parts", {"json": {"part_numbers": [1]}}),
+        ("post", f"/api/v1/objects/{oid}/restore", {}),
         ("delete", f"/api/v1/objects/{oid}", {}),
         ("patch", f"/api/v1/objects/{oid}", {"json": {"folder_id": None}}),
         ("get", "/api/v1/folders", {}),
@@ -409,11 +416,10 @@ def test_m06_reconcile_storage_failure_is_reported(monkeypatch):
     oid = c.post("/api/v1/objects/upload-intents",
                  json={"display_name": "stale.bin", "size_bytes": 1},
                  headers=_svc(token)).json()["id"]
-    main.repo.conn.execute(
+    catalogue_sql.execute(
         "UPDATE objects SET created_at = ? WHERE id = ?",
         (main.repo.now() - 7200, oid),
     )
-    main.repo.conn.commit()
 
     class BrokenS3:
         def delete_object(self, Bucket, Key):

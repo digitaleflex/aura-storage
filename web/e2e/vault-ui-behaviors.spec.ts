@@ -14,7 +14,7 @@ import type { Page, Route } from "@playwright/test";
  *     `user` never calls `GET /api/v1/admin/usage` and never sees usage;
  *  4. the "SHA-256 vérifié" chip appears only once a queue item reaches the
  *     `available` phase, never while it is still moving;
- *  5. the accepted import categories are informative text, not controls.
+ *  5. the import panel opens on demand and states the server-side check.
  *
  * The mock mirrors e2e/upload-flow.spec.ts: `page.route` answers every /api/v1
  * call and the presigned PUT, so no uvicorn/Vite backend data is needed beyond
@@ -192,7 +192,7 @@ async function login(page: Page, role = "admin"): Promise<void> {
   await page.getByLabel("Identifiant").fill(role);
   await page.getByLabel("Mot de passe").fill("pw");
   await page.getByRole("button", { name: "Se connecter", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
 }
 
 async function chooseFile(page: Page, name = "rapport.pdf"): Promise<void> {
@@ -248,7 +248,7 @@ test("a drop during a transfer is buffered as a backlog, never swallowed", async
   ).toBeVisible();
 
   // The drop never started a second intent: only the first file was submitted.
-  await expect(page.getByTestId("transfer-status")).toContainText("en-cours.pdf");
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status")).toContainText("en-cours.pdf");
 });
 
 // -- 2. actionable 409 folder-delete retry ---------------------------------
@@ -296,7 +296,7 @@ test("storage usage is never fetched nor shown for a plain user", async ({ page 
   await login(page, "user");
 
   // No admin:read -> the admin usage query must stay disabled.
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
   expect(mocks.usageRequests()).toBe(0);
   await expect(page.getByText("Espace utilisé")).toHaveCount(0);
   await expect(page.getByText(/Usage réel \(admin\)/)).toHaveCount(0);
@@ -324,40 +324,36 @@ test("the SHA-256 chip only appears once a file is available", async ({ page }) 
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
   // While the file is still moving the checksum is not (yet) claimed.
-  await expect(page.getByTestId("transfer-status")).toContainText("Envoi…");
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status")).toContainText("Envoi…");
   await expect(page.getByText("SHA-256 vérifié", { exact: true })).toHaveCount(0);
 
   // Once committed and available, the verified chip is shown.
-  await expect(page.getByTestId("transfer-status")).toContainText("Disponible");
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status")).toContainText("Disponible");
   await expect(page.getByText("SHA-256 vérifié", { exact: true })).toBeVisible();
 });
 
-// -- 5. informational (non-interactive) category badges ---------------------
+// -- 5. on-demand import panel ----------------------------------------------
 
-test("accepted import categories are informative, not interactive", async ({ page }) => {
+test("the import panel opens on demand and states the server-side check", async ({
+  page,
+}) => {
   await installMocks(page);
   await login(page);
 
-  const categories = page.getByRole("list", {
-    name: "Catégories de fichiers acceptées",
-  });
-  await expect(categories).toBeVisible();
+  const intake = page.getByRole("region", { name: "Importer" });
+  // Closed by default: the register is the first thing on the page.
+  await expect(intake).toBeHidden();
 
-  for (const label of [
-    "Documents",
-    "Images",
-    "Vidéos",
-    "Audio",
-    "Archives",
-    "Autres",
-  ]) {
-    await expect(categories.getByText(label, { exact: true })).toBeVisible();
-  }
+  await page.getByRole("button", { name: "Importer", exact: true }).click();
+  await expect(intake).toBeVisible();
+  await expect(intake).toContainText("SHA-256");
+  await expect(
+    intake.getByRole("button", { name: "Importer et valider" }),
+  ).toBeDisabled();
 
-  // They carry no control: no buttons, no links inside the badge list.
-  await expect(categories.getByRole("button")).toHaveCount(0);
-  await expect(categories.getByRole("link")).toHaveCount(0);
-  await expect(categories.getByRole("listitem")).toHaveCount(6);
+  // Closing it (nothing pending) hides it again.
+  await intake.getByRole("button", { name: "Fermer" }).click();
+  await expect(intake).toBeHidden();
 });
 
 // -- 6. recursive (cascade) folder deletion ---------------------------------

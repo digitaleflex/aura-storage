@@ -182,6 +182,12 @@ def test_me_endpoint():
     assert c2.get("/api/v1/me").json()["id"]
 
 
+def test_me_exposes_the_signed_in_display_name():
+    c = make_client()
+    login(c)
+    assert c.get("/api/v1/me").json()["name"] == "admin"
+
+
 def test_me_exposes_csrf_token_recoverable_without_relogin():
     # Regression for "session expires all the time": the CSRF token was returned
     # only by POST /login and kept in the frontend's memory, so a refresh/new tab
@@ -225,12 +231,12 @@ def test_me_csrf_token_is_null_for_service_principal():
     assert me.json()["csrf_token"] is None
 
 
-def test_default_session_ttl_is_30_days():
-    # The shipped default (no override) is 2592000s = 30 days, per the product
-    # decision. Skip if the running environment deliberately overrides the TTL.
+def test_default_session_ttl_is_8_hours():
+    # The shipped default (no override) is 28800s = 8 hours (audit H6). Skip if
+    # the running environment deliberately overrides the TTL.
     if os.environ.get("AURA_SESSION_TTL"):
         pytest.skip("AURA_SESSION_TTL is overridden in this environment")
-    assert main.settings.session_ttl == 2592000
+    assert main.settings.session_ttl == 28800
 
 
 def test_mutation_requires_csrf():
@@ -337,6 +343,43 @@ def test_soft_delete_and_purge(monkeypatch):
     assert c.post(f"/api/v1/objects/{oid}/purge", headers=headers).status_code == 404
 
 
+def test_restore_brings_a_soft_deleted_object_back(monkeypatch):
+    c, headers = authed_client()
+    oid = c.post(
+        "/api/v1/objects/upload-intents",
+        json={"bucket": "aura", "display_name": "trash-me.txt", "size_bytes": 1},
+        headers=headers,
+    ).json()["id"]
+    # An object that is not in the trash cannot be "restored".
+    assert c.post(f"/api/v1/objects/{oid}/restore", headers=headers).status_code == 409
+
+    # Simulate a committed object, then soft-delete and restore it.
+    main.repo.mark_available(oid, 1, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    assert c.delete(f"/api/v1/objects/{oid}", headers=headers).status_code == 200
+    trash = c.get("/api/v1/objects?status=deleted", headers=headers).json()["items"]
+    assert [i["id"] for i in trash] == [oid]
+
+    r = c.post(f"/api/v1/objects/{oid}/restore", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "available"
+    assert c.get("/api/v1/objects?status=deleted", headers=headers).json()["items"] == []
+    # Restoring twice is refused: it is no longer in the trash.
+    assert c.post(f"/api/v1/objects/{oid}/restore", headers=headers).status_code == 409
+
+
+def test_restore_refuses_an_intent_deleted_before_its_upload():
+    c, headers = authed_client()
+    oid = c.post(
+        "/api/v1/objects/upload-intents",
+        json={"bucket": "aura", "display_name": "never-uploaded.txt", "size_bytes": 1},
+        headers=headers,
+    ).json()["id"]
+    assert c.delete(f"/api/v1/objects/{oid}", headers=headers).status_code == 200
+    r = c.post(f"/api/v1/objects/{oid}/restore", headers=headers)
+    assert r.status_code == 409
+    assert "never uploaded" in r.json()["detail"]
+
+
 def test_reconcile_expires_stale_pending():
     from api.lifecycle import reconcile_pending
 
@@ -348,18 +391,17 @@ def test_reconcile_expires_stale_pending():
     ).json()["id"]
     # backdate the pending row past the grace period
     old = 7200
-    if hasattr(main.repo, "conn") and "sqlite3" in type(main.repo.conn).__module__:
+    if main.repo.dialect == "sqlite":
         main.repo.conn.execute(
             "UPDATE objects SET created_at = ? WHERE id = ?",
             (main.repo.now() - old, oid),
         )
         main.repo.conn.commit()
-    else:
-        with main.repo.conn.cursor() as cur:
-            cur.execute(
-                "UPDATE objects SET created_at = %s WHERE id = %s",
-                (main.repo.now() - old, oid),
-            )
+    else:  # psycopg connection: go through the repository helper
+        main.repo._run(
+            "UPDATE objects SET created_at = %s WHERE id = %s",
+            (main.repo.now() - old, oid),
+        )
     # fresh pending objects are untouched; only the stale one expires
     fresh = c.post(
         "/api/v1/objects/upload-intents",
@@ -421,7 +463,7 @@ def test_live_round_trip_with_integrity():
     ).json()
     put = httpx.put(
         intent["upload_url"], content=payload,
-        headers={"Content-Type": "application/octet-stream"}, timeout=30,
+        headers=intent["headers"], timeout=30,
     )
     assert put.status_code == 200, put.text
     committed = c.post(
@@ -449,7 +491,11 @@ def test_live_round_trip_with_integrity():
     from api.s3 import presigned_put as _presign
     short_url = _presign(main.s3, bucket, "expiry-probe", "text/plain", 2, 1)
     _time.sleep(4)
-    expired = httpx.put(short_url, content=b"x", headers={"Content-Type": "text/plain"}, timeout=30)
+    expired = httpx.put(
+        short_url, content=b"x",
+        headers={"Content-Type": "text/plain", "x-amz-server-side-encryption": "AES256"},
+        timeout=30,
+    )
     assert expired.status_code == 403, expired.text
 
 

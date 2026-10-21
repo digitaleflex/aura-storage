@@ -171,6 +171,15 @@ export interface UsageResponse {
     intent_ttl: number;
     allow_empty_objects: boolean;
   };
+  /** Capacity guard; null when no capacity is configured. */
+  capacity?: {
+    capacity_bytes: number;
+    high_watermark_pct: number;
+    accept_until_bytes: number;
+    stored_bytes: number;
+    reserved_bytes: number;
+    free_for_uploads_bytes: number;
+  } | null;
   totals: {
     objects_by_status: Record<string, number>;
     available_count: number;
@@ -224,6 +233,46 @@ export interface OrphanScanResponse {
   checked_at: number;
 }
 
+export interface StorageOrphan {
+  key: string;
+  size_bytes: number;
+  last_modified: number;
+  reason: "no_row" | "terminal";
+  object_id: string | null;
+}
+
+export interface StorageOrphanBucket {
+  bucket: string;
+  scanned?: number;
+  orphans?: StorageOrphan[];
+  orphan_bytes?: number;
+  stale_uploads?: Array<{ key: string; upload_id: string; initiated: number }>;
+  next_start_after?: string | null;
+  error?: string;
+}
+
+export interface StorageOrphanReport {
+  grace_seconds: number;
+  buckets: StorageOrphanBucket[];
+  checked_at: number;
+}
+
+export interface IntegrityProblem {
+  id: string;
+  space_id: string;
+  display_name: string;
+  size_bytes: number;
+  scrub_result: "mismatch" | "missing";
+  scrubbed_at: number;
+}
+
+export interface IntegrityReport {
+  interval_days: number;
+  /** Count (and oldest check) per result: ok, mismatch, missing, unchecked. */
+  results: Record<string, { count: number; oldest: number | null }>;
+  problems: IntegrityProblem[];
+}
+
 export interface ReconcileResponse {
   expired: number;
   storage_deletes_attempted: number;
@@ -259,7 +308,11 @@ export interface UploadIntentResponse {
   status: string;
   /** Data-plane method the browser must use. */
   method: string;
-  upload_url: string;
+  /** Single presigned PUT; null for a multipart upload (parts are requested). */
+  upload_url: string | null;
+  /** "multipart" when the server chose part-level upload (#72). */
+  upload_mode?: "single" | "multipart";
+  multipart?: { part_size_bytes: number; part_count: number };
   /** Headers to send with the presigned PUT (Content-Type is signed). */
   headers: Record<string, string>;
   /** Server-normalized media type actually stored/authorized. */
@@ -280,6 +333,31 @@ export interface CommitResponse {
   checksum_algorithm?: string;
 }
 
+export interface PreviewIntentResponse {
+  id: string;
+  preview_url: string;
+  method: string;
+  expires_in: number;
+  expires_at: number | null;
+  display_name: string;
+  content_type: string;
+  size_bytes: number;
+}
+
+export interface MultipartStatus {
+  id: string;
+  size_bytes: number;
+  part_size_bytes: number;
+  part_count: number;
+  uploaded_parts: number[];
+}
+
+export interface MultipartPartUrls {
+  id: string;
+  expires_in: number;
+  parts: Array<{ part_number: number; size_bytes: number; url: string }>;
+}
+
 export interface DownloadIntentResponse {
   id: string;
   download_url: string;
@@ -293,34 +371,13 @@ export interface DownloadIntentResponse {
   checksum_algorithm?: string;
 }
 
-/**
- * Response of `POST /api/v1/objects/{id}/preview-intent`. Same shape as a
- * download intent, but the presigned GET is bound to `Content-Disposition:
- * inline` so renderable types (image, audio, PDF) display in place.
- */
-export interface PreviewIntentResponse {
-  id: string;
-  /** Short-lived, opaque presigned URL used directly as the media `src`. */
-  preview_url: string;
-  method: string;
-  expires_in: number;
-  expires_at: number | null;
-  display_name: string;
-  content_type: string;
-  size_bytes: number;
-  /**
-   * True when the preview endpoint was unavailable (404/501) and this intent
-   * was minted through the download endpoint instead: inline rendering is not
-   * guaranteed, so the UI should degrade to a download offer.
-   */
-  fallback?: boolean;
-}
-
 /** Principal metadata returned by GET /api/v1/me. */
 export interface SessionInfo {
   id: string;
   /** "user" (human session) or "service" (machine identity). */
   kind: string;
+  /** Display name: username for a person, identity name for a service. */
+  name?: string | null;
   /** Role for humans: "user" | "operator" | "admin"; null for services. */
   role: string | null;
   space_id: string | null;
@@ -332,6 +389,16 @@ export interface SessionInfo {
    * re-hydrate the in-memory CSRF token after a reload/new tab.
    */
   csrf_token: string | null;
+  /** Master mode expiry (epoch seconds) while active on this session, else null. */
+  master_until?: number | null;
+}
+
+export interface BulkPurgeResult {
+  purged: string[];
+  not_found: string[];
+  failed: string[];
+  /** Empty trash only: true when another call is needed. */
+  more?: boolean;
 }
 
 /** True when a role may read the administration console (`admin:read`). */
@@ -571,45 +638,12 @@ export const api = {
     );
   },
 
-  /**
-   * Mint an inline preview intent (`objects:read`). Mirrors the download
-   * intent but asks the storage for `Content-Disposition: inline`, so images,
-   * audio and PDFs can be pointed at directly by the browser.
-   *
-   * Older backends (or a not-yet-deployed server) answer 404/501 to this
-   * route; we then degrade to a download intent so the feature never hard-fails
-   * on a server that only knows download-intent. Genuine 409s (object not
-   * available) are propagated unchanged.
-   */
-  async createPreviewIntent(
-    id: string,
-    csrf: string,
-  ): Promise<PreviewIntentResponse> {
-    try {
-      return await request<PreviewIntentResponse>(
-        `/api/v1/objects/${encodeURIComponent(id)}/preview-intent`,
-        { method: "POST", csrf },
-      );
-    } catch (err) {
-      if (err instanceof ApiError && (err.status === 404 || err.status === 501)) {
-        const download = await request<DownloadIntentResponse>(
-          `/api/v1/objects/${encodeURIComponent(id)}/download-intent`,
-          { method: "POST", csrf },
-        );
-        return {
-          id: download.id,
-          preview_url: download.download_url,
-          method: download.method,
-          expires_in: download.expires_in,
-          expires_at: download.expires_at,
-          display_name: download.display_name,
-          content_type: download.content_type,
-          size_bytes: download.size_bytes,
-          fallback: true,
-        };
-      }
-      throw err;
-    }
+  /** Short-lived inline GET for images, audio and PDF (415 for other types). */
+  createPreviewIntent(id: string, csrf: string): Promise<PreviewIntentResponse> {
+    return request<PreviewIntentResponse>(
+      `/api/v1/objects/${encodeURIComponent(id)}/preview-intent`,
+      { method: "POST", csrf },
+    );
   },
 
   // --- Object lifecycle ---
@@ -626,11 +660,66 @@ export const api = {
     });
   },
 
+  /** Multipart plan and the parts the storage already holds (resume). */
+  multipartStatus(id: string): Promise<MultipartStatus> {
+    return request<MultipartStatus>(`/api/v1/objects/${encodeURIComponent(id)}/multipart`);
+  },
+
+  /** Short-lived presigned PUTs for up to 100 parts. */
+  multipartPartUrls(
+    id: string,
+    partNumbers: number[],
+    csrf: string,
+  ): Promise<MultipartPartUrls> {
+    return request<MultipartPartUrls>(
+      `/api/v1/objects/${encodeURIComponent(id)}/multipart/parts`,
+      { method: "POST", csrf, body: { part_numbers: partNumbers } },
+    );
+  },
+
+  /** Enter master mode by re-entering the password (objects:purge). */
+  enableMasterMode(password: string, csrf: string): Promise<{ master_until: number }> {
+    return request<{ master_until: number }>("/api/v1/me/master-mode", {
+      method: "POST",
+      csrf,
+      body: { password },
+    });
+  },
+
+  disableMasterMode(csrf: string): Promise<{ master_until: null }> {
+    return request<{ master_until: null }>("/api/v1/me/master-mode", {
+      method: "DELETE",
+      csrf,
+    });
+  },
+
+  /** Master mode: purge many objects in one call. */
+  bulkPurge(ids: string[], csrf: string): Promise<BulkPurgeResult> {
+    return request<BulkPurgeResult>("/api/v1/objects/bulk-purge", {
+      method: "POST",
+      csrf,
+      body: { ids },
+    });
+  },
+
+  /** Master mode: purge the trash (call again while `more`). */
+  emptyTrash(csrf: string): Promise<BulkPurgeResult> {
+    return request<BulkPurgeResult>("/api/v1/objects/trash/empty", { method: "POST", csrf });
+  },
+
   /** Soft-delete an object (objects:delete). */
   deleteObject(id: string, csrf: string): Promise<{ id: string; status: string }> {
     return request<{ id: string; status: string }>(
       `/api/v1/objects/${encodeURIComponent(id)}`,
       { method: "DELETE", csrf },
+    );
+  },
+
+  /** Undo a soft delete (objects:delete); 409 if it is not in the trash. */
+  restoreObject(id: string, csrf: string): Promise<ObjectItem> {
+    return request<ObjectItem>(
+      `/api/v1/objects/${encodeURIComponent(id)}/restore`,
+      { method: "POST", csrf },
     );
   },
 
@@ -745,6 +834,16 @@ export const api = {
     return request<OrphanScanResponse>(
       `/api/v1/admin/orphans?limit=${encodeURIComponent(String(limit))}`,
     );
+  },
+
+  /** Storage bytes the catalogue does not account for (admin:read, read-only). */
+  adminStorageOrphans(): Promise<StorageOrphanReport> {
+    return request<StorageOrphanReport>("/api/v1/admin/storage-orphans");
+  },
+
+  /** Periodic integrity scrub results (admin:read). */
+  adminIntegrity(): Promise<IntegrityReport> {
+    return request<IntegrityReport>("/api/v1/admin/integrity");
   },
 
   // --- Administration mutations (`admin:write`) ---
@@ -899,19 +998,15 @@ export interface PutOptions {
  */
 export function putToPresignedUrl(
   url: string,
-  file: File,
+  file: Blob,
   options: PutOptions = {},
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let settled = false;
-    // Drop the signal listener as soon as the request settles so a long-lived
-    // queue never accumulates abort listeners on the per-file controller.
-    const detachSignal = () => options.signal?.removeEventListener("abort", onAbort);
     const fail = (err: Error) => {
       if (!settled) {
         settled = true;
-        detachSignal();
         reject(err);
       }
     };
@@ -941,7 +1036,6 @@ export function putToPresignedUrl(
         options.onProgress?.(file.size, file.size);
         if (!settled) {
           settled = true;
-          detachSignal();
           resolve();
         }
         return;

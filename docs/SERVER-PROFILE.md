@@ -1,7 +1,7 @@
 # VPS server profile — AURA Storage
 
 > **Last verified:** 2026-10-14  
-> **Status:** provisioned; initial OS maintenance and access hardening are in progress. The host has **not** yet passed AURA deployment acceptance tests.
+> **Status:** the AURA stack is deployed on this host with partial, dated verification evidence (bootstrap OK, live PostgreSQL migration, SSE-S3 smoke PASS — see the 2026-10-15 and 2026-10-16 verification logs linked from `README.md`). The host has **not** yet passed AURA deployment acceptance tests.
 
 This document records operational facts observed on the AURA Storage pilot VPS. It is not a secret store. Do not add passwords, private SSH keys, API tokens, environment values, encryption keys, or recovery codes here.
 
@@ -18,7 +18,7 @@ This document records operational facts observed on the AURA Storage pilot VPS. 
 | Next invoice recorded at provisioning | 2026-11-14 |
 | Provider host node | Storage-kvm5600 |
 | Service status in panel | Active |
-| Intended workload | AURA Storage pilot: Docker Compose, Traefik, SeaweedFS; PostgreSQL/API are planned, not yet deployed |
+| Intended workload | AURA Storage pilot: Docker Compose, Traefik, SeaweedFS; PostgreSQL and the management API are implemented in the stack and deployed locally on this VPS, but not accepted |
 
 Billing and provider plan details were copied from the account information available at provisioning. Re-check the provider panel before renewals or capacity decisions.
 
@@ -98,19 +98,19 @@ Do not expose SeaweedFS master, volume, filer/admin, metrics, or other internal 
 
 ## 6. AURA deployment baseline
 
-The VPS is intended to host the pilot stack, but the following are **not yet verified as complete**:
+The VPS hosts the pilot stack. Dated verification logs (2026-10-15, 2026-10-16; linked from `README.md`) record partial progress, but these items are **not yet all verified as complete**:
 
-- [ ] Docker Engine and Docker Compose plugin installed from an approved source.
+- [x] Docker Engine and Docker Compose plugin installed and running (Engine 29.9.0 / Compose v5.6.0).
 - [ ] Host firewall and provider firewall reviewed and tested.
 - [ ] SSH public-key login tested for aura-admin.
-- [ ] DNS records and HTTPS certificate issuance verified.
-- [ ] Compose configuration validated on the real host.
-- [ ] SeaweedFS release, flags, S3 policy, and SSE-S3 behavior validated.
-- [ ] S3 access controls and private internal networking tested.
-- [ ] Data persistence tested across container recreation and host reboot.
+- [ ] DNS records and HTTPS certificate issuance verified externally. (Partially: A records and Let's Encrypt certificates validated for `app.aura-storage.eurinhash.com` and `aura-storage.eurinhash.com` on 2026-10-15.)
+- [x] Compose configuration validated on the real host (`docker compose config --quiet` during bootstrap).
+- [x] SeaweedFS release, flags, S3 policy, and SSE-S3 behavior validated. (SSE-S3 smoke PASS 2026-10-15 and 2026-10-16 on SeaweedFS 4.48.)
+- [ ] S3 access controls and private internal networking tested. (Partially: unauthenticated S3 request denied 403; internal ports confirmed only via the listening-port scan, not probed from outside.)
+- [ ] Data persistence tested across container recreation and host reboot. (Partially: the API was recreated during deploys and returned healthy; host reboot not tested.)
 - [ ] Independent backup configured outside this VPS.
 - [ ] Backup restoration tested successfully.
-- [ ] End-to-end smoke test confirms encrypted-object response and byte-for-byte download integrity.
+- [x] End-to-end smoke test confirms encrypted-object response and byte-for-byte download integrity.
 
 **Do not import the original PDF/audio files until encryption, access control, persistence, and an independent backup restoration have all passed.** Keep the original files until that restoration test succeeds.
 

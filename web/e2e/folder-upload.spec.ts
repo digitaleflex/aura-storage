@@ -118,7 +118,7 @@ test("imports a folder tree and uploads files into the recreated folders", async
   await page.getByLabel("Identifiant").fill("admin");
   await page.getByLabel("Mot de passe").fill("pw");
   await page.getByRole("button", { name: "Se connecter" }).click();
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
 
   await page.getByTestId("folder-input").setInputFiles(root);
 
@@ -140,5 +140,5 @@ test("imports a folder tree and uploads files into the recreated folders", async
   expect(target.get("b.pdf")).toBe("folder-2026");
 
   // All three end up available.
-  await expect(page.getByTestId("transfer-status").getByText("Disponible", { exact: true })).toHaveCount(3);
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status").getByText("Disponible", { exact: true })).toHaveCount(3);
 });

@@ -72,7 +72,8 @@ class DummyS3:
     def head_object(self, Bucket, Key):
         if self.head_error is not None:
             raise self.head_error
-        return {"ContentLength": self.declared_size, "ContentType": "application/octet-stream"}
+        return {"ContentLength": self.declared_size, "ContentType": "application/octet-stream",
+                "ServerSideEncryption": "AES256"}
 
     def get_object(self, Bucket, Key):
         if self.get_error is not None:
@@ -115,14 +116,13 @@ def _intent(c, headers, *, name="file.bin", size_bytes=1, content_type=None,
 
 
 def _backdate_intent(oid, seconds):
-    conn = main.repo.conn
     expired = int(time.time()) - seconds
-    if "sqlite3" in type(conn).__module__:
+    if main.repo.dialect == "sqlite":
+        conn = main.repo.conn
         conn.execute("UPDATE objects SET intent_expires_at = ? WHERE id = ?", (expired, oid))
         conn.commit()
     else:  # pragma: no cover - offline tests run on SQLite
-        with conn.cursor() as cur:
-            cur.execute("UPDATE objects SET intent_expires_at = %s WHERE id = %s", (expired, oid))
+        main.repo._run("UPDATE objects SET intent_expires_at = %s WHERE id = %s", (expired, oid))
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +162,36 @@ def test_presigned_url_binds_content_length_and_type(monkeypatch):
     # the gateway refuses a different size/type than the API authorized (#40).
     assert "content-length" in signed
     assert "content-type" in signed
+
+
+def test_presigned_put_signs_sse_s3_and_get_does_not():
+    # SSE-S3 (AES256) is bound into the upload signature, exactly like the
+    # size/type headers above; botocore records it in X-Amz-SignedHeaders (it is
+    # a *header*, not a query parameter). The GET path must not carry it: a
+    # download is never re-encrypted and must stay byte-identical.
+    from api.s3 import make_client, presigned_get, presigned_put
+
+    client = make_client("https://example.invalid", "ak-1234567890", "sk-1234567890", "us-east-1")
+    put = presigned_put(client, "bucket", "key", "text/plain", 900, 10)
+    signed = parse_qs(urlparse(put).query)["X-Amz-SignedHeaders"][0]
+    assert "x-amz-server-side-encryption" in signed
+    assert "x-amz-server-side-encryption" in put
+
+    get = presigned_get(client, "bucket", "key", 900)
+    assert "x-amz-server-side-encryption" not in get
+
+
+def test_intent_tells_the_client_to_send_the_sse_header(monkeypatch):
+    monkeypatch.setattr(main, "s3ops", DummyS3(b"x"))
+    c, headers = _admin()
+    r = _intent(c, headers, size_bytes=4096, content_type="text/plain")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    signed = parse_qs(urlparse(body["upload_url"]).query)["X-Amz-SignedHeaders"][0]
+    assert "x-amz-server-side-encryption" in signed
+    # The header the API signed and the header the client is told to send must
+    # match, or the gateway rejects the PUT (signed-header mismatch).
+    assert body["headers"]["x-amz-server-side-encryption"] == "AES256"
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +238,38 @@ def test_object_larger_than_declared_is_refused_at_commit(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Declared size vs stored size (G3a, #119): the size the API authorised at
+# intent time is compared with the bytes the gateway actually stored.
+# ---------------------------------------------------------------------------
+def test_stored_size_differs_from_declared_is_failed_and_bytes_dropped(monkeypatch):
+    # The intent authorised 5 bytes; HEAD reports 7 stored (the signed
+    # Content-Length is only enforced live by the gateway, so the commit
+    # cross-checks the catalogue here). The object must never become
+    # available, and its bytes are dropped best-effort like the SSE branch.
+    s3 = DummyS3(b"stored-7")
+    monkeypatch.setattr(main, "s3ops", s3)
+    c, headers = _admin()
+    oid = _intent(c, headers, size_bytes=5).json()["id"]
+    r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
+    assert r.status_code == 422, r.text
+    assert "declared" in r.json()["detail"]
+    assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "failed"
+    assert len(s3.deleted) == 1
+    assert c.post(f"/api/v1/objects/{oid}/download-intent", headers=headers).status_code == 409
+
+
+def test_stored_size_matching_declared_still_commits(monkeypatch):
+    # The happy path is unaffected: equal declared/stored/streamed sizes.
+    data = b"declared==stored"
+    monkeypatch.setattr(main, "s3ops", DummyS3(data))
+    c, headers = _admin()
+    oid = _intent(c, headers, size_bytes=len(data)).json()["id"]
+    r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "available"
+
+
+# ---------------------------------------------------------------------------
 # Network/storage interruption: retryable, never a false success
 # ---------------------------------------------------------------------------
 def test_storage_unreachable_keeps_intent_pending_for_retry(monkeypatch):
@@ -238,6 +300,53 @@ def test_truncated_upload_is_failed_and_not_downloadable(monkeypatch):
     assert r.status_code == 422, r.text
     assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "failed"
     assert c.post(f"/api/v1/objects/{oid}/download-intent", headers=headers).status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Commit deadline + bounded S3 client (G3b, #120)
+# ---------------------------------------------------------------------------
+def test_commit_past_the_global_deadline_fails_the_intent_with_504(monkeypatch):
+    # A 0 s deadline is already exceeded when the first chunk arrives, so the
+    # hashing loop must abort with a terminal failed intent and 504 instead of
+    # streaming (and holding a worker slot) forever.
+    monkeypatch.setattr(main.settings, "commit_deadline_s", 0)
+    data = os.urandom(64 * 1024)
+    s3 = DummyS3(data)
+    monkeypatch.setattr(main, "s3ops", s3)
+    c, headers = _admin()
+    oid = _intent(c, headers, size_bytes=len(data)).json()["id"]
+    r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
+    assert r.status_code == 504, r.text
+    assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "failed"
+    # The unreachable bytes of the failed intent are dropped best-effort.
+    assert len(s3.deleted) == 1
+    # Terminal: a second commit cannot resurrect it (a fresh upload is needed).
+    assert c.post(f"/api/v1/objects/{oid}/commit", headers=headers).status_code == 409
+
+
+def test_stream_sha256_checks_the_deadline_between_chunks():
+    from api.s3 import CommitDeadlineExceeded, stream_sha256
+
+    with pytest.raises(CommitDeadlineExceeded):
+        stream_sha256(FakeBody(b"x" * 64), 1024, 16, deadline=time.monotonic() - 1)
+    # Without a deadline the behaviour is byte-for-byte the old one (#37).
+    assert stream_sha256(FakeBody(b"x" * 64), 1024, 16) == (64, hashlib.sha256(b"x" * 64).hexdigest())
+
+
+def test_transfer_client_has_bounded_timeouts_and_adaptive_retries():
+    # A stalled backend must not hang a commit indefinitely: the ops client
+    # gets explicit timeouts and adaptive retries, while the probe client keeps
+    # its own fast-fail profile (connect 2 s / read 3 s / no retry).
+    from api.s3 import make_client
+
+    cfg = make_client("https://example.invalid", "ak-1234567890",
+                      "sk-1234567890", "us-east-1").meta.config
+    assert cfg.connect_timeout == 10
+    assert cfg.read_timeout == 60
+    # botocore resolves the retry policy: adaptive mode, 3 retries after the
+    # initial attempt (4 total attempts).
+    assert cfg.retries["mode"] == "adaptive"
+    assert cfg.retries["total_max_attempts"] == 4
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +619,30 @@ def test_preview_intent_renders_inline_with_object_type(monkeypatch):
     assert "X-Amz-Signature=" in body["preview_url"]
     assert "response-content-disposition=inline" in body["preview_url"]
     assert "response-content-type=application%2Fpdf" in body["preview_url"]
+
+
+def test_preview_intent_refuses_types_that_can_run_script(monkeypatch):
+    # A user-uploaded HTML/SVG/XML file must never be served inline from the
+    # storage origin: preview-intent answers 415 and the UI offers a download.
+    monkeypatch.setattr(main, "s3ops", DummyS3(b"<script>1</script>"))
+    c, headers = _admin()
+    for name, ctype in (("page.html", "text/html"), ("logo.svg", "image/svg+xml"),
+                        ("data.xml", "application/xml"), ("doc.bin", "application/octet-stream")):
+        oid = _intent(c, headers, name=name, size_bytes=18, content_type=ctype).json()["id"]
+        c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
+        r = c.post(f"/api/v1/objects/{oid}/preview-intent", headers=headers)
+        assert r.status_code == 415, (ctype, r.status_code, r.text)
+        # download-intent is unaffected: the file stays retrievable.
+        assert c.post(f"/api/v1/objects/{oid}/download-intent", headers=headers).status_code == 200
+
+
+def test_is_previewable_ignores_parameters_and_case():
+    assert main.is_previewable("Application/PDF")
+    assert main.is_previewable("image/png; charset=binary")
+    assert main.is_previewable("audio/mpeg")
+    assert not main.is_previewable("image/svg+xml")
+    assert not main.is_previewable("text/html")
+    assert not main.is_previewable("")
 
 
 def test_preview_intent_matches_download_scoping(monkeypatch):

@@ -33,6 +33,9 @@ test("admin can open the console and sees the write controls", async ({ page }) 
   await expect(
     page.getByRole("heading", { name: "Tableau de bord" }),
   ).toBeVisible();
+  // One tab per section: the overview is open first, the others on demand.
+  await expect(page.getByRole("tab", { selected: true })).toHaveText("Vue d'ensemble");
+  await page.getByRole("tab", { name: "Identités de service" }).click();
   await expect(
     page.getByRole("heading", { name: "Identités machine-à-machine" }),
   ).toBeVisible();
@@ -41,6 +44,7 @@ test("admin can open the console and sees the write controls", async ({ page }) 
   await expect(
     page.getByRole("button", { name: "Créer l'identité" }),
   ).toBeVisible();
+  await page.getByRole("tab", { name: "Applications et espaces" }).click();
   await expect(
     page.getByRole("button", { name: "Créer l'espace" }),
   ).toBeVisible();

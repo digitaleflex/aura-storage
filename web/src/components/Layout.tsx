@@ -1,566 +1,464 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import type { FormEvent } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, api, hasAdminAccess } from "../lib/api";
+import React from "react";
+import { Link, useNavigate, useLocation } from "@tanstack/react-router";
 import { useAuth, useSession } from "../lib/auth";
-import { FolderMark } from "./FolderMark";
+import { hasAdminAccess, api } from "../lib/api";
+import { useQuery } from "@tanstack/react-query";
 import { VaultMark } from "./VaultMark";
-import { useFolderNavigation } from "../lib/folderContext";
 
-/** Byte size -> a human label ("3,4 Mo"). Uses the French decimal comma so the
- * shell never duplicates the explorer's exact "3.4 Mo" string on screen. */
+/** Local copy of formatBytes to avoid circular import with ObjectsPage. */
 function formatBytes(size: number): string {
-  if (!Number.isFinite(size) || size < 0) {
-    return "taille inconnue";
-  }
-  if (size === 0) {
-    return "0 o";
-  }
+  if (!Number.isFinite(size) || size < 0) return "taille inconnue";
+  if (size === 0) return "0 o";
   const units = ["o", "Ko", "Mo", "Go", "To"];
   const index = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
   const value = size / 1024 ** index;
-  const rounded = value.toFixed(index === 0 ? 0 : 1).replace(".", ",");
-  return `${rounded} ${units[index]}`;
+  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
-/** French label for the signed-in principal (no fictional display name). */
-function principalLabel(role: string | null | undefined, kind: string | undefined): string {
-  if (kind !== undefined && kind !== "user") return "Identité de service";
-  switch (role) {
-    case "admin":
-      return "Administrateur";
-    case "operator":
-      return "Opérateur";
-    case "user":
-      return "Utilisateur";
-    default:
-      return "Compte";
-  }
+/** Human label for a session role (the API stays authoritative on access). */
+function roleLabel(kind: string | undefined, role: string | null | undefined): string {
+  if (kind === "service") return "Identité de service";
+  if (role === "admin") return "Administrateur";
+  if (role === "operator") return "Opérateur";
+  return "Utilisateur";
 }
 
-/** Catalogue status -> French label for the real object breakdown. */
-const STATUS_FR: Record<string, string> = {
-  available: "Disponibles",
-  pending: "En cours",
-  deleted: "Supprimés",
-  expired: "Expirés",
-  failed: "Échecs",
-  aborted: "Abandonnés",
-};
-
-const STATUS_ORDER = ["available", "pending", "deleted", "expired", "failed", "aborted"];
-
-/** Close a disclosure on outside click and on Escape. */
-function useDismiss(
-  open: boolean,
-  setOpen: (value: boolean) => void,
-) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    function handlePointer(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    }
-    function handleKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", handlePointer);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handlePointer);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [open, setOpen]);
-  return ref;
+/** Two-letter initials for the account chip; never derived from a pronoun. */
+function initials(name: string): string {
+  const letters = name.replace(/[^\p{L}\p{N}]/gu, "");
+  return (letters.slice(0, 2) || "?").toUpperCase();
 }
 
-function FolderNavIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M3 7a3 3 0 0 1 3-3h3.1a2 2 0 0 1 1.6.8l1 1.3H18a3 3 0 0 1 3 3V17a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z"
-        stroke="currentColor"
-        strokeWidth="1.6"
-      />
-    </svg>
-  );
-}
-
-function AdminNavIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <circle cx="12" cy="12" r="3.2" stroke="currentColor" strokeWidth="1.6" />
-      <path
-        d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"
-        stroke="currentColor"
-        strokeWidth="1.6"
-      />
-    </svg>
-  );
-}
-
-function SearchIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.7" />
-      <path d="M16 16l4.5 4.5" stroke="currentColor" strokeWidth="1.7" />
-    </svg>
-  );
-}
-
-function BellIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z"
-        stroke="currentColor"
-        strokeWidth="1.6"
-      />
-      <path d="M10 19a2 2 0 0 0 4 0" stroke="currentColor" strokeWidth="1.6" />
-    </svg>
-  );
-}
-
-function MenuIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="1.7" />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.7" />
-    </svg>
-  );
-}
-
-function ChevronIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M7 10l5 5 5-5" stroke="currentColor" strokeWidth="1.7" />
-    </svg>
-  );
-}
-
+/**
+ * App shell: a dark navigation sidebar (stacks above the content on a phone)
+ * and a light top bar that says who is signed in. Pages render in `.content`.
+ * - Largeur contrôlée par le token --side-w (248px par défaut).
+ * - État actif géré par le routeur TanStack + classe .nav-link-active.
+ * - Collapsible : bouton en topbar + mémorisation en URL (?sidebar=collapsed).
+ * - S'ouvre/referme sur clic de lien dans la sidebar mobile.
+ */
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { currentFolderId, setCurrentFolderId } = useFolderNavigation();
   const { csrf, logout } = useAuth();
   const session = useSession();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
+  const location = useLocation();
 
   const canAdmin = hasAdminAccess(session.data?.role);
-  /** Only fire catalogue/usage reads once the server has confirmed a session. */
-  const signedIn = session.data !== undefined;
+  // Display name of the signed-in account (username for a human, identity
+  // name for a service). It must come from the session: an unbound `name`
+  // silently resolves to the global `window.name`, i.e. an empty string, and
+  // the top bar showed a blank name instead of the account.
+  const name = session.data?.name;
 
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [notifOpen, setNotifOpen] = useState(false);
-  const [newFolderOpen, setNewFolderOpen] = useState(false);
-  const [newFolderName, setNewFolderName] = useState("");
-  const [folderError, setFolderError] = useState<string | null>(null);
-  const [creatingFolder, setCreatingFolder] = useState(false);
-
-  const searchRef = useRef<HTMLInputElement | null>(null);
-  const hamburgerRef = useRef<HTMLButtonElement | null>(null);
-
-  const profileMenuRef = useDismiss(profileOpen, setProfileOpen);
-  const notifMenuRef = useDismiss(notifOpen, setNotifOpen);
-
-  // Same query keys as the explorer: the shell and the page share one fetch.
-  const treeQuery = useQuery({
-    queryKey: ["folders", "all"],
-    queryFn: () => api.listAllFolders(),
-    enabled: signedIn,
-  });
-  const topFolders = (treeQuery.data?.items ?? []).filter(
-    (folder) => folder.parent_id === null,
-  );
-
-  // Real storage usage, admin:read only — never fabricated for other roles.
+  // Usage réel pour l'indicateur de stockage (admin uniquement)
   const usageQuery = useQuery({
     queryKey: ["admin", "usage"],
     queryFn: () => api.adminUsage(),
     enabled: canAdmin,
     retry: false,
   });
-  const usage = usageQuery.data;
-  const byStatus = usage?.totals.objects_by_status ?? {};
-  const statusRows = [
-    ...STATUS_ORDER.filter((key) => (byStatus[key] ?? 0) > 0),
-    ...Object.keys(byStatus).filter((key) => !STATUS_ORDER.includes(key)),
-  ];
 
-  // Ctrl+K / Cmd+K focuses the global search field.
-  useEffect(() => {
-    function handleKey(event: KeyboardEvent) {
-      if ((event.ctrlKey || event.metaKey) && (event.key === "k" || event.key === "K")) {
-        event.preventDefault();
-        const input = searchRef.current;
-        if (input) {
-          input.focus();
-          input.select();
-        }
-      }
+  // État collapsible : persistant en URL (?sidebar=collapsed|expanded)
+  const urlParams = new URLSearchParams(location.search);
+  const sidebarCollapsed = urlParams.get("sidebar") === "collapsed";
+
+  // Mobile drawer state
+  const [mobileOpen, setMobileOpen] = React.useState(false);
+  const touchStartX = React.useRef<number | null>(null);
+
+  // Densité d'affichage (compact/confortable)
+  const [density, setDensity] = React.useState<"comfortable" | "compact">(() => {
+    return (localStorage.getItem("aura-density") as "comfortable" | "compact") || "comfortable";
+  });
+  React.useEffect(() => {
+    document.body.classList.toggle("density-compact", density === "compact");
+    localStorage.setItem("aura-density", density);
+  }, [density]);
+
+  // Theme manuel (override prefers-color-scheme)
+  const [theme, setTheme] = React.useState<"light" | "dark" | "auto">(() => {
+    return (localStorage.getItem("aura-theme") as "light" | "dark" | "auto") || "auto";
+  });
+  React.useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "auto") {
+      root.removeAttribute("data-theme");
+    } else {
+      root.setAttribute("data-theme", theme);
     }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, []);
+    localStorage.setItem("aura-theme", theme);
+  }, [theme]);
+  const hamburgerRef = React.useRef<HTMLButtonElement | null>(null);
+  const drawerRef = React.useRef<HTMLDivElement | null>(null);
+  const drawerCloseRef = React.useRef<HTMLButtonElement | null>(null);
 
-  // Escape closes the mobile drawer and returns focus to its trigger.
-  useEffect(() => {
-    if (!drawerOpen) return;
-    function handleKey(event: KeyboardEvent) {
+  /** Close the drawer and give focus back to the button that opened it. */
+  function closeMobile(restoreFocus = true) {
+    setMobileOpen(false);
+    if (restoreFocus) {
+      requestAnimationFrame(() => hamburgerRef.current?.focus());
+    }
+  }
+
+  // Close mobile drawer on route change (no focus restore: the destination
+  // owns focus after navigation).
+  React.useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
+  // Focus trap for the mobile drawer: opening moves focus inside, Tab and
+  // Shift+Tab cycle within it, Escape closes and restores the trigger.
+  React.useEffect(() => {
+    if (!mobileOpen) return;
+    drawerCloseRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const focusables = () =>
+      Array.from(
+        drawerRef.current?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => element.offsetParent !== null);
+
+    function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setDrawerOpen(false);
-        hamburgerRef.current?.focus();
+        event.preventDefault();
+        closeMobile();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !drawerRef.current?.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
       }
     }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [drawerOpen]);
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileOpen]);
+
+  // Mise à jour de l'URL lors du toggle
+  const toggleSidebar = (collapsed: boolean) => {
+    const search = new URLSearchParams(location.search);
+    search.set("sidebar", collapsed ? "collapsed" : "expanded");
+    const newSearch = search.toString();
+    // Remplace les params existants mais garde d'autres éventuels
+    const updatedSearch =
+      location.search === newSearch ? "" : newSearch;
+    navigate({ to: location.pathname, search: updatedSearch });
+  };
 
   async function handleLogout() {
-    setProfileOpen(false);
     await logout();
     await navigate({ to: "/login" });
   }
 
-  async function submitNewFolder(event: FormEvent) {
-    event.preventDefault();
-    const name = newFolderName.trim();
-    if (!name || !csrf) return;
-    setCreatingFolder(true);
-    setFolderError(null);
-    try {
-      await api.createFolder({ name, parent_id: null }, csrf);
-      setNewFolderName("");
-      setNewFolderOpen(false);
-      await queryClient.invalidateQueries({ queryKey: ["folders"] });
-    } catch (err) {
-      setFolderError(
-        err instanceof ApiError ? err.detail : "Création du dossier impossible.",
-      );
-    } finally {
-      setCreatingFolder(false);
-    }
-  }
-
-  function submitSearch(event: FormEvent) {
-    event.preventDefault();
-    // The only search surface is the files workspace; return there on submit.
-    void navigate({ to: "/" });
-  }
-
-  const label = principalLabel(session.data?.role, session.data?.kind);
-  const avatarInitial = label.charAt(0).toUpperCase();
+  // Détermine si on est sur la page "Fichiers" (indexRoute exacte)
+  const isFilesPage =
+    location.pathname === "/" || location.pathname === "";
 
   return (
-    <div className="vault-shell">
+    <div className="shell">
+      <a className="skip-link" href="#main-content">
+        Aller au contenu principal
+      </a>
       <aside
-        id="vault-sidebar"
-        className={drawerOpen ? "vault-sidebar vault-sidebar-open" : "vault-sidebar"}
-        aria-label="Barre latérale"
+        className={`sidebar${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+        aria-label="Barre latérale AURA Vault"
       >
-        <div className="vault-brand">
+        {/* Brand section — réduit à l'icône quand collapsed */}
+        <Link to="/" className="brand">
           <VaultMark />
-          <span className="vault-brand-name">
-            AURA <span className="vault-brand-accent">Vault</span>
-          </span>
-          <button
-            type="button"
-            className="vault-icon-btn vault-focus vault-drawer-close"
-            aria-label="Masquer la navigation"
-            onClick={() => {
-              setDrawerOpen(false);
-              hamburgerRef.current?.focus();
-            }}
+          <span
+            aria-label={sidebarCollapsed ? "AURA Vault" : undefined}
           >
-            <CloseIcon />
-          </button>
-        </div>
+            AURA Vault
+          </span>
+        </Link>
 
-        <nav className="vault-nav" aria-label="Navigation principale">
-          <Link to="/" activeOptions={{ exact: true }} className="vault-nav-item vault-focus">
-            <FolderNavIcon />
+        {/* Navigation principale */}
+        <nav className="nav" aria-label="Navigation principale">
+          {/* Élément : Fichiers — état actif via classe .nav-link-active */}
+          <Link
+            to="/"
+            activeOptions={{ exact: true }}
+            className={isFilesPage ? "nav-link nav-link-active" : "nav-link"}
+            onClick={() => toggleSidebar(false)}
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            >
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+            </svg>
             Fichiers
           </Link>
           {canAdmin ? (
-            <Link to="/admin" className="vault-nav-item vault-focus">
-              <AdminNavIcon />
+            <Link
+              to="/admin"
+              activeOptions={{ exact: true }}
+              className={
+                location.pathname === "/admin" ? "nav-link nav-link-active" : "nav-link"
+              }
+              onClick={() => toggleSidebar(false)}
+            >
+              <svg
+                aria-hidden="true"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              >
+                <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
+              </svg>
               Administration
             </Link>
           ) : null}
         </nav>
 
-        <section className="vault-folders" aria-labelledby="vault-folders-label">
-          <div className="vault-folders-head">
-            <p className="vault-section-label" id="vault-folders-label">
-              Dossiers
-            </p>
-            <button
-              type="button"
-              className="vault-icon-btn vault-focus"
-              aria-label="Créer un dossier"
-              aria-expanded={newFolderOpen}
-              onClick={() => {
-                setFolderError(null);
-                setNewFolderOpen((open) => !open);
-              }}
-            >
-              +
-            </button>
-          </div>
-          {newFolderOpen ? (
-            <form className="vault-folders-new" onSubmit={(e) => void submitNewFolder(e)}>
-              <input
-                type="text"
-                autoFocus
-                value={newFolderName}
-                onChange={(e) => setNewFolderName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setNewFolderOpen(false);
-                }}
-                aria-label="Nom du nouveau dossier"
-                placeholder="Nom du dossier…"
-              />
-              <button
-                type="submit"
-                className="vault-icon-btn vault-focus"
-                aria-label="Valider la création"
-                disabled={creatingFolder || newFolderName.trim() === ""}
-              >
-                ✓
-              </button>
-            </form>
-          ) : null}
-          {folderError ? (
-            <p role="alert" className="vault-folders-note">
-              {folderError}
-            </p>
-          ) : null}
-          <ul className="vault-folder-list">
-            {/* Each row selects the folder the explorer should browse. The
-                selection lives in FolderProvider (shared with ObjectsPage), so
-                clicking here filters the file list. Rows are operable with the
-                keyboard, not click-only. */}
-            <li
-              className="vault-folder-item"
-              role="button"
-              tabIndex={0}
-              aria-current={currentFolderId === null ? "true" : undefined}
-              onClick={() => setCurrentFolderId(null)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  setCurrentFolderId(null);
-                }
-              }}
-            >
-              <span className="vault-folder-icon" aria-hidden="true">
-                <FolderMark size={16} />
-              </span>
-              <span className="vault-folder-name">Racine</span>
-            </li>
-            {topFolders.map((folder) => (
-              <li
-                key={folder.id}
-                className="vault-folder-item"
-                role="button"
-                tabIndex={0}
-                aria-current={currentFolderId === folder.id ? "true" : undefined}
-                onClick={() => setCurrentFolderId(folder.id)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setCurrentFolderId(folder.id);
-                  }
-                }}
-              >
-                <span className="vault-folder-icon" aria-hidden="true">
-                  <FolderMark size={16} />
-                </span>
-                <span className="vault-folder-name">{folder.name}</span>
-              </li>
-            ))}
-          </ul>
-          {treeQuery.isPending && signedIn ? (
-            <p className="vault-folders-note">Chargement…</p>
-          ) : null}
-          {treeQuery.isError ? (
-            <p className="vault-folders-note">Dossiers indisponibles.</p>
-          ) : null}
-        </section>
-
-        <div className="vault-usage">
-          <p className="vault-section-label">Stockage</p>
-          {canAdmin ? (
-            <div className="vault-usage-card">
-              {usage ? (
-                <>
-                  <div className="vault-ring-wrap">
-                    <svg
-                      className="vault-ring"
-                      viewBox="0 0 42 42"
-                      role="img"
-                      aria-label="Espace utilisé (capacité totale non configurée)"
-                    >
-                      <circle
-                        className="vault-ring-track"
-                        cx="21"
-                        cy="21"
-                        r="16"
-                        fill="none"
-                        strokeWidth="4"
-                      />
-                    </svg>
-                    <span className="vault-ring-value num">
-                      {formatBytes(usage.totals.stored_bytes)}
-                    </span>
-                  </div>
-                  <p className="vault-usage-note">
-                    {usage.totals.available_count} objet(s) vérifié(s). Capacité totale
-                    non configurée : aucun pourcentage affiché.
-                  </p>
-                  {statusRows.length > 0 ? (
-                    <ul className="vault-usage-list">
-                      {statusRows.map((key) => (
-                        <li key={key} className="vault-usage-row">
-                          <span>{STATUS_FR[key] ?? key}</span>
-                          <span className="vault-usage-count num">
-                            {byStatus[key]}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </>
-              ) : usageQuery.isError ? (
-                <p className="vault-usage-note">
-                  Espace utilisé indisponible.{" "}
-                  <button
-                    type="button"
-                    className="vault-focus"
-                    onClick={() => void usageQuery.refetch()}
-                  >
-                    Réessayer
-                  </button>
-                </p>
-              ) : (
-                <p className="vault-usage-note">Mesure en cours…</p>
-              )}
-            </div>
-          ) : (
-            <div className="vault-usage-card">
-              <p className="vault-usage-note">
-                Données de stockage réservées aux administrateurs.
-              </p>
-            </div>
-          )}
-        </div>
+        {/* Indicateur de stockage — placeholder honnête */}
+        <p className="sidebar-foot">
+          <svg
+            aria-hidden="true"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+          >
+            <rect x="5" y="11" width="14" height="10" rx="2" />
+            <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+          </svg>
+          <span aria-live="polite" aria-atomic="true">
+            {usageQuery.data
+              ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes).replace(" ", "")} utilisés`
+              : canAdmin
+                ? "Stockage : chargement…"
+                : "Chiffré au repos, intégrité vérifiée"}
+          </span>
+        </p>
       </aside>
 
-      {drawerOpen ? (
-        <div
-          className="vault-scrim"
-          aria-hidden="true"
-          onClick={() => setDrawerOpen(false)}
-        />
+      {/* Mobile drawer overlay */}
+      {mobileOpen ? (
+        <>
+          <div
+            className="mobile-drawer-scrim"
+            onClick={() => closeMobile()}
+            aria-hidden="true"
+          />
+          <div
+            ref={drawerRef}
+            id="mobile-navigation"
+            className="mobile-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation mobile"
+            onTouchStart={(event) => {
+              touchStartX.current = event.touches[0]?.clientX ?? null;
+            }}
+            onTouchEnd={(event) => {
+              const start = touchStartX.current;
+              touchStartX.current = null;
+              if (start === null) return;
+              const end = event.changedTouches[0]?.clientX ?? start;
+              if (start - end > 60) closeMobile();
+            }}
+          >
+            <div className="mobile-drawer-head">
+              <Link to="/" className="brand" onClick={() => closeMobile(false)}>
+                <VaultMark />
+                <span className="brand-name">AURA Vault</span>
+              </Link>
+              <button
+                ref={drawerCloseRef}
+                className="btn btn-ghost btn-small"
+                aria-label="Fermer le menu"
+                onClick={() => closeMobile()}
+              >
+                ✕
+              </button>
+            </div>
+            <nav className="mobile-drawer-nav" aria-label="Navigation mobile">
+              <Link
+                to="/"
+                activeOptions={{ exact: true }}
+                className={isFilesPage ? "nav-link nav-link-active" : "nav-link"}
+                onClick={() => closeMobile(false)}
+              >
+                <svg
+                  aria-hidden="true"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                >
+                  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                </svg>
+                Fichiers
+              </Link>
+              {canAdmin ? (
+                <Link
+                  to="/admin"
+                  activeOptions={{ exact: true }}
+                  className={
+                    location.pathname === "/admin" ? "nav-link nav-link-active" : "nav-link"
+                  }
+                  onClick={() => closeMobile(false)}
+                >
+                  <svg
+                    aria-hidden="true"
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                  >
+                    <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
+                  </svg>
+                  Administration
+                </Link>
+              ) : null}
+            </nav>
+            <p className="sidebar-foot">
+              <svg
+                aria-hidden="true"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              >
+                <rect x="5" y="11" width="14" height="10" rx="2" />
+                <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+              </svg>
+              <span aria-live="polite" aria-atomic="true">
+                {usageQuery.data
+                  ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes)} utilisés`
+                  : "Chiffré au repos, intégrité vérifiée"}
+              </span>
+            </p>
+          </div>
+        </>
       ) : null}
 
-      <div className="vault-main">
-        <header className="vault-topbar">
+      <div className="main">
+        <header className="topbar">
+          {/* Bouton hamburger mobile */}
           <button
             ref={hamburgerRef}
-            type="button"
-            className="vault-icon-btn vault-focus vault-hamburger"
-            aria-label="Ouvrir la navigation"
-            aria-controls="vault-sidebar"
-            aria-expanded={drawerOpen}
-            onClick={() => setDrawerOpen(true)}
+            className="btn btn-ghost btn-small topbar-mobile-toggle"
+            aria-label="Ouvrir le menu de navigation"
+            aria-expanded={mobileOpen}
+            aria-controls="mobile-navigation"
+            onClick={() => setMobileOpen(true)}
           >
-            <MenuIcon />
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            >
+              <path d="M3 12h18M3 6h18M3 18h18" />
+            </svg>
           </button>
-
-          <form className="vault-search" role="search" onSubmit={submitSearch}>
-            <SearchIcon />
-            <input
-              ref={searchRef}
-              type="search"
-              aria-label="Recherche globale"
-              placeholder="Rechercher un fichier, un dossier…"
-            />
-            <kbd className="vault-kbd">Ctrl K</kbd>
-          </form>
-
-          <div className="vault-topbar-actions">
-            <div className="menu" ref={notifMenuRef}>
-              <button
-                type="button"
-                className="vault-icon-btn vault-focus"
-                aria-label="Notifications"
-                aria-expanded={notifOpen}
-                onClick={() => setNotifOpen((open) => !open)}
-              >
-                <BellIcon />
-              </button>
-              {notifOpen ? (
-                <div className="menu-panel">
-                  <p className="vault-menu-status">Aucune notification.</p>
-                </div>
-              ) : null}
-            </div>
-
-            {session.data ? (
-              <div className="menu" ref={profileMenuRef}>
+          {/* Bouton de togglage sidebar (réduire/agrandir) sur grand écran */}
+          <button
+            className="btn btn-ghost btn-small topbar-sidebar-toggle"
+            aria-label={sidebarCollapsed ? "Agrandir la sidebar" : "Réduire la sidebar"}
+            aria-pressed={sidebarCollapsed}
+            onClick={() => toggleSidebar(!sidebarCollapsed)}
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            >
+              <path d="M3 12h18M3 6h18M3 18h18" />
+            </svg>
+          </button>
+          <div className="session">
+            {csrf ? (
+              <>
+                <span className="whoami">
+                  <span className="avatar" aria-hidden="true">
+                    {initials(name ?? "")}
+                  </span>
+                  <span className="whoami-text">
+                    <span className="whoami-name">{name ?? "Session ouverte"}</span>
+                    <span className="whoami-role">
+                      {roleLabel(session.data?.kind, session.data?.role)}
+                    </span>
+                  </span>
+                </span>
                 <button
                   type="button"
-                  className="vault-profile vault-focus"
-                  aria-label={`Compte : ${label}`}
-                  aria-expanded={profileOpen}
-                  onClick={() => setProfileOpen((open) => !open)}
+                  className="btn btn-ghost btn-small"
+                  aria-label="Changer la densité d'affichage"
+                  onClick={() => setDensity((d) => (d === "compact" ? "comfortable" : "compact"))}
                 >
-                  <span className="vault-avatar" aria-hidden="true">
-                    {avatarInitial}
-                  </span>
-                  <span className="vault-profile-meta">
-                    <span className="vault-profile-name">{label}</span>
-                    <span className="vault-profile-sub">Stockage AURA</span>
-                  </span>
-                  <ChevronIcon />
+                  {density === "compact" ? " ≡ " : " ☰ "}
                 </button>
-                {profileOpen ? (
-                  <div className="menu-panel">
-                    <p className="vault-menu-status">
-                      {csrf ? "Coffre déverrouillé" : "Coffre verrouillé"}
-                    </p>
-                    <button
-                      type="button"
-                      className="menu-item"
-                      onClick={() => void handleLogout()}
-                    >
-                      Déconnexion
-                    </button>
-                  </div>
-                ) : null}
-              </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  aria-label="Changer le thème"
+                  onClick={() =>
+                    setTheme((t) => (t === "dark" ? "light" : t === "light" ? "auto" : "dark"))
+                  }
+                >
+                  {theme === "dark" ? "🌙" : theme === "light" ? "☀️" : "💻"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  onClick={() => void handleLogout()}
+                >
+                  Déconnexion
+                </button>
+              </>
             ) : (
-              <Link to="/login" className="vault-topbar-link vault-focus">
-                Connexion
-              </Link>
+              <Link to="/login">Connexion</Link>
             )}
           </div>
         </header>
-
-        <main className="content">{children}</main>
+        <main id="main-content" className="content" tabIndex={-1}>
+          {children}
+        </main>
       </div>
     </div>
   );

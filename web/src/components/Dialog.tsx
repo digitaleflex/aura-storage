@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 /**
@@ -17,21 +17,30 @@ export function Dialog({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  // Unique per instance: several dialogs live on one page, and a shared id
+  // would give every one of them the first dialog's title as its name.
+  const titleId = useId();
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     if (open && !el.open) {
       el.showModal();
+      // showModal() focuses the first focusable element, which is the header's
+      // "Fermer" button: typing a name then Enter would close the dialog. Move
+      // focus to the first field of the body when there is one.
+      el.querySelector<HTMLElement>(
+        ".dialog-body input:not([type=hidden]):not([disabled]), .dialog-body select, .dialog-body textarea",
+      )?.focus();
     } else if (!open && el.open) {
       el.close();
     }
   }, [open]);
 
   return (
-    <dialog ref={ref} className="dialog" onClose={onClose} aria-labelledby="dlg-title">
+    <dialog ref={ref} className="dialog" onClose={onClose} aria-labelledby={titleId}>
       <div className="dialog-head">
-        <h2 id="dlg-title">{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         <button
           type="button"
           className="btn btn-ghost btn-small"

@@ -7,7 +7,9 @@
 - Use default-deny inbound firewall rules and allow only required ports.
 - Keep SeaweedFS master, volume, filer UI/admin, metrics and other internal interfaces private.
 - Expose S3 only through HTTPS.
-- Never publish the Traefik dashboard without explicit authentication and network restrictions.
+- Never publish the Traefik dashboard without explicit authentication and network restrictions. The Compose router applies a source allow-list (`DASHBOARD_ALLOWED_IPS`, loopback-only by default) before BasicAuth.
+- Session cookies carry a random token; the catalogue stores only its SHA-256 digest (`api/auth.py:session_key`). Deploying this change signs every user out once.
+- The app shell sends a Content-Security-Policy (`app/nginx.conf`); Traefik adds HSTS on every public router.
 - Restrict Docker socket access; Docker group membership is effectively root-equivalent.
 
 ## S3 access and object encryption
@@ -19,6 +21,8 @@
 - Losing the SSE key may make SSE-S3 objects unrecoverable. Rotating the key is a data-migration procedure, not a simple environment edit.
 - Run tests/sse-s3-smoke-test.sh after deployment. It uploads an object with AES256, checks the S3 response and verifies downloaded bytes. Do not import valuable data unless the test passes.
 - This test validates S3 object encryption reporting; it does not prove whole-disk encryption or protect against a compromised running server.
+- **WEED_S3_SSE_KEK alone does not encrypt anything.** SeaweedFS 4.48 applies SSE-S3 only to writes that send `x-amz-server-side-encryption: AES256`; there is no implicit default. Verified locally on 2026-10-18: uploads made through the app before this fix were stored in plaintext (readable in the `.dat` volume files). The API now signs that header into every presigned PUT, returns it in the upload-intent `headers`, and refuses to commit an object not reported as `AES256` (`AURA_REQUIRE_SSE=1`, default).
+- Objects stored before the fix: back up, run `docker compose exec -T api python -m api.reencrypt` (dry run) then `--apply`, then `volume.vacuum -garbageThreshold=0.0001` in `weed shell` so the old plaintext needles are compacted away. Re-run `tests/sse-s3-smoke-test.sh`.
 - Confirm the selected SeaweedFS image release supports WEED_S3_SSE_KEK. If it does not, do not assume encryption is active; select a supported release and re-run the acceptance test.
 - Validate S3 policy syntax/actions against the exact selected SeaweedFS release.
 
@@ -35,11 +39,15 @@
 - A valid session or CSRF token is authentication, not authorization: administrative
   and destructive actions (purge, reconcile, provisioning) require the matching role
   or scope and are refused with 403 otherwise.
-- Human sessions are long-lived by default (`AURA_SESSION_TTL` = 30 days). The wider
-  theft window is compensated by an HttpOnly, `Secure`, `SameSite=Strict` cookie and
-  the CSRF double-submit on mutations; the expiry is fixed at login (no rolling
-  renewal), so logout or expiry genuinely ends the session. Shorten the TTL where a
-  higher-value deployment warrants it.
+- Human sessions are relatively short-lived by default (`AURA_SESSION_TTL` = 8 hours)
+  in the Docker Compose stack (and `api/config.py` defaults to 8 hours). The narrower
+  theft window reduces exposure; the team can override the value explicitly in
+  `.env` when a longer session is an operational requirement (a long-lived value such
+  as 30 days widens the theft window and is compensated by the HttpOnly, `Secure`,
+  `SameSite=Strict` cookie and the CSRF double-submit on mutations). The cookie is
+  `HttpOnly`, `Secure`, `SameSite=Strict` and set with `max_age` corresponding to
+  the effective TTL (no sliding refresh). A new login always issues a new session
+  identifier and a new CSRF token.
 - Objects carry an application/space/environment boundary. Catalogue queries are
   always filtered by the caller's space, and human users are further limited to their
   own objects.
@@ -77,6 +85,11 @@
   the API authorised and fill the volume before commit. Declared sizes above the
   configured maximum are refused up front (422), and the commit-time size check remains
   as defence in depth (#40). Enforcement of the signed header is validated on the pilot.
+- The presigned PUT also signs the SSE-S3 request header
+  **`x-amz-server-side-encryption: AES256`** (`api/s3.py`), so the client must send it
+  for the gateway to encrypt the object at rest; the commit step can then require
+  AES256 at the object level. Like `Content-Length`, the signed-header enforcement is
+  validated on the pilot, not in the offline suite.
 - Default bucket names (derived from the space name/environment, or supplied) are
   validated against the S3 naming rules before the bucket is registered, so a space can
   never point at a bucket name S3 would reject (`api/s3.py:is_valid_bucket_name`, #41).

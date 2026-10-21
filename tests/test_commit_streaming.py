@@ -4,7 +4,9 @@ Offline: the S3 client is replaced with a stub that streams bytes in chunks, so
 the tests exercise the real commit handler without a live endpoint.
 """
 import hashlib
+import logging
 import os
+import re
 import time
 
 import pytest
@@ -46,7 +48,8 @@ class DummyS3:
         self.deleted = []
 
     def head_object(self, Bucket, Key):
-        return {"ContentLength": self.declared_size, "ContentType": "application/octet-stream"}
+        return {"ContentLength": self.declared_size, "ContentType": "application/octet-stream",
+                "ServerSideEncryption": "AES256"}
 
     def get_object(self, Bucket, Key):
         return {"Body": self.body}
@@ -88,14 +91,13 @@ def _intent(c, headers, name="stream.bin", size_bytes=1):
 
 
 def _backdate_intent(oid, seconds):
-    conn = main.repo.conn
     expired = int(time.time()) - seconds
-    if "sqlite3" in type(conn).__module__:
+    if main.repo.dialect == "sqlite":
+        conn = main.repo.conn
         conn.execute("UPDATE objects SET intent_expires_at = ? WHERE id = ?", (expired, oid))
         conn.commit()
     else:  # pragma: no cover - offline tests run on SQLite
-        with conn.cursor() as cur:
-            cur.execute("UPDATE objects SET intent_expires_at = %s WHERE id = %s", (expired, oid))
+        main.repo._run("UPDATE objects SET intent_expires_at = %s WHERE id = %s", (expired, oid))
 
 
 def test_commit_streams_large_object_with_bounded_chunks(monkeypatch):
@@ -122,7 +124,7 @@ def test_commit_is_idempotent(monkeypatch):
     data = b"idempotent-payload"
     monkeypatch.setattr(main, "s3ops", DummyS3(data))
     c, headers = _admin_headers()
-    oid = _intent(c, headers)
+    oid = _intent(c, headers, size_bytes=len(data))
     first = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
     second = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
     assert first.status_code == 200 and second.status_code == 200
@@ -169,7 +171,41 @@ def test_expired_intent_is_refused(monkeypatch):
 def test_pending_object_is_not_visible_as_available(monkeypatch):
     monkeypatch.setattr(main, "s3ops", DummyS3(b"pending"))
     c, headers = _admin_headers()
-    oid = _intent(c, headers, "notyet.bin")
+    oid = _intent(c, headers, "notyet.bin", size_bytes=len(b"pending"))
     items = c.get("/api/v1/objects").json()["items"]
     entry = next(i for i in items if i["id"] == oid)
     assert entry["status"] == "pending"
+
+
+def test_commit_emits_server_timing(monkeypatch, caplog):
+    """The success path carries the same numbers in a header and one log line."""
+    data = b"timed-payload"
+    monkeypatch.setattr(main, "s3ops", DummyS3(data))
+    c, headers = _admin_headers()
+    oid = _intent(c, headers, "timed.bin", size_bytes=len(data))
+
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
+
+    assert r.status_code == 200, r.text
+    match = re.fullmatch(
+        r"head;dur=(\d+\.\d), hash;dur=(\d+\.\d), total;dur=(\d+\.\d)",
+        r.headers["Server-Timing"],
+    )
+    assert match is not None, r.headers["Server-Timing"]
+    head_ms, hash_ms, total_ms = (float(value) for value in match.groups())
+    assert head_ms >= 0 and hash_ms >= 0 and total_ms >= 0
+
+    body = r.json()
+    assert body["status"] == "available"
+    assert body["checksum_algorithm"] == "sha256"
+
+    lines = [
+        record.getMessage() for record in caplog.records
+        if record.name == "uvicorn.error" and "commit timings oid=" in record.getMessage()
+    ]
+    assert len(lines) == 1, lines
+    assert lines[0] == (
+        f"commit timings oid={oid} bytes={len(data)} head_ms={head_ms:.1f} "
+        f"hash_ms={hash_ms:.1f} total_ms={total_ms:.1f}"
+    )

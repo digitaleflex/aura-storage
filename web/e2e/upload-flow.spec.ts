@@ -130,7 +130,7 @@ async function login(page: Page): Promise<void> {
   await page.getByLabel("Identifiant").fill("admin");
   await page.getByLabel("Mot de passe").fill("pw");
   await page.getByRole("button", { name: "Se connecter" }).click();
-  await expect(page.getByRole("heading", { name: "Fichiers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
 }
 
 async function chooseFile(page: Page, name = "rapport.pdf"): Promise<void> {
@@ -147,7 +147,7 @@ test("upload shows name/size and confirms success only after commit", async ({ p
   await chooseFile(page, "rapport.pdf");
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
-  const status = page.getByTestId("transfer-status");
+  const status = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
   await expect(status).toContainText("rapport.pdf");
   await expect(status).toContainText("11 o");
   await expect(status).toContainText("Disponible");
@@ -168,7 +168,7 @@ test("blocks an accidental double submission", async ({ page }) => {
   // control is offered, so a second submit cannot create a second intent.
   await expect(page.getByRole("button", { name: "Annuler" })).toBeVisible();
   await expect(submit).toBeDisabled();
-  await expect(page.getByTestId("transfer-status")).toContainText("Disponible");
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status")).toContainText("Disponible");
 
   expect(mocks.intentCount()).toBe(1);
 });
@@ -182,7 +182,10 @@ test("a server validation error is surfaced and never shown as success", async (
   await chooseFile(page);
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
-  await expect(page.getByRole("alert")).toContainText("does not match");
+  // Scoped to the import panel: the page can show other alerts (e.g. storage usage).
+  await expect(
+    page.getByRole("region", { name: "Importer" }).getByRole("alert"),
+  ).toContainText("incomplet ou différent de l'original");
   await expect(page.getByText("Import validé et vérifié par le backend.")).toHaveCount(0);
   expect(mocks.calls).toContain("commit");
 });
@@ -193,7 +196,7 @@ test("recovers from an expired presigned URL with a fresh intent", async ({ page
   await chooseFile(page);
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
-  await expect(page.getByTestId("transfer-status")).toContainText("Disponible");
+  await expect(page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status")).toContainText("Disponible");
   expect(mocks.calls.filter((call) => call === "intent")).toHaveLength(2);
   expect(mocks.calls.filter((call) => call === "put")).toHaveLength(1);
 });

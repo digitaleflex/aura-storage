@@ -1,0 +1,28 @@
+name: CI Tests (PR)
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # The web dependencies live in web/ (web/package-lock.json). Run there:
+      # `npm ci` at the repository root had no lockfile to install from and
+      # failed every run, so the PR gate was red on every branch.
+      - run: npm ci --no-audit --no-fund
+        working-directory: web
+      - run: python3 -m pip install -r api/requirements-dev.txt
+      - run: |
+          AURA_API_ADMIN_PASSWORD=ci-dummy-password \
+          AURA_S3_ACCESS_KEY=ci-dummy-access-key-1234 \
+          AURA_S3_SECRET_KEY=ci-dummy-secret-12345678901234567890 \
+          AURA_S3_ENDPOINT=https://127.0.0.1:9 \
+          AURA_API_DB=:memory: AURA_COOKIE_SECURE=0 \
+          python3 -m pytest tests/ -q --timeout=45

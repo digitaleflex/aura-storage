@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { useFolderNavigation } from "../lib/folderContext";
 import {
   useInfiniteQuery,
   useMutation,
@@ -16,9 +15,16 @@ import {
 } from "../lib/api";
 import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
+import {
+  addEntries,
+  clearOwner,
+  fingerprint,
+  pendingEntries,
+  removeEntries,
+  type JournalEntry,
+} from "../lib/uploadJournal";
 import type {
   QueueInput,
-  QueueItem,
   QueueState,
   TransferDeps,
   TransferPhase,
@@ -34,15 +40,47 @@ import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
-import { PreviewModal } from "../components/PreviewModal";
 import { RowMenu } from "../components/RowMenu";
+import { describeError } from "../lib/errors";
+import { PreviewModal } from "../components/PreviewModal";
+import {
+  MasterModeBanner,
+  MasterModeDialog,
+  useMasterMode,
+} from "../components/MasterMode";
+import { isPreviewable } from "../lib/preview";
 
 /** Objects fetched per page ("Charger plus" increments the offset). */
 const OBJECTS_PAGE_SIZE = 50;
 
+/**
+ * True when a key event belongs to text entry. Global shortcuts must not
+ * hijack typing, but they should still work when focus is on a checkbox or a
+ * button (e.g. selecting rows then pressing Suppr).
+ */
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target.tagName === "TEXTAREA" || target.tagName === "SELECT") return true;
+  if (target.tagName === "INPUT") {
+    const type = (target as HTMLInputElement).type;
+    return ![
+      "checkbox",
+      "radio",
+      "button",
+      "submit",
+      "reset",
+      "file",
+      "range",
+      "color",
+    ].includes(type);
+  }
+  return false;
+}
+
 /** Human label for each transfer phase (import → validation → availability). */
 const PHASE_LABEL: Record<TransferPhase, string> = {
-  idle: "En file d'attente",
+  idle: "En attente",
   "requesting-intent": "Autorisation…",
   uploading: "Envoi…",
   validating: "Validation…",
@@ -62,47 +100,26 @@ function queuePhaseClass(phase: TransferPhase): string {
   return "chip chip-warn";
 }
 
-/**
- * A held file (paused) keeps `state.phase === "idle"` in the engine, so the
- * pause must be read from `item.paused` — never guessed from the phase — or a
- * paused file would lie and read as "En file d'attente".
- */
-function queueItemLabel(item: QueueItem): string {
-  return item.paused ? "En pause" : PHASE_LABEL[item.state.phase];
-}
-
-/** Chip style for a queue item: a held file is paused, not queued. */
-function queueItemClass(item: QueueItem): string {
-  return item.paused ? "chip chip-muted" : queuePhaseClass(item.state.phase);
-}
-
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "Tous les états" },
   { value: "available", label: "Disponible" },
   { value: "pending", label: "En cours" },
-  { value: "deleted", label: "Supprimé" },
+  { value: "verifying", label: "Vérification" },
+  { value: "deleted", label: "Corbeille" },
   { value: "expired", label: "Expiré" },
   { value: "failed", label: "Échec" },
   { value: "aborted", label: "Abandonné" },
 ];
 
-const SORT_OPTIONS: {
-  value: NonNullable<ObjectQuery["sort"]>;
+/** Sortable columns: the API field, its label and the order a first click uses. */
+const SORT_COLUMNS: {
+  field: NonNullable<ObjectQuery["sort"]>;
   label: string;
+  firstOrder: NonNullable<ObjectQuery["order"]>;
 }[] = [
-  { value: "created_at", label: "Date" },
-  { value: "display_name", label: "Nom" },
-  { value: "size_bytes", label: "Taille" },
-];
-
-/** Accepted import categories, shown as informative (non-clickable) badges. */
-const IMPORT_CATEGORIES = [
-  "Documents",
-  "Images",
-  "Vidéos",
-  "Audio",
-  "Archives",
-  "Autres",
+  { field: "display_name", label: "Nom", firstOrder: "asc" },
+  { field: "size_bytes", label: "Taille", firstOrder: "desc" },
+  { field: "created_at", label: "Ajouté", firstOrder: "desc" },
 ];
 
 /** Common media types offered as suggestions; the field stays free text. */
@@ -164,13 +181,75 @@ function parseSize(value: string): number | undefined {
 const STATUS_LABELS: Record<string, string> = {
   available: "Disponible",
   pending: "En cours",
+  verifying: "Vérification…",
   deleted: "Supprimé",
+  purging: "Purge en cours",
   expired: "Expiré",
   failed: "Échec",
   aborted: "Abandonné",
 };
 
 /** Friendly type label for scanning; the raw MIME stays in the details panel. */
+/** SVG icon for a recognized file type. Returns null for unknown types. */
+function FileTypeIcon({ contentType }: { contentType: string }) {
+  const value = contentType.toLowerCase();
+  if (value.startsWith("image/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.6" />
+        <circle cx="8" cy="10" r="2" fill="currentColor" />
+        <path d="M3 17l5-4 4 3 5-5 4 4" stroke="currentColor" strokeWidth="1.4" />
+      </svg>
+    );
+  }
+  if (value === "application/pdf") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="6" y="2" width="12" height="20" rx="1" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M9 7h6M9 11h6M9 15h4" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+  if (value.startsWith("audio/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    );
+  }
+  if (value.startsWith("video/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="2" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M18 9l4-2v10l-4-2" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    );
+  }
+  if (value === "application/zip" || value === "application/gzip" || value === "application/x-tar") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M4 10h16M10 4v6" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+  if (value.startsWith("text/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M14 2v6h6M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
 function typeLabel(contentType: string): string {
   const value = contentType.toLowerCase();
   if (value === "application/pdf") return "PDF";
@@ -196,14 +275,13 @@ function StatusLabel({ status }: { status: string }) {
   const variant =
     status === "available"
       ? "status status-ok"
-      : status === "pending"
+      : status === "pending" || status === "verifying"
         ? "status status-warn"
         : status === "failed"
           ? "status status-error"
           : status === "deleted"
-            ? // Vault token: the deleted pastille stays neutral grey (never the
-              // mock's green, so deletion never borrows the activity colour).
-              "status vault-dot-deleted-neutre"
+            ? // Deletion stays neutral grey: it never borrows the activity colour.
+              "status status-muted"
             : "status";
   return <span className={variant}>{STATUS_LABELS[status] ?? status}</span>;
 }
@@ -211,6 +289,16 @@ function StatusLabel({ status }: { status: string }) {
 /** Server-side soft delete accepts only `available` or `pending` rows; anything
  * else is refused with 409. The bulk selection and the per-row "Supprimer"
  * action share this predicate so they never diverge. */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `k-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+/** In the trash and fully uploaded: the server refuses to restore anything else. */
+function isRestorable(item: ObjectItem): boolean {
+  return item.status === "deleted" && item.size_bytes >= 0;
+}
+
 function isDeletable(item: ObjectItem): boolean {
   return item.status === "available" || item.status === "pending";
 }
@@ -421,29 +509,12 @@ export function ObjectsPage() {
   const session = useSession();
   const queryClient = useQueryClient();
 
-  const { currentFolderId, setCurrentFolderId } = useFolderNavigation();
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   // Uploads run through the M03 transfer engine as a bounded multi-file queue.
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [queue, setQueue] = useState<QueueState>(() => emptyQueue());
   const queueRef = useRef<UploadQueue | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
-  // Page Lifecycle "freeze": a truly frozen tab suspends its JS, so progress
-  // genuinely stops there. Surface it honestly instead of pretending otherwise.
-  const [tabFrozen, setTabFrozen] = useState(false);
-  useEffect(() => {
-    const onFreeze = () => setTabFrozen(true);
-    const onResume = () => setTabFrozen(false);
-    document.addEventListener("freeze", onFreeze);
-    document.addEventListener("resume", onResume);
-    return () => {
-      document.removeEventListener("freeze", onFreeze);
-      document.removeEventListener("resume", onResume);
-    };
-  }, []);
-
-  // The transfer engine owns its own window listeners (beforeunload guard,
-  // offline/online suspension). Detach them when this page unmounts.
-  useEffect(() => () => queueRef.current?.dispose(), []);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -469,8 +540,8 @@ export function ObjectsPage() {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }
 
-  function notify(kind: Toast["kind"], text: string) {
-    setToasts((current) => [...current.slice(-4), makeToast(kind, text)]);
+  function notify(kind: Toast["kind"], text: string, action?: Toast["action"]) {
+    setToasts((current) => [...current.slice(-4), makeToast(kind, text, action)]);
   }
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -479,10 +550,34 @@ export function ObjectsPage() {
   const [moveTarget, setMoveTarget] = useState<FolderItem | null>(null);
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
   const [details, setDetails] = useState<ObjectItem | null>(null);
-  /** Object whose inline preview modal is open (null = closed). */
   const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  // The import panel opens on demand (header button) and stays open while it
+  // holds pending files, a queue or an error; a drop anywhere also opens it.
+  const [intakeOpen, setIntakeOpen] = useState(false);
+  const [trayCollapsed, setTrayCollapsed] = useState(false);
+  // Directory import: which folder of the plan is being created (item P1.7).
+  const [folderProgress, setFolderProgress] = useState<{
+    done: number;
+    total: number;
+    name: string;
+  } | null>(null);
+  // Bulk delete: the dialog stays open while the per-file loop reports its
+  // real progress instead of a silent "Suppression…" (item P1.8).
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [deleteManyProgress, setDeleteManyProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const uploadStartTimeRef = useRef<number | null>(null);
+
+  // File d'attente automatique : placeholder (defini plus bas apres transferActive)
+
+  // Infinite scroll : charger automatiquement quand le bouton "Charger plus" est visible
+  // (defini apres objectsQuery pour eviter le TDZ)
   const [pendingConfirm, setPendingConfirm] = useState<{
     title: string;
     message: ReactNode;
@@ -569,6 +664,10 @@ export function ObjectsPage() {
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
 
+  // Permissions d'écriture : tout utilisateur authentifié peut créer des dossiers
+  // et importer des fichiers ; l'API reste autoritaire.
+  const canCreate = !!session.data?.id;
+  const canCreateFolder = !!session.data?.id;
   // Recursive deletion deletes objects (objects:delete) inside folders the
   // caller owns (objects:write); it is a human-only flow, like folders. When
   // either scope is missing the option is never offered.
@@ -586,26 +685,209 @@ export function ObjectsPage() {
     retry: false,
   });
 
-  /** True while any file of the queue is transferring (drives live readouts). */
+  /** True while any file of the queue is transferring (blocks double submit). */
   const transferActive = queue.active > 0;
 
-  /** True while the queue still has unfinished work (running or held): it blocks
-   * a second submission and keeps the lifecycle guards honest — a paused queue
-   * is not "done". */
-  const queueBusy = queue.items.length > 0 && !queue.finished;
+  // File d'attente automatique : quand le transfert se termine et qu'il y a
+  // des fichiers en attente, les lancer automatiquement.
+  useEffect(() => {
+    if (transferActive) return;
+    if (pendingFiles.length === 0) return;
+    if (!csrf) return;
+    // Petite temporisation pour laisser l'UI se stabiliser
+    const timer = setTimeout(() => {
+      launchQueue(
+        csrf,
+        pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
+      );
+      setPendingFiles([]);
+      setNotice(null);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [transferActive, pendingFiles.length, csrf, currentFolderId]);
 
-  /** At least one file can still be held (queued or moving) and nothing is
-   * already suspended: the "Pause tout" control is worth offering. */
-  const canPauseAll =
-    !queue.schedulerPaused &&
-    queue.items.some(
-      (item) =>
-        !item.paused &&
-        (item.state.phase === "idle" || ACTIVE_PHASES.includes(item.state.phase)),
+  // -- Upload journal: resume a long import after a reload --------------------
+  const owner = session.data?.id ?? null;
+  const [resumable, setResumable] = useState<JournalEntry[]>([]);
+  const resumeFilesRef = useRef<HTMLInputElement>(null);
+  const resumeDirRef = useRef<HTMLInputElement>(null);
+  /** Journal keys already forgotten, so each settled file is removed once. */
+  const forgottenRef = useRef<Set<string>>(new Set());
+
+  function refreshResumable() {
+    if (!owner) return;
+    void pendingEntries(owner).then(setResumable);
+  }
+
+  useEffect(() => {
+    if (!transferActive) refreshResumable();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [owner, transferActive]);
+
+  // Leaving the page mid-import loses the files in flight: ask first.
+  useEffect(() => {
+    if (!transferActive) return;
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [transferActive]);
+
+  // Raccourcis clavier : / pour focus recherche
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (isTextEntryTarget(event.target)) return;
+      // Un "/" majuscule ouvre la légende, pas la recherche : les deux
+      // raccourcis partagent la même touche physique.
+      if (event.key === "/" && !event.shiftKey) {
+        event.preventDefault();
+        const searchInput = document.querySelector('input[name="filter"]') as HTMLInputElement;
+        if (searchInput) searchInput.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Coller-pour-importer (Ctrl+V / Cmd+V)
+  useEffect(() => {
+    function onPaste(event: ClipboardEvent) {
+      const files = event.clipboardData?.files;
+      if (!files || files.length === 0) return;
+      // Ignorer si on est dans un champ de saisie
+      const target = event.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      event.preventDefault();
+      setPendingFiles((prev) => [...prev, ...Array.from(files)]);
+      setIntakeOpen(true);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
+  // Keep the screen (and so the machine) awake while files are being sent.
+  // Best effort: unsupported browsers or a refused lock change nothing.
+  useEffect(() => {
+    if (!transferActive) return;
+    let lock: { release(): Promise<void> } | null = null;
+    let released = false;
+    const wakeLock = (navigator as Navigator & {
+      wakeLock?: { request(type: "screen"): Promise<{ release(): Promise<void> }> };
+    }).wakeLock;
+    wakeLock
+      ?.request("screen")
+      .then((acquired) => {
+        if (released) void acquired.release();
+        else lock = acquired;
+      })
+      .catch(() => undefined);
+    return () => {
+      released = true;
+      void lock?.release().catch(() => undefined);
+    };
+  }, [transferActive]);
+
+  /** Start a queue, journaling every file so the import survives a reload. */
+  function launchQueue(
+    activeCsrf: string,
+    entries: Array<{
+      file: File;
+      rel: string;
+      folderId: string | null;
+      idempotencyKey?: string;
+    }>,
+  ) {
+    const journal: JournalEntry[] = [];
+    const inputs: QueueInput[] = entries.map(({ file, rel, folderId, idempotencyKey }) => {
+      if (!owner) return { file, folderId };
+      const key = fingerprint(owner, rel, file);
+      // One key per file for its whole life: a resume after a reload reopens
+      // the same server session and keeps the parts already sent.
+      const idem = idempotencyKey ?? newIdempotencyKey();
+      forgottenRef.current.delete(key);
+      journal.push({ key, owner, rel, size: file.size, folderId, idempotencyKey: idem });
+      return { file, folderId, key, idempotencyKey: idem };
+    });
+    void addEntries(journal);
+    const uploadQueue = startUploadQueue(inputs, transferDeps(activeCsrf), {
+      folderId: currentFolderId,
+      onUpdate: handleQueueUpdate,
+      // A file whose PUT died with the link is replayed by the queue as soon as
+      // the browser reports the network back: say so, instead of leaving the
+      // user in front of a tray full of "Échec" they did not ask to fix.
+      onAutoRetry: (count) =>
+        notify(
+          "ok",
+          `Connexion rétablie : ${count} fichier${count > 1 ? "s" : ""} relancé${
+            count > 1 ? "s" : ""
+          } automatiquement.`,
+        ),
+    });
+    queueRef.current = uploadQueue;
+  }
+
+  /** Re-selected files: send only those the journal still lists. */
+  function handleResume(selected: FileList | null) {
+    if (!selected || selected.length === 0 || !owner || !csrf || transferActive) return;
+    const byKey = new Map(resumable.map((entry) => [entry.key, entry]));
+    // Same file picked through the other picker (plain files vs folder) has a
+    // different relative path: fall back to name + size + mtime.
+    const byName = new Map(
+      resumable.map((entry) => [
+        `${entry.rel.split("/").pop()}\u0000${entry.size}`,
+        entry,
+      ]),
     );
+    const matched: Array<{
+      file: File;
+      rel: string;
+      folderId: string | null;
+      idempotencyKey?: string;
+    }> = [];
+    const seen = new Set<string>();
+    for (const file of Array.from(selected)) {
+      const rel = normalizeRelativePath(
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+      );
+      const entry =
+        byKey.get(fingerprint(owner, rel, file)) ??
+        (() => {
+          const candidate = byName.get(`${file.name}\u0000${file.size}`);
+          return candidate &&
+            candidate.key === fingerprint(owner, candidate.rel, file)
+            ? candidate
+            : undefined;
+        })();
+      if (!entry || seen.has(entry.key)) continue;
+      seen.add(entry.key);
+      matched.push({
+        file,
+        rel: entry.rel,
+        folderId: entry.folderId,
+        idempotencyKey: entry.idempotencyKey,
+      });
+    }
+    const ignored = selected.length - matched.length;
+    if (matched.length === 0) {
+      setUploadError(
+        "Aucun des fichiers choisis ne correspond à l'import interrompu (même nom, taille et date de modification).",
+      );
+      return;
+    }
+    setUploadError(null);
+    setNotice(
+      `Reprise de ${matched.length} fichier(s)` +
+        (ignored > 0 ? ` ; ${ignored} déjà envoyé(s) ou hors import ignoré(s).` : "."),
+    );
+    launchQueue(csrf, matched);
+  }
 
-  /** True while any file is held (explicit pause or a connectivity loss). */
-  const queuePaused = queue.paused > 0 || queue.schedulerPaused;
+  function forgetResumable() {
+    if (!owner) return;
+    void clearOwner(owner).then(() => setResumable([]));
+  }
 
   /** Wire the injected engine to the real API for one authenticated session. */
   function transferDeps(activeCsrf: string): TransferDeps {
@@ -628,6 +910,9 @@ export function ObjectsPage() {
           signal: opts.signal,
         }),
       commit: (id) => api.commitObject(id, activeCsrf),
+      multipartStatus: (id) => api.multipartStatus(id),
+      objectStatus: (id) => api.getObject(id),
+      partUrls: (id, numbers) => api.multipartPartUrls(id, numbers, activeCsrf),
       abortIntent: async (id) => {
         await api.abortObject(id, activeCsrf);
       },
@@ -650,6 +935,23 @@ export function ObjectsPage() {
         ? lastOffset + lastPage.items.length
         : undefined,
   });
+
+  // Infinite scroll : charger automatiquement quand le bouton "Charger plus" est visible
+  useEffect(() => {
+    if (!objectsQuery.hasNextPage) return;
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !objectsQuery.isFetchingNextPage) {
+          void objectsQuery.fetchNextPage();
+        }
+      },
+      { threshold: 0.1 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [objectsQuery.hasNextPage, objectsQuery.isFetchingNextPage]);
 
   const tree = treeQuery.data?.items ?? [];
   const byId = useMemo(() => new Map(tree.map((f) => [f.id, f])), [tree]);
@@ -706,7 +1008,7 @@ export function ObjectsPage() {
 
   function reportError(err: unknown, fallback: string) {
     setNotice(null);
-    setActionError(err instanceof ApiError ? err.detail : fallback);
+    setActionError(describeError(err, fallback));
   }
 
   // -- mutations -----------------------------------------------------------
@@ -797,9 +1099,12 @@ export function ObjectsPage() {
       if (!csrf) throw new Error("Session expirée.");
       return api.deleteObject(id, csrf);
     },
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       setDetails(null);
-      notify("ok", "Objet marqué comme supprimé. Les octets restent jusqu'à une purge.");
+      notify("ok", "Objet marqué comme supprimé. Les octets restent jusqu'à une purge.", {
+        label: "Annuler",
+        onClick: () => restoreMutation.mutate(id),
+      });
       invalidateLibrary();
     },
     onError: (err) => reportError(err, "Suppression impossible."),
@@ -813,6 +1118,7 @@ export function ObjectsPage() {
       if (!csrf) throw new Error("Session expirée.");
       const failed: string[] = [];
       let deleted = 0;
+      setDeleteManyProgress({ done: 0, total: ids.length });
       for (const id of ids) {
         try {
           await api.deleteObject(id, csrf);
@@ -820,17 +1126,30 @@ export function ObjectsPage() {
         } catch {
           const target = items.find((item) => item.id === id);
           failed.push(target?.display_name ?? id);
+        } finally {
+          setDeleteManyProgress({ done: deleted + failed.length, total: ids.length });
         }
       }
       return { deleted, failed };
     },
-    onSuccess: ({ deleted, failed }) => {
+    onSuccess: ({ deleted, failed }, ids) => {
+      setBulkDeleteOpen(false);
+      setDeleteManyProgress(null);
       setSelectedIds(new Set());
       setDetails(null);
       if (failed.length === 0) {
         notify(
           "ok",
           `${deleted} objet(s) marqué(s) comme supprimé(s). Les octets restent jusqu'à une purge.`,
+          {
+            label: "Annuler",
+            onClick: () => {
+              if (!csrf) return;
+              for (const id of ids) {
+                void restoreMutation.mutate(id);
+              }
+            },
+          },
         );
       } else {
         notify(
@@ -840,7 +1159,100 @@ export function ObjectsPage() {
       }
       invalidateLibrary();
     },
-    onError: (err) => reportError(err, "Suppression en masse impossible."),
+    onError: (err) => {
+      setBulkDeleteOpen(false);
+      setDeleteManyProgress(null);
+      reportError(err, "Suppression en masse impossible.");
+    },
+  });
+
+  // Raccourcis clavier globaux (P1.1): `?` ouvre la légende et `Suppr`
+  // prépare la suppression de la sélection. Ignorés dans les champs de
+  // saisie et quand un dialogue est ouvert (il a déjà son propre clavier).
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (isTextEntryTarget(event.target)) return;
+      if (document.querySelector("dialog[open]")) return;
+      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
+        // "? peut arriver tel quel (clavier réel) ou comme "/" + Shift
+        // (événement synthétique, claviers où ? exige une autre touche).
+        event.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      if (
+        event.key === "Delete" &&
+        selectedIds.size > 0 &&
+        !deleteManyMutation.isPending
+      ) {
+        event.preventDefault();
+        setBulkDeleteOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedIds.size, deleteManyMutation.isPending]);
+
+  const restoreMutation = useMutation({
+    mutationFn: (id: string) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.restoreObject(id, csrf);
+    },
+    onSuccess: () => {
+      setDetails(null);
+      notify("ok", "Fichier restauré depuis la corbeille.");
+      invalidateLibrary();
+    },
+    onError: (err) => reportError(err, "Restauration impossible."),
+  });
+
+  // -- Master mode: bulk purges without a confirmation per item ------------
+  const master = useMasterMode();
+  const [masterDialogOpen, setMasterDialogOpen] = useState(false);
+  const bulkPurgeMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.bulkPurge(ids, csrf);
+    },
+    onSuccess: (out) => {
+      setSelectedIds(new Set());
+      setDetails(null);
+      notify(
+        out.failed.length ? "error" : "ok",
+        `${out.purged.length} fichier(s) purgé(s) définitivement` +
+          (out.failed.length
+            ? ` ; ${out.failed.length} échec(s) du stockage, fiches conservées.`
+            : "."),
+      );
+      invalidateLibrary();
+    },
+    onError: (err) => reportError(err, "Purge en masse impossible."),
+  });
+  const emptyTrashMutation = useMutation({
+    mutationFn: async () => {
+      if (!csrf) throw new Error("Session expirée.");
+      let purged = 0;
+      let failed = 0;
+      // The server purges at most one batch per call and says when to go on.
+      for (let round = 0; round < 50; round += 1) {
+        const out = await api.emptyTrash(csrf);
+        purged += out.purged.length;
+        failed += out.failed.length;
+        if (!out.more || out.purged.length === 0) break;
+      }
+      return { purged, failed };
+    },
+    onSuccess: ({ purged, failed }) => {
+      notify(
+        failed ? "error" : "ok",
+        purged === 0
+          ? "La corbeille était déjà vide."
+          : `Corbeille vidée : ${purged} fichier(s) purgé(s)` +
+              (failed ? ` ; ${failed} échec(s) du stockage, fiches conservées.` : "."),
+      );
+      invalidateLibrary();
+    },
+    onError: (err) => reportError(err, "Vidage de la corbeille impossible."),
   });
 
   const purgeMutation = useMutation({
@@ -876,6 +1288,19 @@ export function ObjectsPage() {
   /** Shared queue subscriber: mirrors state and reacts when it settles. */
   function handleQueueUpdate(next: QueueState) {
     setQueue(next);
+    // Confirmed by the server, or cancelled on purpose: nothing left to resume.
+    const settled = next.items
+      .filter(
+        (item) =>
+          item.key !== undefined &&
+          (item.state.phase === "available" || item.state.phase === "cancelled") &&
+          !forgottenRef.current.has(item.key),
+      )
+      .map((item) => item.key as string);
+    if (settled.length > 0) {
+      for (const key of settled) forgottenRef.current.add(key);
+      void removeEntries(settled);
+    }
     if (!next.finished) return;
     if (next.done > 0) {
       invalidateLibrary();
@@ -897,11 +1322,11 @@ export function ObjectsPage() {
       setUploadError("Choisissez au moins un fichier.");
       return;
     }
-    if (queueBusy) {
-      // A submit can still reach here (e.g. Enter in the form) even though the
-      // button is disabled: say why instead of returning silently.
-      setUploadError(
-        "Un import est déjà en cours (ou en pause) : terminez-le ou annulez-le avant d'en lancer un autre.",
+    if (transferActive) {
+      // File d'attente : les fichiers sont mis en attente et seront uploadés
+      // automatiquement quand le transfert en cours se termine.
+      setNotice(
+        `${pendingFiles.length} fichier(s) mis en file d'attente — ils seront uploadés automatiquement à la fin du transfert en cours.`,
       );
       return;
     }
@@ -909,11 +1334,24 @@ export function ObjectsPage() {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
     }
-    const uploadQueue = startUploadQueue(pendingFiles, transferDeps(csrf), {
-      folderId: currentFolderId,
-      onUpdate: handleQueueUpdate,
-    });
-    queueRef.current = uploadQueue;
+    // Garde-fou taille client : vérifier max_object_bytes avant l'upload
+    const maxBytes = usageQuery.data?.limits?.max_object_bytes;
+    if (maxBytes && maxBytes > 0) {
+      const oversized = pendingFiles.filter((f) => f.size > maxBytes);
+      if (oversized.length > 0) {
+        const names = oversized.map((f) => f.name).join(", ");
+        setUploadError(
+          `Fichier(s) trop volumineux (max ${formatBytes(maxBytes)}) : ${names}. ` +
+            "Réduisez la taille ou contactez l'administrateur.",
+        );
+        return;
+      }
+    }
+    uploadStartTimeRef.current = Date.now();
+    launchQueue(
+      csrf,
+      pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
+    );
     // The queue now owns the submitted files: clear them so anything dropped
     // during the transfer stays visible as a real backlog for the next run.
     setPendingFiles([]);
@@ -937,7 +1375,7 @@ export function ObjectsPage() {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
     }
-    if (queueBusy) return;
+    if (transferActive) return;
     setUploadError(null);
     setNotice(null);
 
@@ -959,8 +1397,21 @@ export function ObjectsPage() {
       existing.set(keyOf(folder.parent_id, folder.name), folder.id);
     }
 
+    if (plan.folders.length > 0) {
+      setFolderProgress({
+        done: 0,
+        total: plan.folders.length,
+        name: plan.folders[0]!.name,
+      });
+    }
+
     let createdAny = false;
-    for (const folder of plan.folders) {
+    for (const [index, folder] of plan.folders.entries()) {
+      setFolderProgress({
+        done: index,
+        total: plan.folders.length,
+        name: folder.name,
+      });
       const parentId = folder.parentPath
         ? (folderIds.get(folder.parentPath) ?? currentFolderId)
         : currentFolderId;
@@ -980,22 +1431,34 @@ export function ObjectsPage() {
         createdAny = true;
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
-          const all = await api.listAllFolders();
-          const found = all.items.find(
-            (candidate) =>
-              (candidate.parent_id ?? null) === (parentId ?? null) &&
-              candidate.name === folder.name,
-          );
-          if (found) {
-            existing.set(key, found.id);
-            folderIds.set(folder.path, found.id);
-            continue;
+          try {
+            const all = await api.listAllFolders();
+            const found = all.items.find(
+              (candidate) =>
+                (candidate.parent_id ?? null) === (parentId ?? null) &&
+                candidate.name === folder.name,
+            );
+            if (found) {
+              existing.set(key, found.id);
+              folderIds.set(folder.path, found.id);
+              continue;
+            }
+          } catch {
+            // Fall through to the named failure below: the folder that could
+            // not be resolved is the one worth reporting.
           }
         }
-        setUploadError("Création de l'arborescence impossible.");
+        setFolderProgress(null);
+        setUploadError(
+          `Création du dossier « ${folder.name} » impossible : ${describeError(
+            err,
+            "réponse inattendue du serveur",
+          )}`,
+        );
         return;
       }
     }
+    setFolderProgress(null);
     if (createdAny) invalidateLibrary();
     if (plan.tooDeep.length > 0) {
       setNotice(
@@ -1003,32 +1466,21 @@ export function ObjectsPage() {
       );
     }
 
-    const entries: QueueInput[] = kept.map((item) => {
-      const dir = parentDirOf(item.rel);
-      return {
-        file: item.file,
-        folderId: dir ? (folderIds.get(dir) ?? currentFolderId) : currentFolderId,
-      };
-    });
-    const uploadQueue = startUploadQueue(entries, transferDeps(csrf), {
-      folderId: currentFolderId,
-      onUpdate: handleQueueUpdate,
-    });
-    queueRef.current = uploadQueue;
+    launchQueue(
+      csrf,
+      kept.map((item) => {
+        const dir = parentDirOf(item.rel);
+        return {
+          file: item.file,
+          rel: item.rel,
+          folderId: dir ? (folderIds.get(dir) ?? currentFolderId) : currentFolderId,
+        };
+      }),
+    );
   }
 
   function handleCancelUpload() {
     queueRef.current?.cancelAll();
-  }
-
-  /** Hold every file still in play (in-flight PUTs finish, new starts stop). */
-  function handlePauseUpload() {
-    queueRef.current?.pauseAll();
-  }
-
-  /** Release the queue and every held file. */
-  function handleResumeUpload() {
-    queueRef.current?.resumeAll();
   }
 
   function handleRetryFailed() {
@@ -1138,7 +1590,7 @@ export function ObjectsPage() {
       return;
     }
     const hasFolders = entries.some((entry) => entry.rel.includes("/"));
-    if (queueBusy) {
+    if (transferActive) {
       const loose = entries.filter((entry) => !entry.rel.includes("/"));
       if (loose.length > 0) {
         // Buffer loose files for the next run and say so (P0.1): never
@@ -1193,11 +1645,7 @@ export function ObjectsPage() {
         )}).`,
       );
     } catch (err) {
-      setActionError(
-        err instanceof ApiError
-          ? `Téléchargement refusé : ${err.detail}`
-          : "Téléchargement impossible.",
-      );
+      setActionError(`Téléchargement impossible. ${describeError(err, "")}`.trim());
     } finally {
       setDownloadingId(null);
     }
@@ -1207,7 +1655,7 @@ export function ObjectsPage() {
     setActionError(null);
     try {
       await navigator.clipboard.writeText(item.id);
-      setNotice(`Référence copiée : ${item.id}`);
+      notify("ok", `Référence copiée : ${item.id}`);
     } catch {
       setActionError("Copie impossible dans ce navigateur.");
     }
@@ -1233,15 +1681,12 @@ export function ObjectsPage() {
 
   // Only deletable rows are selectable: the server refuses anything else
   // with 409, so offering them would manufacture failures.
-  const selectableItems = items.filter(isDeletable);
+  // In master mode the trash can be selected too: its rows are purgeable.
+  const selectableItems = items.filter(
+    (item) => isDeletable(item) || (master.active && item.status === "deleted"),
+  );
   const selectableIds = new Set(selectableItems.map((item) => item.id));
 
-  // Real weight of what is currently loaded — shown as a rail readout, so the
-  // casiers column carries information instead of empty graphite.
-  const loadedBytes = items.reduce(
-    (sum, item) => sum + (item.size_bytes > 0 ? item.size_bytes : 0),
-    0,
-  );
   const currentName = currentFolderId ? byId.get(currentFolderId)?.name : null;
 
   const moveBlocked = moveTarget ? forbiddenTargets(moveTarget.id) : new Set<string>();
@@ -1255,6 +1700,7 @@ export function ObjectsPage() {
   const objectBusy =
     deleteObjectMutation.isPending ||
     purgeMutation.isPending ||
+    restoreMutation.isPending ||
     abortUploadMutation.isPending ||
     moveObjectMutation.isPending ||
     downloadingId !== null;
@@ -1304,10 +1750,7 @@ export function ObjectsPage() {
       applyCascade({
         ...live,
         phase: "confirm",
-        scanError:
-          err instanceof ApiError
-            ? `Analyse impossible : ${err.detail}`
-            : "Analyse du contenu impossible.",
+        scanError: `Analyse du contenu impossible. ${describeError(err, "")}`.trim(),
       });
     }
   }
@@ -1360,7 +1803,7 @@ export function ObjectsPage() {
         done += 1;
         failures = failures.filter((failure) => failure.key !== key);
       } catch (err) {
-        const detail = err instanceof ApiError ? err.detail : "Échec de suppression.";
+        const detail = describeError(err, "Échec de suppression.");
         failures = [
           ...failures.filter((failure) => failure.key !== key),
           { key, kind: op.kind, id: op.id, label: op.label, path: op.path, error: detail },
@@ -1450,6 +1893,102 @@ export function ObjectsPage() {
     }
   }, [cascade]);
 
+  // Details drawer: focus its close button on open and close it on Escape
+  // from anywhere (focus may still be on the row that opened it). A modal
+  // dialog stacked on top handles its own Escape first.
+  const detailsCloseRef = useRef<HTMLButtonElement | null>(null);
+  const detailsId = details?.id ?? null;
+  useEffect(() => {
+    if (!detailsId) return;
+    detailsCloseRef.current?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || document.querySelector("dialog[open]")) return;
+      setDetails(null);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [detailsId]);
+
+  const intakeVisible =
+    intakeOpen || pendingFiles.length > 0 || queue.items.length > 0 || uploadError !== null;
+
+  // Subfolders are listed first in the register, like any file browser; a
+  // search or filter narrows files only, so folders step aside meanwhile.
+  const visibleFolders = hasActiveFilters ? [] : subfolders;
+
+  function folderMenuItems(folder: FolderItem) {
+    return [
+      {
+        label: "Renommer",
+        onSelect: () => {
+          setRenameName(folder.name);
+          setRenameTarget(folder);
+        },
+      },
+      { label: "Déplacer", onSelect: () => setMoveTarget(folder) },
+      {
+        label: "Supprimer",
+        danger: true,
+        onSelect: () => {
+          setFolderDeleteWithContent(false);
+          setCascadeConfirmText("");
+          setPendingConfirm({
+            title: "Supprimer le dossier",
+            message: (
+              <>
+                Supprimer <strong>{folder.name}</strong> ? Un dossier contenant
+                encore des fichiers ou sous-dossiers sera refusé.
+              </>
+            ),
+            confirmLabel: "Supprimer",
+            danger: true,
+            folderCascade: canCascadeDelete,
+            onConfirm: (withContent: boolean) => {
+              if (withContent) {
+                openCascade({ id: folder.id, name: folder.name });
+              } else {
+                deleteFolderMutation.mutate({ id: folder.id, name: folder.name });
+              }
+            },
+          });
+        },
+      },
+    ];
+  }
+
+  /** A column header that sorts server-side: same column toggles the order. */
+  function sortHeader(field: NonNullable<ObjectQuery["sort"]>) {
+    const column = SORT_COLUMNS.find((entry) => entry.field === field);
+    if (!column) return null;
+    const active = sortField === field;
+    return (
+      <button
+        type="button"
+        className={active ? "sort-head sort-head-active" : "sort-head"}
+        onClick={() => {
+          if (active) {
+            setSortOrder(sortOrder === "asc" ? "desc" : "asc");
+          } else {
+            setSortField(field);
+            setSortOrder(column.firstOrder);
+          }
+        }}
+      >
+        {column.label}
+        {active ? (
+          <>
+            <span aria-hidden="true" className="sort-arrow">
+              {sortOrder === "asc" ? "▲" : "▼"}
+            </span>
+            <span className="visually-hidden">
+              {sortOrder === "asc" ? " (tri croissant)" : " (tri décroissant)"}
+            </span>
+          </>
+        ) : null}
+      </button>
+    );
+  }
+
   const cascadeConfirmed =
     cascade !== null &&
     cascade.plan !== null &&
@@ -1457,44 +1996,31 @@ export function ObjectsPage() {
     cascadeConfirmText.trim() === cascade.rootName.trim();
 
   return (
-    <div className="stack vault-workspace">
-      <div className="page-head">
-        <h1>Fichiers</h1>
-        <div className="head-actions">
-          <button
-            type="button"
-            className="btn"
-            disabled={objectsQuery.isFetching || treeQuery.isFetching}
-            onClick={() => {
-              setActionError(null);
-              void queryClient.invalidateQueries({ queryKey: ["objects"] });
-              void queryClient.invalidateQueries({ queryKey: ["folders"] });
-            }}
-          >
-            {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
-          </button>
-          <button
-            type="button"
-            className="btn vault-btn-primary"
-            onClick={() => {
-              setNewFolderName("");
-              setNewFolderOpen(true);
-            }}
-          >
-            + Nouveau dossier
-          </button>
-        </div>
-      </div>
-
-      {currentFolderId !== null ? (
-        <nav className="breadcrumb" aria-label="Fil d'Ariane">
+    <div
+      className="stack vault-workspace"
+      onDragEnter={(e) => {
+        e.preventDefault();
+        setDragDepth((depth) => depth + 1);
+      }}
+      onDragLeave={() => {
+        setDragDepth((depth) => Math.max(0, depth - 1));
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(e) => {
+        void handleDrop(e);
+      }}
+    >
+      <nav className="breadcrumb" aria-label="Fil d'Ariane">
         <button
           type="button"
           className={currentFolderId === null ? "crumb crumb-current" : "crumb"}
           aria-current={currentFolderId === null ? "page" : undefined}
           onClick={() => setCurrentFolderId(null)}
         >
-          Racine
+          Mes fichiers
         </button>
         {breadcrumb.map((folder, index) => (
           <span key={folder.id} className="crumb-item">
@@ -1513,8 +2039,98 @@ export function ObjectsPage() {
             </button>
           </span>
         ))}
-        </nav>
-      ) : null}
+      </nav>
+
+      <div className="page-head">
+        <div className="page-title">
+          <h1>{currentName ?? "Mes fichiers"}</h1>
+          <p className="muted page-sub">
+            {subfolders.length} dossier{subfolders.length > 1 ? "s" : ""} ·{" "}
+            {items.length} fichier{items.length > 1 ? "s" : ""}
+            {objectsQuery.hasNextPage ? " (d'autres restent à charger)" : ""}
+            {usageQuery.data ? (
+              <>
+                {" · "}
+                <span>
+                  Espace utilisé : {formatBytes(usageQuery.data.totals.stored_bytes)}
+                </span>
+                <span className="visually-hidden">
+                  {" "}
+                  — Usage réel (admin), mesuré le{" "}
+                  {formatDateTime(usageQuery.data.measured_at)}.
+                </span>
+              </>
+            ) : null}
+          </p>
+        </div>
+        <div className="head-actions">
+          {/* Actions : Importer (principale), Nouveau dossier (secondaire), Actualiser */}
+          {canCreate ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setIntakeOpen(true)}
+            >
+              Importer
+            </button>
+          ) : null}
+          {canCreateFolder ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setNewFolderOpen(true)}
+            >
+              Nouveau dossier
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            title="Actualiser la liste"
+            aria-label="Actualiser la liste"
+            disabled={objectsQuery.isFetching || treeQuery.isFetching}
+            onClick={() => {
+              setActionError(null);
+              void queryClient.invalidateQueries({ queryKey: ["objects"] });
+              void queryClient.invalidateQueries({ queryKey: ["folders"] });
+            }}
+          >
+            {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            aria-label="Afficher les raccourcis clavier"
+            title="Raccourcis clavier (?)"
+            aria-haspopup="dialog"
+            onClick={() => setShortcutsOpen(true)}
+          >
+            ?
+          </button>
+          {canPurge && !master.active ? (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setMasterDialogOpen(true)}
+            >
+              Mode maître
+            </button>
+          ) : null}
+          {master.active && statusFilter === "deleted" ? (
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={emptyTrashMutation.isPending}
+              onClick={() => emptyTrashMutation.mutate()}
+            >
+              {emptyTrashMutation.isPending ? (
+                <span className="spinner" aria-hidden="true" />
+              ) : null}
+              {emptyTrashMutation.isPending ? "Vidage…" : "Vider la corbeille"}
+            </button>
+          ) : null}
+        </div>
+      </div>
 
       {actionError ? (
         <p role="alert" className="alert alert-error">
@@ -1529,6 +2145,62 @@ export function ObjectsPage() {
         </p>
       ) : null}
 
+      {master.active ? (
+        <MasterModeBanner secondsLeft={master.secondsLeft} csrf={csrf} />
+      ) : null}
+
+      {resumable.length > 0 && !transferActive ? (
+        <div role="region" aria-label="Import interrompu" className="alert alert-warn resume-banner">
+          <p>
+            <strong>Import interrompu</strong> : {resumable.length} fichier(s) restant(s) (
+            {formatBytes(resumable.reduce((sum, entry) => sum + entry.size, 0))}). Choisissez
+            à nouveau les mêmes fichiers ou le même dossier : seuls ceux qui manquent
+            seront envoyés.
+          </p>
+          <div className="resume-actions">
+            <button
+              type="button"
+              className="btn btn-primary btn-small"
+              onClick={() => resumeFilesRef.current?.click()}
+            >
+              Reprendre avec des fichiers…
+            </button>
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={() => resumeDirRef.current?.click()}
+            >
+              Reprendre avec un dossier…
+            </button>
+            <button type="button" className="btn btn-ghost btn-small" onClick={forgetResumable}>
+              Oublier
+            </button>
+          </div>
+          <input
+            ref={resumeFilesRef}
+            type="file"
+            multiple
+            data-testid="resume-files-input"
+            className="visually-hidden"
+            onChange={(e) => {
+              handleResume(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={resumeDirRef}
+            type="file"
+            multiple
+            data-testid="resume-folder-input"
+            className="visually-hidden"
+            onChange={(e) => {
+              handleResume(e.target.files);
+              e.target.value = "";
+            }}
+            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+          />
+        </div>
+      ) : null}
       {notice ? (
         <p role="status" className="alert alert-ok">
           {notice}
@@ -1573,182 +2245,78 @@ export function ObjectsPage() {
         </p>
       ) : null}
 
-      <aside className="casiers" aria-labelledby="folders-title">
-        <h2 id="folders-title">Dossiers</h2>
-        <ul className="casier-list">
-          <li
-            className={
-              currentFolderId === null ? "casier casier-current" : "casier"
-            }
+      {treeQuery.isError ? (
+        <p role="alert" className="alert alert-error">
+          Dossiers indisponibles.
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => void treeQuery.refetch()}
           >
-            <button
-              type="button"
-              className="folder-open"
-              aria-current={currentFolderId === null ? "true" : undefined}
-              onClick={() => setCurrentFolderId(null)}
-            >
-              <span className="folder-icon" aria-hidden="true">
-                <FolderMark />
-              </span>
-              <span className="folder-name">Racine</span>
-            </button>
-          </li>
-        </ul>
-        {treeQuery.isError ? (
-          <p role="alert" className="alert alert-error">
-            Dossiers indisponibles.
+            Réessayer
+          </button>
+        </p>
+      ) : null}
+
+      {/* Admin-only query: surface a real failure instead of leaving the
+          readout blank (non-admins are silently skipped — no error). */}
+      {hasAdminAccess(session.data?.role) && usageQuery.isError ? (
+        <p role="alert" className="alert alert-error">
+          Espace utilisé indisponible.
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => void usageQuery.refetch()}
+          >
+            Réessayer
+          </button>
+        </p>
+      ) : null}
+
+      {dragDepth > 0 ? (
+        <div className="drop-overlay" role="status">
+          <p className="drop-hint">
+            Relâchez pour importer{currentName ? ` dans « ${currentName} »` : ""} —
+            dossiers acceptés.
+          </p>
+        </div>
+      ) : null}
+
+      <section
+        id="intake"
+        className="card intake"
+        aria-labelledby="upload-title"
+        hidden={!intakeVisible}
+      >
+        <div className="intake-head">
+          <h2 id="upload-title">
+            Importer{currentName ? ` dans « ${currentName} »` : ""}
+          </h2>
+          {!transferActive && pendingFiles.length === 0 ? (
             <button
               type="button"
               className="btn btn-ghost btn-small"
-              onClick={() => void treeQuery.refetch()}
+              onClick={() => {
+                setIntakeOpen(false);
+                setUploadError(null);
+                if (queue.finished) setQueue(emptyQueue());
+              }}
             >
-              Réessayer
+              Fermer
             </button>
-          </p>
-        ) : treeQuery.isPending ? (
-          <p className="muted">Chargement…</p>
-        ) : subfolders.length === 0 ? (
-          <p className="empty">Aucun sous-dossier ici.</p>
-        ) : (
-          <ul className="casier-list">
-            {subfolders.map((folder) => (
-              <li key={folder.id} className="casier">
-                <button
-                  type="button"
-                  className="folder-open"
-                  onClick={() => setCurrentFolderId(folder.id)}
-                >
-                  <span className="folder-icon" aria-hidden="true">
-                    <FolderMark />
-                  </span>
-                  <span className="folder-name">{folder.name}</span>
-                </button>
-                <RowMenu
-                  label={`Actions pour le dossier ${folder.name}`}
-                  items={[
-                    {
-                      label: "Renommer",
-                      onSelect: () => {
-                        setRenameName(folder.name);
-                        setRenameTarget(folder);
-                      },
-                    },
-                    { label: "Déplacer", onSelect: () => setMoveTarget(folder) },
-                    {
-                      label: "Supprimer",
-                      danger: true,
-                      onSelect: () => {
-                        setFolderDeleteWithContent(false);
-                        setCascadeConfirmText("");
-                        setPendingConfirm({
-                          title: "Supprimer le dossier",
-                          message: (
-                            <>
-                              Supprimer <strong>{folder.name}</strong> ? Un dossier
-                              contenant encore des fichiers ou sous-dossiers sera
-                              refusé.
-                            </>
-                          ),
-                          confirmLabel: "Supprimer",
-                          danger: true,
-                          folderCascade: canCascadeDelete,
-                          onConfirm: (withContent) => {
-                            if (withContent) {
-                              openCascade({ id: folder.id, name: folder.name });
-                            } else {
-                              deleteFolderMutation.mutate({
-                                id: folder.id,
-                                name: folder.name,
-                              });
-                            }
-                          },
-                        });
-                      },
-                    },
-                  ]}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="casiers-foot">
-          <dl>
-            <dt>Position</dt>
-            <dd>{currentName ?? "Racine"}</dd>
-            <dt>Poids affiché</dt>
-            <dd className="num">{formatBytes(loadedBytes)}</dd>
-            {usageQuery.data ? (
-              <>
-                <dt>Espace utilisé</dt>
-                <dd className="num">
-                  {formatBytes(usageQuery.data.totals.stored_bytes)}
-                </dd>
-              </>
-            ) : null}
-          </dl>
-          {usageQuery.data ? (
-            <p className="muted casiers-usage-note">
-              Usage réel (admin), mesuré le{" "}
-              {formatDateTime(usageQuery.data.measured_at)}.
-            </p>
-          ) : null}
-          {/* Admin-only query: surface a real failure instead of leaving the
-              readout blank (non-admins are silently skipped — no error). */}
-          {hasAdminAccess(session.data?.role) && usageQuery.isError ? (
-            <p role="alert" className="alert alert-error">
-              Espace utilisé indisponible.
-              <button
-                type="button"
-                className="btn btn-ghost btn-small"
-                onClick={() => void usageQuery.refetch()}
-              >
-                Réessayer
-              </button>
-            </p>
           ) : null}
         </div>
-      </aside>
-
-      <section
-        className={`card intake${dragDepth > 0 ? " drop-active" : ""}`}
-        aria-labelledby="upload-title"
-        onDragEnter={(e) => {
-          e.preventDefault();
-          setDragDepth((depth) => depth + 1);
-        }}
-        onDragLeave={() => {
-          setDragDepth((depth) => Math.max(0, depth - 1));
-        }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "copy";
-        }}
-        onDrop={(e) => {
-          void handleDrop(e);
-        }}
-      >
-        <h2 id="upload-title">
-          Importer{currentName ? ` dans « ${currentName} »` : ""}
-        </h2>
-        {dragDepth > 0 ? (
-          <p role="status" className="drop-hint">
-            Relâchez pour importer — dossiers acceptés.
+        <p className="muted">
+          Déposez des fichiers ou des dossiers n'importe où sur la page, ou
+          choisissez-les. Un fichier n'est déclaré disponible qu'une fois sa
+          taille et son empreinte SHA-256 vérifiées par le serveur.
+        </p>
+        {folderProgress ? (
+          <p className="pending-hint" role="status">
+            Arborescence : dossier {folderProgress.done + 1}/
+            {folderProgress.total} — «&nbsp;{folderProgress.name}&nbsp;»
           </p>
         ) : null}
-        <p className="muted">
-          Déposez des fichiers ici ou choisissez-les. Un fichier n'est déclaré
-          disponible qu'une fois sa taille et son empreinte SHA-256 vérifiées
-          par le backend, au moment du commit.
-        </p>
-        {/* Informative only: these categories describe what the intake accepts;
-            they are not controls, so they stay non-interactive text. */}
-        <ul className="intake-cats" aria-label="Catégories de fichiers acceptées">
-          {IMPORT_CATEGORIES.map((category) => (
-            <li key={category} className="intake-cat">
-              {category}
-            </li>
-          ))}
-        </ul>
         <form onSubmit={handleUpload} className="form form-inline">
           <div className="field file-field">
             <span>Fichiers</span>
@@ -1759,13 +2327,13 @@ export function ObjectsPage() {
                 multiple
                 data-testid="files-input"
                 className="visually-hidden"
-                disabled={queueBusy}
+                disabled={transferActive}
                 onChange={(e) => {
                   handleFilesChange(e.target.files);
                   e.target.value = "";
                 }}
               />
-              <span className="btn vault-btn-blue">Choisir des fichiers…</span>
+              <span className="btn">Choisir des fichiers…</span>
               <span className="file-picker-name">
                 {pendingFiles.length === 0
                   ? "Aucun fichier sélectionné"
@@ -1781,7 +2349,7 @@ export function ObjectsPage() {
             multiple
             data-testid="folder-input"
             className="visually-hidden"
-            disabled={queueBusy}
+            disabled={transferActive}
             onChange={(e) => {
               void handleFolderUpload(e.target.files);
               e.target.value = "";
@@ -1791,7 +2359,7 @@ export function ObjectsPage() {
           <button
             type="button"
             className="btn"
-            disabled={queueBusy}
+            disabled={transferActive}
             onClick={() => dirInputRef.current?.click()}
           >
             Importer un dossier…
@@ -1799,16 +2367,16 @@ export function ObjectsPage() {
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={queueBusy || pendingFiles.length === 0}
+            disabled={transferActive || pendingFiles.length === 0}
           >
             {transferActive ? "Transfert…" : "Importer et valider"}
           </button>
-          {queueBusy ? (
+          {transferActive ? (
             <button type="button" className="btn" onClick={handleCancelUpload}>
-              Annuler tout
+              Annuler
             </button>
           ) : null}
-          {!queueBusy && (queue.failed > 0 || queue.cancelled > 0) ? (
+          {!transferActive && (queue.failed > 0 || queue.cancelled > 0) ? (
             <button type="button" className="btn" onClick={handleRetryFailed}>
               Réessayer les échecs
             </button>
@@ -1817,7 +2385,7 @@ export function ObjectsPage() {
 
         {pendingFiles.length > 0 ? (
           <>
-            {queueBusy ? (
+            {transferActive ? (
               <p className="pending-hint" role="status">
                 En attente du prochain import — le transfert en cours se termine
                 d'abord.
@@ -1840,162 +2408,6 @@ export function ObjectsPage() {
               ))}
             </ul>
           </>
-        ) : null}
-
-        {queue.items.length > 0 ? (
-          <div className="transfer" data-testid="transfer-status" aria-live="polite">
-            <div className="queue-head">
-              <span className="muted">
-                {queue.done}/{queue.items.length} transféré
-                {queue.items.length > 1 ? "s" : ""}
-                {queue.paused > 0 ? ` · ${queue.paused} en pause` : ""}
-                {queue.failed > 0 ? ` · ${queue.failed} en échec` : ""}
-                {queue.cancelled > 0
-                  ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
-                  : ""}
-              </span>
-              {transferActive ? (
-                <span className="muted">
-                  jusqu'à {queue.concurrency} en parallèle
-                </span>
-              ) : null}
-              {canPauseAll ? (
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  onClick={handlePauseUpload}
-                >
-                  Pause tout
-                </button>
-              ) : null}
-              {queuePaused ? (
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  onClick={handleResumeUpload}
-                >
-                  Reprendre tout
-                </button>
-              ) : null}
-            </div>
-            {queue.schedulerPaused ? (
-              <p className="muted" role="status">
-                Import en pause — reprise automatique au retour de la connexion,
-                ou manuelle via «&nbsp;Reprendre tout&nbsp;».
-              </p>
-            ) : null}
-            {tabFrozen && queueBusy ? (
-              <p className="muted" role="status">
-                En pause — onglet en arrière-plan, reprise au retour.
-              </p>
-            ) : null}
-            {queueBusy ? (
-              <p className="muted" role="status">
-                Fermer l'onglet interrompt l'import : re-sélection nécessaire
-                après fermeture.
-              </p>
-            ) : null}
-            {transferActive &&
-            queue.maxConcurrency > 1 &&
-            queue.concurrency < queue.maxConcurrency ? (
-              <p className="muted" role="status">
-                Connexion difficile : envois limités à {queue.concurrency} à la
-                fois — retour à {queue.maxConcurrency} dès que ça passe.
-              </p>
-            ) : null}
-            <ul className="queue">
-              {queue.items.map((item) => (
-                <li key={item.id} className="queue-item">
-                  <div className="queue-line">
-                    <span className="transfer-name">{item.fileName}</span>
-                    <span className="muted">{formatBytes(item.sizeBytes)}</span>
-                    <span className={queueItemClass(item)}>
-                      {queueItemLabel(item)}
-                    </span>
-                    {item.state.phase === "available" ? (
-                      <span className="chip chip-muted">SHA-256 vérifié</span>
-                    ) : null}
-                    {item.state.phase === "idle" && !item.paused ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        aria-label={`Mettre en pause ${item.fileName}`}
-                        onClick={() => queueRef.current?.pauseItem(item.id)}
-                      >
-                        Pause
-                      </button>
-                    ) : null}
-                    {item.paused ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        aria-label={`Reprendre ${item.fileName}`}
-                        onClick={() => queueRef.current?.resumeItem(item.id)}
-                      >
-                        Reprendre
-                      </button>
-                    ) : null}
-                    {ACTIVE_PHASES.includes(item.state.phase) ||
-                    item.state.phase === "idle" ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        aria-label={`Interrompre ${item.fileName}`}
-                        onClick={() => queueRef.current?.cancelItem(item.id)}
-                      >
-                        ×
-                      </button>
-                    ) : null}
-                    {item.state.phase === "failed" ||
-                    item.state.phase === "cancelled" ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        aria-label={`Relancer ${item.fileName}`}
-                        onClick={() => {
-                          setUploadError(null);
-                          queueRef.current?.retryItem(item.id);
-                        }}
-                      >
-                        Relancer
-                      </button>
-                    ) : null}
-                  </div>
-                  {item.state.phase === "uploading" ? (
-                    <div
-                      className="progress"
-                      role="progressbar"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Math.round(item.state.progress * 100)}
-                      aria-label={`Progression de ${item.fileName}`}
-                    >
-                      <span
-                        className="progress-bar"
-                        style={{ width: `${Math.round(item.state.progress * 100)}%` }}
-                      />
-                    </div>
-                  ) : null}
-                  {item.state.phase === "uploading" ? (
-                    <p className="muted">
-                      {formatBytes(item.state.transferredBytes)} /{" "}
-                      {formatBytes(item.state.sizeBytes)} (
-                      {Math.round(item.state.progress * 100)} %)
-                    </p>
-                  ) : null}
-                  {item.state.attempts > 0 &&
-                  ACTIVE_PHASES.includes(item.state.phase) ? (
-                    <p className="muted">
-                      Nouvelle tentative ({item.state.attempts})…
-                    </p>
-                  ) : null}
-                  {item.state.error && item.state.phase === "failed" ? (
-                    <p className="muted">{item.state.error}</p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </div>
         ) : null}
 
         {uploadError ? (
@@ -2021,13 +2433,12 @@ export function ObjectsPage() {
 
       <section className="section" aria-labelledby="objects-title">
         <div className="section-head">
-          <h2 id="objects-title">
-            Objets{currentName ? ` — ${currentName}` : " — racine"}
+          <h2 id="objects-title" className="visually-hidden">
+            Contenu — {currentName ?? "racine"}
           </h2>
-          <span className="muted" aria-live="polite">
-            {items.length} objet{items.length > 1 ? "s" : ""} affiché
+          <span className="visually-hidden" aria-live="polite">
+            {items.length} fichier{items.length > 1 ? "s" : ""} affiché
             {items.length > 1 ? "s" : ""}
-            {objectsQuery.hasNextPage ? " (d'autres restent à charger)" : ""}
           </span>
         </div>
 
@@ -2059,35 +2470,6 @@ export function ObjectsPage() {
                   {option.label}
                 </option>
               ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Trier par</span>
-            <select
-              name="sort"
-              value={sortField}
-              onChange={(e) =>
-                setSortField(e.target.value as NonNullable<ObjectQuery["sort"]>)
-              }
-            >
-              {SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Ordre</span>
-            <select
-              name="order"
-              value={sortOrder}
-              onChange={(e) =>
-                setSortOrder(e.target.value as NonNullable<ObjectQuery["order"]>)
-              }
-            >
-              <option value="desc">Décroissant</option>
-              <option value="asc">Croissant</option>
             </select>
           </label>
           <button
@@ -2197,7 +2579,7 @@ export function ObjectsPage() {
               </div>
             ))}
           </div>
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && visibleFolders.length === 0 ? (
           <p className="empty">
             {hasActiveFilters
               ? "Aucun fichier ne correspond à ces critères."
@@ -2216,28 +2598,40 @@ export function ObjectsPage() {
                 >
                   Tout désélectionner
                 </button>{" "}
-                <ConfirmAction
-                  label={
-                    deleteManyMutation.isPending
-                      ? "Suppression…"
-                      : "Supprimer la sélection"
-                  }
-                  title="Supprimer la sélection"
-                  message={
-                    <>
-                      Marquer <strong>{selectedIds.size} objet(s)</strong>{" "}
-                      comme supprimé(s) ? Chaque fichier est supprimé
-                      individuellement et le résultat est rapporté par
-                      fichier. Les octets restent jusqu'à une purge.
-                    </>
-                  }
-                  confirmLabel="Supprimer"
-                  danger
-                  pending={deleteManyMutation.isPending}
-                  onConfirm={() =>
-                    deleteManyMutation.mutate([...selectedIds])
-                  }
-                />
+                {master.active ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-small"
+                      disabled={bulkPurgeMutation.isPending}
+                      onClick={() => bulkPurgeMutation.mutate([...selectedIds])}
+                    >
+                      {bulkPurgeMutation.isPending ? (
+                        <span className="spinner" aria-hidden="true" />
+                      ) : null}
+                      {bulkPurgeMutation.isPending
+                        ? "Purge…"
+                        : `Purger définitivement (${selectedIds.size})`}
+                    </button>{" "}
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  disabled={deleteManyMutation.isPending}
+                  onClick={() => setBulkDeleteOpen(true)}
+                >
+                  {deleteManyMutation.isPending && deleteManyProgress
+                    ? `Suppression ${deleteManyProgress.done}/${deleteManyProgress.total}…`
+                    : "Supprimer la sélection"}
+                </button>
+                {deleteManyProgress ? (
+                  <span role="status" className="muted">
+                    {" "}
+                    Suppression {deleteManyProgress.done}/
+                    {deleteManyProgress.total}…
+                  </span>
+                ) : null}
               </p>
             ) : null}
             <div className="ledger" role="list">
@@ -2263,14 +2657,45 @@ export function ObjectsPage() {
                     }
                   }}
                 />{" "}
-                <span aria-hidden="true">Nom</span>
+                {sortHeader("display_name")}
               </span>
               <span aria-hidden="true">Type</span>
-              <span aria-hidden="true">Taille</span>
+              {sortHeader("size_bytes")}
               <span aria-hidden="true">État</span>
-              <span aria-hidden="true">Modifié</span>
+              {sortHeader("created_at")}
               <span aria-hidden="true" />
             </div>
+            {visibleFolders.map((folder) => (
+              <div className="ledger-row folder-row" role="listitem" key={folder.id}>
+                <div className="ledger-name">
+                  <span className="check-spacer" aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="folder-open"
+                    onClick={() => setCurrentFolderId(folder.id)}
+                  >
+                    <span className="folder-icon" aria-hidden="true">
+                      <FolderMark />
+                    </span>
+                    <span className="folder-name">{folder.name}</span>
+                  </button>
+                </div>
+                <div className="ledger-meta">
+                  <span className="ledger-type">Dossier</span>
+                  <span className="ledger-size num">—</span>
+                  <span className="ledger-status" />
+                  <span className="ledger-date num">
+                    {formatDateTime(folder.created_at)}
+                  </span>
+                </div>
+                <div className="ledger-menu">
+                  <RowMenu
+                    label={`Actions pour le dossier ${folder.name}`}
+                    items={folderMenuItems(folder)}
+                  />
+                </div>
+              </div>
+            ))}
             {items.map((item) => {
               const rowBusy =
                 deletePendingId === item.id ||
@@ -2310,14 +2735,8 @@ export function ObjectsPage() {
                     </button>
                   </div>
                   <div className="ledger-meta">
-                    <span
-                      className={`ledger-type${
-                        typeLabel(item.content_type) === "Image"
-                          ? " vault-badge-image"
-                          : ""
-                      }`}
-                      title={item.content_type}
-                    >
+                    <span className="ledger-type" title={item.content_type}>
+                      <FileTypeIcon contentType={item.content_type} />{" "}
                       {typeLabel(item.content_type)}
                     </span>
                     <span className="ledger-size num">
@@ -2331,7 +2750,7 @@ export function ObjectsPage() {
                       <StatusLabel status={item.status} />
                     </span>
                     <span className="ledger-date num">
-                      {formatDateTime(item.updated_at)}
+                      {formatDateTime(item.created_at)}
                     </span>
                   </div>
                   <div className="ledger-menu">
@@ -2339,11 +2758,9 @@ export function ObjectsPage() {
                       label={`Actions pour ${item.display_name}`}
                       items={[
                         { label: "Détails", onSelect: () => setDetails(item) },
-                        {
-                          label: "Aperçu",
-                          disabled: item.status !== "available",
-                          onSelect: () => setPreviewTarget(item),
-                        },
+                        ...(item.status === "available" && isPreviewable(item.content_type)
+                          ? [{ label: "Aperçu", onSelect: () => setPreviewTarget(item) }]
+                          : []),
                         {
                           label: "Télécharger",
                           disabled:
@@ -2385,6 +2802,15 @@ export function ObjectsPage() {
                               },
                             ]
                           : []),
+                        ...(isRestorable(item)
+                          ? [
+                              {
+                                label: "Restaurer",
+                                disabled: objectBusy,
+                                onSelect: () => restoreMutation.mutate(item.id),
+                              },
+                            ]
+                          : []),
                         {
                           label: "Supprimer",
                           danger: true,
@@ -2412,20 +2838,23 @@ export function ObjectsPage() {
                                 label: "Purger définitivement",
                                 danger: true,
                                 disabled: objectBusy,
+                                // Master mode: no confirmation per item.
                                 onSelect: () =>
-                                  setPendingConfirm({
-                                    title: "Purger définitivement",
-                                    message: (
-                                      <>
-                                        Supprimer définitivement{" "}
-                                        <strong>{item.display_name}</strong> et ses
-                                        octets ? Action irréversible.
-                                      </>
-                                    ),
-                                    confirmLabel: "Purger",
-                                    danger: true,
-                                    onConfirm: () => purgeMutation.mutate(item.id),
-                                  }),
+                                  master.active
+                                    ? purgeMutation.mutate(item.id)
+                                    : setPendingConfirm({
+                                        title: "Purger définitivement",
+                                        message: (
+                                          <>
+                                            Supprimer définitivement{" "}
+                                            <strong>{item.display_name}</strong> et ses
+                                            octets ? Action irréversible.
+                                          </>
+                                        ),
+                                        confirmLabel: "Purger",
+                                        danger: true,
+                                        onConfirm: () => purgeMutation.mutate(item.id),
+                                      }),
                               },
                             ]
                           : []),
@@ -2439,7 +2868,7 @@ export function ObjectsPage() {
           </>
         )}
         {objectsQuery.hasNextPage ? (
-          <div className="load-more">
+          <div className="load-more" ref={loadMoreRef}>
             <button
               type="button"
               className="btn"
@@ -2465,13 +2894,14 @@ export function ObjectsPage() {
             role="dialog"
             aria-modal="false"
             aria-labelledby="details-title"
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setDetails(null);
-          }}
-        >
+          >
           <div className="drawer-head">
-            <h2 id="details-title">{details.display_name}</h2>
+            <div className="drawer-title">
+              <span className="muted">{typeLabel(details.content_type)}</span>
+              <h2 id="details-title">{details.display_name}</h2>
+            </div>
             <button
+              ref={detailsCloseRef}
               type="button"
               className="btn btn-ghost btn-small"
               onClick={() => setDetails(null)}
@@ -2480,28 +2910,83 @@ export function ObjectsPage() {
               Fermer
             </button>
           </div>
+          <div
+            className={`drawer-banner drawer-banner-${
+              details.status === "available"
+                ? "ok"
+                : details.status === "pending"
+                  ? "run"
+                  : details.status === "failed"
+                    ? "error"
+                    : "muted"
+            }`}
+          >
+            <strong>
+              {details.status === "available"
+                ? "Disponible et vérifié"
+                : (STATUS_LABELS[details.status] ?? details.status)}
+            </strong>
+            <span>
+              {details.status === "available"
+                ? "Taille et SHA-256 contrôlés à l'import."
+                : details.status === "pending"
+                  ? "L'envoi n'est pas terminé : rien n'est téléchargeable."
+                  : details.status === "deleted"
+                    ? "Les octets restent jusqu'à une purge."
+                    : "Ce fichier n'est pas utilisable en l'état."}
+            </span>
+          </div>
+          <div className="drawer-actions">
+            {details.status === "available" && isPreviewable(details.content_type) ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setPreviewTarget(details)}
+              >
+                Aperçu
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={details.status !== "available" || downloadingId !== null}
+              onClick={() => void handleDownload(details)}
+            >
+              {downloadingId === details.id ? "…" : "Télécharger"}
+            </button>
+            {isRestorable(details) ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={objectBusy}
+                onClick={() => restoreMutation.mutate(details.id)}
+              >
+                Restaurer
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn"
+              disabled={objectBusy}
+              onClick={() => setMoveObjectTarget(details)}
+            >
+              Déplacer
+            </button>
+          </div>
           <dl className="detail-list">
-            <dt>Nom</dt>
-            <dd>{details.display_name}</dd>
-            <dt>Identifiant</dt>
-            <dd className="mono">{details.id}</dd>
-            <dt>Type MIME</dt>
-            <dd>{details.content_type}</dd>
             <dt>Taille</dt>
             <dd>
               {formatBytes(details.size_bytes)}
               <span className="muted"> ({details.size_bytes} octets)</span>
             </dd>
-            <dt>État</dt>
-            <dd>
-              <StatusLabel status={details.status} />
-            </dd>
             <dt>Dossier</dt>
             <dd>{folderPath(details.folder_id)}</dd>
-            <dt>Créé le</dt>
+            <dt>Ajouté le</dt>
             <dd>{formatDateTime(details.created_at)}</dd>
             <dt>Modifié le</dt>
             <dd>{formatDateTime(details.updated_at)}</dd>
+            <dt>Type MIME</dt>
+            <dd className="mono">{details.content_type}</dd>
             <dt>Empreinte SHA-256</dt>
             <dd className="detail-hash">
               {details.checksum_sha256 ? (
@@ -2513,12 +2998,12 @@ export function ObjectsPage() {
                     onClick={() => {
                       const value = details.checksum_sha256;
                       if (!navigator.clipboard) {
-                        setNotice("Copie impossible : contexte non sécurisé.");
+                        notify("error", "Copie impossible : contexte non sécurisé.");
                         return;
                       }
                       void navigator.clipboard.writeText(value).then(
-                        () => setNotice("Empreinte SHA-256 copiée."),
-                        () => setNotice("Copie refusée par le navigateur."),
+                        () => notify("ok", "Empreinte SHA-256 copiée."),
+                        () => notify("error", "Copie refusée par le navigateur."),
                       );
                     }}
                   >
@@ -2529,89 +3014,63 @@ export function ObjectsPage() {
                 "non disponible"
               )}
             </dd>
+            <dt>Référence</dt>
+            <dd className="detail-hash">
+              <code className="mono">{details.id}</code>
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={() => void handleCopyReference(details)}
+              >
+                Copier la référence
+              </button>
+            </dd>
           </dl>
-          <div className="drawer-actions">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={details.status !== "available" || downloadingId !== null}
-              onClick={() => void handleDownload(details)}
-            >
-              {downloadingId === details.id ? "…" : "Télécharger"}
-            </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={details.status !== "available"}
-              onClick={() => setPreviewTarget(details)}
-            >
-              Aperçu
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => void handleCopyReference(details)}
-            >
-              Copier la référence
-            </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={objectBusy}
-              onClick={() => setMoveObjectTarget(details)}
-            >
-              Déplacer
-            </button>
-            <ConfirmAction
-              label="Supprimer"
-              title="Supprimer l'objet"
-              message={
-                <>
-                  Marquer <strong>{details.display_name}</strong> comme supprimé ?
-                  Les octets restent jusqu'à une purge.
-                </>
-              }
-              confirmLabel="Supprimer"
-              danger
-              className="btn drawer-actions-danger"
-              disabled={objectBusy}
-              pending={deletePendingId === details.id}
-              onConfirm={() => deleteObjectMutation.mutate(details.id)}
-            />
-            {canPurge ? (
+          <div className="drawer-danger">
+            <h3>Zone sensible</h3>
+            <div className="drawer-actions">
               <ConfirmAction
-                label="Purger définitivement"
-                title="Purger définitivement"
+                label="Supprimer"
+                title="Supprimer l'objet"
                 message={
                   <>
-                    Supprimer définitivement <strong>{details.display_name}</strong>{" "}
-                    et ses octets ? Action irréversible.
+                    Marquer <strong>{details.display_name}</strong> comme supprimé ?
+                    Les octets restent jusqu'à une purge.
                   </>
                 }
-                confirmLabel="Purger"
+                confirmLabel="Supprimer"
                 danger
-                className="btn btn-danger-text"
+                className="btn btn-danger-outline"
                 disabled={objectBusy}
-                pending={purgePendingId === details.id}
-                onConfirm={() => purgeMutation.mutate(details.id)}
+                pending={deletePendingId === details.id}
+                onConfirm={() => deleteObjectMutation.mutate(details.id)}
               />
-            ) : null}
+              {canPurge ? (
+                <ConfirmAction
+                  label="Purger définitivement"
+                  title="Purger définitivement"
+                  message={
+                    <>
+                      Supprimer définitivement <strong>{details.display_name}</strong>{" "}
+                      et ses octets ? Action irréversible.
+                    </>
+                  }
+                  confirmLabel="Purger"
+                  danger
+                  className="btn btn-danger-text"
+                  disabled={objectBusy}
+                  pending={purgePendingId === details.id}
+                  onConfirm={() => purgeMutation.mutate(details.id)}
+                />
+              ) : null}
+            </div>
+            <p className="muted">
+              La purge efface les octets et ne peut pas être annulée.
+            </p>
           </div>
           </aside>
         </>
       ) : null}
-
-      {/* Inline preview: image / audio / PDF rendered from the presigned URL,
-          with a download fallback for anything the browser cannot display. */}
-      <PreviewModal
-        item={previewTarget}
-        csrf={csrf}
-        onClose={() => setPreviewTarget(null)}
-        onDownload={(target) => {
-          setPreviewTarget(null);
-          void handleDownload(target);
-        }}
-      />
 
       {/* New folder */}
       <Dialog
@@ -2840,6 +3299,316 @@ export function ObjectsPage() {
           </button>
         </div>
       </Dialog>
+
+      {/* Bulk delete: opened by the selection bar or the Suppr shortcut. The
+          dialog reports the real per-file progress instead of a mute spinner. */}
+      <Dialog
+        open={bulkDeleteOpen}
+        title="Supprimer la sélection"
+        onClose={() => setBulkDeleteOpen(false)}
+      >
+        <div className="dialog-text">
+          Marquer <strong>{selectedIds.size} objet(s)</strong> comme supprimé(s) ?
+          Chaque fichier est supprimé individuellement et le résultat est
+          rapporté par fichier. Les octets restent jusqu'à une purge.
+        </div>
+        {deleteManyProgress ? (
+          <>
+            <div
+              className="progress"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={deleteManyProgress.total}
+              aria-valuenow={deleteManyProgress.done}
+              aria-label="Progression de la suppression de la sélection"
+            >
+              <span
+                className="progress-bar"
+                style={{
+                  width: `${
+                    deleteManyProgress.total > 0
+                      ? Math.round(
+                          (deleteManyProgress.done / deleteManyProgress.total) * 100,
+                        )
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
+            <p className="muted" role="status">
+              Suppression {deleteManyProgress.done}/{deleteManyProgress.total}…
+            </p>
+          </>
+        ) : null}
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={deleteManyMutation.isPending}
+            onClick={() => setBulkDeleteOpen(false)}
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            disabled={
+              deleteManyMutation.isPending || selectedIds.size === 0
+            }
+            onClick={() => deleteManyMutation.mutate([...selectedIds])}
+          >
+            {deleteManyMutation.isPending ? "Suppression…" : "Supprimer"}
+          </button>
+        </div>
+      </Dialog>
+
+      {/* Keyboard legend: opened with `?` or the header help button. */}
+      <Dialog
+        open={shortcutsOpen}
+        title="Raccourcis clavier"
+        onClose={() => setShortcutsOpen(false)}
+      >
+        <dl className="shortcut-list">
+          <div>
+            <dt>
+              <kbd>/</kbd>
+            </dt>
+            <dd>Rechercher dans le dossier courant</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>Suppr</kbd>
+            </dt>
+            <dd>Supprimer la sélection (confirmation demandée)</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>?</kbd>
+            </dt>
+            <dd>Afficher cette légende</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>Échap</kbd>
+            </dt>
+            <dd>Fermer un menu, un panneau ou un dialogue</dd>
+          </div>
+        </dl>
+        <p className="muted">
+          Les raccourcis sont ignorés dans les champs de saisie.
+        </p>
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setShortcutsOpen(false)}
+          >
+            Compris
+          </button>
+        </div>
+      </Dialog>
+
+      {queue.items.length > 0 ? (
+        <section className="tray" aria-labelledby="tray-title">
+          <div className="tray-head">
+            <h2 id="tray-title">
+              Import · {queue.done} sur {queue.items.length} terminé
+              {queue.done > 1 ? "s" : ""}
+            </h2>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              aria-expanded={!trayCollapsed}
+              onClick={() => setTrayCollapsed((value) => !value)}
+            >
+              {trayCollapsed ? "Agrandir" : "Réduire"}
+            </button>
+            {queue.finished ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => setQueue(emptyQueue())}
+              >
+                Effacer
+              </button>
+            ) : queue.schedulerPaused ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => queueRef.current?.resumeAll()}
+              >
+                Reprendre
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => queueRef.current?.pauseAll()}
+              >
+                Pause
+              </button>
+            )}
+          </div>
+          {/* Barre de progression globale */}
+          {(() => {
+            const totalBytes = queue.items.reduce((sum, item) => sum + item.sizeBytes, 0);
+            const uploadedBytes = queue.items.reduce((sum, item) => sum + item.state.transferredBytes, 0);
+            const pct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
+            // Throughput et ETA
+            const startTime = uploadStartTimeRef.current;
+            const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
+            const throughput = elapsed > 1 ? uploadedBytes / elapsed : 0;
+            const remaining = totalBytes - uploadedBytes;
+            const eta = throughput > 0 ? remaining / throughput : 0;
+            const formatEta = (s: number) => {
+              if (!Number.isFinite(s) || s <= 0) return "";
+              if (s < 60) return `~${Math.ceil(s)}s`;
+              const m = Math.floor(s / 60);
+              const sec = Math.ceil(s % 60);
+              return `~${m}m${sec > 0 ? ` ${sec}s` : ""}`;
+            };
+            return totalBytes > 0 ? (
+              <div className="tray-progress">
+                <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+                  <span className="progress-bar" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="tray-progress-label">
+                  {formatBytes(uploadedBytes)} / {formatBytes(totalBytes)} ({pct}%)
+                  {throughput > 0 && !queue.finished ? (
+                    <>
+                      {" · "}
+                      {formatBytes(Math.round(throughput))}/s
+                      {eta > 0 ? ` · ${formatEta(eta)}` : ""}
+                    </>
+                  ) : null}
+                </span>
+              </div>
+            ) : null;
+          })()}
+        <div
+          className="transfer"
+          data-testid="transfer-status"
+          aria-live="polite"
+          hidden={trayCollapsed}
+        >
+          <div className="queue-head">
+            <span className="muted">
+              {queue.done}/{queue.items.length} transféré
+              {queue.items.length > 1 ? "s" : ""}
+              {queue.failed > 0 ? ` · ${queue.failed} en échec` : ""}
+              {queue.cancelled > 0
+                ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
+                : ""}
+            </span>
+            {transferActive ? (
+              <span className="muted">
+                jusqu'à {queue.concurrency} en parallèle
+              </span>
+            ) : null}
+          </div>
+          {queue.schedulerPaused ? (
+            <p className="muted" role="status">
+              Connexion perdue : la file est suspendue et reprendra
+              automatiquement dès que le réseau revient.
+            </p>
+          ) : null}
+          {transferActive &&
+          queue.maxConcurrency > 1 &&
+          queue.concurrency < queue.maxConcurrency ? (
+            <p className="muted" role="status">
+              Connexion difficile : envois limités à {queue.concurrency} à la
+              fois — retour à {queue.maxConcurrency} dès que ça passe.
+            </p>
+          ) : null}
+          <ul className="queue">
+            {queue.items.map((item) => (
+              <li key={item.id} className="queue-item">
+                <div className="queue-line">
+                  <span className="transfer-name">{item.fileName}</span>
+                  <span className="muted">{formatBytes(item.sizeBytes)}</span>
+                  <span className={queuePhaseClass(item.state.phase)}>
+                    {PHASE_LABEL[item.state.phase]}
+                  </span>
+                  {item.state.phase === "available" ? (
+                    <span className="chip chip-muted">SHA-256 vérifié</span>
+                  ) : null}
+                  {ACTIVE_PHASES.includes(item.state.phase) ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-small"
+                      aria-label={`Interrompre ${item.fileName}`}
+                      onClick={() => queueRef.current?.cancelItem(item.id)}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                  {item.state.phase === "failed" ||
+                  item.state.phase === "cancelled" ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-small"
+                      aria-label={`Relancer ${item.fileName}`}
+                      onClick={() => {
+                        setUploadError(null);
+                        queueRef.current?.retryItem(item.id);
+                      }}
+                    >
+                      Relancer
+                    </button>
+                  ) : null}
+                </div>
+                {item.state.phase === "uploading" ? (
+                  <div
+                    className="progress"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(item.state.progress * 100)}
+                    aria-label={`Progression de ${item.fileName}`}
+                  >
+                    <span
+                      className="progress-bar"
+                      style={{ width: `${Math.round(item.state.progress * 100)}%` }}
+                    />
+                  </div>
+                ) : null}
+                {item.state.phase === "uploading" ? (
+                  <p className="muted">
+                    {formatBytes(item.state.transferredBytes)} /{" "}
+                    {formatBytes(item.state.sizeBytes)} (
+                    {Math.round(item.state.progress * 100)} %)
+                  </p>
+                ) : null}
+                {item.state.attempts > 0 &&
+                ACTIVE_PHASES.includes(item.state.phase) ? (
+                  <p className="muted">
+                    Nouvelle tentative ({item.state.attempts})…
+                  </p>
+                ) : null}
+                {item.state.error && item.state.phase === "failed" ? (
+                  <p className="muted">{item.state.error}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+        </section>
+      ) : null}
+
+      <MasterModeDialog
+        open={masterDialogOpen}
+        csrf={csrf}
+        onClose={() => setMasterDialogOpen(false)}
+      />
+      <PreviewModal
+        item={previewTarget}
+        csrf={csrf}
+        onClose={() => setPreviewTarget(null)}
+        onDownload={(item) => {
+          setPreviewTarget(null);
+          void handleDownload(item);
+        }}
+      />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {/* Recursive (cascade) folder deletion: real listing, typed confirmation,

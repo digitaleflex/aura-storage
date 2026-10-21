@@ -1,5 +1,13 @@
 # #82 — Audit probant du moteur de transfert (ENG-01)
 
+> **État au 2026-10-20.** Cette synthèse courte est **conservée** (règle du dépôt : en cas
+> d'arbitrage éditorial, on garde les deux fichiers). L'audit étendu, la matrice de
+> transitions, l'analyse d'échecs et la classification par capacité sont désormais dans
+> [`transfer-engine-audit.md`](transfer-engine-audit.md) ; la compatibilité multipart
+> mesurée sur le tag épinglé est dans
+> [`multipart-compat-4.48.md`](multipart-compat-4.48.md). Aucune section de ce fichier n'a
+> été supprimée.
+
 Méthode : chaque constat renvoie à du code ou à un test. Statuts :
 `VERIFIED` (observé + preuve pertinente), `IMPLEMENTED_UNVERIFIED` (code
 présent, comportement non validé hors mocks), `PARTIAL`, `ABSENT`.

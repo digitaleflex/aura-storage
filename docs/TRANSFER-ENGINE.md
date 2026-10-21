@@ -5,8 +5,11 @@
 `web/src/pages/ObjectsPage.tsx`) and covered by offline tests
 (`tests/test_transfer_engine.py`) and browser tests
 (`web/e2e/transfer-engine.spec.ts`, `web/e2e/upload-flow.spec.ts`).
-Validated on SQLite and an in-process S3 stub. **Not yet validated against
-PostgreSQL or the pinned SeaweedFS release** — see *Test matrix*.
+Validated on SQLite and an in-process S3 stub. The transfer-engine-specific
+matrix rows for PostgreSQL parity and live multipart/Range remain open (*Test
+matrix*); the pilot has partial dated live evidence — the API runs on the pilot
+PostgreSQL and an SSE-S3 smoke test PASSed on the pinned SeaweedFS 4.48
+(2026-10-15 and 2026-10-16 logs linked from `README.md`).
 
 This document is the transfer-engine companion to the contract in
 [File Transfer Contract](FILE-TRANSFER.md) and the plan in
@@ -22,7 +25,7 @@ The mission's six-step flow maps onto existing AURA routes one-to-one:
 |---|---|---|
 | 1. Frontend asks for a transfer intention | `POST /api/v1/objects/upload-intents` | `web/src/lib/api.ts` |
 | 2. API authenticates + authorizes | `api/authz.py` (`authorize(OBJECTS_WRITE)`) | session cookie + CSRF, or Bearer service identity |
-| 3. API issues a short-lived URL | `api/s3.py::presigned_put` | SigV4, exact bucket/key, signed `Content-Length` + `Content-Type` |
+| 3. API issues a short-lived URL | `api/s3.py::presigned_put` | SigV4, exact bucket/key, signed `Content-Length` + `Content-Type` + `x-amz-server-side-encryption: AES256` |
 | 4. Browser moves bytes directly to S3 | `putToPresignedUrl` (XHR) in `web/src/lib/api.ts` | bytes never traverse FastAPI |
 | 5. Frontend finalizes | `POST /api/v1/objects/{oid}/commit` | idempotent |
 | 6. Backend verifies size + integrity | `commit_object` + `stream_sha256` | object only becomes `available` here |
@@ -48,7 +51,9 @@ idle → requesting-intent → uploading → validating → available
   checks the size and computes SHA-256.
 - `available` — **only** reached when commit returned success. The UI never
   infers success from the upload PUT alone.
-- `failed` / `cancelled` — terminal, with the reason shown.
+- `failed` / `cancelled` — terminal, with the reason shown. A failure also
+  records `failureKind` (`retryable`, `expired`, `fatal`, `aborted`) so the
+  queue can tell an outage from a decision the server will never reverse.
 
 Errors are classified (`classifyError`) into `retryable`, `expired`, `aborted`
 and `fatal`, so the UI retries only what can succeed and never loops on an
@@ -68,8 +73,38 @@ authorization or validation error.
 | Distinguish upload / validation / availability / failure | the five phases above |
 | Handle expired URLs and network errors | 403 → new intent; network/5xx → retry; both bounded |
 | Clean local state after failure | `failed`/`cancelled` states; a new submit mints a new idempotency key |
+| Survive a connectivity loss without a click | the queue suspends scheduling on `offline` (in-flight PUTs are not aborted) and, on `online`, replays every file whose `failureKind` is `retryable` (`QueueOptions.autoRetryOnReconnect`, capped by `maxReconnectRetries`, announced through `onAutoRetry`) |
 | No success before backend confirmation | phase `available` is set only after `commit` resolves |
 | Server-side size/type limits | `api/transfer.py::validate_upload_policy` (see below) |
+
+## Connectivity loss: what recovers by itself, and what does not
+
+A cut in the middle of a PUT is not a decision: the bytes were never refused.
+The queue therefore treats it as recoverable and rewinds it without asking.
+
+- `offline` suspends the scheduler. Files that had not started stay `idle`
+  ("En attente"); no new connection is opened on a dead link.
+- An in-flight PUT still fails (the transport has no way to resume a single
+  PUT), so `runTransfer` exhausts its own bounded retries and the item ends
+  `failed` with `failureKind: "retryable"`.
+- The queue keeps its `online` listener attached even once every file has
+  settled. On `online` it resumes the scheduler and calls `retryTransient()`,
+  which puts back only the `retryable` failures, with the same idempotency key
+  (a multipart session keeps the parts already stored). The tray announces the
+  replay, so a background recovery is never silent.
+- `fatal` (bytes rejected, storage full, integrity failure), `expired` and
+  `aborted` are never replayed: retrying them cannot succeed or would override
+  a human decision. They keep the manual "Réessayer les échecs" control.
+- `maxReconnectRetries` (default 3) bounds the automatic attempts per file, so a
+  broken link cannot loop forever; a manual retry resets that budget.
+
+Limits, stated plainly:
+
+- The page must stay open. After a reload the browser cannot reopen a file by
+  itself: the journal (`uploadJournal.ts`) keeps the metadata and the user
+  re-selects the same files, and only the unconfirmed ones are sent again.
+- A server that is unreachable while the browser still reports `onLine` raises
+  no `online` event; those files stay `failed` and need the manual retry.
 
 ## Server-side transfer policy (authoritative)
 
@@ -99,6 +134,38 @@ the gateway rejects a different size/type than the API authorized.
   hash. `scripts/seaweedfs-compat-probe.py` demonstrates the distinction when
   run against a real endpoint.
 - The API reports `checksum_algorithm: "sha256"` wherever a checksum is returned.
+
+### The size contract is checked server-side, not only by the gateway
+
+The signed `Content-Length` is a *gateway* control: it is enforced by the S3
+backend, and that enforcement is verified live, not offline. The commit
+therefore cross-checks the catalogue against the storage:
+
+- the size declared at intent time (`expected_size_bytes`) must equal the size
+  the gateway reports (`HEAD`), and the streamed total must equal it too;
+- a mismatch marks the intent `failed`, drops the bytes best-effort (the
+  reconciliation sweep retries a failed delete) and answers `422` — an object
+  whose stored size differs from the authorised one never becomes `available`.
+
+## Bounded commits (no unbounded wait)
+
+A commit streams the object twice (HEAD, then the hash), so it can take minutes
+on a large object. Three layers bound it, in this order:
+
+1. the S3 client (`api/s3.py::make_client`) uses `connect_timeout=10`,
+   `read_timeout=60` and adaptive retries (3) — a stalled backend fails instead
+   of hanging the request;
+2. the commit itself has a global deadline, `AURA_COMMIT_DEADLINE_S` (default
+   300 s), checked between chunks: past it the intent is `failed` and the
+   client gets `504`;
+3. the app proxy (`app/nginx.conf`) gives the commit route a 310 s read/send
+   timeout (the default 60 s would cut the response and hide the API's own
+   outcome), and Traefik's entrypoint already allows 1200 s.
+
+The API deadline stays below the proxy timeout on purpose: the API's structured
+`504` (which marks the intent `failed`) must reach the client instead of the
+proxy's generic one (which would leave it `pending`). Raise one, raise all
+three.
 
 ## Large files and multipart: analysis, gaps, proposal
 
