@@ -2391,6 +2391,49 @@ p .chip {
 }
 
 /* ------------------------------------------------------------------ */
+/* Thème manuel (override de la préférence système).                  */
+/* ------------------------------------------------------------------ */
+:root[data-theme="dark"] {
+  --side: #0a0e14;
+  --side-2: #141a22;
+  --side-3: #1c2430;
+  --side-ink: #d5dbe3;
+  --side-muted: #8e99a8;
+
+  --steel-0: #0f1419;
+  --steel-1: #1a2028;
+  --steel-2: #222a34;
+  --steel-3: #2a3442;
+
+  --ink: #e8ecf2;
+  --ink-2: #b8c1cd;
+  --muted: #8e99a8;
+  --faint: #6b7480;
+
+  --line: #2a3442;
+  --line-2: #3a4654;
+  --field-line: #4a5664;
+
+  --signal: #c48a2a;
+  --signal-2: #d99a34;
+  --signal-soft: #2a1f0a;
+  --signal-line: #4a3a1a;
+  --signal-bright: #e0a33a;
+  --on-signal: #10151d;
+  --on-danger: #10151d;
+
+  --ok: #4ade80;
+  --ok-bg: #0a2a14;
+  --run: #60a5fa;
+  --run-bg: #0a1a2a;
+  --warn: #fb923c;
+  --warn-bg: #2a1508;
+  --danger: #f87171;
+  --danger-bg: #2a0a0a;
+  --danger-strong: #dc2626;
+}
+
+/* ------------------------------------------------------------------ */
 /* Dark mode : respecte les preferences systeme.                      */
 /* ------------------------------------------------------------------ */
 @media (prefers-color-scheme: dark) {

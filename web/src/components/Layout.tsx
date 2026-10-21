@@ -64,6 +64,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   // Mobile drawer state
   const [mobileOpen, setMobileOpen] = React.useState(false);
+
+  // Theme manuel (override prefers-color-scheme)
+  const [theme, setTheme] = React.useState<"light" | "dark" | "auto">(() => {
+    return (localStorage.getItem("aura-theme") as "light" | "dark" | "auto") || "auto";
+  });
+  React.useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "auto") {
+      root.removeAttribute("data-theme");
+    } else {
+      root.setAttribute("data-theme", theme);
+    }
+    localStorage.setItem("aura-theme", theme);
+  }, [theme]);
   const hamburgerRef = React.useRef<HTMLButtonElement | null>(null);
   const drawerRef = React.useRef<HTMLDivElement | null>(null);
   const drawerCloseRef = React.useRef<HTMLButtonElement | null>(null);
@@ -388,6 +402,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     </span>
                   </span>
                 </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  aria-label="Changer le thème"
+                  onClick={() =>
+                    setTheme((t) => (t === "dark" ? "light" : t === "light" ? "auto" : "dark"))
+                  }
+                >
+                  {theme === "dark" ? "🌙" : theme === "light" ? "☀️" : "💻"}
+                </button>
                 <button
                   type="button"
                   className="btn btn-ghost btn-small"
