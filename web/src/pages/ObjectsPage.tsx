@@ -726,7 +726,9 @@ export function ObjectsPage() {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (isTextEntryTarget(event.target)) return;
-      if (event.key === "/") {
+      // Un "/" majuscule ouvre la légende, pas la recherche : les deux
+      // raccourcis partagent la même touche physique.
+      if (event.key === "/" && !event.shiftKey) {
         event.preventDefault();
         const searchInput = document.querySelector('input[name="filter"]') as HTMLInputElement;
         if (searchInput) searchInput.focus();
@@ -1158,7 +1160,9 @@ export function ObjectsPage() {
     function onKeyDown(event: KeyboardEvent) {
       if (isTextEntryTarget(event.target)) return;
       if (document.querySelector("dialog[open]")) return;
-      if (event.key === "?") {
+      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
+        // "? peut arriver tel quel (clavier réel) ou comme "/" + Shift
+        // (événement synthétique, claviers où ? exige une autre touche).
         event.preventDefault();
         setShortcutsOpen(true);
         return;
