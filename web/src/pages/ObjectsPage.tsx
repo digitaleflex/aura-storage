@@ -1863,12 +1863,12 @@ export function ObjectsPage() {
             ) : null}
           </p>
         </div>
-        <div className="page-actions">
+        <div className="head-actions">
           {/* Actions : Importer (principale), Nouveau dossier (secondaire), Actualiser */}
           {canCreate ? (
             <button
               type="button"
-              className="btn primary-button"
+              className="btn btn-primary"
               onClick={() => setIntakeOpen(true)}
             >
               Importer
@@ -1877,7 +1877,7 @@ export function ObjectsPage() {
           {canCreateFolder ? (
             <button
               type="button"
-              className="btn secondary-button"
+              className="btn"
               onClick={() => setNewFolderOpen(true)}
             >
               Nouveau dossier
@@ -1885,21 +1885,22 @@ export function ObjectsPage() {
           ) : null}
           <button
             type="button"
-            className="btn btn-ghost tooltip"
+            className="btn btn-ghost"
             title="Actualiser la liste"
             aria-label="Actualiser la liste"
+            disabled={objectsQuery.isFetching || treeQuery.isFetching}
             onClick={() => {
               setActionError(null);
               void queryClient.invalidateQueries({ queryKey: ["objects"] });
               void queryClient.invalidateQueries({ queryKey: ["folders"] });
             }}
           >
-            Actualiser
+            {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
           </button>
           {canPurge && !master.active ? (
             <button
               type="button"
-              className="btn btn-ghost admin-link"
+              className="btn btn-ghost"
               onClick={() => setMasterDialogOpen(true)}
             >
               Mode maître
