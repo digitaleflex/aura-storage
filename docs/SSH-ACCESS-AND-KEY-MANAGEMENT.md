@@ -207,7 +207,7 @@ the cause is SSH key authentication, not the deploy script. Check in order:
    checkout path explicitly and bind the installer to `aura-admin`, so a root
    or rescue-console shell cannot target `/root/.ssh/authorized_keys`:
    ```sh
-   REPO_ROOT=/absolute/path/to/aura-storage
+   REPO_ROOT=/home/aura-admin/aura-storage
    TARGET_USER=aura-admin \
      bash "$REPO_ROOT/scripts/install-admin-key.sh" \
      --apply /tmp/opencode/ci-key/aura-ci-deploy.pub
