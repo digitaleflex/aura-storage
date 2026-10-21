@@ -68,7 +68,9 @@ décrit le code présent sur `main`, pas un déploiement.
 2. Undo : toast « Annuler » après suppression simple ou en masse via l'API
    restore; erreurs d'échec listées avec le nom du fichier.
 3. Progression globale, débit/ETA et pause/reprise dans la barre d'import.
-4. Auto-collapse de la file terminée.
+4. Auto-collapse : implémenté puis **désactivé volontairement** dans #135 pour
+   ne pas masquer le chip « SHA-256 vérifié » ; le repli de la file reste
+   manuel.
 5. Scroll infini : oui. **Virtualisation DOM : non** — les pages font 50
    lignes et s'accumulent; un windowing mesuré reste à faire si les
    catalogues dépassent quelques milliers de lignes (les menus de ligne et
