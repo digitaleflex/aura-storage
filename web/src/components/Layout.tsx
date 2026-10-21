@@ -1,7 +1,18 @@
 import { Link, useNavigate, useLocation } from "@tanstack/react-router";
 import { useAuth, useSession } from "../lib/auth";
-import { hasAdminAccess } from "../lib/api";
+import { hasAdminAccess, api } from "../lib/api";
+import { useQuery } from "@tanstack/react-query";
 import { VaultMark } from "./VaultMark";
+
+/** Local copy of formatBytes to avoid circular import with ObjectsPage. */
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size < 0) return "taille inconnue";
+  if (size === 0) return "0 o";
+  const units = ["o", "Ko", "Mo", "Go", "To"];
+  const index = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
+  const value = size / 1024 ** index;
+  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
 
 /** Human label for a session role (the API stays authoritative on access). */
 function roleLabel(kind: string | undefined, role: string | null | undefined): string {
@@ -32,6 +43,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   const canAdmin = hasAdminAccess(session.data?.role);
+
+  // Usage réel pour l'indicateur de stockage (admin uniquement)
+  const usageQuery = useQuery({
+    queryKey: ["admin", "usage"],
+    queryFn: () => api.adminUsage(),
+    enabled: canAdmin,
+    retry: false,
+  });
 
   // État collapsible : persistant en URL (?sidebar=collapsed|expanded)
   const urlParams = new URLSearchParams(location.search);
@@ -135,8 +154,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <path d="M8 11V8a4 4 0 0 1 8 0v3" />
           </svg>
           <span>
-            {/* TODO : remplacer par donnée usage réelle depuis /api/v1/admin/usage */}
-            Stockage : --:-- utilisé
+            {usageQuery.data
+              ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes)} utilisés`
+              : canAdmin
+                ? "Stockage : chargement…"
+                : "Chiffré au repos, intégrité vérifiée"}
           </span>
         </p>
       </aside>
