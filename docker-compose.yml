@@ -312,6 +312,12 @@ services:
       # for the commit route (app/nginx.conf, 310 s) so the API's structured
       # 504 reaches the client; change both together.
       AURA_COMMIT_DEADLINE_S: ${AURA_COMMIT_DEADLINE_S:-300}
+      # Automatic reconciliation sweep (#144): stale intents and half-done
+      # purges are cleaned without an operator.
+      AURA_RECONCILE_ENABLED: ${AURA_RECONCILE_ENABLED:-1}
+      AURA_RECONCILE_INTERVAL_SECONDS: ${AURA_RECONCILE_INTERVAL_SECONDS:-300}
+      AURA_RECONCILE_LIMIT: ${AURA_RECONCILE_LIMIT:-500}
+      AURA_RECONCILE_EXTRA_GRACE_SECONDS: ${AURA_RECONCILE_EXTRA_GRACE_SECONDS:-3600}
       AURA_MAX_PENDING_INTENTS: ${AURA_MAX_PENDING_INTENTS:-100}
       AURA_ALLOW_EMPTY_OBJECTS: ${AURA_ALLOW_EMPTY_OBJECTS:-0}
       AURA_ALLOWED_CONTENT_TYPES: "${AURA_ALLOWED_CONTENT_TYPES:-}"

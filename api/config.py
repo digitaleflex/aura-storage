@@ -155,6 +155,16 @@ class Settings:
     # Storage orphans (api/storage_reconcile.py): bytes younger than this are
     # never reported or removed, so an upload in flight is never mistaken for one.
     orphan_grace_s: int = _int("AURA_ORPHAN_GRACE_SECONDS", 86400)
+    # Automatic reconciliation sweep (#144). The sweep existed only as an
+    # admin route nothing called; it now runs on its own, like the verifier
+    # and the scrubber. ``reconcile_extra_grace_s`` is the safety margin the
+    # automatic sweep adds on top of the intent life (intent_ttl +
+    # intent_grace_s): a slow upload in progress must never lose its bytes to
+    # a sweep, so the automatic window is wider than the manual route's.
+    reconcile_enabled: bool = os.environ.get("AURA_RECONCILE_ENABLED", "1") == "1"
+    reconcile_interval_s: int = _int("AURA_RECONCILE_INTERVAL_S", 300)
+    reconcile_limit: int = _int("AURA_RECONCILE_LIMIT", 500)
+    reconcile_extra_grace_s: int = _int("AURA_RECONCILE_EXTRA_GRACE_SECONDS", 3600)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
     # Global deadline for one commit request (hashing phase, #120): past it the
     # intent is marked failed and the client gets 504 instead of an unbounded
@@ -210,3 +220,6 @@ if settings.audit_error_window_s < 0:
 # guarding one (#120), so refuse the process at boot.
 if settings.commit_deadline_s < 1:
     raise RuntimeError("AURA_COMMIT_DEADLINE_S must be >= 1")
+# A sweep every second would hammer the storage and the catalogue (#144).
+if settings.reconcile_interval_s < 30:
+    raise RuntimeError("AURA_RECONCILE_INTERVAL_S must be >= 30")
