@@ -162,7 +162,7 @@ Use the equivalent fingerprint display feature in a mobile SSH client.
 - Which SSH clients, if any, will be used on iPhone and Android.
 - The actual device public keys and fingerprints. These must be generated locally; they cannot be inferred or fabricated.
 
-No credentials or key material have been generated or installed by writing this document. All key creation and access validation remain pending until the operator chooses to execute them.
+No credentials or key material are generated or installed by writing this document. The device keys above remain pending until the operator chooses to create and validate them; the CI deploy key documented in §9 is already installed and validated.
 
 ## 9. GitHub Actions CI deploy key
 
@@ -198,15 +198,22 @@ the cause is SSH key authentication, not the deploy script. Check in order:
 
 1. On the VPS, generate a fresh pair in a temp directory and note its fingerprint:
    ```sh
+   install -d -m 700 /tmp/opencode/ci-key
    ssh-keygen -t ed25519 -f /tmp/opencode/ci-key/aura-ci-deploy -N '' \
      -C 'github-actions-deploy-digitaleflex/aura-storage'
    ssh-keygen -lf /tmp/opencode/ci-key/aura-ci-deploy.pub
    ```
-2. Append ONLY the public key (never overwrite existing entries):
+2. Append ONLY the public key (never overwrite existing entries). Set the
+   checkout path explicitly and bind the installer to `aura-admin`, so a root
+   or rescue-console shell cannot target `/root/.ssh/authorized_keys`:
    ```sh
-   bash scripts/install-admin-key.sh --apply /tmp/opencode/ci-key/aura-ci-deploy.pub
+   REPO_ROOT=/absolute/path/to/aura-storage
+   TARGET_USER=aura-admin \
+     bash "$REPO_ROOT/scripts/install-admin-key.sh" \
+     --apply /tmp/opencode/ci-key/aura-ci-deploy.pub
    ```
-3. Verify permissions: `~/.ssh` 0700, `authorized_keys` 0600, owner `aura-admin`.
+3. Verify permissions: `~aura-admin/.ssh` 0700,
+   `~aura-admin/.ssh/authorized_keys` 0600, owner `aura-admin`.
 4. Upload the private half straight from file to secret (it must never be displayed, pasted or committed):
    ```sh
    gh secret set SSH_PRIVATE_KEY --repo digitaleflex/aura-storage \
