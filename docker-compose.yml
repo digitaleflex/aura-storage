@@ -37,6 +37,9 @@ services:
       - traefik-acme:/letsencrypt
     networks:
       - edge
+      # Shared with `api` only, so the docs host can proxy /api/* to the API
+      # without the API joining the public `edge` network.
+      - docs
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -67,6 +70,57 @@ services:
       - traefik.http.middlewares.aura-hsts.headers.stsIncludeSubdomains=true
       # Port 8080 is never published to the host; the dashboard is reachable only
       # through this HTTPS router with BasicAuth (bcrypt).
+
+      # --- Shared API middlewares -------------------------------------------
+      # Definitions only; a router opts in by listing them in
+      # `traefik.http.routers.<name>.middlewares`. They are declared here (like
+      # `dash-auth` above) so several routers can reuse one definition.
+      #
+      # `api-ratelimit`: 30 requests/s per client IP with a burst of 60. This is
+      # a coarse abuse guard for documentation/API routers, not a substitute for
+      # the in-app login/M2M limiters (api/main.py, api/authz.py). Keyed on the
+      # client IP as resolved by the entrypoint (X-Forwarded-For).
+      - traefik.http.middlewares.api-ratelimit.ratelimit.average=30
+      - traefik.http.middlewares.api-ratelimit.ratelimit.burst=60
+      # `api-secure-headers`: baseline hardening for HTML/JSON responses served
+      # through Traefik (HSTS already implied by the TLS routers; set explicitly).
+      - traefik.http.middlewares.api-secure-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.api-secure-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.api-secure-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.api-secure-headers.headers.frameDeny=true
+      - traefik.http.middlewares.api-secure-headers.headers.referrerPolicy=no-referrer
+      # `api-docs-allowlist`: restriction choix utilisateur (2026-10-16) — docs internes
+      # derrière firewall/VPN. Plages privées par défaut; ajoute ton IP publique opérateur
+      # via `SWAGGER_ADMIN_IP` dans .env (ex: 203.0.113.10/32) avant go-live si accès distant.
+      - traefik.http.middlewares.api-docs-allowlist.ipallowlist.sourcerange=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${SWAGGER_ADMIN_IP:-127.0.0.2/32}
+      # `api-docs-auth`: BasicAuth in front of the documentation router. The
+      # allow-list above is a network control: it carries no identity, it is
+      # shared by every host behind the same NAT egress, and it cannot be
+      # revoked per person. This middleware is the credential, so access to the
+      # API surface exposed by Swagger "Try it" is attributable and revocable
+      # on its own. Same pattern as the dashboard's `dash-auth`, same bcrypt
+      # requirement ($2y$/$2b$).
+      - traefik.http.middlewares.api-docs-auth.basicauth.users=${DOCS_AUTH:?Set DOCS_AUTH in .env}
+
+      # --- forwardAuth example: DISABLED (no verify endpoint exists today) ---
+      # api/main.py exposes /api/v1/login, /api/v1/logout and /api/v1/me, and
+      # api/authz.py authorizes in-process; there is NO /auth/verify route, so
+      # nothing here is enabled. Do not uncomment before the prerequisites hold:
+      #
+      #   1. Add a dedicated verification endpoint that validates the
+      #      `aura_session` cookie (or a Bearer service token) and answers 200 —
+      #      optionally copying identity headers — or 401. `/api/v1/me` shows the
+      #      session-validation behaviour but is a JSON API, not a forwardAuth
+      #      target; a thin `/api/v1/auth/verify` is preferred.
+      #   2. Make that endpoint reachable from Traefik. Today `api` is on the
+      #      `storage` network only while Traefik is on `edge`, so Traefik cannot
+      #      dial it; add `api` to `edge` (or expose a dedicated route) first.
+      #   3. Then uncomment the three labels below and prepend `api-auth-forward`
+      #      to the `aura-swagger` router middlewares.
+      #
+      # - traefik.http.middlewares.api-auth-forward.forwardauth.address=http://api:8000/api/v1/auth/verify
+      # - traefik.http.middlewares.api-auth-forward.forwardauth.authResponseHeaders=X-Aura-User,X-Aura-Role
+      # - traefik.http.middlewares.api-auth-forward.forwardauth.trustForwardHeader=true
 
   seaweed-master:
     image: ${SEAWEEDFS_IMAGE:?Set SEAWEEDFS_IMAGE in .env}
@@ -230,14 +284,79 @@ services:
       AURA_SCRUB_BYTES_PER_RUN: ${AURA_SCRUB_BYTES_PER_RUN:-10737418240}
       # Storage orphans: bytes younger than this are never reported or removed.
       AURA_ORPHAN_GRACE_SECONDS: ${AURA_ORPHAN_GRACE_SECONDS:-86400}
-      # No origin/CORS allow-list here on purpose: the api has no Traefik route
-      # and is reached same-origin through the app proxy (app/nginx.conf proxies
-      # /api/ to this service). Browser uploads go straight to SeaweedFS via
-      # presigned URLs, so any CORS belongs to the SeaweedFS S3 gateway.
+      # Remaining tunables read by api/config.py (defaults are its exact
+      # defaults). Uncomment/override any of them in .env as needed.
+      AURA_API_DB: ${AURA_API_DB:-aura-catalogue.db}
+      AURA_INTENT_TTL: ${AURA_INTENT_TTL:-900}
+      AURA_INTENT_GRACE_SECONDS: ${AURA_INTENT_GRACE_SECONDS:-300}
+      # Public share links (/s/<token>). The base URL is built from APP_DOMAIN,
+      # the same required variable as the app router, so the absolute link
+      # matches the host that actually serves it -- and never comes from a
+      # client-supplied Host header.
+      AURA_SHARE_BASE_URL: https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      AURA_SHARE_TTL_DEFAULT: ${AURA_SHARE_TTL_DEFAULT:-604800}
+      AURA_SHARE_TTL_MAX: ${AURA_SHARE_TTL_MAX:-2592000}
+      AURA_SHARE_PRESIGN_TTL: ${AURA_SHARE_PRESIGN_TTL:-60}
+      AURA_AUDIT_RETENTION_DAYS: ${AURA_AUDIT_RETENTION_DAYS:-90}
+      AURA_AUDIT_MAX_SCAN_LINES: ${AURA_AUDIT_MAX_SCAN_LINES:-20000}
+      AURA_AUDIT_ERROR_SCAN_LINES: ${AURA_AUDIT_ERROR_SCAN_LINES:-5000}
+      AURA_AUDIT_ERROR_WINDOW_S: ${AURA_AUDIT_ERROR_WINDOW_S:-3600}
+      AURA_LOGIN_RATE_LIMIT: ${AURA_LOGIN_RATE_LIMIT:-10}
+      AURA_LOGIN_RATE_WINDOW: ${AURA_LOGIN_RATE_WINDOW:-60}
+      AURA_M2M_RATE_LIMIT: ${AURA_M2M_RATE_LIMIT:-60}
+      AURA_M2M_RATE_WINDOW: ${AURA_M2M_RATE_WINDOW:-60}
+      AURA_TRUSTED_PROXIES: ${AURA_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      AURA_MAX_OBJECT_BYTES: ${AURA_MAX_OBJECT_BYTES:-5368709120}
+      AURA_COMMIT_CHUNK_BYTES: ${AURA_COMMIT_CHUNK_BYTES:-1048576}
+      AURA_MAX_PENDING_INTENTS: ${AURA_MAX_PENDING_INTENTS:-100}
+      AURA_ALLOW_EMPTY_OBJECTS: ${AURA_ALLOW_EMPTY_OBJECTS:-0}
+      AURA_ALLOWED_CONTENT_TYPES: "${AURA_ALLOWED_CONTENT_TYPES:-}"
+      AURA_IDEMPOTENCY_KEY_MAX: ${AURA_IDEMPOTENCY_KEY_MAX:-200}
+      # No origin/CORS allow-list here on purpose: the api is reached same-origin
+      # through two *proxies* — the app proxy (`app/nginx.conf` forwards /api/) and,
+      # for the documentation UI only, the `aura-swagger-api` router on the docs
+      # host. Both keep the browser on one origin, so Swagger "Try it" needs no
+      # CORS at all. Browser uploads go straight to SeaweedFS via presigned URLs,
+      # so any CORS belongs to the SeaweedFS S3 gateway.
     volumes:
       - audit-log:/var/lib/aura/audit
     networks:
       - storage
+      # `docs` is a dedicated internal network shared with Traefik only. It lets
+      # the docs host proxy /api/* here (same-origin "Try it") without attaching
+      # the API to the public `edge` network, where SeaweedFS and the app
+      # containers could dial it directly. Internal like `storage`, so the API
+      # keeps its current (no Internet) connectivity.
+      - docs
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aura-docs
+      # Same-origin API for the documentation host. The docs page is served from
+      # `${SWAGGER_DOMAIN}` and calls /api/... there, so the session cookie and
+      # the CSRF header stay same-origin and no CORS allow-list is needed.
+      - traefik.http.routers.aura-swagger-api.rule=Host(`${SWAGGER_DOMAIN:-docs.aura-storage.eurinhash.com}`) && PathPrefix(`/api/`)
+      # Higher than the docs catch-all router (priority 100) so /api/* reaches the
+      # API, not the static Swagger UI.
+      - traefik.http.routers.aura-swagger-api.priority=200
+      - traefik.http.routers.aura-swagger-api.entrypoints=websecure
+      - traefik.http.routers.aura-swagger-api.tls=true
+      - traefik.http.routers.aura-swagger-api.tls.certresolver=le
+      # Same two gates as the docs UI: network allow-list first, then credential.
+      - traefik.http.routers.aura-swagger-api.middlewares=api-docs-allowlist,api-docs-auth,api-ratelimit,api-secure-headers
+      - traefik.http.services.aura-swagger-api.loadbalancer.server.port=8000
+      # Public share links: Host(APP_DOMAIN) + /s/* goes straight to the API,
+      # never through the SPA. Priority 200 beats the app catch-all router so
+      # nginx never sees these requests and cannot answer with index.html.
+      # This is the ONLY unauthenticated API surface; the token is the
+      # credential, so the guard here is the edge rate limit rather than a
+      # second factor. No CORS: a share link is navigated, not fetched.
+      - traefik.http.routers.aura-share.rule=Host(`${APP_DOMAIN:?Set APP_DOMAIN in .env}`) && PathPrefix(`/s/`)
+      - traefik.http.routers.aura-share.priority=200
+      - traefik.http.routers.aura-share.entrypoints=websecure
+      - traefik.http.routers.aura-share.tls=true
+      - traefik.http.routers.aura-share.tls.certresolver=le
+      - traefik.http.routers.aura-share.middlewares=api-ratelimit,api-secure-headers
+      - traefik.http.services.aura-share.loadbalancer.server.port=8000
     depends_on:
       postgres:
         condition: service_healthy
@@ -250,7 +369,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    # No host ports, no Traefik route: reachable only via the app proxy.
+    # No host ports. Reachable through the app proxy and, for the documentation
+    # UI only, through the authenticated docs-host router above.
 
   app:
     image: nginx:1.28.3-alpine
@@ -322,9 +442,58 @@ services:
       - no-new-privileges:true
     # No host ports, no access to the internal storage network.
 
+  # API documentation browser (Swagger UI) rendering the committed contract
+  # docs/openapi.yaml. It has NO host port: it is reachable only through the
+  # dedicated Traefik router below and sits on the `edge` network only, so it can
+  # never reach the storage/api containers.
+  #
+  # The spec targets an INTERNAL audience (session cookie + CSRF for humans,
+  # Bearer tokens for machines; see docs/openapi.yaml and
+  # docs/AUTHORIZATION-MATRIX.md). It is currently protected by a shared rate
+  # limit and security headers. Authentication via forwardAuth is NOT enabled:
+  # no verify endpoint exists yet (see the commented `api-auth-forward`
+  # middleware on the `traefik` service for the pattern to add later). Until
+  # then, keep the `SWAGGER_DOMAIN` DNS record off untrusted networks.
+  swagger-ui:
+    image: ${SWAGGER_UI_IMAGE:-swaggerapi/swagger-ui:v5.17.14}
+    container_name: ${AURA_INSTANCE_ID:-aura-001}-swagger-ui
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Africa/Porto-Novo}
+      # Serve the mounted file as the spec; BASE_URL stays "/" so relative asset
+      # paths resolve identically at the domain root.
+      SWAGGER_JSON: /spec/openapi.yaml
+      BASE_URL: /
+    volumes:
+      - ./docs/openapi.yaml:/spec/openapi.yaml:ro
+    networks:
+      - edge
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aura-edge
+      - traefik.http.routers.aura-swagger.rule=Host(`${SWAGGER_DOMAIN:-docs.aura-storage.eurinhash.com}`)
+      # Lower than the /api/* router (priority 200) defined on the `api` service:
+      # everything that is not an API call stays on the static Swagger UI.
+      - traefik.http.routers.aura-swagger.priority=100
+      - traefik.http.routers.aura-swagger.entrypoints=websecure
+      - traefik.http.routers.aura-swagger.tls=true
+      - traefik.http.routers.aura-swagger.tls.certresolver=le
+      # Prepend `api-auth-forward` here once it is defined (see `traefik` labels).
+      - traefik.http.routers.aura-swagger.middlewares=api-docs-allowlist,api-docs-auth,api-ratelimit,api-secure-headers
+      - traefik.http.services.aura-swagger.loadbalancer.server.port=8080
+    # No host port, no storage network: the docs never bind a local port.
+
 networks:
   edge:
     name: aura-edge
+  docs:
+    # Dedicated to the docs host: Traefik + api only. Internal, so the API keeps
+    # exactly its current connectivity (no Internet) while staying unreachable
+    # from the SeaweedFS/app containers that share the public `edge` network.
+    name: aura-docs
+    internal: true
   storage:
     name: aura-storage-internal
     internal: true
