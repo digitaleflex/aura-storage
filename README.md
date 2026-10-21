@@ -31,6 +31,13 @@
 - [Operations playbook](docs/OPERATIONS-PLAYBOOK.md)
 - [Backup and restore](docs/BACKUP-RESTORE.md)
 - [Traefik configuration notes](config/traefik/README.md)
+- [API routes audit (real routes vs OpenAPI)](docs/API-ROUTES-AUDIT.md)
+- [Transfer engine formal audit](docs/TRANSFER-ENGINE-AUDIT.md)
+- [QA-01 validation checklist and release gate](docs/QA-01-CHECKLIST.md)
+- [Decision: defer Better Auth + Google OAuth](docs/DECISION-BETTER-AUTH.md)
+- [Decision: defer independent backup](docs/DECISION-BACKUP-DEFERRED.md)
+- [Decision: advanced transfer features deferred](docs/DECISION-ADVANCED-TRANSFER-FEATURES.md)
+- [Padding audit report](docs/DESIGN-PADDING-AUDIT.md)
 
 ## Intended topology
 
