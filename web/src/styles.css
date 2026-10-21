@@ -1018,6 +1018,9 @@ select:focus-visible {
   padding: 10px 8px;
   border-bottom: 1px solid var(--steel-2);
   transition: background 120ms ease;
+  /* Virtualisation native : le navigateur ne rend que les lignes visibles. */
+  content-visibility: auto;
+  contain-intrinsic-size: 0 48px;
 }
 
 .ledger-row:hover {
