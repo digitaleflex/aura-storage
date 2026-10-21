@@ -1,0 +1,8 @@
+[Unit]
+Description=AURA Storage reconciliation sweep
+After=network.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/aura/reconcile.env
+ExecStart=/opt/aura-storage/scripts/reconcile-cron.sh

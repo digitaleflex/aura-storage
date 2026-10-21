@@ -350,6 +350,7 @@ paths:
         "403": { description: Bucket not allowed / not authorised }
         "422": { description: "Invalid request, disallowed content type, or empty/size over the cap" }
         "429": { description: Too many pending uploads }
+        "507": { description: "Storage capacity reached: the declared size would pass AURA_STORAGE_HIGH_WATERMARK of AURA_STORAGE_CAPACITY_BYTES (only when a capacity is configured)" }
   /api/v1/objects/{oid}/commit:
     post:
       summary: Validate an upload, stream SHA-256, mark available (objects:write)
@@ -375,7 +376,8 @@ paths:
         "409": { description: Object not committable (including aborted/expired/deleted) }
         "410": { description: Upload intent expired }
         "413": { description: Object exceeds the maximum allowed size }
-        "422": { description: Upload missing or size mismatch }
+        "422": { description: "Upload missing, or stored size does not match the declared size (intent marked failed)" }
+        "504": { description: "Commit deadline (AURA_COMMIT_DEADLINE_S) exceeded (intent marked failed)" }
   /api/v1/objects/{oid}/abort:
     post:
       summary: Cancel a pending upload intent (objects:write)
@@ -705,6 +707,30 @@ paths:
           description: Bounded sweep, oldest first; repeat until expired is 0 (server clamps to 1..5000)
       responses:
         "200": { description: "Reconcile counts (expired, storage_deletes_attempted, storage_failures); failed storage deletes keep the intent pending" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/reconcile-terminal:
+    post:
+      summary: Clean up bytes for terminal rows (admin:write)
+      tags: [administration]
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
+      responses:
+        "200": { description: "Counts (cleaned, storage_deletes_attempted, storage_failures)" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/reconcile-reverse:
+    post:
+      summary: Storage-to-catalogue reverse orphan sweep (admin:write)
+      tags: [administration]
+      parameters:
+        - in: query
+          name: dry_run
+          schema: { type: boolean, default: true }
+      responses:
+        "200": { description: "Counts (scanned, orphans, deleted, failures)" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
   /api/v1/admin/stats:
@@ -1082,6 +1108,200 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Bucket not found }
         "422": { description: Invalid or missing body field }
+  /api/v1/admin/integrity:
+    get:
+      tags: [administration]
+      summary: Periodic integrity scrub results (admin:read)
+      description: >-
+        Counts of available objects per scrub result (ok, mismatch, missing,
+        unchecked) and the objects at fault. Read-only; nothing is changed
+        automatically — a mismatch or missing object calls for a restore.
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+          description: Problems listed (server clamps to 1..500)
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "interval_days, results {result: {count, oldest}}, problems" }
+        "403": { description: Not authorised }
+
+  /api/v1/admin/integrity/scrub:
+    post:
+      tags: [administration]
+      summary: Run one bounded scrub pass now (admin:write)
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "Counts of this pass: ok, mismatch, missing, error, bytes" }
+        "403": { description: Not authorised }
+
+  /api/v1/admin/storage-orphans:
+    get:
+      tags: [administration]
+      summary: Read-only storage bytes the catalogue does not account for (admin:read)
+      description: >-
+        Keys in registered buckets with no catalogue row (no_row) or whose row is
+        aborted/expired/failed (terminal), plus unfinished multipart uploads no
+        pending row owns. Soft-deleted objects (trash) are not orphans. Anything
+        younger than AURA_ORPHAN_GRACE_SECONDS is ignored. Bounded and resumable.
+      parameters:
+        - in: query
+          name: bucket
+          schema: { type: string, maxLength: 63 }
+          description: One registered bucket; omitted = all registered buckets
+        - in: query
+          name: start_after
+          schema: { type: string, maxLength: 1024 }
+          description: Resume after this key (next_start_after of a previous call)
+        - in: query
+          name: max_keys
+          schema: { type: integer, minimum: 1, maximum: 50000, default: 5000 }
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "grace_seconds, buckets[{bucket, scanned, orphans, orphan_bytes, stale_uploads, next_start_after}]" }
+        "403": { description: Not authorised }
+        "404": { description: Bucket not registered }
+
+  /api/v1/admin/storage-orphans/cleanup:
+    post:
+      tags: [administration]
+      summary: Remove listed orphan keys and abort listed stale uploads (admin:write, destructive)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [bucket]
+              properties:
+                bucket: { type: string, maxLength: 63 }
+                keys: { type: array, maxItems: 100, items: { type: string } }
+                uploads:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [key, upload_id]
+                    properties:
+                      key: { type: string }
+                      upload_id: { type: string }
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "removed, aborted_uploads, skipped[{key, reason}] — each item re-checked before acting" }
+        "403": { description: Not authorised }
+        "404": { description: Bucket not registered }
+
+  /api/v1/me/master-mode:
+    post:
+      tags: [auth]
+      summary: Enter master mode by re-entering the password (objects:purge, human session)
+      description: >-
+        Short, session-bound elevation (AURA_MASTER_MODE_SECONDS, default 900)
+        for bulk destructive actions without a confirmation per item. Wrong
+        passwords count against the login rate limit. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "master_until (epoch seconds)" }
+        "403": { description: "Not authorised, or the password does not match" }
+        "429": { description: Too many attempts }
+    delete:
+      tags: [auth]
+      summary: Leave master mode now
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "master_until null" }
+
+  /api/v1/objects/bulk-purge:
+    post:
+      tags: [objects]
+      summary: Master mode only — purge up to AURA_MASTER_BULK_MAX objects in one call (objects:purge)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ids]
+              properties:
+                ids: { type: array, minItems: 1, items: { type: string } }
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "purged, not_found (or outside the caller's scope), failed (storage error; catalogue reference kept)" }
+        "403": { description: "Not authorised, or master mode not active" }
+        "422": { description: Too many ids }
+
+  /api/v1/objects/trash/empty:
+    post:
+      tags: [objects]
+      summary: Master mode only — purge the caller's trash, up to AURA_MASTER_BULK_MAX per call (objects:purge)
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "purged, not_found, failed, more (true when another call is needed)" }
+        "403": { description: "Not authorised, or master mode not active" }
+
+  /api/v1/objects/{oid}/restore:
+    post:
+      tags: [objects]
+      summary: Restore a soft-deleted object from the trash (objects:delete)
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "Object metadata, status available again" }
+        "404": { description: Object not found or not visible }
+        "409": { description: "Object is not in the trash, or was deleted before its upload completed (nothing to restore)" }
+
+  /api/v1/objects/{oid}/multipart:
+    get:
+      tags: [objects]
+      summary: Multipart plan and parts already held (objects:write); a resumed upload sends only the rest
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "size_bytes, part_size_bytes, part_count and uploaded_parts (part numbers whose size matches the plan)" }
+        "404": { description: Object not found or not visible }
+        "409": { description: No multipart upload in progress for this object }
+        "410": { description: Upload intent or multipart session expired }
+        "502": { description: Storage unavailable }
+
+  /api/v1/objects/{oid}/multipart/parts:
+    post:
+      tags: [objects]
+      summary: Short-lived presigned PUTs for up to 100 part numbers (objects:write)
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [part_numbers]
+              properties:
+                part_numbers: { type: array, minItems: 1, maxItems: 100, items: { type: integer, minimum: 1 } }
+      responses:
+        "401": { description: Authentication required }
+        "200": { description: "One URL per part, each bound to the part's exact Content-Length" }
+        "404": { description: Object not found or not visible }
+        "409": { description: No multipart upload in progress for this object }
+        "410": { description: Upload intent expired }
+        "422": { description: Part number out of range }
+
 components:
   schemas:
     Uuid4:

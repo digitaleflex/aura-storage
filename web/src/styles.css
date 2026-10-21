@@ -29,48 +29,70 @@
 }
 
 :root {
+  /* ------------------------------------------------------------------
+     PRIMITIVES (design system v2.1, audit prompt 02).
+     Toute valeur ci-dessous est une primitive : les composants ne consomment
+     QUE des jetons nommés, jamais de valeur brute. Rôles plus bas.
+     Contrast pairs checked (WCAG 2.1, planché 4.5:1 normal / 3:1 large):
+     - ink sur steel-0 : 15.2:1 ; ink sur steel-1 : 16.3:1
+     - side-ink sur side : 13.1:1 ; side-muted sur side : 6.3:1
+     - signal sur blanc : 4.8:1 (accent doré AA ; le #A96B13 proposé tombait
+       à 4.4:1 — même teinte, assombrie pour passer)
+     - faint/muted sur blanc : 4.7:1 / 6.0:1
+     - ok/warn/danger/run sur leurs fonds doux : 5.7/4.7/6.0/6.4:1
+     ------------------------------------------------------------------ */
+
   /* Structure : barre latérale sombre, surface de travail claire. */
-  --side: #0f151d;
+  --side: #10151d;
   --side-2: #1c2531;
   --side-3: #222c38;
   --side-ink: #d5dbe3;
   --side-muted: #8e99a8;
   /* Historique : anciens noms encore lus par l'administration et le login. */
-  --graphite: #0f151d;
+  --graphite: #10151d;
   --graphite-2: #1c2531;
   --graphite-3: #2a3442;
 
-  --steel-0: #f5f6f8;
+  --steel-0: #f5f7fa;
   --steel-1: #ffffff;
   --steel-2: #eef0f3;
   --steel-3: #e3e6eb;
+  --steel-raised: #ffffff;
 
-  --ink: #141a22;
+  --ink: #172033;
   --ink-2: #3d4654;
   --muted: #5b6472;
   /* Plus clair que --muted mais toujours ≥ 4,5:1 sur blanc. */
-  --faint: #6b7480;
+  --faint: #5e6773;
 
   --line: #e3e6eb;
   --line-2: #d3d8df;
   --field-line: #a9b2be;
 
-  /* Accent : la seule couleur d'action du produit (5,6:1 sur blanc). */
-  --signal: #8f5600;
-  --signal-2: #6e4200;
-  --signal-soft: #fbf1e0;
+  /* Accent : la seule couleur d'action du produit. TEINTE dorée demandée
+     (#A96B13) assombrie à #9d660d : la proposition brute ne passait pas
+     4.5:1 avec le blanc de texte des boutons primaires (4.38:1). */
+  --signal: #9d660d;
+  --signal-2: #7a4d07;
+  --signal-soft: #f6ecd0;
   --signal-line: #e6c893;
   /* Ambre clair pour les marques sur fond sombre (logo, focus latéral). */
   --signal-bright: #e0a33a;
+  /* Texte sur un aplat --signal : blanc sur le doré sombre clair, encre sur
+     le doré clair du thème sombre (AA dans les deux thèmes). */
+  --on-signal: #ffffff;
+  /* Idem pour les aplats de danger. */
+  --on-danger: #ffffff;
 
   --ok: #1e6b44;
   --ok-bg: #e6f3ec;
   --run: #2350ae;
   --run-bg: #e7eefb;
-  --warn: #8a6410;
-  --warn-bg: #f8f0dc;
+  --warn: #a34a0a;
+  --warn-bg: #fde7d0;
   --danger: #a8291f;
   --danger-bg: #fbeae8;
+  --danger-strong: #8f2c22; /* survol sur fond plein danger */
 
   --radius: 8px;
   --radius-small: 6px;
@@ -82,10 +104,96 @@
   --band-h: 60px;
   --side-w: 248px;
   --content-width: 1240px;
+
+  /* ------------------------------------------------------------------
+     ESPACEMENTS — échelle unique des composants. Les gabarits de page
+     (content padding, gaps de shell) restent expressément écrits.
+     --space-2 / --space-3 / --space-4 forment le trio dominant.
+     ------------------------------------------------------------------ */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  /* CONTROLES (boutons, champs) : gabarits de pression partagés — bouton
+     de page et bouton "petits" partagent les mêmes variables, le sélecteur
+     décide seulement de la variante. */
+  --control-fs: 14px;
+  --control-fs-sm: 12.5px;
+  --control-pad-y: 9px;
+  --control-pad-x: 14px;
+  --control-pad-y-sm: 5px;
+  --control-pad-x-sm: 10px;
+  --field-fs: 14px;
+  --field-pad-y: 9px;
+  --field-pad-x: 11px;
+  /* Zones de toucher minimales : cible WCAG 2.5.8 (mobile) et forme
+     compacte in-table des contrôles (38px), consommées par les composants. */
+  --tap-target: 44px;
+  --tap-hit: 38px;
+
+  /* BORDURES : une seule graisse standard, une pour les états forts
+     (focus, sélection, backdrops). */
+  --bw: 1px;
+  --bw-strong: 2px;
+
+  /* OMBRES : élévations nommées, une par rangée d'interface ; aucune
+     ombre décorative hors de ces usages. */
+  --shadow-1: 0 1px 2px rgba(15, 21, 29, 0.08);        /* repos discret */
+  --shadow-2: 0 10px 26px rgba(15, 21, 29, 0.16);       /* menu / popover */
+  --shadow-3: 0 20px 50px rgba(15, 21, 29, 0.30);       /* modale */
+  --shadow-tray: 0 12px 32px rgba(15, 21, 29, 0.18);    /* plateau flottant */
+  --shadow-toast: 0 8px 24px rgb(0 0 0 / 0.18);
+  --shadow-focus: 0 0 0 3px color-mix(in srgb, var(--signal) 35%, transparent);
+
+  /* PROFONDEUR (z-index) : échelle exclusive du produit, une valeur par
+     couche, jamais de nombre nu dans les composants. */
+  --z-sticky: 40;   /* topbar, barre cohortée */
+  --z-menu: 50;     /* menu contextuel, plateau de dépôt */
+  --z-drawer: 55;   /* drawer détail + son scrim */
+  --z-toast: 60;    /* toasts, overlay de dépôt */
+
+  /* TRANSITIONS : press plus court que settle. */
+  --dur-fast: 120ms;
+  --dur-std: 180ms;
+  --dur-slow: 260ms;
+  --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-press: cubic-bezier(0.2, 0.9, 0.3, 1); /* settle léger overshoot */
+
+  /* ÉCHELLE TYPOGRAPHIQUE : les tailles effectives d'aujourd'hui, nommées
+     pour que la consommation remplace la valeur nue. */
+  --fs-2xs: 11px;   /* rappels mono, lettres d'accents */
+  --fs-xs: 12px;    /* en-têtes de tableaux, compteurs */
+  --fs-sm: 13px;    /* méta, muted */
+  --fs-md: 14px;    /* corps */
+  --fs-lg: 16px;    /* titres de section */
+  --fs-xl: 26px;    /* titre de page */
+  --fs-2xl: 20px;   /* sous-section / carte */
+  --lh-tight: 1.15;
+  --lh-std: 1.5;
+  --lh-display: 1.2;
+  --lh-mono: 1.4;
+  --track-tight: -0.012em;
+  --track-loose: 0.06em;
+  /* Poids typographiques (IBM Plex Sans 400–600). */
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Chiffres tabulaires pour les colonnes numériques / dates. */
+.mono, code, .size, .date, td, th, table {
+  font-variant-numeric: tabular-nums;
 }
 
 body {
@@ -93,17 +201,19 @@ body {
   background: var(--steel-0);
   color: var(--ink);
   font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: var(--fs-md);
+  line-height: var(--lh-std);
   -webkit-font-smoothing: antialiased;
+  transition: background-color var(--dur-std) var(--ease-std),
+    color var(--dur-std) var(--ease-std);
 }
 
 /* Type roles: heavy sans for titles, mono for anything you compare. */
 h1 {
-  font-size: 26px;
+  font-size: var(--fs-xl);
   font-weight: 600;
-  letter-spacing: -0.012em;
-  line-height: 1.15;
+  letter-spacing: var(--track-tight);
+  line-height: var(--lh-tight);
   margin: 0;
 }
 
@@ -130,7 +240,7 @@ h3 {
 
 .muted {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .mono {
@@ -143,7 +253,7 @@ h3 {
 }
 
 /* ------------------------------------------------------------------ */
-/* Shell: dark navigation sidebar, light top bar, working surface.     */
+/* Shell: dark navigation sidebar, light top bar, working surface.      */
 /* ------------------------------------------------------------------ */
 .shell {
   min-height: 100vh;
@@ -151,6 +261,7 @@ h3 {
   background: var(--steel-0);
 }
 
+/* Sidebar: base styling */
 .sidebar {
   position: sticky;
   top: 0;
@@ -163,6 +274,211 @@ h3 {
   padding: 20px 14px;
   background: var(--side);
   color: var(--side-ink);
+  transition: width var(--dur-slow) var(--ease-std);
+  overflow: hidden;
+}
+
+/* Sidebar collapsed: icône seule, largeur réduite */
+.sidebar.sidebar-collapsed {
+  width: 56px;
+  transition: width var(--dur-slow) var(--ease-std);
+  overflow: hidden;
+}
+
+.sidebar-collapsed .nav {
+  flex-direction: column;
+  padding: var(--space-2) 0;
+}
+
+.sidebar-collapsed .nav .sidebar-section {
+  margin-bottom: var(--space-2);
+  border-top: 1px solid var(--sidebar-section-hover);
+  padding: var(--spacing-xs) 0;
+}
+
+.sidebar-collapsed .sidebar-section .section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--section-title-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 var(--spacing-xs) 0;
+}
+
+.sidebar-collapsed .nav a:hover {
+  background: var(--sidebar-section-hover);
+}
+
+/* Brand collapsed : icône seule, texte masqué */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+  text-decoration: none;
+  transition: margin-left var(--dur-std) var(--ease-std);
+}
+
+.brand svg {
+  flex: none;
+  color: var(--side-muted);
+}
+
+.brand-name {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--side-ink);
+  transition: color var(--dur-std) var(--ease-std);
+}
+
+.brand-name-hidden {
+  display: none;
+}
+
+/* Bouton de togglage sidebar dans la topbar */
+.topbar-sidebar-toggle {
+  margin-right: var(--space-2);
+}
+
+/* Bouton hamburger mobile — masqué sur desktop */
+.topbar-mobile-toggle {
+  display: none;
+  margin-right: var(--space-2);
+}
+
+/* Mobile drawer */
+.mobile-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 24, 31, 0.5);
+  z-index: var(--z-drawer);
+  animation: fade-in 150ms ease-out;
+}
+
+.mobile-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  width: min(280px, 85vw);
+  background: var(--side);
+  color: var(--side-ink);
+  z-index: calc(var(--z-drawer) + 1);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 14px;
+  animation: drawer-in 220ms var(--ease-out);
+  overflow-y: auto;
+}
+
+.mobile-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--side-3);
+}
+
+.mobile-drawer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mobile-drawer-nav .nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--radius-small);
+  color: var(--side-ink);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.mobile-drawer-nav .nav-link:hover {
+  background: var(--side-3);
+  color: #ffffff;
+}
+
+.mobile-drawer-nav .nav-link-active {
+  background: var(--side-2);
+  color: #ffffff;
+}
+
+/* Afficher le hamburger sur mobile */
+@media (max-width: 760px) {
+  .topbar-mobile-toggle {
+    display: inline-flex;
+  }
+
+  /* Masquer le togglage sidebar desktop sur mobile (sidebar cachée) */
+  .topbar-sidebar-toggle {
+    display: none;
+  }
+
+  /* Cibles tactiles minimales (44px) sur mobile. */
+  .btn, button, .nav-link, .mobile-drawer-nav a {
+    min-height: 44px;
+  }
+
+  /* Éviter le débordement du whoami sur petit écran. */
+  .whoami-text {
+    max-width: 110px;
+    overflow: hidden;
+  }
+  .whoami-role {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Masquer le sidebar desktop sur mobile */
+  .sidebar {
+    display: none;
+  }
+}
+
+/* État actif du lien nav */
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--radius-small);
+  color: var(--side-ink);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.nav-link:hover {
+  background: var(--side-3);
+  color: #ffffff;
+}
+
+.nav-link-active {
+  background: var(--side-2);
+  color: #ffffff;
+}
+
+/* Lien admin séparé visuellement */
+.nav-link-admin {
+  margin-left: auto;
+  color: var(--side-ink);
+}
+
+/* Focus visible sur la sidebar */
+.sidebar a:focus-visible,
+.sidebar button:focus-visible {
+  outline-color: var(--signal);
+  outline-offset: 2px;
 }
 
 .brand {
@@ -215,6 +531,7 @@ h3 {
 .sidebar a:focus-visible,
 .sidebar button:focus-visible {
   outline-color: var(--signal-bright);
+  box-shadow: none;
 }
 
 .sidebar-foot {
@@ -244,7 +561,7 @@ h3 {
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 40;
+  z-index: var(--z-sticky);
   height: var(--band-h);
   display: flex;
   align-items: center;
@@ -302,6 +619,28 @@ h3 {
   width: 100%;
   max-width: var(--content-width);
   padding: 24px 32px 120px;
+  animation: content-fade-in var(--dur-slow) var(--ease-std);
+}
+
+@keyframes content-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content {
+    animation: none;
+  }
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -309,17 +648,19 @@ h3 {
 /* ------------------------------------------------------------------ */
 .btn {
   appearance: none;
-  border: 1px solid var(--line-2);
+  border: var(--bw) solid var(--line-2);
   background: var(--steel-1);
   color: var(--ink);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--control-fs);
   font-weight: 500;
   border-radius: var(--radius);
-  padding: 9px 14px;
+  padding: var(--control-pad-y) var(--control-pad-x);
   cursor: pointer;
-  transition: background 110ms ease, border-color 110ms ease, color 110ms ease,
-    transform 70ms ease;
+  transition: background var(--dur-std) var(--ease-std),
+    border-color var(--dur-std) var(--ease-std),
+    color var(--dur-std) var(--ease-std),
+    transform var(--dur-fast) var(--ease-std);
 }
 
 .btn:hover {
@@ -335,8 +676,8 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 2px solid var(--signal);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 .btn:disabled {
@@ -348,13 +689,13 @@ select:focus-visible {
 .btn-primary {
   background: var(--signal);
   border-color: var(--signal);
-  color: #ffffff;
+  color: var(--on-signal);
 }
 
 .btn-primary:hover {
   background: var(--signal-2);
   border-color: var(--signal-2);
-  color: #ffffff;
+  color: var(--on-signal);
 }
 
 /* A disabled primary must read as inert, not as the brightest thing on screen. */
@@ -378,19 +719,20 @@ select:focus-visible {
 }
 
 .btn-small {
-  font-size: 12.5px;
-  padding: 5px 10px;
+  font-size: var(--control-fs-sm);
+  padding: var(--control-pad-y-sm) var(--control-pad-x-sm);
 }
 
 .btn-danger {
   background: var(--danger);
   border-color: var(--danger);
-  color: #ffffff;
+  color: var(--on-danger);
 }
 
 .btn-danger:hover {
-  background: #8f2c22;
-  border-color: #8f2c22;
+  background: var(--danger-strong);
+  border-color: var(--danger-strong);
+  /* --danger-strong stays dark in both themes, so white remains AA. */
   color: #ffffff;
 }
 
@@ -420,20 +762,20 @@ select:focus-visible {
 .field input[type="date"],
 .field select {
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: var(--field-fs);
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
-  border: 1px solid var(--field-line);
+  border: var(--bw) solid var(--field-line);
   border-radius: var(--radius);
-  padding: 9px 11px;
+  padding: var(--field-pad-y) var(--field-pad-x);
   background: var(--steel-1);
   color: var(--ink);
   max-width: 420px;
 }
 
 .field input::placeholder {
-  color: #8a94a1;
+  color: var(--muted);
 }
 
 .form {
@@ -683,7 +1025,7 @@ select:focus-visible {
 .filters-count {
   font-size: 12px;
   font-weight: 500;
-  color: #ffffff;
+  color: var(--on-signal);
   background: var(--signal);
   border-radius: var(--radius-small);
   padding: 0 5px;
@@ -724,7 +1066,7 @@ select:focus-visible {
 }
 
 .ledger-row:hover {
-  background: #f8f9fb;
+  background: var(--steel-2);
 }
 
 .ledger-meta {
@@ -783,6 +1125,18 @@ select:focus-visible {
   color: var(--signal-2);
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.link-button:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: var(--radius-small);
+}
+
+.crumb:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: var(--radius-small);
 }
 
 /* Status: a dot plus a word — never colour alone. */
@@ -851,14 +1205,14 @@ select:focus-visible {
   top: calc(100% + 4px);
   min-width: 208px;
   background: var(--steel-1);
-  border: 1px solid var(--line-2);
+  border: var(--bw) solid var(--line-2);
   border-radius: var(--radius);
-  box-shadow: 0 10px 26px rgba(20, 24, 31, 0.16);
+  box-shadow: var(--shadow-2);
   padding: 4px;
-  z-index: 50;
+  z-index: var(--z-menu);
   display: flex;
   flex-direction: column;
-  animation: menu-in 130ms ease-out;
+  animation: menu-in 130ms var(--ease-out);
   transform-origin: top right;
 }
 
@@ -935,12 +1289,12 @@ select:focus-visible {
 .drop-overlay {
   position: fixed;
   inset: 12px 12px 12px calc(var(--side-w) + 12px);
-  z-index: 60;
+  z-index: var(--z-toast);
   display: grid;
   place-items: center;
-  border: 2px dashed var(--signal);
+  border: var(--bw-strong) dashed var(--signal);
   border-radius: 16px;
-  background: rgba(251, 241, 224, 0.92);
+  background: var(--signal-soft);
   pointer-events: none;
 }
 
@@ -964,12 +1318,12 @@ select:focus-visible {
   position: fixed;
   right: 16px;
   /* Top right, under the top bar: the bottom right belongs to the upload tray. */
-  top: calc(var(--band-h) + 12px);
+  top: calc(var(--band-h) + var(--space-3));
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   max-width: min(380px, calc(100vw - 32px));
-  z-index: 60;
+  z-index: var(--z-toast);
   /* The stack itself never takes clicks; only the toasts inside do. */
   pointer-events: none;
 }
@@ -984,15 +1338,15 @@ select:focus-visible {
   gap: 10px;
   padding: 10px 12px;
   border-radius: var(--radius);
-  border: 1px solid var(--line-2);
+  border: var(--bw) solid var(--line-2);
   border-left: 3px solid var(--muted);
   background: var(--steel-1);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  box-shadow: var(--shadow-toast);
   opacity: 0;
   transform: translateY(8px);
   transition:
-    opacity 160ms ease-out,
-    transform 160ms ease-out;
+    opacity var(--dur-slow) var(--ease-std),
+    transform var(--dur-slow) var(--ease-std);
 }
 
 .toast-in {
@@ -1089,13 +1443,26 @@ select:focus-visible {
   position: fixed;
   right: 20px;
   bottom: 20px;
-  z-index: 50;
+  z-index: var(--z-menu);
   width: min(420px, calc(100vw - 40px));
   background: var(--steel-1);
-  border: 1px solid var(--line);
+  border: var(--bw) solid var(--line);
   border-radius: 14px;
-  box-shadow: 0 12px 32px rgba(15, 21, 29, 0.18);
+  box-shadow: var(--shadow-tray);
   overflow: hidden;
+}
+
+.tray-progress {
+  padding: 4px 16px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tray-progress-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .tray-head {
@@ -1309,6 +1676,33 @@ p .chip {
   margin-left: auto;
 }
 
+.alert-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-color: var(--warn-bg);
+  border-left-color: var(--warn);
+}
+
+.resume-banner {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.resume-banner p {
+  margin: 0;
+}
+
+.resume-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resume-actions .btn {
+  margin-left: 0;
+}
+
 .empty {
   padding: 22px 4px;
   color: var(--muted);
@@ -1332,11 +1726,11 @@ p .chip {
 /* Dialog and details drawer.                                         */
 /* ------------------------------------------------------------------ */
 .dialog {
-  border: 1px solid var(--graphite-3);
+  border: var(--bw) solid var(--graphite-3);
   border-radius: var(--radius);
   padding: 0;
   width: min(520px, 92vw);
-  box-shadow: 0 20px 50px rgba(20, 24, 31, 0.3);
+  box-shadow: var(--shadow-3);
   color: var(--ink);
 }
 
@@ -1373,48 +1767,42 @@ p .chip {
   margin-top: 18px;
 }
 
-/* Inline preview: media is rendered from the presigned URL, kept on-screen. */
-.preview-dialog {
-  width: min(860px, 94vw);
-}
-
-.preview-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.preview-media {
-  display: block;
-  width: 100%;
-  max-height: 70vh;
-  object-fit: contain;
-  background: var(--steel-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-small);
-}
-
-.preview-audio {
-  width: 100%;
-}
-
-.preview-frame {
-  width: 100%;
-  height: 70vh;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-small);
-  background: var(--steel-2);
-}
-
-.preview-fallback {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.preview-warn {
+/* Keyboard legend: a compact definition list, keycaps on the left. */
+.shortcut-list {
   margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.shortcut-list > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+}
+
+.shortcut-list dt,
+.shortcut-list dd {
+  margin: 0;
+}
+
+.shortcut-list dd {
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.shortcut-list kbd {
+  display: inline-block;
+  min-width: 28px;
+  padding: 2px 7px;
+  border: var(--bw) solid var(--line-2);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-small);
+  background: var(--steel-1);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
 }
 
 .move-list {
@@ -1432,7 +1820,7 @@ p .chip {
   position: fixed;
   inset: 0;
   background: rgba(20, 24, 31, 0.32);
-  z-index: 55;
+  z-index: var(--z-drawer);
 }
 
 .drawer {
@@ -1442,11 +1830,11 @@ p .chip {
   height: 100vh;
   width: min(440px, 92vw);
   background: var(--steel-1);
-  border-left: 1px solid var(--graphite-3);
+  border-left: var(--bw) solid var(--graphite-3);
   padding: 20px 22px 40px;
   overflow-y: auto;
-  z-index: 60;
-  animation: drawer-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: var(--z-drawer);
+  animation: drawer-in 220ms var(--ease-press);
 }
 
 .drawer-head {
@@ -2004,6 +2392,139 @@ p .chip {
 }
 
 /* ------------------------------------------------------------------ */
+/* Thème manuel (override de la préférence système).                  */
+/* ------------------------------------------------------------------ */
+:root[data-theme="dark"] {
+  --side: #0a0e14;
+  --side-2: #141a22;
+  --side-3: #1c2430;
+  --side-ink: #d5dbe3;
+  --side-muted: #8e99a8;
+
+  --steel-0: #0f1419;
+  --steel-1: #1a2028;
+  --steel-2: #222a34;
+  --steel-3: #2a3442;
+
+  --ink: #e8ecf2;
+  --ink-2: #b8c1cd;
+  --muted: #8e99a8;
+  --faint: #6b7480;
+
+  --line: #2a3442;
+  --line-2: #3a4654;
+  --field-line: #4a5664;
+
+  --signal: #c48a2a;
+  --signal-2: #d99a34;
+  --signal-soft: #2a1f0a;
+  --signal-line: #4a3a1a;
+  --signal-bright: #e0a33a;
+  --on-signal: #10151d;
+  --on-danger: #10151d;
+
+  --ok: #4ade80;
+  --ok-bg: #0a2a14;
+  --run: #60a5fa;
+  --run-bg: #0a1a2a;
+  --warn: #fb923c;
+  --warn-bg: #2a1508;
+  --danger: #f87171;
+  --danger-bg: #2a0a0a;
+  --danger-strong: #dc2626;
+}
+
+/* ------------------------------------------------------------------ */
+/* Dark mode : respecte les preferences systeme.                      */
+/* ------------------------------------------------------------------ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --side: #0a0e14;
+    --side-2: #141a22;
+    --side-3: #1c2430;
+    --side-ink: #d5dbe3;
+    --side-muted: #8e99a8;
+
+    --steel-0: #0f1419;
+    --steel-1: #1a2028;
+    --steel-2: #222a34;
+    --steel-3: #2a3442;
+
+    --ink: #e8ecf2;
+    --ink-2: #b8c1cd;
+    --muted: #8e99a8;
+    --faint: #6b7480;
+
+    --line: #2a3442;
+    --line-2: #3a4654;
+    --field-line: #4a5664;
+
+    --signal: #c48a2a;
+    --signal-2: #d99a34;
+    --signal-soft: #2a1f0a;
+    --signal-line: #4a3a1a;
+    --signal-bright: #e0a33a;
+    --on-signal: #10151d;
+    --on-danger: #10151d;
+
+    --ok: #4ade80;
+    --ok-bg: #0a2a14;
+    --run: #60a5fa;
+    --run-bg: #0a1a2a;
+    --warn: #fb923c;
+    --warn-bg: #2a1508;
+    --danger: #f87171;
+    --danger-bg: #2a0a0a;
+    --danger-strong: #dc2626;
+  }
+
+  body {
+    background: var(--steel-0);
+    color: var(--ink);
+  }
+
+  .topbar {
+    background: var(--steel-1);
+    border-bottom-color: var(--line);
+  }
+
+  .dialog::backdrop {
+    background: rgba(0, 0, 0, 0.6);
+  }
+
+  .toast {
+    background: var(--steel-1);
+    border-color: var(--line-2);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Tablette : sidebar réduite aux icônes (760–1024px).               */
+/* ------------------------------------------------------------------ */
+@media (min-width: 761px) and (max-width: 1024px) {
+  .sidebar {
+    width: 64px;
+  }
+  .brand span,
+  .nav a {
+    font-size: 0;
+  }
+  .nav a {
+    justify-content: center;
+    padding: 10px;
+  }
+  .nav a svg {
+    margin: 0;
+  }
+  .sidebar-foot {
+    display: none;
+  }
+  .sidebar-section .section-title {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Narrow screens: the rail becomes a shelf, rows stack.              */
 /* ------------------------------------------------------------------ */
 @media (max-width: 760px) {
@@ -2128,10 +2649,6 @@ p .chip {
   .dialog-body {
     padding-left: 15px;
     padding-right: 15px;
-  }
-
-  .preview-frame {
-    height: 60vh;
   }
 
   .row-actions {
@@ -2265,486 +2782,164 @@ p .chip {
   justify-content: flex-end;
 }
 
-/* ==================================================================== */
-/* Vault explorer polish (S16) — append-only, scoped to .vault-* rules.  */
-/* Behaviour is untouched: this block only dresses the existing DOM.     */
-/* Colours come from the shared tokens (vault-tokens.css + :root): the   */
-/* existing hue (graphite rail, steel surfaces, amber signal) is kept.   */
-/* ==================================================================== */
+/* --- Inline preview --- */
+.preview-dialog {
+  width: min(900px, 96vw);
+}
 
-/* --- Top band: breadcrumb, title and messages share one full-width row. --- */
-.vault-workspace > .vault-top {
-  grid-column: 1 / -1;
-  grid-row: 1;
+.preview-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-width: 0;
+  max-height: 80vh;
+  overflow: auto;
 }
 
-/* --- Page title block: larger, bolder, with a one-line lede. --- */
-.vault-page-head {
-  align-items: flex-start;
-  gap: 16px;
-}
-
-.vault-page-title {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.vault-workspace .vault-page-title h1 {
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
-}
-
-.vault-subtitle {
-  margin: 0;
-  font-size: 13.5px;
-  color: var(--muted);
-  max-width: 64ch;
-}
-
-/* --- Breadcrumb: home mark, then the path. --- */
-.vault-breadcrumb {
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  gap: 6px;
-  margin: 0;
-}
-
-.vault-crumb {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border-radius: var(--vault-radius-sm);
-  color: var(--muted);
-}
-
-.vault-crumb:hover {
-  background: var(--steel-2);
-  color: var(--ink);
-}
-
-.vault-crumb-current {
-  color: var(--vault-ink);
-  font-weight: 600;
-  cursor: default;
-}
-
-.vault-crumb-current:hover {
-  background: none;
-}
-
-.vault-home-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--vault-accent);
-}
-
-.vault-crumb-current .vault-home-icon {
-  color: var(--vault-accent);
-}
-
-.vault-breadcrumb .crumb-sep {
-  color: var(--faint);
-}
-
-/* --- Header actions: the overflow menu reads as a peer of the buttons. --- */
-.vault-head-actions {
-  align-items: center;
-  gap: 8px;
-}
-
-.vault-head-actions .menu-trigger {
-  border: 1px solid var(--line-2);
-  background: var(--steel-1);
-  color: var(--ink-2);
-  font-size: 18px;
-  line-height: 1;
-  padding: 6px 12px;
-  border-radius: var(--vault-radius-sm);
-}
-
-.vault-head-actions .menu-trigger:hover,
-.vault-head-actions .menu-trigger[aria-expanded="true"] {
-  background: var(--steel-2);
-  color: var(--ink);
-}
-
-.vault-btn-refresh,
-.vault-btn-folder {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.vault-refresh-icon,
-.vault-btn-icon,
-.vault-btn-caret {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-}
-
-.vault-btn-caret {
-  font-size: 10px;
-  color: var(--muted);
-}
-
-/* --- Import dropzone: dashed frame, cloud mark, explicit drop states. --- */
-.vault-workspace > .vault-dropzone {
-  border: 1px dashed var(--line-2);
-  border-radius: var(--vault-radius-lg);
-  background: var(--steel-1);
-  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
-}
-
-.vault-workspace > .vault-dropzone:hover {
-  border-color: var(--signal-line);
-}
-
-.vault-dropzone-main {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-}
-
-.vault-cloud-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--vault-accent);
-  background: var(--steel-2);
-  border-radius: 50%;
-  padding: 10px;
-}
-
-.vault-dropzone-text {
-  min-width: 0;
-}
-
-.vault-dropzone-title {
-  margin: 0;
-  font-family: var(--font-ui);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--ink);
-}
-
-.vault-dropzone-lead {
-  margin: 4px 0 0;
-  font-size: 13.5px;
-  color: var(--ink-2);
-}
-
-/* Dropping a payload over the zone: unmistakable accent frame. */
-.vault-workspace > .vault-dropzone.drop-active {
-  border-color: var(--vault-accent);
-  border-style: dashed;
-  background: var(--signal-soft);
-  outline: 2px dashed var(--vault-accent);
-  outline-offset: -7px;
-}
-
-/* A refused drop (empty files/folders, wrong payload) colours the zone. */
-.vault-workspace > .vault-dropzone.drop-refused {
-  border-color: var(--danger);
-}
-
-.vault-workspace > .vault-dropzone.drop-refused .vault-cloud-icon {
-  color: var(--danger);
-  background: var(--danger-bg);
-}
-
-/* --- Objects card: title mark, counter and list/grid switch. --- */
-.vault-objects-card {
-  border-radius: var(--vault-radius-lg);
-}
-
-.vault-objects-head {
-  align-items: center;
-}
-
-.vault-card-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.vault-card-title-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--muted);
-}
-
-.vault-objects-tools {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.vault-counter {
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.vault-view-toggle {
-  display: inline-flex;
-  border: 1px solid var(--line-2);
-  border-radius: var(--vault-radius-sm);
-  overflow: hidden;
-  background: var(--steel-1);
-}
-
-.vault-view-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 9px;
-  border: none;
-  background: none;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.vault-view-btn + .vault-view-btn {
-  border-left: 1px solid var(--line-2);
-}
-
-.vault-view-btn:hover {
-  color: var(--ink);
-  background: var(--steel-2);
-}
-
-.vault-view-btn-active,
-.vault-view-btn-active:hover {
-  color: var(--vault-ink);
-  background: var(--steel-2);
-}
-
-/* --- Filters: search with a leading glyph; toolbar wraps before it crowds. --- */
-.vault-filters {
-  align-items: flex-end;
-  gap: 10px;
-}
-
-.vault-search-field {
-  position: relative;
-}
-
-.vault-search-field .vault-search-icon {
-  position: absolute;
-  left: 9px;
-  bottom: 9px;
-  display: inline-flex;
-  color: var(--faint);
-  pointer-events: none;
-}
-
-.vault-search-field input {
-  padding-left: 30px;
-}
-
-/* --- Register: plate header, tabular figures, soft type badges. --- */
-.vault-workspace .ledger-head {
-  font-size: 11px;
-}
-
-.ledger-type.vault-badge-type {
-  justify-self: start;
-  width: fit-content;
-  padding: 2px 8px;
-  color: var(--vault-blue);
-  background: var(--vault-blue-soft);
-  border-radius: var(--vault-radius-sm);
-}
-
-.vault-workspace .ledger-size {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
-}
-
-.vault-workspace .ledger-date {
-  font-variant-numeric: tabular-nums;
-}
-
-/* --- Grid view: the same rows, laid out as touch-friendly cards. --- */
-.ledger.vault-view-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 12px;
-}
-
-.ledger.vault-view-grid .ledger-head {
-  display: none;
-}
-
-.ledger.vault-view-grid .ledger-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "name menu"
-    "meta meta";
-  gap: 8px;
-  align-items: start;
-  border: 1px solid var(--line);
-  border-left-width: 3px;
-  border-radius: var(--vault-radius-md);
-  padding: 12px;
-}
-
-.ledger.vault-view-grid .ledger-name {
-  grid-area: name;
-}
-
-.ledger.vault-view-grid .ledger-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  grid-area: meta;
-}
-
-.ledger.vault-view-grid .ledger-menu {
-  grid-area: menu;
-}
-
-.ledger.vault-view-grid .ledger-size {
-  text-align: left;
-}
-
-/* --- Messages and progress: shared tokens, never colour alone. --- */
-.vault-workspace .alert {
-  border-radius: var(--vault-radius-sm);
-}
-
-.vault-workspace .alert:not(.alert-ok):not(.alert-error) {
-  background: var(--vault-blue-soft);
-  color: var(--vault-blue);
-  border-color: var(--vault-blue-soft);
-  border-left-color: var(--vault-blue);
-}
-
-.vault-workspace .progress {
-  height: 5px;
-  border-radius: 999px;
-  background: var(--steel-2);
-}
-
-.vault-workspace .progress-bar {
-  border-radius: 999px;
-  background: var(--vault-accent);
-}
-
-/* --- Focus stays visible through the new controls. --- */
-.vault-workspace :is(button, a, input, select, [tabindex]):focus-visible {
-  outline: 2px solid var(--signal);
-  outline-offset: 2px;
-}
-
-/* --- No horizontal scroll from the workspace grid. --- */
-.vault-workspace {
+.preview-media {
   max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  align-self: center;
 }
 
-.vault-objects-card,
-.vault-workspace .ledger {
-  min-width: 0;
+.preview-audio {
+  width: 100%;
 }
 
-/* --- Toolbar wraps to multiple lines before 1280px. --- */
-@media (max-width: 1279px) {
-  .vault-filters,
-  .vault-head-actions,
-  .vault-objects-tools {
-    flex-wrap: wrap;
+.preview-frame {
+  width: 100%;
+  height: 70vh;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.preview-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* --- Waiting states ------------------------------------------------------ */
+/* Inline spinner for buttons and status lines; stops for reduced motion. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
-/* --- 1001–1279px: the register's fixed column gates no longer fit the
-   half-width column of the two-column workspace, so a last cell would spill
-   past the viewport. Hand the register the full width; the rail and the
-   dropzone keep sharing the row above. Below 1000px the layout is already
-   single-column (see the base stylesheet), so DOM order is left untouched. --- */
-@media (min-width: 1001px) and (max-width: 1279px) {
-  .vault-workspace > .section[aria-labelledby="objects-title"] {
-    grid-column: 1 / -1;
-    grid-row: 3;
-    margin-left: 0;
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
   }
 }
 
-/* --- Phones: rows become compact touch cards (~44px), grid folds to one column. --- */
-@media (max-width: 768px) {
-  .vault-workspace .ledger-head {
-    display: none;
-  }
+/* --- Master mode --------------------------------------------------------- */
+.master-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-small);
+  background: var(--danger);
+  color: var(--on-danger);
+  font-size: 13.5px;
+}
 
-  .vault-workspace .ledger-row {
-    grid-template-columns: minmax(0, 1fr) 44px;
-    grid-template-areas:
-      "name menu"
-      "meta meta";
-    row-gap: 6px;
-    align-items: start;
-    padding: 12px 6px;
-  }
+.master-banner .btn {
+  background: #fff;
+  color: var(--danger-strong);
+  border-color: #fff;
+}
+.plain-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 13.5px;
+}
 
-  .vault-workspace .ledger-name {
-    grid-area: name;
-    min-height: 44px;
-    display: flex;
-    align-items: center;
-  }
+.loading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding: 10px 2px;
+  color: var(--muted);
+  font-size: 13.5px;
+}
 
-  .vault-workspace .ledger-meta {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 10px 12px;
-    grid-area: meta;
-  }
+.loading-slow {
+  flex-basis: 100%;
+  padding-left: 20px;
+  font-size: 12.5px;
+  animation: fade-in 0.3s ease-out;
+}
 
-  .vault-workspace .ledger-menu {
-    grid-area: menu;
-  }
+.load-error {
+  flex-wrap: wrap;
+}
 
-  .vault-workspace .ledger-size {
-    text-align: left;
+@keyframes fade-in {
+  from {
+    opacity: 0;
   }
+}
 
-  .vault-workspace .ledger-date {
-    flex-basis: 100%;
+/* ------------------------------------------------------------------ */
+/* Contraste élevé : bordures plus marquées pour les utilisateurs       */
+/* qui demandent plus de contraste (prefers-contrast: more).           */
+/* ------------------------------------------------------------------ */
+@media (prefers-contrast: more) {
+  :root {
+    --line: #9aa3af;
+    --line-2: #7a8390;
+    --field-line: #5b6472;
   }
+  .btn, input, select, textarea {
+    border-width: 2px;
+  }
+}
 
-  .vault-workspace .menu-trigger {
-    min-width: 44px;
-    min-height: 44px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
+/* Skip link (accessibilité clavier). */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 8px;
+  z-index: var(--z-toast);
+  padding: 8px 12px;
+  background: var(--signal);
+  color: var(--on-signal);
+  border-radius: var(--radius-small);
+  font-weight: var(--fw-semibold);
+  text-decoration: none;
+  transition: top var(--dur-fast) var(--ease-out);
+}
+.skip-link:focus {
+  top: 8px;
+}
 
-  .vault-head-actions .btn,
-  .vault-head-actions .menu-trigger,
-  .vault-filters .field input,
-  .vault-filters .field select,
-  .vault-filters .field button {
-    min-height: 44px;
-  }
-
-  .vault-dropzone-main {
-    flex-direction: column;
-  }
-
-  .ledger.vault-view-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* Densité compacte : réduit les paddings des lignes de registre. */
+body.density-compact .ledger-row {
+  padding: 6px 10px;
+}
+body.density-compact .nav a {
+  padding: 6px 10px;
 }

@@ -9,7 +9,10 @@ import { AuthProvider, RequireAuth } from "./lib/auth";
 import { FolderProvider } from "./lib/folderContext";
 import { LoginPage } from "./pages/LoginPage";
 import { ObjectsPage } from "./pages/ObjectsPage";
-import { AdminPage } from "./pages/AdminPage";
+import { lazy, Suspense } from "react";
+import { Loading } from "./components/Loading";
+
+const AdminPage = lazy(() => import("./pages/AdminPage").then((m) => ({ default: m.AdminPage })));
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -45,7 +48,9 @@ const adminRoute = createRoute({
   component: () => (
     <Layout>
       <RequireAuth>
-        <AdminPage />
+        <Suspense fallback={<Loading label="Chargement de l'administration" />}>
+          <AdminPage />
+        </Suspense>
       </RequireAuth>
     </Layout>
   ),

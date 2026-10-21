@@ -5,6 +5,9 @@
 
 pytest==9.1.1
 httpx==0.28.1
+# Test-only: the per-test timeout the CI job passes (--timeout=45). Without it
+# pytest rejects the flag and the whole suite aborts before running.
+pytest-timeout==2.4.0
 # Test-only: parse docs/openapi.yaml in tests/test_openapi_contract.py (#41).
 pyyaml==6.0.3
 # Test-only: full OpenAPI 3.1 schema validation of docs/openapi.yaml. Catches

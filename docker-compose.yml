@@ -251,17 +251,39 @@ services:
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
       AURA_COOKIE_SECURE: "1"
-      # Human session cookie lifetime (seconds): 8h. Deliberately tighter than the
-      # 90-day value previously pinned on main (deploy/session-90d): a long-lived
-      # cookie widens the theft window for an Internet-facing app. Operators can
-      # still raise it in .env (e.g. 2592000 = 30 days) if a longer session is
-      # required; the expiry is fixed at login (no renewal).
-      AURA_SESSION_TTL: ${AURA_SESSION_TTL:-28800}
-      # Persistent audit log (JSONL) stored on the api-audit volume below, so the
-      # trail survives container recreation and the 90-day retention promise
-      # holds. `api/config.py` defaults to a relative path for dev runs; the
-      # Compose stack pins this absolute one.
+      # Human session cookie lifetime (seconds): 90 days. Pinned here so the
+      # deployed stack matches the documented default (api/config.py). Override
+      # in .env only deliberately; the expiry is fixed at login (no renewal).
+      AURA_SESSION_TTL: "7776000"
+      # Audit trail on a named volume: it must survive image rebuilds and
+      # container recreation (the default path is inside the container).
       AURA_AUDIT_LOG: /var/lib/aura/audit/aura-audit.jsonl
+      # Multipart upload (#72): off until the compatibility gate in
+      # docs/MULTIPART-UPLOAD-PLAN.md passes on the pinned SeaweedFS image.
+      AURA_MULTIPART_ENABLED: ${AURA_MULTIPART_ENABLED:-0}
+      AURA_MULTIPART_THRESHOLD_BYTES: ${AURA_MULTIPART_THRESHOLD_BYTES:-104857600}
+      AURA_MULTIPART_PART_BYTES: ${AURA_MULTIPART_PART_BYTES:-16777216}
+      AURA_MULTIPART_MAX_OBJECT_BYTES: ${AURA_MULTIPART_MAX_OBJECT_BYTES:-1099511627776}
+      AURA_MULTIPART_SESSION_TTL: ${AURA_MULTIPART_SESSION_TTL:-604800}
+      # Asynchronous integrity check (N5): objects at or above the threshold are
+      # hashed by a worker thread in this container, outside the commit request.
+      AURA_VERIFY_ASYNC_THRESHOLD_BYTES: ${AURA_VERIFY_ASYNC_THRESHOLD_BYTES:-268435456}
+      AURA_VERIFY_WORKER: ${AURA_VERIFY_WORKER:-inline}
+      # Master mode: password-confirmed elevation for bulk purges (seconds) and
+      # the most objects one bulk call may purge.
+      AURA_MASTER_MODE_SECONDS: ${AURA_MASTER_MODE_SECONDS:-900}
+      AURA_MASTER_BULK_MAX: ${AURA_MASTER_BULK_MAX:-500}
+      # Capacity guard: usable object-store bytes (0 = off) and the fill level
+      # (%) above which new uploads are refused with 507.
+      AURA_STORAGE_CAPACITY_BYTES: ${AURA_STORAGE_CAPACITY_BYTES:-0}
+      AURA_STORAGE_HIGH_WATERMARK: ${AURA_STORAGE_HIGH_WATERMARK:-90}
+      # Periodic integrity scrub (api/scrubber.py): read-only re-hash of stored
+      # objects, at least once per interval, within a byte budget per hour.
+      AURA_SCRUB_ENABLED: ${AURA_SCRUB_ENABLED:-1}
+      AURA_SCRUB_INTERVAL_DAYS: ${AURA_SCRUB_INTERVAL_DAYS:-30}
+      AURA_SCRUB_BYTES_PER_RUN: ${AURA_SCRUB_BYTES_PER_RUN:-10737418240}
+      # Storage orphans: bytes younger than this are never reported or removed.
+      AURA_ORPHAN_GRACE_SECONDS: ${AURA_ORPHAN_GRACE_SECONDS:-86400}
       # Remaining tunables read by api/config.py (defaults are its exact
       # defaults). Uncomment/override any of them in .env as needed.
       AURA_API_DB: ${AURA_API_DB:-aura-catalogue.db}
@@ -286,6 +308,16 @@ services:
       AURA_TRUSTED_PROXIES: ${AURA_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       AURA_MAX_OBJECT_BYTES: ${AURA_MAX_OBJECT_BYTES:-5368709120}
       AURA_COMMIT_CHUNK_BYTES: ${AURA_COMMIT_CHUNK_BYTES:-1048576}
+      # Commit deadline (#120). Must stay below the app proxy's read timeout
+      # for the commit route (app/nginx.conf, 310 s) so the API's structured
+      # 504 reaches the client; change both together.
+      AURA_COMMIT_DEADLINE_S: ${AURA_COMMIT_DEADLINE_S:-300}
+      # Automatic reconciliation sweep (#144): stale intents and half-done
+      # purges are cleaned without an operator.
+      AURA_RECONCILE_ENABLED: ${AURA_RECONCILE_ENABLED:-1}
+      AURA_RECONCILE_INTERVAL_SECONDS: ${AURA_RECONCILE_INTERVAL_SECONDS:-300}
+      AURA_RECONCILE_LIMIT: ${AURA_RECONCILE_LIMIT:-500}
+      AURA_RECONCILE_EXTRA_GRACE_SECONDS: ${AURA_RECONCILE_EXTRA_GRACE_SECONDS:-3600}
       AURA_MAX_PENDING_INTENTS: ${AURA_MAX_PENDING_INTENTS:-100}
       AURA_ALLOW_EMPTY_OBJECTS: ${AURA_ALLOW_EMPTY_OBJECTS:-0}
       AURA_ALLOWED_CONTENT_TYPES: "${AURA_ALLOWED_CONTENT_TYPES:-}"
@@ -297,10 +329,7 @@ services:
       # CORS at all. Browser uploads go straight to SeaweedFS via presigned URLs,
       # so any CORS belongs to the SeaweedFS S3 gateway.
     volumes:
-      # The audit trail lives outside the container layer (named volume), so it
-      # survives recreation and upgrades. Bounded by AURA_AUDIT_RETENTION_DAYS;
-      # never mount this into another service.
-      - api-audit:/var/lib/aura/audit
+      - audit-log:/var/lib/aura/audit
     networks:
       - storage
       # `docs` is a dedicated internal network shared with Traefik only. It lets
@@ -482,4 +511,4 @@ networks:
 volumes:
   traefik-acme:
   pgdata:
-  api-audit:
+  audit-log:

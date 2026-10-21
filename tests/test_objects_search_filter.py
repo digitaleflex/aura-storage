@@ -329,6 +329,10 @@ def test_query_vocabulary_matches_the_repository():
     # drift. ``aborted`` is written by the abort endpoint (api/main.py) and defined by
     # api/transfer.py, so both must carry it. Comparing against the route Literal
     # itself (not a hard-coded set) makes a route↔builder divergence actually fail.
+    assert set(OBJECT_STATUSES) == {
+        "pending", "verifying", "available", "deleted", "expired", "failed", "aborted",
+        "purging",
+    }
     assert set(OBJECT_STATUSES) == set(main.ObjectStatus.__args__)
     assert set(SORT_COLUMNS) == {"created_at", "display_name", "size_bytes"}
 

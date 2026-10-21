@@ -53,6 +53,7 @@ class Settings:
     # Grace period after intent_ttl during which a commit is still accepted
     # (upload may finish just before expiry; #37).
     intent_grace_s: int = _int("AURA_INTENT_GRACE_SECONDS", 300)
+    replay_refresh_margin_s: int = _int("AURA_REPLAY_REFRESH_MARGIN_SECONDS", 60)
     # Public share links (api/shares.py). A share is an unauthenticated,
     # revocable read-only capability for one object: the token is stored as a
     # SHA-256 fingerprint and redeemed through a 302 to a presigned URL.
@@ -80,6 +81,8 @@ class Settings:
     login_rate_window: int = _int("AURA_LOGIN_RATE_WINDOW", 60)
     # Machine-to-machine authentication failure rate limit (per client IP; #38).
     m2m_rate_limit: int = _int("AURA_M2M_RATE_LIMIT", 60)
+    quota_bytes_per_day: int = _int("AURA_QUOTA_BYTES_PER_DAY", 0)
+    quota_files_per_day: int = _int("AURA_QUOTA_FILES_PER_DAY", 0)
     m2m_rate_window: int = _int("AURA_M2M_RATE_WINDOW", 60)
     # Reverse proxies trusted to set X-Forwarded-For when resolving the client
     # IP for the rate limiters (#35/#38). Comma-separated IPs or CIDRs; defaults
@@ -99,8 +102,76 @@ class Settings:
     # or below the S3 backend's single-PUT limit (SeaweedFS/AWS: 5 GiB) until the
     # multipart workflow is implemented and compatibility-tested; see
     # docs/TRANSFER-ENGINE.md. The default equals that limit on purpose.
-    max_object_bytes: int = _int("AURA_MAX_OBJECT_BYTES", 50 * 1024 * 1024 * 1024)
+    max_object_bytes: int = _int("AURA_MAX_OBJECT_BYTES", 5 * 1024 * 1024 * 1024)
+    # Multipart upload (#72). Off by default until the compatibility gate in
+    # docs/MULTIPART-UPLOAD-PLAN.md is recorded on the pinned SeaweedFS image.
+    # When on, files at or above the threshold are sent as independently
+    # retried parts and may exceed ``max_object_bytes`` up to the multipart cap.
+    multipart_enabled: bool = os.environ.get("AURA_MULTIPART_ENABLED", "0") == "1"
+    multipart_threshold_bytes: int = _int("AURA_MULTIPART_THRESHOLD_BYTES", 100 * 1024 * 1024)
+    # Each part is one request through the edge proxy: keep part / slowest
+    # supported rate well under Traefik's readTimeout (see the plan).
+    multipart_part_bytes: int = _int("AURA_MULTIPART_PART_BYTES", 16 * 1024 * 1024)
+    multipart_max_object_bytes: int = _int(
+        "AURA_MULTIPART_MAX_OBJECT_BYTES", 1024 * 1024 * 1024 * 1024
+    )
+    # A multipart session outlives a single-PUT intent: a large upload may be
+    # paused (reload, sleep, network loss) and resumed within this window.
+    multipart_session_ttl: int = _int("AURA_MULTIPART_SESSION_TTL", 7 * 24 * 3600)
+    # Asynchronous integrity check (N5). At or above this size, commit answers
+    # 202 'verifying' and a worker hashes the object outside the request.
+    verify_async_threshold_bytes: int = _int(
+        "AURA_VERIFY_ASYNC_THRESHOLD_BYTES", 256 * 1024 * 1024
+    )
+    # "inline": a worker thread inside the API process (default). "off": run
+    # `python -m api.verifier` as its own process instead.
+    verify_worker: str = os.environ.get("AURA_VERIFY_WORKER", "inline")
+    verify_lease_s: int = _int("AURA_VERIFY_LEASE_SECONDS", 300)
+    verify_heartbeat_bytes: int = _int("AURA_VERIFY_HEARTBEAT_BYTES", 256 * 1024 * 1024)
+    verify_max_attempts: int = _int("AURA_VERIFY_MAX_ATTEMPTS", 8)
+    verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
+    # Hard deadline for a single commit response (seconds). Objects above the
+    # async threshold return 202 quickly; this guards the synchronous path.
+    commit_deadline_s: int = _int("AURA_COMMIT_DEADLINE_SECONDS", 300)
+    av_scan_cmd: str = os.environ.get("AURA_AV_SCAN_CMD", "")
+    # Master mode: how long a password-confirmed elevation for bulk purges
+    # lasts on one session (seconds), and the most objects one call may purge.
+    master_mode_ttl: int = _int("AURA_MASTER_MODE_SECONDS", 900)
+    master_bulk_max: int = _int("AURA_MASTER_BULK_MAX", 500)
+    # Capacity guard: the usable object-store capacity in bytes (0 = off) and
+    # the fill level, in percent, above which new uploads are refused (507).
+    # Every upload reserves its declared size from the moment its intent is
+    # issued, so concurrent imports cannot overfill the single disk.
+    storage_capacity_bytes: int = _int("AURA_STORAGE_CAPACITY_BYTES", 0)
+    storage_high_watermark_pct: int = _int("AURA_STORAGE_HIGH_WATERMARK", 90)
+    # Periodic integrity scrub (api/scrubber.py): every available object is
+    # re-hashed at least once per interval, oldest check first, within a byte
+    # budget per run so the disk is never saturated. Read-only: it reports,
+    # it never deletes or rewrites.
+    scrub_enabled: bool = os.environ.get("AURA_SCRUB_ENABLED", "1") == "1"
+    scrub_interval_days: int = _int("AURA_SCRUB_INTERVAL_DAYS", 30)
+    scrub_bytes_per_run: int = _int("AURA_SCRUB_BYTES_PER_RUN", 10 * 1024 ** 3)
+    scrub_period_s: int = _int("AURA_SCRUB_PERIOD_SECONDS", 3600)
+    # Storage orphans (api/storage_reconcile.py): bytes younger than this are
+    # never reported or removed, so an upload in flight is never mistaken for one.
+    orphan_grace_s: int = _int("AURA_ORPHAN_GRACE_SECONDS", 86400)
+    # Automatic reconciliation sweep (#144). The sweep existed only as an
+    # admin route nothing called; it now runs on its own, like the verifier
+    # and the scrubber. ``reconcile_extra_grace_s`` is the safety margin the
+    # automatic sweep adds on top of the intent life (intent_ttl +
+    # intent_grace_s): a slow upload in progress must never lose its bytes to
+    # a sweep, so the automatic window is wider than the manual route's.
+    reconcile_enabled: bool = os.environ.get("AURA_RECONCILE_ENABLED", "1") == "1"
+    reconcile_interval_s: int = _int("AURA_RECONCILE_INTERVAL_S", 300)
+    reconcile_limit: int = _int("AURA_RECONCILE_LIMIT", 500)
+    reconcile_extra_grace_s: int = _int("AURA_RECONCILE_EXTRA_GRACE_SECONDS", 3600)
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
+    # Global deadline for one commit request (hashing phase, #120): past it the
+    # intent is marked failed and the client gets 504 instead of an unbounded
+    # wait. Must stay *below* the app proxy's read timeout for the commit route
+    # (app/nginx.conf, 310 s) so the API's structured 504 wins over the proxy's
+    # generic one; change both together.
+    commit_deadline_s: int = _int("AURA_COMMIT_DEADLINE_S", 300)
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
     # Zero-byte objects are refused by default: an empty upload is usually a
     # client bug rather than intent. Enable only when a caller legitimately needs
@@ -145,3 +216,10 @@ if settings.audit_error_scan_lines < 1:
     raise RuntimeError("AURA_AUDIT_ERROR_SCAN_LINES must be >= 1")
 if settings.audit_error_window_s < 0:
     raise RuntimeError("AURA_AUDIT_ERROR_WINDOW_S must be >= 0")
+# A zero/negative commit deadline would fail every commit instead of
+# guarding one (#120), so refuse the process at boot.
+if settings.commit_deadline_s < 1:
+    raise RuntimeError("AURA_COMMIT_DEADLINE_S must be >= 1")
+# A sweep every second would hammer the storage and the catalogue (#144).
+if settings.reconcile_interval_s < 30:
+    raise RuntimeError("AURA_RECONCILE_INTERVAL_S must be >= 30")

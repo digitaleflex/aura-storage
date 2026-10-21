@@ -4,13 +4,19 @@ export interface Toast {
   id: number;
   kind: "ok" | "error" | "info";
   text: string;
+  /** Optional action button (e.g. "Annuler" for undo). */
+  action?: { label: string; onClick: () => void };
 }
 
 let nextToastId = 1;
 
-export function makeToast(kind: Toast["kind"], text: string): Toast {
+export function makeToast(
+  kind: Toast["kind"],
+  text: string,
+  action?: Toast["action"],
+): Toast {
   nextToastId += 1;
-  return { id: nextToastId, kind, text };
+  return { id: nextToastId, kind, text, action };
 }
 
 /** Toast stack (P1.2): feedback where the action happened, not pages away.
@@ -24,7 +30,7 @@ export function ToastStack({
   onDismiss: (id: number) => void;
 }) {
   return (
-    <div className="toasts" role="region" aria-label="Notifications">
+    <div className="toasts" role="region" aria-label="Notifications" aria-live="polite" aria-atomic="false">
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />
       ))}
@@ -57,6 +63,18 @@ function ToastItem({
       className={`toast toast-${toast.kind}${visible ? " toast-in" : ""}`}
     >
       <span className="toast-text">{toast.text}</span>
+      {toast.action ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-small"
+          onClick={() => {
+            toast.action!.onClick();
+            onDismiss(toast.id);
+          }}
+        >
+          {toast.action.label}
+        </button>
+      ) : null}
       <button
         type="button"
         className="btn btn-ghost btn-small"

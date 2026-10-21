@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ApiError } from "../lib/api";
+import { describeError } from "../lib/errors";
 import { useAuth } from "../lib/auth";
 import { VaultMark } from "../components/VaultMark";
 
@@ -33,7 +34,7 @@ export function LoginPage() {
       } else if (err instanceof ApiError && err.status === 429) {
         setError("Trop de tentatives. Patientez une minute puis réessayez.");
       } else {
-        setError("Connexion impossible : service indisponible ou réseau.");
+        setError(describeError(err, "Connexion impossible : service indisponible."));
       }
     } finally {
       setPending(false);
@@ -75,6 +76,7 @@ export function LoginPage() {
               type="text"
               name="username"
               autoComplete="username"
+              autoFocus
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               required
