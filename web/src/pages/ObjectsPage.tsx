@@ -535,13 +535,7 @@ export function ObjectsPage() {
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const uploadStartTimeRef = useRef<number | null>(null);
 
-  // Auto-collapse la tray quand tous les fichiers sont terminés
-  // (desactive pour ne pas masquer le chip SHA-256 verifie)
-  // useEffect(() => {
-  //   if (queue.finished && queue.items.length > 0) {
-  //     setTrayCollapsed(true);
-  //   }
-  // }, [queue.finished, queue.items.length]);
+  // File d'attente automatique : placeholder (defini plus bas apres transferActive)
 
   // Infinite scroll : charger automatiquement quand le bouton "Charger plus" est visible
   // (defini apres objectsQuery pour eviter le TDZ)
@@ -654,6 +648,24 @@ export function ObjectsPage() {
 
   /** True while any file of the queue is transferring (blocks double submit). */
   const transferActive = queue.active > 0;
+
+  // File d'attente automatique : quand le transfert se termine et qu'il y a
+  // des fichiers en attente, les lancer automatiquement.
+  useEffect(() => {
+    if (transferActive) return;
+    if (pendingFiles.length === 0) return;
+    if (!csrf) return;
+    // Petite temporisation pour laisser l'UI se stabiliser
+    const timer = setTimeout(() => {
+      launchQueue(
+        csrf,
+        pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
+      );
+      setPendingFiles([]);
+      setNotice(null);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [transferActive, pendingFiles.length, csrf, currentFolderId]);
 
   // -- Upload journal: resume a long import after a reload --------------------
   const owner = session.data?.id ?? null;
@@ -1238,10 +1250,10 @@ export function ObjectsPage() {
       return;
     }
     if (transferActive) {
-      // A submit can still reach here (e.g. Enter in the form) even though the
-      // button is disabled: say why instead of returning silently.
-      setUploadError(
-        "Un transfert est déjà en cours : attendez sa fin ou annulez-le avant de relancer l'import.",
+      // File d'attente : les fichiers sont mis en attente et seront uploadés
+      // automatiquement quand le transfert en cours se termine.
+      setNotice(
+        `${pendingFiles.length} fichier(s) mis en file d'attente — ils seront uploadés automatiquement à la fin du transfert en cours.`,
       );
       return;
     }
