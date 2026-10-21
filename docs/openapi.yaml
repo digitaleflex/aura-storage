@@ -302,6 +302,7 @@ paths:
                     expires_in: 900
                     expires_at: 1761130500
                     idempotent_replay: false
+        "401": { description: Authentication required }
         "403": { description: Bucket not allowed / not authorised }
         "422": { description: "Invalid request, disallowed content type, or empty/size over the cap" }
         "429": { description: Too many pending uploads }
@@ -325,6 +326,7 @@ paths:
                     size_bytes: 482133
                     checksum_sha256: 9f2c41a7d0b8e6534c1f9a2b7d8e0c3f5a6b9d2e8c1f4a7b0d3e6c9f2a5b8d1e
                     checksum_algorithm: sha256
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not committable (including aborted/expired/deleted) }
         "410": { description: Upload intent expired }
@@ -343,6 +345,7 @@ paths:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: Intent aborted (or already in a terminal pending state) }
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not abortable }
   /api/v1/objects/{oid}:
@@ -353,6 +356,7 @@ paths:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: Object metadata (size_bytes is -1 until verified; expected_size_bytes carries the declared size) }
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
     patch:
       summary: File or unfile an object in a logical folder (objects:write, human only)
@@ -371,6 +375,7 @@ paths:
                 folder_id: { $ref: "#/components/schemas/Uuid4", nullable: true, description: Folder owned by the caller; null unfiles the object (root level) }
       responses:
         "200": { description: Object metadata with its new folder_id }
+        "401": { description: Authentication required }
         "404": { description: Object or target folder not found or not visible }
         "422": { description: "No fields supplied, or malformed folder id" }
     delete:
@@ -380,6 +385,7 @@ paths:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: Object marked deleted }
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not deletable }
   /api/v1/objects/{oid}/download-intent:
@@ -390,6 +396,7 @@ paths:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: "Presigned GET URL plus display_name, content_type, size_bytes and checksum_sha256 for progress/verification display" }
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
   /api/v1/objects/{oid}/preview-intent:
@@ -400,6 +407,7 @@ paths:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: "Presigned GET URL bound to Content-Disposition inline and the object content type, plus display_name, content_type and size_bytes; the client falls back to a download when the type is not renderable" }
+        "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
   /api/v1/objects/{oid}/purge:
@@ -410,6 +418,7 @@ paths:
         - $ref: "#/components/parameters/ObjectId"
       responses:
         "200": { description: Object purged }
+        "401": { description: Authentication required }
         "403": { description: Not authorised }
         "404": { description: Object not found or not visible }
         "502": { description: Storage delete failed; the catalogue reference is kept }
@@ -476,6 +485,7 @@ paths:
         - $ref: "#/components/parameters/FolderId"
       responses:
         "200": { description: Folder metadata }
+        "401": { description: Authentication required }
         "404": { description: Folder not found or not visible }
     patch:
       summary: Rename or move a folder (objects:write, human only)
@@ -495,6 +505,7 @@ paths:
                 parent_id: { $ref: "#/components/schemas/Uuid4", nullable: true }
       responses:
         "200": { description: Folder updated }
+        "401": { description: Authentication required }
         "404": { description: Folder or target parent not found or not visible }
         "409": { description: "Duplicate name, cycle, or depth limit reached" }
         "422": { description: "No fields supplied, or invalid name" }
@@ -505,6 +516,7 @@ paths:
         - $ref: "#/components/parameters/FolderId"
       responses:
         "200": { description: Folder deleted }
+        "401": { description: Authentication required }
         "404": { description: Folder not found or not visible }
         "409": { description: Folder is not empty }
   /api/v1/admin/reconcile:
@@ -518,6 +530,7 @@ paths:
           description: Bounded sweep, oldest first; repeat until expired is 0 (server clamps to 1..5000)
       responses:
         "200": { description: "Reconcile counts (expired, storage_deletes_attempted, storage_failures); failed storage deletes keep the intent pending" }
+        "401": { description: Authentication required }
         "403": { description: Not authorised }
   /api/v1/admin/stats:
     get:
@@ -538,6 +551,7 @@ paths:
                     buckets: 6
                     service_identities: 4
                     active_service_identities: 3
+        "401": { description: Authentication required }
         "403": { description: Not authorised }
   /api/v1/admin/audit:
     get:
@@ -664,12 +678,14 @@ paths:
                 name: { type: string, minLength: 1, maxLength: 63 }
       responses:
         "200": { description: Application created }
+        "401": { description: Authentication required }
         "409": { description: Application already exists }
     get:
       summary: List applications (admin:read)
       tags: [platform]
       responses:
         "200": { description: Applications }
+        "401": { description: Authentication required }
   /api/v1/admin/spaces:
     post:
       summary: Create a space and its default bucket (admin:write)
@@ -689,6 +705,7 @@ paths:
                 default_bucket: { type: string, maxLength: 63, nullable: true, description: Must be a valid S3 bucket name; omitted = derived from name and environment (also validated) }
       responses:
         "200": { description: Space created }
+        "401": { description: Authentication required }
         "404": { description: Application not found }
         "409": { description: "Duplicate (application_id, name, environment), inactive application, or bucket name already in use" }
         "422": { description: Invalid bucket name }
@@ -697,6 +714,7 @@ paths:
       tags: [platform]
       responses:
         "200": { description: Spaces }
+        "401": { description: Authentication required }
   /api/v1/admin/identities:
     post:
       summary: Create a machine-to-machine identity (admin:write)
@@ -721,6 +739,7 @@ paths:
                 ttl_seconds: { type: integer, minimum: 1, nullable: true }
       responses:
         "200": { description: Identity created; response contains the one-time token }
+        "401": { description: Authentication required }
         "404": { description: Space not found }
         "422": { description: "Unknown scope, or an admin scope requested for a service identity" }
     get:
@@ -732,6 +751,7 @@ paths:
           schema: { $ref: "#/components/schemas/Uuid4" }
       responses:
         "200": { description: Identity metadata (never secret material) }
+        "401": { description: Authentication required }
   /api/v1/admin/identities/{iid}/rotate:
     post:
       summary: Rotate an identity secret (admin:write)
@@ -740,6 +760,7 @@ paths:
         - $ref: "#/components/parameters/IdentityId"
       responses:
         "200": { description: New one-time token; old secret invalid immediately }
+        "401": { description: Authentication required }
         "404": { description: Identity not found or revoked }
   /api/v1/admin/identities/{iid}/revoke:
     post:
@@ -749,6 +770,7 @@ paths:
         - $ref: "#/components/parameters/IdentityId"
       responses:
         "200": { description: Identity revoked }
+        "401": { description: Authentication required }
         "404": { description: Identity not found }
   /api/v1/admin/applications/{aid}:
     get:
@@ -758,6 +780,7 @@ paths:
         - $ref: "#/components/parameters/ApplicationId"
       responses:
         "200": { description: "Application with name, status, stable id and space count" }
+        "401": { description: Authentication required }
         "404": { description: Application not found }
         "422": { description: Identifier is not a canonical UUID v4 }
     patch:
@@ -780,6 +803,7 @@ paths:
                 status: { type: string, enum: [active, disabled] }
       responses:
         "200": { description: Application updated }
+        "401": { description: Authentication required }
         "404": { description: Application not found }
         "409": { description: Application name already exists }
         "422": { description: "No field, an explicit null, or an invalid status" }
@@ -791,6 +815,7 @@ paths:
         - $ref: "#/components/parameters/SpaceId"
       responses:
         "200": { description: "Space with its application, buckets and counts" }
+        "401": { description: Authentication required }
         "404": { description: Space not found }
         "422": { description: Identifier is not a canonical UUID v4 }
     patch:
@@ -816,6 +841,7 @@ paths:
                 status: { type: string, enum: [active, disabled] }
       responses:
         "200": { description: Space updated }
+        "401": { description: Authentication required }
         "404": { description: Space not found }
         "409": { description: "Duplicate (application_id, name, environment)" }
         "422": { description: "No field, an explicit null, or an invalid status" }
@@ -845,6 +871,7 @@ paths:
                   description: Must be a valid S3 bucket name.
       responses:
         "200": { description: Bucket registered (not the space default) }
+        "401": { description: Authentication required }
         "404": { description: Space not found }
         "409": { description: Bucket name already in use }
         "422": { description: Invalid bucket name }
@@ -854,6 +881,7 @@ paths:
       tags: [platform]
       responses:
         "200": { description: Buckets and their attachment; never any S3 credential }
+        "401": { description: Authentication required }
   /api/v1/admin/buckets/{bid}:
     patch:
       summary: Set or clear a bucket's default flag (admin:write)
@@ -876,6 +904,7 @@ paths:
                 is_default: { type: boolean }
       responses:
         "200": { description: Bucket default flag updated }
+        "401": { description: Authentication required }
         "404": { description: Bucket not found }
         "422": { description: Invalid or missing body field }
 components:
