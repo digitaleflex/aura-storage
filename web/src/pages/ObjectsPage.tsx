@@ -654,6 +654,16 @@ export function ObjectsPage() {
     const uploadQueue = startUploadQueue(inputs, transferDeps(activeCsrf), {
       folderId: currentFolderId,
       onUpdate: handleQueueUpdate,
+      // A file whose PUT died with the link is replayed by the queue as soon as
+      // the browser reports the network back: say so, instead of leaving the
+      // user in front of a tray full of "Échec" they did not ask to fix.
+      onAutoRetry: (count) =>
+        notify(
+          "ok",
+          `Connexion rétablie : ${count} fichier${count > 1 ? "s" : ""} relancé${
+            count > 1 ? "s" : ""
+          } automatiquement.`,
+        ),
     });
     queueRef.current = uploadQueue;
   }
@@ -3057,6 +3067,12 @@ export function ObjectsPage() {
               </span>
             ) : null}
           </div>
+          {queue.schedulerPaused ? (
+            <p className="muted" role="status">
+              Connexion perdue : la file est suspendue et reprendra
+              automatiquement dès que le réseau revient.
+            </p>
+          ) : null}
           {transferActive &&
           queue.maxConcurrency > 1 &&
           queue.concurrency < queue.maxConcurrency ? (
