@@ -2731,7 +2731,7 @@ export function ObjectsPage() {
                       onClick={() => setDetails(item)}
                       aria-label={`Détails de ${item.display_name}`}
                     >
-                      {item.display_name}
+                      <span title={item.display_name}>{item.display_name}</span>
                     </button>
                   </div>
                   <div className="ledger-meta">
