@@ -533,6 +533,7 @@ export function ObjectsPage() {
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [trayCollapsed, setTrayCollapsed] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const uploadStartTimeRef = useRef<number | null>(null);
 
   // Auto-collapse la tray quand tous les fichiers sont terminés
   useEffect(() => {
@@ -1260,6 +1261,7 @@ export function ObjectsPage() {
         return;
       }
     }
+    uploadStartTimeRef.current = Date.now();
     launchQueue(
       csrf,
       pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
@@ -3221,6 +3223,19 @@ export function ObjectsPage() {
             const totalBytes = queue.items.reduce((sum, item) => sum + item.sizeBytes, 0);
             const uploadedBytes = queue.items.reduce((sum, item) => sum + item.state.transferredBytes, 0);
             const pct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
+            // Throughput et ETA
+            const startTime = uploadStartTimeRef.current;
+            const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
+            const throughput = elapsed > 1 ? uploadedBytes / elapsed : 0;
+            const remaining = totalBytes - uploadedBytes;
+            const eta = throughput > 0 ? remaining / throughput : 0;
+            const formatEta = (s: number) => {
+              if (!Number.isFinite(s) || s <= 0) return "";
+              if (s < 60) return `~${Math.ceil(s)}s`;
+              const m = Math.floor(s / 60);
+              const sec = Math.ceil(s % 60);
+              return `~${m}m${sec > 0 ? ` ${sec}s` : ""}`;
+            };
             return totalBytes > 0 ? (
               <div className="tray-progress">
                 <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
@@ -3228,6 +3243,13 @@ export function ObjectsPage() {
                 </div>
                 <span className="tray-progress-label">
                   {formatBytes(uploadedBytes)} / {formatBytes(totalBytes)} ({pct}%)
+                  {throughput > 0 && !queue.finished ? (
+                    <>
+                      {" · "}
+                      {formatBytes(Math.round(throughput))}/s
+                      {eta > 0 ? ` · ${formatEta(eta)}` : ""}
+                    </>
+                  ) : null}
                 </span>
               </div>
             ) : null;
