@@ -165,6 +165,66 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 /** Friendly type label for scanning; the raw MIME stays in the details panel. */
+/** SVG icon for a recognized file type. Returns null for unknown types. */
+function FileTypeIcon({ contentType }: { contentType: string }) {
+  const value = contentType.toLowerCase();
+  if (value.startsWith("image/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.6" />
+        <circle cx="8" cy="10" r="2" fill="currentColor" />
+        <path d="M3 17l5-4 4 3 5-5 4 4" stroke="currentColor" strokeWidth="1.4" />
+      </svg>
+    );
+  }
+  if (value === "application/pdf") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="6" y="2" width="12" height="20" rx="1" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M9 7h6M9 11h6M9 15h4" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+  if (value.startsWith("audio/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    );
+  }
+  if (value.startsWith("video/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="2" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M18 9l4-2v10l-4-2" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    );
+  }
+  if (value === "application/zip" || value === "application/gzip" || value === "application/x-tar") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M4 10h16M10 4v6" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+  if (value.startsWith("text/")) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M14 2v6h6M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
 function typeLabel(contentType: string): string {
   const value = contentType.toLowerCase();
   if (value === "application/pdf") return "PDF";
@@ -558,6 +618,10 @@ export function ObjectsPage() {
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
 
+  // Permissions d'écriture : tout utilisateur authentifié peut créer des dossiers
+  // et importer des fichiers ; l'API reste autoritaire.
+  const canCreate = !!session.data?.id;
+  const canCreateFolder = !!session.data?.id;
   // Recursive deletion deletes objects (objects:delete) inside folders the
   // caller owns (objects:write); it is a human-only flow, like folders. When
   // either scope is missing the option is never offered.
@@ -1799,23 +1863,43 @@ export function ObjectsPage() {
             ) : null}
           </p>
         </div>
-        <div className="head-actions">
+        <div className="page-actions">
+          {/* Actions : Importer (principale), Nouveau dossier (secondaire), Actualiser */}
+          {canCreate ? (
+            <button
+              type="button"
+              className="btn primary-button"
+              onClick={() => setIntakeOpen(true)}
+            >
+              Importer
+            </button>
+          ) : null}
+          {canCreateFolder ? (
+            <button
+              type="button"
+              className="btn secondary-button"
+              onClick={() => setNewFolderOpen(true)}
+            >
+              Nouveau dossier
+            </button>
+          ) : null}
           <button
             type="button"
-            className="btn btn-ghost"
-            disabled={objectsQuery.isFetching || treeQuery.isFetching}
+            className="btn btn-ghost tooltip"
+            title="Actualiser la liste"
+            aria-label="Actualiser la liste"
             onClick={() => {
               setActionError(null);
               void queryClient.invalidateQueries({ queryKey: ["objects"] });
               void queryClient.invalidateQueries({ queryKey: ["folders"] });
             }}
           >
-            {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
+            Actualiser
           </button>
           {canPurge && !master.active ? (
             <button
               type="button"
-              className="btn btn-ghost"
+              className="btn btn-ghost admin-link"
               onClick={() => setMasterDialogOpen(true)}
             >
               Mode maître
@@ -1834,25 +1918,6 @@ export function ObjectsPage() {
               {emptyTrashMutation.isPending ? "Vidage…" : "Vider la corbeille"}
             </button>
           ) : null}
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              setNewFolderName("");
-              setNewFolderOpen(true);
-            }}
-          >
-            Nouveau dossier
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            aria-expanded={intakeVisible}
-            aria-controls="intake"
-            onClick={() => setIntakeOpen(true)}
-          >
-            Importer
-          </button>
         </div>
       </div>
 
@@ -2459,6 +2524,7 @@ export function ObjectsPage() {
                   </div>
                   <div className="ledger-meta">
                     <span className="ledger-type" title={item.content_type}>
+                      <FileTypeIcon contentType={item.content_type} />{" "}
                       {typeLabel(item.content_type)}
                     </span>
                     <span className="ledger-size num">

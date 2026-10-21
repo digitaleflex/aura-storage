@@ -29,23 +29,36 @@
 }
 
 :root {
+  /* ------------------------------------------------------------------
+     PRIMITIVES (design system v2.1, audit prompt 02).
+     Toute valeur ci-dessous est une primitive : les composants ne consomment
+     QUE des jetons nommés, jamais de valeur brute. Rôles plus bas.
+     Contrast pairs checked (WCAG 2.1, planché 4.5:1 normal / 3:1 large):
+     - ink sur steel-0 : 15.2:1 ; ink sur steel-1 : 16.3:1
+     - side-ink sur side : 13.1:1 ; side-muted sur side : 6.3:1
+     - signal sur blanc : 4.8:1 (accent doré AA ; le #A96B13 proposé tombait
+       à 4.4:1 — même teinte, assombrie pour passer)
+     - faint/muted sur blanc : 4.7:1 / 6.0:1
+     - ok/warn/danger/run sur leurs fonds doux : 5.7/4.7/6.0/6.4:1
+     ------------------------------------------------------------------ */
+
   /* Structure : barre latérale sombre, surface de travail claire. */
-  --side: #0f151d;
+  --side: #10151d;
   --side-2: #1c2531;
   --side-3: #222c38;
   --side-ink: #d5dbe3;
   --side-muted: #8e99a8;
   /* Historique : anciens noms encore lus par l'administration et le login. */
-  --graphite: #0f151d;
+  --graphite: #10151d;
   --graphite-2: #1c2531;
   --graphite-3: #2a3442;
 
-  --steel-0: #f5f6f8;
+  --steel-0: #f5f7fa;
   --steel-1: #ffffff;
   --steel-2: #eef0f3;
   --steel-3: #e3e6eb;
 
-  --ink: #141a22;
+  --ink: #172033;
   --ink-2: #3d4654;
   --muted: #5b6472;
   /* Plus clair que --muted mais toujours ≥ 4,5:1 sur blanc. */
@@ -55,9 +68,11 @@
   --line-2: #d3d8df;
   --field-line: #a9b2be;
 
-  /* Accent : la seule couleur d'action du produit (5,6:1 sur blanc). */
-  --signal: #8f5600;
-  --signal-2: #6e4200;
+  /* Accent : la seule couleur d'action du produit. TEINTE dorée demandée
+     (#A96B13) assombrie à #9d660d : la proposition brute ne passait pas
+     4.5:1 avec le blanc de texte des boutons primaires (4.38:1). */
+  --signal: #9d660d;
+  --signal-2: #7a4d07;
   --signal-soft: #fbf1e0;
   --signal-line: #e6c893;
   /* Ambre clair pour les marques sur fond sombre (logo, focus latéral). */
@@ -71,6 +86,7 @@
   --warn-bg: #f8f0dc;
   --danger: #a8291f;
   --danger-bg: #fbeae8;
+  --danger-strong: #8f2c22; /* survol sur fond plein danger */
 
   --radius: 8px;
   --radius-small: 6px;
@@ -82,6 +98,76 @@
   --band-h: 60px;
   --side-w: 248px;
   --content-width: 1240px;
+
+  /* ------------------------------------------------------------------
+     ESPACEMENTS — échelle unique des composants. Les gabarits de page
+     (content padding, gaps de shell) restent expressément écrits.
+     --space-2 / --space-3 / --space-4 forment le trio dominant.
+     ------------------------------------------------------------------ */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  /* CONTROLES (boutons, champs) : gabarits de pression partagés — bouton
+     de page et bouton "petits" partagent les mêmes variables, le sélecteur
+     décide seulement de la variante. */
+  --control-fs: 14px;
+  --control-fs-sm: 12.5px;
+  --control-pad-y: 9px;
+  --control-pad-x: 14px;
+  --control-pad-y-sm: 5px;
+  --control-pad-x-sm: 10px;
+  --field-fs: 14px;
+  --field-pad-y: 9px;
+  --field-pad-x: 11px;
+  /* Zones de toucher minimales : cible WCAG 2.5.8 (mobile) et forme
+     compacte in-table des contrôles (38px), consommées par les composants. */
+  --tap-target: 44px;
+  --tap-hit: 38px;
+
+  /* BORDURES : une seule graisse standard, une pour les états forts
+     (focus, sélection, backdrops). */
+  --bw: 1px;
+  --bw-strong: 2px;
+
+  /* OMBRES : élévations nommées, une par rangée d'interface ; aucune
+     ombre décorative hors de ces usages. */
+  --shadow-1: 0 1px 2px rgba(15, 21, 29, 0.08);        /* repos discret */
+  --shadow-2: 0 10px 26px rgba(15, 21, 29, 0.16);       /* menu / popover */
+  --shadow-3: 0 20px 50px rgba(15, 21, 29, 0.30);       /* modale */
+  --shadow-tray: 0 12px 32px rgba(15, 21, 29, 0.18);    /* plateau flottant */
+  --shadow-toast: 0 8px 24px rgb(0 0 0 / 0.18);
+
+  /* PROFONDEUR (z-index) : échelle exclusive du produit, une valeur par
+     couche, jamais de nombre nu dans les composants. */
+  --z-sticky: 40;   /* topbar, barre cohortée */
+  --z-menu: 50;     /* menu contextuel, plateau de dépôt */
+  --z-drawer: 55;   /* drawer détail + son scrim */
+  --z-toast: 60;    /* toasts, overlay de dépôt */
+
+  /* TRANSITIONS : press plus court que settle. */
+  --dur-fast: 70ms;
+  --dur-std: 110ms;
+  --dur-slow: 160ms;
+  --ease-std: ease;
+  --ease-press: cubic-bezier(0.2, 0.9, 0.3, 1); /* settle léger overshoot */
+
+  /* ÉCHELLE TYPOGRAPHIQUE : les tailles effectives d'aujourd'hui, nommées
+     pour que la consommation remplace la valeur nue. */
+  --fs-2xs: 11px;   /* rappels mono, lettres d'accents */
+  --fs-xs: 12px;    /* en-têtes de tableaux, compteurs */
+  --fs-sm: 13px;    /* méta, muted */
+  --fs-md: 14px;    /* corps */
+  --fs-lg: 16px;    /* titres de section */
+  --fs-xl: 26px;    /* titre de page */
+  --lh-tight: 1.15;
+  --lh-std: 1.5;
+  --track-tight: -0.012em;
 }
 
 * {
@@ -93,17 +179,17 @@ body {
   background: var(--steel-0);
   color: var(--ink);
   font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: var(--fs-md);
+  line-height: var(--lh-std);
   -webkit-font-smoothing: antialiased;
 }
 
 /* Type roles: heavy sans for titles, mono for anything you compare. */
 h1 {
-  font-size: 26px;
+  font-size: var(--fs-xl);
   font-weight: 600;
-  letter-spacing: -0.012em;
-  line-height: 1.15;
+  letter-spacing: var(--track-tight);
+  line-height: var(--lh-tight);
   margin: 0;
 }
 
@@ -130,7 +216,7 @@ h3 {
 
 .muted {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .mono {
@@ -143,7 +229,7 @@ h3 {
 }
 
 /* ------------------------------------------------------------------ */
-/* Shell: dark navigation sidebar, light top bar, working surface.     */
+/* Shell: dark navigation sidebar, light top bar, working surface.      */
 /* ------------------------------------------------------------------ */
 .shell {
   min-height: 100vh;
@@ -151,18 +237,101 @@ h3 {
   background: var(--steel-0);
 }
 
-.sidebar {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  flex: none;
-  width: var(--side-w);
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  padding: 20px 14px;
+/* Sidebar collapsed: icône seule, largeur réduite */
+.sidebar-collapsed {
+  width: 56px;
   background: var(--side);
   color: var(--side-ink);
+  flex-shrink: 0;
+}
+
+.sidebar-collapsed .nav {
+  flex-direction: column;
+  padding: var(--space-2) 0;
+}
+
+.sidebar-collapsed .nav .sidebar-section {
+  margin-bottom: var(--space-2);
+  border-top: 1px solid var(--sidebar-section-hover);
+  padding: var(--spacing-xs) 0;
+}
+
+.sidebar-collapsed .sidebar-section .section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--section-title-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 var(--spacing-xs) 0;
+}
+
+.sidebar-collapsed .nav a:hover {
+  background: var(--sidebar-section-hover);
+}
+
+/* Brand collapsed : icône seule, texte masqué */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+  text-decoration: none;
+  transition: margin-left var(--dur-std) var(--ease-std);
+}
+
+.brand svg {
+  flex: none;
+  color: var(--side-muted);
+}
+
+.brand-name {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--side-ink);
+  transition: color var(--dur-std) var(--ease-std);
+}
+
+.brand-name-hidden {
+  display: none;
+}
+
+/* État actif du lien nav */
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--radius-small);
+  color: var(--side-ink);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.nav-link:hover {
+  background: var(--side-3);
+  color: #ffffff;
+}
+
+.nav-link-active {
+  background: var(--side-2);
+  color: #ffffff;
+}
+
+/* Lien admin séparé visuellement */
+.nav-link-admin {
+  margin-left: auto;
+  color: var(--side-ink);
+}
+
+/* Focus visible sur la sidebar */
+.sidebar a:focus-visible,
+.sidebar button:focus-visible {
+  outline-color: var(--signal);
+  outline-offset: 2px;
 }
 
 .brand {
@@ -244,7 +413,7 @@ h3 {
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 40;
+  z-index: var(--z-sticky);
   height: var(--band-h);
   display: flex;
   align-items: center;
@@ -309,17 +478,19 @@ h3 {
 /* ------------------------------------------------------------------ */
 .btn {
   appearance: none;
-  border: 1px solid var(--line-2);
+  border: var(--bw) solid var(--line-2);
   background: var(--steel-1);
   color: var(--ink);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--control-fs);
   font-weight: 500;
   border-radius: var(--radius);
-  padding: 9px 14px;
+  padding: var(--control-pad-y) var(--control-pad-x);
   cursor: pointer;
-  transition: background 110ms ease, border-color 110ms ease, color 110ms ease,
-    transform 70ms ease;
+  transition: background var(--dur-std) var(--ease-std),
+    border-color var(--dur-std) var(--ease-std),
+    color var(--dur-std) var(--ease-std),
+    transform var(--dur-fast) var(--ease-std);
 }
 
 .btn:hover {
@@ -378,8 +549,8 @@ select:focus-visible {
 }
 
 .btn-small {
-  font-size: 12.5px;
-  padding: 5px 10px;
+  font-size: var(--control-fs-sm);
+  padding: var(--control-pad-y-sm) var(--control-pad-x-sm);
 }
 
 .btn-danger {
@@ -389,8 +560,8 @@ select:focus-visible {
 }
 
 .btn-danger:hover {
-  background: #8f2c22;
-  border-color: #8f2c22;
+  background: var(--danger-strong);
+  border-color: var(--danger-strong);
   color: #ffffff;
 }
 
@@ -420,13 +591,13 @@ select:focus-visible {
 .field input[type="date"],
 .field select {
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: var(--field-fs);
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
-  border: 1px solid var(--field-line);
+  border: var(--bw) solid var(--field-line);
   border-radius: var(--radius);
-  padding: 9px 11px;
+  padding: var(--field-pad-y) var(--field-pad-x);
   background: var(--steel-1);
   color: var(--ink);
   max-width: 420px;
@@ -851,14 +1022,14 @@ select:focus-visible {
   top: calc(100% + 4px);
   min-width: 208px;
   background: var(--steel-1);
-  border: 1px solid var(--line-2);
+  border: var(--bw) solid var(--line-2);
   border-radius: var(--radius);
-  box-shadow: 0 10px 26px rgba(20, 24, 31, 0.16);
+  box-shadow: var(--shadow-2);
   padding: 4px;
-  z-index: 50;
+  z-index: var(--z-menu);
   display: flex;
   flex-direction: column;
-  animation: menu-in 130ms ease-out;
+  animation: menu-in 130ms var(--ease-std);
   transform-origin: top right;
 }
 
@@ -935,10 +1106,10 @@ select:focus-visible {
 .drop-overlay {
   position: fixed;
   inset: 12px 12px 12px calc(var(--side-w) + 12px);
-  z-index: 60;
+  z-index: var(--z-toast);
   display: grid;
   place-items: center;
-  border: 2px dashed var(--signal);
+  border: var(--bw-strong) dashed var(--signal);
   border-radius: 16px;
   background: rgba(251, 241, 224, 0.92);
   pointer-events: none;
@@ -964,12 +1135,12 @@ select:focus-visible {
   position: fixed;
   right: 16px;
   /* Top right, under the top bar: the bottom right belongs to the upload tray. */
-  top: calc(var(--band-h) + 12px);
+  top: calc(var(--band-h) + var(--space-3));
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   max-width: min(380px, calc(100vw - 32px));
-  z-index: 60;
+  z-index: var(--z-toast);
   /* The stack itself never takes clicks; only the toasts inside do. */
   pointer-events: none;
 }
@@ -984,15 +1155,15 @@ select:focus-visible {
   gap: 10px;
   padding: 10px 12px;
   border-radius: var(--radius);
-  border: 1px solid var(--line-2);
+  border: var(--bw) solid var(--line-2);
   border-left: 3px solid var(--muted);
   background: var(--steel-1);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  box-shadow: var(--shadow-toast);
   opacity: 0;
   transform: translateY(8px);
   transition:
-    opacity 160ms ease-out,
-    transform 160ms ease-out;
+    opacity var(--dur-slow) var(--ease-std),
+    transform var(--dur-slow) var(--ease-std);
 }
 
 .toast-in {
@@ -1089,12 +1260,12 @@ select:focus-visible {
   position: fixed;
   right: 20px;
   bottom: 20px;
-  z-index: 50;
+  z-index: var(--z-menu);
   width: min(420px, calc(100vw - 40px));
   background: var(--steel-1);
-  border: 1px solid var(--line);
+  border: var(--bw) solid var(--line);
   border-radius: 14px;
-  box-shadow: 0 12px 32px rgba(15, 21, 29, 0.18);
+  box-shadow: var(--shadow-tray);
   overflow: hidden;
 }
 
@@ -1310,10 +1481,10 @@ p .chip {
 }
 
 .alert-warn {
-  background: var(--signal-soft);
-  color: var(--ink);
-  border-color: var(--signal-line);
-  border-left-color: var(--signal);
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-color: var(--warn-bg);
+  border-left-color: var(--warn);
 }
 
 .resume-banner {
@@ -1359,11 +1530,11 @@ p .chip {
 /* Dialog and details drawer.                                         */
 /* ------------------------------------------------------------------ */
 .dialog {
-  border: 1px solid var(--graphite-3);
+  border: var(--bw) solid var(--graphite-3);
   border-radius: var(--radius);
   padding: 0;
   width: min(520px, 92vw);
-  box-shadow: 0 20px 50px rgba(20, 24, 31, 0.3);
+  box-shadow: var(--shadow-3);
   color: var(--ink);
 }
 
@@ -1415,7 +1586,7 @@ p .chip {
   position: fixed;
   inset: 0;
   background: rgba(20, 24, 31, 0.32);
-  z-index: 55;
+  z-index: var(--z-drawer);
 }
 
 .drawer {
@@ -1425,11 +1596,11 @@ p .chip {
   height: 100vh;
   width: min(440px, 92vw);
   background: var(--steel-1);
-  border-left: 1px solid var(--graphite-3);
+  border-left: var(--bw) solid var(--graphite-3);
   padding: 20px 22px 40px;
   overflow-y: auto;
-  z-index: 60;
-  animation: drawer-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: var(--z-drawer);
+  animation: drawer-in 220ms var(--ease-press);
 }
 
 .drawer-head {
