@@ -51,7 +51,9 @@ idle → requesting-intent → uploading → validating → available
   checks the size and computes SHA-256.
 - `available` — **only** reached when commit returned success. The UI never
   infers success from the upload PUT alone.
-- `failed` / `cancelled` — terminal, with the reason shown.
+- `failed` / `cancelled` — terminal, with the reason shown. A failure also
+  records `failureKind` (`retryable`, `expired`, `fatal`, `aborted`) so the
+  queue can tell an outage from a decision the server will never reverse.
 
 Errors are classified (`classifyError`) into `retryable`, `expired`, `aborted`
 and `fatal`, so the UI retries only what can succeed and never loops on an
@@ -71,8 +73,38 @@ authorization or validation error.
 | Distinguish upload / validation / availability / failure | the five phases above |
 | Handle expired URLs and network errors | 403 → new intent; network/5xx → retry; both bounded |
 | Clean local state after failure | `failed`/`cancelled` states; a new submit mints a new idempotency key |
+| Survive a connectivity loss without a click | the queue suspends scheduling on `offline` (in-flight PUTs are not aborted) and, on `online`, replays every file whose `failureKind` is `retryable` (`QueueOptions.autoRetryOnReconnect`, capped by `maxReconnectRetries`, announced through `onAutoRetry`) |
 | No success before backend confirmation | phase `available` is set only after `commit` resolves |
 | Server-side size/type limits | `api/transfer.py::validate_upload_policy` (see below) |
+
+## Connectivity loss: what recovers by itself, and what does not
+
+A cut in the middle of a PUT is not a decision: the bytes were never refused.
+The queue therefore treats it as recoverable and rewinds it without asking.
+
+- `offline` suspends the scheduler. Files that had not started stay `idle`
+  ("En attente"); no new connection is opened on a dead link.
+- An in-flight PUT still fails (the transport has no way to resume a single
+  PUT), so `runTransfer` exhausts its own bounded retries and the item ends
+  `failed` with `failureKind: "retryable"`.
+- The queue keeps its `online` listener attached even once every file has
+  settled. On `online` it resumes the scheduler and calls `retryTransient()`,
+  which puts back only the `retryable` failures, with the same idempotency key
+  (a multipart session keeps the parts already stored). The tray announces the
+  replay, so a background recovery is never silent.
+- `fatal` (bytes rejected, storage full, integrity failure), `expired` and
+  `aborted` are never replayed: retrying them cannot succeed or would override
+  a human decision. They keep the manual "Réessayer les échecs" control.
+- `maxReconnectRetries` (default 3) bounds the automatic attempts per file, so a
+  broken link cannot loop forever; a manual retry resets that budget.
+
+Limits, stated plainly:
+
+- The page must stay open. After a reload the browser cannot reopen a file by
+  itself: the journal (`uploadJournal.ts`) keeps the metadata and the user
+  re-selects the same files, and only the unconfirmed ones are sent again.
+- A server that is unreachable while the browser still reports `onLine` raises
+  no `online` event; those files stay `failed` and need the manual retry.
 
 ## Server-side transfer policy (authoritative)
 
