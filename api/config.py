@@ -53,6 +53,20 @@ class Settings:
     # Grace period after intent_ttl during which a commit is still accepted
     # (upload may finish just before expiry; #37).
     intent_grace_s: int = _int("AURA_INTENT_GRACE_SECONDS", 300)
+    # Public share links (api/shares.py). A share is an unauthenticated,
+    # revocable read-only capability for one object: the token is stored as a
+    # SHA-256 fingerprint and redeemed through a 302 to a presigned URL.
+    # `share_base_url` is the externally reachable origin used to build the
+    # absolute link. It is configuration and is never derived from the request
+    # Host header, which a client controls.
+    share_base_url: str = os.environ.get("AURA_SHARE_BASE_URL", "").rstrip("/")
+    # Default lifetime (7 days) and hard ceiling (30 days). The ceiling is a
+    # policy limit: a longer request is refused, not clamped silently.
+    share_ttl_default: int = _int("AURA_SHARE_TTL_DEFAULT", 604800)
+    share_ttl_max: int = _int("AURA_SHARE_TTL_MAX", 2592000)
+    # Lifetime of the presigned URL behind each redemption. Kept short so a
+    # copied redirect target (browser history, proxy log) is useless quickly.
+    share_presign_ttl: int = _int("AURA_SHARE_PRESIGN_TTL", 60)
     # Audit log (JSON-lines, IDs and statuses only — never secrets or URLs).
     # The Compose stack pins an absolute path on the persistent `api-audit`
     # volume, so events survive container recreations; this relative default is

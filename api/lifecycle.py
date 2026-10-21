@@ -61,5 +61,8 @@ def purge_object(repo, s3ops, oid: str, *, space_id: str,
         s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
     except Exception as exc:
         raise StorageDeleteError(f"storage delete failed for {oid}") from exc
+    # Share links die with the object: they are dropped first so no dangling row
+    # can ever be redeemed, and so no constraint blocks the object deletion.
+    repo.delete_shares_for_object(oid)
     repo.delete_object_row(oid)
     return True

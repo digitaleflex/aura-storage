@@ -384,6 +384,71 @@ class Repository:
         )
         self.conn.commit()
 
+    # -- object shares ----------------------------------------------------
+    def create_share(
+        self, object_id: str, space_id: str, created_by: str,
+        created_by_kind: str, token_hash: str, expires_at: int,
+        content_disposition: str = "attachment",
+        max_uses: Optional[int] = None,
+    ) -> str:
+        sid = self.new_id()
+        self.conn.execute(
+            "INSERT INTO object_shares (id, object_id, space_id, created_by, "
+            "created_by_kind, token_hash, content_disposition, expires_at, "
+            "max_uses, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (sid, object_id, space_id, created_by, created_by_kind, token_hash,
+             content_disposition, expires_at, max_uses, self.now()),
+        )
+        self.conn.commit()
+        return sid
+
+    def get_share(self, sid: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM object_shares WHERE id = ?", (sid,)
+        ).fetchone())
+
+    def get_share_by_token_hash(self, token_hash: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM object_shares WHERE token_hash = ?", (token_hash,)
+        ).fetchone())
+
+    def list_shares(self, object_id: str) -> list:
+        rows = self.conn.execute(
+            "SELECT * FROM object_shares WHERE object_id = ? "
+            "ORDER BY created_at DESC, id",
+            (object_id,),
+        ).fetchall()
+        return [_as_dict(r) for r in rows]
+
+    def consume_share(self, sid: str, now: int) -> bool:
+        """Redeem one use atomically. False when revoked, expired or exhausted.
+
+        The condition lives in the UPDATE so two concurrent readers cannot both
+        take the last remaining use of a ``max_uses`` link.
+        """
+        cur = self.conn.execute(
+            "UPDATE object_shares SET use_count = use_count + 1, last_used_at = ? "
+            "WHERE id = ? AND revoked_at IS NULL AND expires_at > ? "
+            "AND (max_uses IS NULL OR use_count < max_uses)",
+            (now, sid, now),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def revoke_share(self, sid: str, now: int) -> None:
+        self.conn.execute(
+            "UPDATE object_shares SET revoked_at = ? "
+            "WHERE id = ? AND revoked_at IS NULL",
+            (now, sid),
+        )
+        self.conn.commit()
+
+    def delete_shares_for_object(self, object_id: str) -> None:
+        self.conn.execute(
+            "DELETE FROM object_shares WHERE object_id = ?", (object_id,)
+        )
+        self.conn.commit()
+
     # -- objects ----------------------------------------------------------
     def create_pending_object(
         self, *, space_id: str, application_id: Optional[str], environment: Optional[str],
