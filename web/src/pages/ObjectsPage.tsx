@@ -79,6 +79,13 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   return false;
 }
 
+/** Which files the upload tray lists. "auto" shows everything for a small
+ * batch and only what still needs attention for a big one: rendering every row
+ * of a 10 000-file import costs 22-57 ms per refresh (~50k DOM nodes). */
+type TrayFilter = "auto" | "active" | "failed" | "all";
+const TRAY_AUTO_ALL_MAX = 30;
+const TRAY_ROW_CAP = 100;
+
 /** Human label for each transfer phase (import → validation → availability). */
 const PHASE_LABEL: Record<TransferPhase, string> = {
   idle: "En attente",
@@ -558,6 +565,7 @@ export function ObjectsPage() {
   // holds pending files, a queue or an error; a drop anywhere also opens it.
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [trayCollapsed, setTrayCollapsed] = useState(false);
+  const [trayFilter, setTrayFilter] = useState<TrayFilter>("auto");
   // Directory import: which folder of the plan is being created (item P1.7).
   const [folderProgress, setFolderProgress] = useState<{
     done: number;
@@ -3554,8 +3562,51 @@ export function ObjectsPage() {
               fois — retour à {queue.maxConcurrency} dès que ça passe.
             </p>
           ) : null}
+          {queue.items.length > TRAY_AUTO_ALL_MAX ? (
+            <div className="queue-filter" role="group" aria-label="Fichiers affichés">
+              {(
+                [
+                  ["auto", "Auto"],
+                  ["active", "En cours"],
+                  ["failed", "Échecs"],
+                  ["all", "Tous"],
+                ] as Array<[TrayFilter, string]>
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  aria-pressed={trayFilter === value}
+                  onClick={() => setTrayFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {(() => {
+            if (trayCollapsed) return null;
+            const mode =
+              trayFilter === "auto"
+                ? queue.items.length > TRAY_AUTO_ALL_MAX
+                  ? "active"
+                  : "all"
+                : trayFilter;
+            const needsAttention = (phase: TransferPhase) =>
+              phase !== "available" && phase !== "idle" && phase !== "cancelled";
+            const matching = queue.items.filter((item) =>
+              mode === "all"
+                ? true
+                : mode === "failed"
+                  ? item.state.phase === "failed" || item.state.phase === "cancelled"
+                  : needsAttention(item.state.phase),
+            );
+            const shown = matching.slice(0, TRAY_ROW_CAP);
+            const hiddenCount = queue.items.length - shown.length;
+            return (
+              <>
           <ul className="queue">
-            {queue.items.map((item) => (
+            {shown.map((item) => (
               <li key={item.id} className="queue-item">
                 <div className="queue-line">
                   <span className="transfer-name">{item.fileName}</span>
@@ -3625,6 +3676,17 @@ export function ObjectsPage() {
               </li>
             ))}
           </ul>
+          {hiddenCount > 0 ? (
+            <p className="muted">
+              {hiddenCount} autre{hiddenCount > 1 ? "s" : ""} fichier
+              {hiddenCount > 1 ? "s" : ""} non affiché{hiddenCount > 1 ? "s" : ""} (
+              {queue.done} transféré{queue.done > 1 ? "s" : ""}, {queue.failed} en échec) —
+              choisissez « Tous » ou « Échecs » pour les parcourir.
+            </p>
+          ) : null}
+              </>
+            );
+          })()}
         </div>
         </section>
       ) : null}
