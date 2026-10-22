@@ -907,6 +907,155 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Bucket not found }
         "422": { description: Invalid or missing body field }
+  /api/v1/objects/bulk-purge:
+    post:
+      summary: "Permanently delete several trashed objects in one call (objects:purge, human, master mode)"
+      tags: [objects]
+      responses:
+        "200": { description: Per-object outcome }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "422": { description: Invalid identifier list or too many objects }
+  /api/v1/objects/trash/empty:
+    post:
+      summary: "Permanently delete everything in the caller's trash (objects:purge, human, master mode)"
+      tags: [objects]
+      responses:
+        "200": { description: Trash emptied; per-object outcome }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/objects/{oid}/restore:
+    post:
+      summary: "Restore a soft-deleted object from the trash (objects:delete)"
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Object restored }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object is not in the trash }
+  /api/v1/objects/{oid}/multipart:
+    get:
+      summary: "Multipart upload state: parts already held by the storage, for resuming (objects:write)"
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Plan and uploaded parts }
+        "401": { description: Authentication required }
+        "404": { description: Object not found, or not a multipart upload }
+  /api/v1/objects/{oid}/multipart/parts:
+    post:
+      summary: "Presigned URLs for a batch of multipart parts (objects:write)"
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Presigned part URLs }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not a multipart upload }
+        "422": { description: Invalid part numbers }
+  /api/v1/objects/{oid}/share:
+    post:
+      summary: "Create a share link for an object; the token is returned once (objects:read, human)"
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Share link and one-time token }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not available }
+        "422": { description: Invalid expiry or use limit }
+  /api/v1/objects/{oid}/shares:
+    get:
+      summary: "List the share links of an object (objects:read)"
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Share links without their tokens }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+  /api/v1/objects/{oid}/shares/{sid}:
+    delete:
+      summary: "Revoke a share link (objects:read, human)"
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+        - { in: path, name: sid, required: true, schema: { $ref: "#/components/schemas/Uuid4" } }
+      responses:
+        "200": { description: Share revoked }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "404": { description: Share not found or not visible }
+  /api/v1/me/master-mode:
+    post:
+      summary: "Enter master mode after re-entering the password: bulk purges without a per-item confirmation for a limited time (objects:purge, human)"
+      tags: [auth]
+      responses:
+        "200": { description: Master mode active until the returned expiry }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "422": { description: Missing or wrong password }
+    delete:
+      summary: "Leave master mode"
+      tags: [auth]
+      responses:
+        "200": { description: Master mode ended }
+        "401": { description: Authentication required }
+  /api/v1/admin/integrity:
+    get:
+      summary: "Periodic integrity scrub report: results, oldest check and problem objects (admin:read)"
+      tags: [administration]
+      responses:
+        "200": { description: Integrity summary }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/integrity/scrub:
+    post:
+      summary: "Run one bounded integrity scrub pass now (admin:write)"
+      tags: [administration]
+      responses:
+        "200": { description: Pass counters }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/reconcile-reverse:
+    post:
+      summary: "Find catalogue objects missing at the storage (reverse reconciliation) (admin:write)"
+      tags: [administration]
+      responses:
+        "200": { description: Findings }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/reconcile-terminal:
+    post:
+      summary: "Delete storage bytes left by objects in a terminal state (admin:write)"
+      tags: [administration]
+      responses:
+        "200": { description: Cleanup counters }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/storage-orphans:
+    get:
+      summary: "List storage objects that no catalogue row references (admin:read)"
+      tags: [administration]
+      responses:
+        "200": { description: Orphan keys older than the grace period }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/storage-orphans/cleanup:
+    post:
+      summary: "Delete selected storage orphans (admin:write)"
+      tags: [administration]
+      responses:
+        "200": { description: Per-key outcome }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "422": { description: Invalid key list }
 components:
   schemas:
     Uuid4:
