@@ -25,6 +25,7 @@ import {
   cascadeOpKey,
 } from "../lib/cascade";import { ThroughputWindow } from "../lib/throughput";
 import { UploadTray } from "../components/UploadTray";
+import { VaultOverview } from "../components/VaultOverview";
 import {
   addEntries,
   clearOwner,
@@ -237,6 +238,26 @@ function FileTypeIcon({ contentType }: { contentType: string }) {
   );
 }
 
+/** Visual family of a file, for the coloured tile in the ledger. */
+function fileKind(contentType: string): string {
+  const value = contentType.toLowerCase();
+  if (value === "application/pdf") return "pdf";
+  if (value.startsWith("audio/")) return "audio";
+  if (value.startsWith("image/")) return "image";
+  if (value.startsWith("video/")) return "video";
+  if (value === "application/zip" || value === "application/gzip" || value === "application/x-tar") {
+    return "archive";
+  }
+  if (
+    value.includes("wordprocessingml") || value.includes("spreadsheetml") ||
+    value.includes("presentationml") || value === "application/msword" ||
+    value.startsWith("text/")
+  ) {
+    return "doc";
+  }
+  return "other";
+}
+
 function typeLabel(contentType: string): string {
   const value = contentType.toLowerCase();
   if (value === "application/pdf") return "PDF";
@@ -249,6 +270,11 @@ function typeLabel(contentType: string): string {
     value === "application/x-tar"
   ) {
     return "Archive";
+  }
+  if (value.includes("wordprocessingml") || value === "application/msword") return "Word";
+  if (value.includes("spreadsheetml") || value === "application/vnd.ms-excel") return "Excel";
+  if (value.includes("presentationml") || value === "application/vnd.ms-powerpoint") {
+    return "PowerPoint";
   }
   if (value === "application/json") return "JSON";
   if (value === "text/csv") return "CSV";
@@ -1860,19 +1886,6 @@ export function ObjectsPage() {
             {subfolders.length} dossier{subfolders.length > 1 ? "s" : ""} ·{" "}
             {items.length} fichier{items.length > 1 ? "s" : ""}
             {objectsQuery.hasNextPage ? " (d'autres restent à charger)" : ""}
-            {usageQuery.data ? (
-              <>
-                {" · "}
-                <span>
-                  Espace utilisé : {formatBytes(usageQuery.data.totals.stored_bytes)}
-                </span>
-                <span className="visually-hidden">
-                  {" "}
-                  — Usage réel (admin), mesuré le{" "}
-                  {formatDateTime(usageQuery.data.measured_at)}.
-                </span>
-              </>
-            ) : null}
           </p>
         </div>
         <div className="head-actions">
@@ -1943,6 +1956,12 @@ export function ObjectsPage() {
           ) : null}
         </div>
       </div>
+
+      <VaultOverview
+        usage={usageQuery.data}
+        formatBytes={formatBytes}
+        measuredLabel={usageQuery.data ? formatDateTime(usageQuery.data.measured_at) : ""}
+      />
 
       {actionError ? (
         <p role="alert" className="alert alert-error">
@@ -2408,11 +2427,34 @@ export function ObjectsPage() {
             ))}
           </div>
         ) : items.length === 0 && visibleFolders.length === 0 ? (
-          <p className="empty">
-            {hasActiveFilters
-              ? "Aucun fichier ne correspond à ces critères."
-              : "Aucun fichier dans ce dossier."}
-          </p>
+          <div className="empty empty-rich">
+            <span className="empty-mark" aria-hidden="true">
+              <FileTypeIcon contentType={hasActiveFilters ? "" : "application/pdf"} />
+            </span>
+            <p className="empty-title">
+              {hasActiveFilters
+                ? "Aucun fichier ne correspond à ces critères."
+                : "Aucun fichier dans ce dossier."}
+            </p>
+            {!hasActiveFilters ? (
+              <>
+                <p className="muted empty-help">
+                  Glissez des fichiers ou des dossiers n'importe où sur la page. Chaque
+                  fichier n'est déclaré disponible qu'une fois sa taille et son empreinte
+                  SHA-256 vérifiées par le serveur.
+                </p>
+                {canCreate ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setIntakeOpen(true)}
+                  >
+                    Importer des fichiers
+                  </button>
+                ) : null}
+              </>
+            ) : null}
+          </div>
         ) : (
           <>
             {selectedIds.size > 0 ? (
@@ -2553,6 +2595,12 @@ export function ObjectsPage() {
                         });
                       }}
                     />{" "}
+                    <span
+                      className={`file-tile file-tile-${fileKind(item.content_type)}`}
+                      aria-hidden="true"
+                    >
+                      <FileTypeIcon contentType={item.content_type} />
+                    </span>
                     <button
                       type="button"
                       className="link-button"
