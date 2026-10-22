@@ -179,9 +179,11 @@ services:
       # signed `x-amz-server-side-encryption` header on presigned PUTs is echoed.
       - -s3.allowedOrigins=https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
       # S3 GET read cache (SeaweedFS 4.48): in-memory chunk cache shared across
-      # requests. 0 disables.
+      # requests. 0 disables. The reader cache is a *blocking* global memory
+      # budget for all S3 reads: at 128 MB (~6 streams of 20 MiB) commit rehash,
+      # verifier, scrubber and downloads queue behind each other, so it is 512.
       - -s3.cacheCapacityMB=${SEAWEEDFS_S3_CACHE_MB:-256}
-      - -s3.readerCacheSizeMB=${SEAWEEDFS_S3_READER_CACHE_MB:-128}
+      - -s3.readerCacheSizeMB=${SEAWEEDFS_S3_READER_CACHE_MB:-512}
     environment:
       TZ: ${TZ:-Africa/Porto-Novo}
       # SeaweedFS SSE-S3 envelope-encryption key. Keep identical across all S3 gateways.
@@ -271,7 +273,7 @@ services:
       AURA_MULTIPART_SESSION_TTL: ${AURA_MULTIPART_SESSION_TTL:-604800}
       # Asynchronous integrity check (N5): objects at or above the threshold are
       # hashed by a worker thread in this container, outside the commit request.
-      AURA_VERIFY_ASYNC_THRESHOLD_BYTES: ${AURA_VERIFY_ASYNC_THRESHOLD_BYTES:-268435456}
+      AURA_VERIFY_ASYNC_THRESHOLD_BYTES: ${AURA_VERIFY_ASYNC_THRESHOLD_BYTES:-33554432}
       AURA_VERIFY_WORKER: ${AURA_VERIFY_WORKER:-inline}
       # Master mode: password-confirmed elevation for bulk purges (seconds) and
       # the most objects one bulk call may purge.

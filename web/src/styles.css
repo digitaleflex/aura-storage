@@ -67,7 +67,7 @@
 
   --line: #e3e6eb;
   --line-2: #d3d8df;
-  --field-line: #a9b2be;
+  --field-line: #7b8594;
 
   /* Accent : la seule couleur d'action du produit. TEINTE dorée demandée
      (#A96B13) assombrie à #9d660d : la proposition brute ne passait pas
@@ -699,7 +699,9 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: none;
+  /* Keep a real outline: the halo alone is ~1.6:1 on white (WCAG 2.4.7/1.4.11). */
+  outline: 2px solid var(--signal-bright);
+  outline-offset: 2px;
   box-shadow: var(--shadow-focus);
 }
 
@@ -3017,4 +3019,15 @@ body.density-compact .nav a {
 body.density-compact .filters-tally {
   margin-top: var(--space-2);
   gap: var(--space-1) var(--space-2);
+}
+
+.queue-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+}
+.queue-filter [aria-pressed="true"] {
+  background: var(--surface-2, rgba(0, 0, 0, 0.06));
+  font-weight: 600;
 }

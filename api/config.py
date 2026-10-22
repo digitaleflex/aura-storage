@@ -121,8 +121,14 @@ class Settings:
     # Asynchronous integrity check (N5). At or above this size, commit answers
     # 202 'verifying' and a worker hashes the object outside the request.
     verify_async_threshold_bytes: int = _int(
-        "AURA_VERIFY_ASYNC_THRESHOLD_BYTES", 256 * 1024 * 1024
+        "AURA_VERIFY_ASYNC_THRESHOLD_BYTES", 32 * 1024 * 1024
     )
+    # Hold verification back while uploads are running: the re-read competes
+    # with the PUTs for the disk (5.8-7.1x slower under 4 concurrent writes,
+    # docs/engineering/commit-latency-bench.md). A pending intent created within
+    # the window counts as a running upload; abandoned ones age out of it.
+    verify_pause_while_uploading: bool = _int("AURA_VERIFY_PAUSE_WHILE_UPLOADING", 1) != 0
+    verify_pause_window_s: int = _int("AURA_VERIFY_PAUSE_WINDOW_S", 300)
     # "inline": a worker thread inside the API process (default). "off": run
     # `python -m api.verifier` as its own process instead.
     verify_worker: str = os.environ.get("AURA_VERIFY_WORKER", "inline")
@@ -132,8 +138,9 @@ class Settings:
     verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
     # Hard deadline for a single commit response (seconds). Objects above the
     # async threshold return 202 quickly; this guards the synchronous path.
-    commit_deadline_s: int = _int("AURA_COMMIT_DEADLINE_SECONDS", 300)
     av_scan_cmd: str = os.environ.get("AURA_AV_SCAN_CMD", "")
+    # A hung scanner must not hold a request (or the verification worker).
+    av_scan_timeout_s: int = _int("AURA_AV_SCAN_TIMEOUT_S", 120)
     # Master mode: how long a password-confirmed elevation for bulk purges
     # lasts on one session (seconds), and the most objects one call may purge.
     master_mode_ttl: int = _int("AURA_MASTER_MODE_SECONDS", 900)
@@ -171,7 +178,9 @@ class Settings:
     # wait. Must stay *below* the app proxy's read timeout for the commit route
     # (app/nginx.conf, 310 s) so the API's structured 504 wins over the proxy's
     # generic one; change both together.
-    commit_deadline_s: int = _int("AURA_COMMIT_DEADLINE_S", 300)
+    commit_deadline_s: int = _int(
+        "AURA_COMMIT_DEADLINE_S", _int("AURA_COMMIT_DEADLINE_SECONDS", 300)
+    )
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
     # Zero-byte objects are refused by default: an empty upload is usually a
     # client bug rather than intent. Enable only when a caller legitimately needs

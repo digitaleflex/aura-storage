@@ -26,6 +26,7 @@ import hashlib
 import threading
 import time
 
+from .avscan import INFECTED, TIMEOUT, scan_object
 from .s3 import ObjectTooLarge
 
 
@@ -113,6 +114,21 @@ def verify_one(repo, s3ops, settings, *, now=time.time, audit=None) -> str | Non
         expected is not None and expected >= 0 and total != int(expected)
     ):
         return fail("size_mismatch")
+    if settings.av_scan_cmd:
+        # Large objects skip the synchronous commit, so the scan happens here:
+        # nothing is published without it.
+        try:
+            verdict = scan_object(s3ops, row["bucket"], row["object_key"], settings)
+        except Exception:
+            return retry()
+        if verdict == INFECTED:
+            try:
+                s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+            except Exception:
+                pass
+            return fail("av_infected")
+        if verdict == TIMEOUT:
+            return retry()
     repo.mark_available(oid, total, digest)
     if audit:
         audit("verify", "system", "success", {"object_id": oid, "size_bytes": total})
@@ -128,6 +144,13 @@ def run_forever(repo, s3ops, settings, *, stop: threading.Event | None = None,
     last_purge_sweep = 0.0
     while not stop.is_set():
         try:
+            if settings.verify_pause_while_uploading and repo.has_pending_uploads(
+                int(time.time()) - settings.verify_pause_window_s
+            ):
+                # Uploads are running: verify once they are done (the re-read
+                # would compete with the PUTs for the disk).
+                stop.wait(settings.verify_poll_s)
+                continue
             outcome = verify_one(repo, s3ops, settings, audit=audit)
         except Exception:
             # Never let one bad row kill the worker; its lease expires and

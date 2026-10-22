@@ -1,7 +1,14 @@
 import { test, expect } from "@playwright/test";
 import { ApiError, PresignedUploadError } from "../src/lib/api";
 import type { CommitResponse, UploadIntentResponse } from "../src/lib/api";
-import { backoffDelay, classifyError, runTransfer, startUploadQueue } from "../src/lib/transfer";
+import {
+  DEFAULT_QUEUE_CONCURRENCY,
+  backoffDelay,
+  classifyError,
+  runTransfer,
+  startUploadQueue,
+} from "../src/lib/transfer";
+import { ThroughputWindow } from "../src/lib/throughput";
 import type { QueueState, TransferDeps, TransferState } from "../src/lib/transfer";
 
 /**
@@ -371,6 +378,75 @@ test("queue transfers every file with bounded concurrency", async () => {
   expect(peak).toBeLessThanOrEqual(2);
   // It never started more than the configured concurrency at once.
   expect(Math.max(...states.map((s) => s.active))).toBeLessThanOrEqual(2);
+});
+
+test("default queue concurrency stays narrow so one uplink is not split ten ways", async () => {
+  expect(DEFAULT_QUEUE_CONCURRENCY).toBeLessThanOrEqual(4);
+  const files = Array.from({ length: 12 }, (_, i) => fakeFile(`f${i}.bin`));
+  let running = 0;
+  let peak = 0;
+  const deps: TransferDeps = {
+    requestIntent: async (input) => ({
+      id: input.fileName,
+      status: "pending",
+      method: "PUT",
+      upload_url: "https://s3.example/put",
+      headers: { "Content-Type": "application/octet-stream" },
+      content_type: "application/octet-stream",
+      size_bytes: input.sizeBytes,
+      expires_in: 900,
+      expires_at: null,
+      idempotent_replay: false,
+    }),
+    upload: async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 5));
+      running -= 1;
+    },
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+  const final = await startUploadQueue(files, deps, { folderId: null }).done;
+  expect(final.done).toBe(files.length);
+  expect(peak).toBeLessThanOrEqual(DEFAULT_QUEUE_CONCURRENCY);
+});
+
+test("progress-only events are coalesced, phase changes are not", async () => {
+  const file = fakeFile("big.bin", 1000);
+  const deps: TransferDeps = {
+    requestIntent: async (input) => ({
+      id: input.fileName,
+      status: "pending",
+      method: "PUT",
+      upload_url: "https://s3.example/put",
+      headers: {},
+      content_type: "application/octet-stream",
+      size_bytes: input.sizeBytes,
+      expires_in: 900,
+      expires_at: null,
+      idempotent_replay: false,
+    }),
+    upload: async (_url, _file, opts) => {
+      // A burst of 500 progress events within a few milliseconds.
+      for (let i = 1; i <= 500; i += 1) opts.onProgress?.(i * 2, 1000);
+    },
+    commit: async (id) => ({ id, status: "available", size_bytes: 1000, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+  const states: QueueState[] = [];
+  const final = await startUploadQueue([file], deps, {
+    folderId: null,
+    onUpdate: (s) => states.push(s),
+  }).done;
+  expect(final.done).toBe(1);
+  expect(states.length).toBeLessThan(40); // not ~500
+  expect(states[states.length - 1]?.finished).toBe(true);
+  expect(states.some((s) => s.items[0]?.state.phase === "validating")).toBe(true);
 });
 
 test("one failing file does not stop the others, and retry re-runs only it", async () => {
@@ -1024,4 +1100,19 @@ test("the online event replays a transient failure without any click", async () 
     if (hadWindow) globals.window = previousWindow;
     else delete globals.window;
   }
+});
+
+test("throughput is measured over a sliding window, not since the start", async () => {
+  const w = new ThroughputWindow(10_000);
+  expect(w.rate()).toBe(0);
+  // 50 s at 1 MB/s, then a long verification pause with no progress, then 4 MB/s.
+  for (let t = 0; t <= 50_000; t += 1000) w.push(t, t * 1000);
+  expect(Math.round(w.rate())).toBe(1_000_000);
+  for (let t = 51_000; t <= 80_000; t += 1000) w.push(t, 50_000_000);
+  expect(w.rate()).toBe(0); // idle window: no stale figure
+  for (let t = 81_000; t <= 91_000; t += 1000) w.push(t, 50_000_000 + (t - 80_000) * 4000);
+  expect(Math.round(w.rate())).toBe(4_000_000);
+  // A restart that lowers the cumulative count does not produce a negative rate.
+  w.push(92_000, 0);
+  expect(w.rate()).toBe(0);
 });

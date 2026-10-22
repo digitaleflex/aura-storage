@@ -15,6 +15,7 @@ import {
 } from "../lib/api";
 import type { CommitTiming, FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
+import { ThroughputWindow } from "../lib/throughput";
 import {
   addEntries,
   clearOwner,
@@ -78,12 +79,19 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   return false;
 }
 
+/** Which files the upload tray lists. "auto" shows everything for a small
+ * batch and only what still needs attention for a big one: rendering every row
+ * of a 10 000-file import costs 22-57 ms per refresh (~50k DOM nodes). */
+type TrayFilter = "auto" | "active" | "failed" | "all";
+const TRAY_AUTO_ALL_MAX = 30;
+const TRAY_ROW_CAP = 100;
+
 /** Human label for each transfer phase (import → validation → availability). */
 const PHASE_LABEL: Record<TransferPhase, string> = {
   idle: "En attente",
   "requesting-intent": "Autorisation…",
   uploading: "Envoi…",
-  validating: "Validation…",
+  validating: "Vérification d'intégrité…",
   available: "Disponible",
   failed: "Échec",
   cancelled: "Annulé",
@@ -587,6 +595,7 @@ export function ObjectsPage() {
   // holds pending files, a queue or an error; a drop anywhere also opens it.
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [trayCollapsed, setTrayCollapsed] = useState(false);
+  const [trayFilter, setTrayFilter] = useState<TrayFilter>("auto");
   // Directory import: which folder of the plan is being created (item P1.7).
   const [folderProgress, setFolderProgress] = useState<{
     done: number;
@@ -602,7 +611,8 @@ export function ObjectsPage() {
   } | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const uploadStartTimeRef = useRef<number | null>(null);
+  const throughputRef = useRef(new ThroughputWindow());
+  const libraryRefreshRef = useRef({ at: 0, done: 0 });
 
   // File d'attente automatique : placeholder (defini plus bas apres transferActive)
 
@@ -841,6 +851,8 @@ export function ObjectsPage() {
       return { file, folderId, key, idempotencyKey: idem };
     });
     void addEntries(journal);
+    throughputRef.current.reset();
+    libraryRefreshRef.current = { at: Date.now(), done: 0 };
     const uploadQueue = startUploadQueue(inputs, transferDeps(activeCsrf), {
       folderId: currentFolderId,
       onUpdate: handleQueueUpdate,
@@ -1318,6 +1330,18 @@ export function ObjectsPage() {
   /** Shared queue subscriber: mirrors state and reacts when it settles. */
   function handleQueueUpdate(next: QueueState) {
     setQueue(next);
+    const nowMs = Date.now();
+    throughputRef.current.push(
+      nowMs,
+      next.items.reduce((sum, item) => sum + item.state.transferredBytes, 0),
+    );
+    // Files become visible as they are verified, not only when the whole batch
+    // ends (an import can run for hours): refresh the ledger at most every 10 s.
+    const refresh = libraryRefreshRef.current;
+    if (!next.finished && next.done > refresh.done && nowMs - refresh.at >= 10_000) {
+      libraryRefreshRef.current = { at: nowMs, done: next.done };
+      invalidateLibrary();
+    }
     // Confirmed by the server, or cancelled on purpose: nothing left to resume.
     const settled = next.items
       .filter(
@@ -1377,7 +1401,6 @@ export function ObjectsPage() {
         return;
       }
     }
-    uploadStartTimeRef.current = Date.now();
     launchQueue(
       csrf,
       pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
@@ -2417,11 +2440,27 @@ export function ObjectsPage() {
             {transferActive ? "Transfert…" : "Importer et valider"}
           </button>
           {transferActive ? (
-            <button type="button" className="btn" onClick={handleCancelUpload}>
-              Annuler
-            </button>
+            <ConfirmAction
+              label="Annuler"
+              title="Arrêter l'import ?"
+              message={
+                <>
+                  {queue.items.length - queue.done} fichier(s) sur {queue.items.length} ne sont
+                  pas encore transférés ({formatBytes(
+                    queue.items.reduce(
+                      (sum, item) => sum + (item.state.phase === "available" ? 0 : item.sizeBytes),
+                      0,
+                    ),
+                  )}). Les envois en cours sont interrompus ; les fichiers déjà validés restent.
+                </>
+              }
+              confirmLabel="Arrêter l'import"
+              danger
+              className="btn"
+              onConfirm={handleCancelUpload}
+            />
           ) : null}
-          {!transferActive && (queue.failed > 0 || queue.cancelled > 0) ? (
+          {queue.failed > 0 || (!transferActive && queue.cancelled > 0) ? (
             <button type="button" className="btn" onClick={handleRetryFailed}>
               Réessayer les échecs
             </button>
@@ -3528,10 +3567,9 @@ export function ObjectsPage() {
             const totalBytes = queue.items.reduce((sum, item) => sum + item.sizeBytes, 0);
             const uploadedBytes = queue.items.reduce((sum, item) => sum + item.state.transferredBytes, 0);
             const pct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
-            // Throughput et ETA
-            const startTime = uploadStartTimeRef.current;
-            const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
-            const throughput = elapsed > 1 ? uploadedBytes / elapsed : 0;
+            // Débit sur les ~20 dernières secondes (pas depuis le début : les pauses,
+            // les fichiers déjà présents et les vérifications faussaient le chiffre).
+            const throughput = throughputRef.current.rate();
             const remaining = totalBytes - uploadedBytes;
             const eta = throughput > 0 ? remaining / throughput : 0;
             const formatEta = (s: number) => {
@@ -3562,9 +3600,13 @@ export function ObjectsPage() {
         <div
           className="transfer"
           data-testid="transfer-status"
-          aria-live="polite"
           hidden={trayCollapsed}
         >
+          {/* One short announcement per finished file; the per-byte texts of the
+              list below are not live (a screen reader would read them nonstop). */}
+          <span className="visually-hidden" role="status">
+            {queue.done}/{queue.items.length} fichiers transférés
+          </span>
           <div className="queue-head">
             <span className="muted">
               {queue.done}/{queue.items.length} transféré
@@ -3594,8 +3636,51 @@ export function ObjectsPage() {
               fois — retour à {queue.maxConcurrency} dès que ça passe.
             </p>
           ) : null}
+          {queue.items.length > TRAY_AUTO_ALL_MAX ? (
+            <div className="queue-filter" role="group" aria-label="Fichiers affichés">
+              {(
+                [
+                  ["auto", "Auto"],
+                  ["active", "En cours"],
+                  ["failed", "Échecs"],
+                  ["all", "Tous"],
+                ] as Array<[TrayFilter, string]>
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  aria-pressed={trayFilter === value}
+                  onClick={() => setTrayFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {(() => {
+            if (trayCollapsed) return null;
+            const mode =
+              trayFilter === "auto"
+                ? queue.items.length > TRAY_AUTO_ALL_MAX
+                  ? "active"
+                  : "all"
+                : trayFilter;
+            const needsAttention = (phase: TransferPhase) =>
+              phase !== "available" && phase !== "idle" && phase !== "cancelled";
+            const matching = queue.items.filter((item) =>
+              mode === "all"
+                ? true
+                : mode === "failed"
+                  ? item.state.phase === "failed" || item.state.phase === "cancelled"
+                  : needsAttention(item.state.phase),
+            );
+            const shown = matching.slice(0, TRAY_ROW_CAP);
+            const hiddenCount = queue.items.length - shown.length;
+            return (
+              <>
           <ul className="queue">
-            {queue.items.map((item) => (
+            {shown.map((item) => (
               <li key={item.id} className="queue-item">
                 <div className="queue-line">
                   <span className="transfer-name">{item.fileName}</span>
@@ -3668,6 +3753,17 @@ export function ObjectsPage() {
               </li>
             ))}
           </ul>
+          {hiddenCount > 0 ? (
+            <p className="muted">
+              {hiddenCount} autre{hiddenCount > 1 ? "s" : ""} fichier
+              {hiddenCount > 1 ? "s" : ""} non affiché{hiddenCount > 1 ? "s" : ""} (
+              {queue.done} transféré{queue.done > 1 ? "s" : ""}, {queue.failed} en échec) —
+              choisissez « Tous » ou « Échecs » pour les parcourir.
+            </p>
+          ) : null}
+              </>
+            );
+          })()}
         </div>
         </section>
       ) : null}

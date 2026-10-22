@@ -228,6 +228,18 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
                 runner.exec(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
     runner.commit()
     runner.exec("CREATE INDEX IF NOT EXISTS idx_objects_space ON objects(space_id, status)")
+    # Every upload intent looks up its Idempotency-Key; without this index that
+    # is a scan of the whole catalogue (14.8 ms at 100k rows, growing linearly).
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_objects_idem ON objects(actor_id, idempotency_key)"
+    )
+    # The background workers (verifier, scrubber yield, reconciler, upload
+    # gating) only care about the few in-flight rows: a partial index keeps
+    # those probes constant-time however large the catalogue grows.
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_objects_inflight ON objects(status, created_at) "
+        "WHERE status IN ('pending', 'verifying')"
+    )
     runner.commit()
     _canonicalize_legacy_ids(runner)
     _seed(runner)

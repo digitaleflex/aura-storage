@@ -195,6 +195,11 @@ function isNearExpiry(intent: UploadIntentResponse, nowMs: number): boolean {
 }
 
 export interface RunTransferOptions {
+  /**
+   * Called once when the bytes are stored and the server answers "verifying"
+   * (N5): the file no longer uses the uplink, so the queue may free its slot.
+   */
+  onVerifying?: () => void;
   folderId: string | null;
   /** Stable per-submission key: reused by automatic retries, new on a new submit. */
   idempotencyKey: string;
@@ -432,11 +437,12 @@ export async function runTransfer(
     // ne portent pas les timings du commit, qui ne valent que pour cette requête.
     const commitTiming = committed.commit_timing ?? null;
     let current = committed;
+    if (current.status === "verifying") options.onVerifying?.();
     for (let polls = 0; current.status === "verifying"; polls += 1) {
       if (aborted()) return cancel();
       if (!deps.objectStatus) break;
       emit({ phase: "validating", error: null });
-      await deps.sleep(Math.min(15_000, 1_000 * 2 ** Math.min(polls, 4)));
+      await deps.sleep(Math.min(5_000, 1_000 * 2 ** Math.min(polls, 3)));
       try {
         current = await deps.objectStatus(id);
       } catch (err) {
@@ -500,18 +506,46 @@ export async function runTransfer(
     }
 
     try {
-      await deps.upload(current.upload_url, file, {
-        headers: current.headers,
-        onProgress: (loaded, total) =>
-          emit({
-            phase: "uploading",
-            transferredBytes: loaded,
-            progress: total > 0 ? Math.min(1, loaded / total) : 0,
-          }),
-        signal: options.signal,
-      });
+      try {
+        await deps.upload(current.upload_url, file, {
+          headers: current.headers,
+          onProgress: (loaded, total) =>
+            emit({
+              phase: "uploading",
+              transferredBytes: loaded,
+              progress: total > 0 ? Math.min(1, loaded / total) : 0,
+            }),
+          signal: options.signal,
+        });
+      } catch (err) {
+        // 412: the PUT is conditional (If-None-Match: *), so the object already
+        // exists on this key, left by an earlier attempt whose commit failed.
+        // The bytes are there: go straight to the commit instead of failing.
+        if (!(err instanceof PresignedUploadError && err.status === 412)) throw err;
+      }
       emit({ phase: "validating", progress: 1, transferredBytes: file.size });
-      const committed = await deps.commit(current.id);
+      // The bytes are stored: a failing commit retries the commit only, never
+      // the whole upload (which would resend everything, then hit 412/409).
+      let committed: { status: string; checksum_sha256?: string };
+      for (let tries = 0; ; tries += 1) {
+        try {
+          committed = await deps.commit(current.id);
+          break;
+        } catch (err) {
+          if (aborted() || classifyError(err) === "aborted") return cancel();
+          // 504: the server gave up and discarded the bytes; only a re-upload helps.
+          const retryable =
+            classifyError(err) === "retryable" && !(err instanceof ApiError && err.status === 504);
+          if (!retryable) throw err;
+          if (tries >= config.maxAttempts - 1) {
+            emit({ phase: "failed", error: messageOf(err), failureKind: "retryable" });
+            return { state, objectId: current.id };
+          }
+          attempts += 1;
+          emit({ attempts, error: messageOf(err) });
+          await deps.sleep(backoffDelay(tries, config, deps.random));
+        }
+      }
       return settle(current.id, committed);
     } catch (err) {
       if (aborted() || classifyError(err) === "aborted") {
@@ -625,6 +659,8 @@ export interface UploadQueue {
 }
 
 export interface QueueOptions {
+  /** Minimum gap between progress-only snapshots (default 250 ms; 0 = every event). */
+  progressIntervalMs?: number;
   folderId: string | null;
   /** How many files transfer at once (default 10). */
   concurrency?: number;
@@ -677,12 +713,14 @@ export interface QueueOptions {
 }
 
 /**
- * Default parallelism. Raised from 3 to 10 for the MVP so a batch import is not
- * serialized behind a three-wide window. The global semaphore (slots are shared
- * by actives and staggered reservations) plus the 250 ms stagger still bound how
- * fast connections are opened, so a wider window does not become a burst.
+ * Default parallelism. A wide window (10) shares one uplink between ten PUTs, so
+ * each file takes ~10/3 longer, trips Traefik's 1200 s readTimeout earlier and
+ * makes the server re-read ten objects at once on the same disk (commit rehash
+ * is 5.8-7.1x slower under 4 concurrent writes, see
+ * docs/engineering/commit-latency-bench.md). Four keeps the link busy without
+ * those costs; adaptive concurrency still backs off to 1 on congestion.
  */
-export const DEFAULT_QUEUE_CONCURRENCY = 10;
+export const DEFAULT_QUEUE_CONCURRENCY = 4;
 export const DEFAULT_START_STAGGER_MS = 250;
 /** Base congestion tolerance, tuned for the historical cap of 3 concurrent files. */
 export const DEFAULT_CONGESTION_THRESHOLD = 2;
@@ -821,6 +859,9 @@ export function startUploadQueue(
   });
 
   let active = 0;
+  // Files whose bytes are stored and only await the server's integrity check:
+  // still in flight (finish detection) but no longer holding an upload slot.
+  let verifyingSlots = 0;
   let finished = false;
   // Held while the scheduler must not start new files (explicit pause/offline).
   let schedulerPaused = false;
@@ -849,7 +890,29 @@ export function startUploadQueue(
     finished: finished || (active === 0 && items.every((item) => item.settled)),
   });
 
-  const emit = () => options.onUpdate?.(snapshot());
+  // Byte-progress events arrive ~20/s per XHR (200/s at ten files). Each emit
+  // copies the whole queue and re-renders the page, so progress-only updates
+  // are coalesced to one per `progressIntervalMs`; every phase change, and the
+  // final state, is emitted at once.
+  const progressIntervalMs = Math.max(0, options.progressIntervalMs ?? 250);
+  let progressTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastEmitAt = 0;
+  const emit = () => {
+    if (progressTimer !== null) {
+      clearTimeout(progressTimer);
+      progressTimer = null;
+    }
+    lastEmitAt = Date.now();
+    options.onUpdate?.(snapshot());
+  };
+  const emitProgress = () => {
+    const wait = progressIntervalMs - (Date.now() - lastEmitAt);
+    if (wait <= 0) {
+      emit();
+    } else if (progressTimer === null) {
+      progressTimer = setTimeout(emit, wait);
+    }
+  };
 
   /**
    * A file that stopped on a transient error is not really finished: the next
@@ -958,6 +1021,7 @@ export function startUploadQueue(
       },
     };
     active += 1;
+    let slotReleased = false;
     item.state = { ...idleTransfer(item.file), phase: "requesting-intent" };
     emit();
     runTransfer(item.file, tracked, {
@@ -965,9 +1029,18 @@ export function startUploadQueue(
       idempotencyKey: item.idempotencyKey ?? queueItemId(),
       signal: controller.signal,
       config: options.config,
+      onVerifying: () => {
+        if (slotReleased) return;
+        slotReleased = true;
+        verifyingSlots += 1;
+        pump();
+      },
       onUpdate: (state) => {
+        const progressOnly =
+          state.phase === "uploading" && item.state.phase === "uploading";
         item.state = state;
-        emit();
+        if (progressOnly) emitProgress();
+        else emit();
       },
     })
       .catch(() => undefined)
@@ -975,6 +1048,7 @@ export function startUploadQueue(
         item.controller = null;
         item.settled = true;
         active -= 1;
+        if (slotReleased) verifyingSlots -= 1;
         adaptToOutcome(item, lastError);
         emit();
         pump();
@@ -1001,7 +1075,7 @@ export function startUploadQueue(
     // actives and staggered reservations share the same budget, so ten parallel
     // uploads never become ten simultaneous connection bursts.
     let immediateStarted = false;
-    while (active + pendingStarts < effectiveConcurrency) {
+    while (active - verifyingSlots + pendingStarts < effectiveConcurrency) {
       const item = nextQueued();
       if (!item) break;
       if (!immediateStarted || startStaggerMs <= 0) {
