@@ -2956,3 +2956,14 @@ body.density-compact .nav a {
   background: var(--surface-2, rgba(0, 0, 0, 0.06));
   font-weight: 600;
 }
+
+.queue-detail {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+}
+.queue-breakdown {
+  margin: 0.25rem 0;
+}
+.elapsed {
+  font-variant-numeric: tabular-nums;
+}
