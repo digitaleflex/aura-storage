@@ -68,12 +68,19 @@ def scrub_one(repo, s3ops, settings, *, now=time.time, audit=None) -> tuple[str,
     return result, max(0, total)
 
 
+# An upload that started within this window keeps the scrubber idle: the disk
+# is writing (and the commit re-reading) those bytes already.
+BUSY_WINDOW_S = 1800
+
+
 def scrub_run(repo, s3ops, settings, *, now=time.time, audit=None,
               stop: threading.Event | None = None) -> dict:
     """One bounded pass: check due objects until the byte budget is spent."""
     counts = {"ok": 0, "mismatch": 0, "missing": 0, "error": 0, "bytes": 0}
     while counts["bytes"] < settings.scrub_bytes_per_run:
         if stop is not None and stop.is_set():
+            break
+        if repo.has_active_transfers(int(now()) - BUSY_WINDOW_S):
             break
         out = scrub_one(repo, s3ops, settings, now=now, audit=audit)
         if out is None:
