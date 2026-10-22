@@ -6,6 +6,7 @@ token in the response body and never puts S3 credentials in the frontend.
 """
 import logging
 import shutil
+import threading
 import time
 from typing import Annotated, Literal
 
@@ -41,6 +42,7 @@ from .authz import (
 from .config import settings
 from .identity import fingerprint, format_token, new_secret
 from .lifecycle import purge_object, reconcile_pending, reconcile_terminal, reconcile_reverse
+from .avscan import INFECTED as AV_INFECTED, TIMEOUT as AV_TIMEOUT, scan_object as av_scan_object
 from .s3 import (
     SSE_ALGORITHM,
     SSE_HEADER,
@@ -80,9 +82,36 @@ app = FastAPI(title="AURA Management API", version="0.2.0")
 # not re-run the integrity check. TTL is short; the catalogue remains the truth.
 _RESP_CACHE: dict = {}
 _RESP_CACHE_TTL = 300
+_RESP_CACHE_MAX = 1000
 
 # Simple per-space daily quota (D3). 0 disables.
 _QUOTA: dict = {}
+
+_QUOTA_LOCK = threading.Lock()
+
+
+def _charge_quota(space_id: str, size_bytes: int) -> None:
+    """Daily quota (D3): 429 when the space exceeds its budget, else debit it.
+
+    Called after every other refusal (pending cap, capacity, folder) so a
+    request that is rejected anyway never consumes budget; the check-and-debit
+    is atomic across request threads. The counter is in memory (per process).
+    """
+    if settings.quota_bytes_per_day <= 0 and settings.quota_files_per_day <= 0:
+        return
+    today = int(time.time()) // 86400
+    with _QUOTA_LOCK:
+        q = _QUOTA.setdefault(space_id, {"day": today, "bytes": 0, "files": 0})
+        if q["day"] != today:
+            q["day"] = today
+            q["bytes"] = 0
+            q["files"] = 0
+        if (settings.quota_files_per_day > 0 and q["files"] >= settings.quota_files_per_day) or (
+            settings.quota_bytes_per_day > 0 and q["bytes"] + size_bytes > settings.quota_bytes_per_day
+        ):
+            raise HTTPException(status_code=429, detail="quota exceeded")
+        q["files"] += 1
+        q["bytes"] += size_bytes
 # uvicorn installs handlers on its own loggers only and leaves the root logger
 # handler-free, so an INFO record from "api.main" is dropped by logging's
 # lastResort handler (WARNING). Route through the logger uvicorn configures so
@@ -886,22 +915,6 @@ def upload_intent(
                 "expires_in": 0, "expires_at": None, "idempotent_replay": True,
             }
 
-    # Daily quota (D3): reject early with 429 when the space exceeds its budget.
-    if settings.quota_bytes_per_day > 0 or settings.quota_files_per_day > 0:
-        space = space_id
-        today = int(time.time()) // 86400
-        q = _QUOTA.setdefault(space, {"day": today, "bytes": 0, "files": 0})
-        if q["day"] != today:
-            q["day"] = today
-            q["bytes"] = 0
-            q["files"] = 0
-        if (settings.quota_files_per_day > 0 and q["files"] >= settings.quota_files_per_day) or (
-            settings.quota_bytes_per_day > 0 and q["bytes"] + body.size_bytes > settings.quota_bytes_per_day
-        ):
-            raise HTTPException(status_code=429, detail="quota exceeded")
-        q["files"] += 1
-        q["bytes"] += body.size_bytes
-
     if repo.count_pending(**_object_scope(principal)) >= settings.max_pending_intents:
         raise HTTPException(status_code=429, detail="too many pending uploads")
     _check_capacity(body.size_bytes)
@@ -913,6 +926,8 @@ def upload_intent(
             body.folder_id, owner_id=principal["id"]
         ) is None:
             raise HTTPException(status_code=403, detail="forbidden")
+
+    _charge_quota(space_id, body.size_bytes)
 
     owner_id = principal["id"] if principal["kind"] == "user" else None
     key = f"aura/{space_id}/{principal['id']}/{ids.new_id()}"
@@ -1150,10 +1165,12 @@ def multipart_part_urls(
     return {"id": row["id"], "expires_in": settings.intent_ttl, "parts": parts}
 
 
-def _cache_key(route: str, oid: str, idem: str | None) -> str | None:
+def _cache_key(route: str, oid: str, idem: str | None, principal_id: str = "") -> str | None:
     if not idem:
         return None
-    return f"{route}:{oid}:{idem}"
+    # The caller is part of the key: one principal's cached answer is never
+    # served to another that happens to reuse the same key and object id.
+    return f"{route}:{principal_id}:{oid}:{idem}"
 
 
 def _cache_get(key: str | None):
@@ -1171,7 +1188,14 @@ def _cache_get(key: str | None):
 def _cache_set(key: str | None, status: int, body):
     if key is None:
         return
-    _RESP_CACHE[key] = (time.time(), status, body)
+    now = time.time()
+    if len(_RESP_CACHE) >= _RESP_CACHE_MAX:
+        # Bounded: drop expired entries, then the oldest ones.
+        for k in [k for k, v in _RESP_CACHE.items() if now - v[0] > _RESP_CACHE_TTL]:
+            _RESP_CACHE.pop(k, None)
+        while len(_RESP_CACHE) >= _RESP_CACHE_MAX:
+            _RESP_CACHE.pop(next(iter(_RESP_CACHE)), None)
+    _RESP_CACHE[key] = (now, status, body)
 
 
 @app.post("/api/v1/objects/{oid}/commit")
@@ -1185,17 +1209,18 @@ def commit_object(
     # stream_sha256 (the other phases are bounded by the S3 client timeouts).
     deadline = time.monotonic() + settings.commit_deadline_s
     oid = _canonical_id(oid, "object id")
-    idem = request.headers.get("idempotency-key") if "request" in globals() else None
-    # D2: serve a cached result for a retried commit with the same key.
-    ck = _cache_key("commit", oid, idem)
+    idem = request.headers.get("idempotency-key")
+    ck = _cache_key("commit", oid, idem, principal["id"])
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    # D2: serve a cached result for a retried commit with the same key, only
+    # after the caller's access to the object is established.
     cached = _cache_get(ck)
     if cached is not None:
         status, body = cached
         response.status_code = status
         return body
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
     row = _as_dict(row)
 
     if row["status"] == "available":
@@ -1303,31 +1328,21 @@ def commit_object(
 
     # Optional AV scan (D4): if configured, scan the bytes before publication.
     if settings.av_scan_cmd:
-        import subprocess
-        import tempfile
-        import os as _os
-        tmp = tempfile.NamedTemporaryFile(delete=False)
         try:
-            body2 = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
-            for chunk in body2.iter_chunks(chunk_size=settings.commit_chunk_bytes):
-                tmp.write(chunk)
-            tmp.close()
-            proc = subprocess.run(
-                [settings.av_scan_cmd, tmp.name],
-                capture_output=True, text=True,
-            )
-            if proc.returncode != 0:
-                repo.set_status(oid, "failed")
-                try:
-                    s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
-                except Exception:
-                    pass
-                raise HTTPException(status_code=422, detail="object failed av scan")
-        finally:
+            verdict = av_scan_object(s3ops, row["bucket"], row["object_key"], settings)
+        except Exception:
+            raise HTTPException(status_code=422, detail="upload not readable at storage")
+        if verdict == AV_INFECTED:
+            repo.set_status(oid, "failed")
             try:
-                _os.unlink(tmp.name)
-            except OSError:
+                s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+            except Exception:
                 pass
+            audit_event("commit", principal["id"], "av_infected", {"object_id": oid})
+            raise HTTPException(status_code=422, detail="object failed av scan")
+        if verdict == AV_TIMEOUT:
+            # Not a verdict: the object stays pending and the client may retry.
+            raise HTTPException(status_code=504, detail="av scan timed out")
 
     # Hard deadline guard for the synchronous commit path.
     if settings.commit_deadline_s and (time.perf_counter() - started) > settings.commit_deadline_s:
