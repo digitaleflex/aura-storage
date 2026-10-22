@@ -11,7 +11,11 @@
 - [Architecture decisions and boundaries](docs/ARCHITECTURE.md)
 - [File transfer contract: API + presigned S3 URLs, FTPS boundaries](docs/FILE-TRANSFER.md)
 - [Vault transfer engine: upload state machine, progress, retries, cancellation, integrity](docs/TRANSFER-ENGINE.md)
-- [Follow-up proposal: S3 multipart upload for large objects (not implemented)](docs/MULTIPART-UPLOAD-PLAN.md)
+- [Local validation: what to run before pushing, and what it proves](docs/LOCAL-VALIDATION.md)
+- [Changes of 2026-10-22: slow-upload audit, transfer engine and UI](docs/CHANGES-2026-10-22-transfer-and-ui.md)
+- [Measure upload speed before/after a deployment (read-only)](docs/MEASURE-TRANSFER.md)
+- [Commit re-read cost benchmark](docs/engineering/commit-latency-bench.md)
+- [S3 multipart upload for large objects (implemented behind `AURA_MULTIPART_ENABLED`, off by default, not validated on SeaweedFS 4.48)](docs/MULTIPART-UPLOAD-PLAN.md)
 - [Secure and efficient bulk transfers: security, resumability, multipart, compression and benchmarks](docs/SECURE-BULK-TRANSFERS.md)
 - [Storage platform problem landscape: common failures, proven solutions, trade-offs and AURA priorities](docs/STORAGE-PLATFORM-PROBLEM-LANDSCAPE.md)
 - [Detailed deployment runbook](docs/DEPLOYMENT.md)
@@ -37,7 +41,6 @@
 - [Decision: defer Better Auth + Google OAuth](docs/DECISION-BETTER-AUTH.md)
 - [Decision: defer independent backup](docs/DECISION-BACKUP-DEFERRED.md)
 - [Decision: advanced transfer features deferred](docs/DECISION-ADVANCED-TRANSFER-FEATURES.md)
-- [Padding audit report](docs/DESIGN-PADDING-AUDIT.md)
 
 ## Intended topology
 

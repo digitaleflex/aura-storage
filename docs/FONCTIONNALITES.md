@@ -69,7 +69,7 @@ par la session humaine `operator`/`admin`.
 
 ## 2. Plan de contrôle — objets (implémenté)
 
-Le cycle de vie d'un objet suit l'état catalogue : `pending` → (`available` |
+Le cycle de vie d'un objet suit l'état catalogue : `pending` → (`verifying` →) (`available` |
 `failed` | `expired` | `aborted`), puis `deleted` (soft) et enfin purge (row supprimée).
 Les octets ne traversent jamais l'API : le client upload/télécharge directement vers
 S3 via des URLs présignées de courte durée (`api/s3.py`).
@@ -77,7 +77,7 @@ S3 via des URLs présignées de courte durée (`api/s3.py`).
 | Route | Capacité | Comportement |
 |---|---|---|
 | `POST /api/v1/objects/upload-intents` | `objects:write` | Politique serveur (type MIME, plafond de taille, règle vide) ; clé d'objet générée serveur ; bucket imposé par l'espace ; `Idempotency-Key` optionnel ; URL PUT présignée liant `Content-Length` signé ; refuse un espace `disabled` (403) |
-| `POST /api/v1/objects/{oid}/commit` | `objects:write` | Vérifie la taille réelle, calcule SHA-256 en streaming, passe `available` ; **idempotent** ; 410 si intention expirée, 413 si trop gros, 422 si absent/tronqué |
+| `POST /api/v1/objects/{oid}/commit` | `objects:write` | Vérifie la taille réelle, calcule SHA-256 en streaming, passe `available` ; **idempotent** ; 410 si intention expirée, 413 si trop gros, 422 si absent/tronqué. **202 `verifying`** dès `AURA_VERIFY_ASYNC_THRESHOLD_BYTES` (32 Mio) ou si le délai `AURA_COMMIT_DEADLINE_S` est dépassé : un vérificateur finit le contrôle (le fichier n'est pas téléchargeable avant `available`) ; antivirus optionnel (`AURA_AV_SCAN_CMD`) ; 504 si l'antivirus dépasse son délai (l'objet reste `pending`) |
 | `POST /api/v1/objects/{oid}/abort` | `objects:write` | Annule une intention `pending` (suppression best-effort des octets partiels) ; idempotent ; refuse 409 un objet `available`/`deleted` |
 | `GET /api/v1/objects` | `objects:read` | Liste paginée et filtrable : `folder_id` (`root` = non classé), `q` (sous-chaîne du nom affiché), `status`, `content_type`, `min_size`/`max_size`, `created_after`/`created_before`, `sort`/`order`. Les `deleted` sont masqués sauf `status=deleted` explicite |
 | `GET /api/v1/objects/{oid}` | `objects:read` | Métadonnées seules ; 404 hors périmètre |
