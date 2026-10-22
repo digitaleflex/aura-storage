@@ -325,12 +325,34 @@ export interface UploadIntentResponse {
   idempotent_replay: boolean;
 }
 
+/**
+ * Durées mesurées côté API pendant la publication d'un objet (millisecondes).
+ * Mesures d'une requête donnée, jamais persistées : elles décrivent le commit,
+ * pas l'objet.
+ */
+export interface CommitTiming {
+  /** HEAD de l'objet sur le stockage. */
+  head_ms: number;
+  /** Lecture + SHA-256 des octets (vérification d'intégrité). */
+  hash_ms: number;
+  /** Durée totale du handler de commit. */
+  total_ms: number;
+}
+
 export interface CommitResponse {
   id: string;
   status: string;
   size_bytes: number;
   checksum_sha256: string;
   checksum_algorithm?: string;
+  /**
+   * Timings du commit. Absent quand le serveur n'a pas eu à commiter la
+   * requête (objet déjà `available` : l'API renvoie la ligne existante), et
+   * `null` quand le commit a été gagné par une requête concurrente et que ses
+   * phases n'ont donc pas été mesurées ici. Le code appelant doit traiter
+   * « absent » et `null` de la même façon : aucun timing disponible.
+   */
+  commit_timing?: CommitTiming | null;
 }
 
 export interface PreviewIntentResponse {
