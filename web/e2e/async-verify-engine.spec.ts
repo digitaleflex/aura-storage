@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { UploadIntentResponse } from "../src/lib/api";
-import { runTransfer } from "../src/lib/transfer";
+import { ApiError, PresignedUploadError } from "../src/lib/api";
+import { runTransfer, startUploadQueue } from "../src/lib/transfer";
 import type { TransferDeps } from "../src/lib/transfer";
 
 /**
@@ -66,4 +67,91 @@ test("a file the server already holds is not sent again", async () => {
   const result = await runTransfer(FILE, d, { folderId: null, idempotencyKey: "k" });
   expect(result.state.phase).toBe("available");
   expect(counts().uploads).toBe(0);
+});
+
+test("a file waiting for its integrity check frees its upload slot", async () => {
+  const files = ["a", "b", "c", "d"].map(
+    (n) => ({ name: n, size: 10, type: "application/octet-stream" }) as unknown as File,
+  );
+  let uploading = 0;
+  let peakUploading = 0;
+  let uploadsStarted = 0;
+  const releaseVerify: Array<() => void> = [];
+  const d: TransferDeps = {
+    requestIntent: async (input) => ({ ...intent(), id: input.fileName }),
+    upload: async () => {
+      uploadsStarted += 1;
+      uploading += 1;
+      peakUploading = Math.max(peakUploading, uploading);
+      await new Promise((r) => setTimeout(r, 2));
+      uploading -= 1;
+    },
+    commit: async (id) => ({ id, status: "verifying", size_bytes: 10, checksum_sha256: "" }),
+    abortIntent: async () => undefined,
+    // Verification only ends when the test says so.
+    objectStatus: (id) =>
+      new Promise((resolve) => {
+        releaseVerify.push(() => resolve({ status: "available", checksum_sha256: id }));
+      }),
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+  const queue = startUploadQueue(files, d, { folderId: null, concurrency: 1, startStaggerMs: 0 });
+  // With one slot, all four uploads still go out while every file is verifying.
+  for (let i = 0; i < 400 && uploadsStarted < files.length; i += 1) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  expect(uploadsStarted).toBe(files.length);
+  // The slot is released for verification only: uploads stay one at a time.
+  expect(peakUploading).toBe(1);
+  for (let i = 0; i < 400 && releaseVerify.length < files.length; i += 1) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  releaseVerify.forEach((release) => release());
+  const final = await queue.done;
+  expect(final.done).toBe(files.length);
+  expect(final.failed).toBe(0);
+});
+
+test("a failing commit retries the commit, not the whole upload", async () => {
+  let uploads = 0;
+  let commits = 0;
+  const d: TransferDeps = {
+    requestIntent: async () => intent(),
+    upload: async () => {
+      uploads += 1;
+    },
+    commit: async () => {
+      commits += 1;
+      if (commits < 3) throw new ApiError(502, "bad gateway");
+      return { id: "obj-v", status: "available", size_bytes: 10, checksum_sha256: "abc" };
+    },
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+  const result = await runTransfer(FILE, d, { folderId: null, idempotencyKey: "k" });
+  expect(result.state.phase).toBe("available");
+  expect(uploads).toBe(1);
+  expect(commits).toBe(3);
+});
+
+test("a 412 on the conditional PUT means the bytes are there: commit, do not fail", async () => {
+  let commits = 0;
+  const d: TransferDeps = {
+    requestIntent: async () => intent(),
+    upload: async () => {
+      throw new PresignedUploadError("rejected", 412, "precondition failed");
+    },
+    commit: async () => {
+      commits += 1;
+      return { id: "obj-v", status: "available", size_bytes: 10, checksum_sha256: "abc" };
+    },
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+  const result = await runTransfer(FILE, d, { folderId: null, idempotencyKey: "k" });
+  expect(result.state.phase).toBe("available");
+  expect(commits).toBe(1);
 });
