@@ -1,6 +1,10 @@
 import { memo, useState } from "react";
 import { Elapsed } from "./Elapsed";
 import { FileDetail } from "./FileDetail";
+import { CONCURRENCY_CHOICES } from "../lib/uploadPrefs";
+
+/** From this size one PUT lasts many minutes on an ordinary uplink. */
+const LARGE_FILE_BYTES = 500 * 1024 * 1024;
 import type { QueueItem, QueueState, TransferPhase } from "../lib/transfer";
 
 /** Which files the upload tray lists. "auto" shows everything for a small
@@ -75,6 +79,8 @@ export interface UploadTrayProps {
   onResume: () => void;
   onCancelItem: (id: string) => void;
   onRetryItem: (id: string) => void;
+  /** Change how many files upload at once. */
+  onSetConcurrency: (n: number) => void;
 }
 
 /** The floating import tray. It owns its own UI state (collapsed, filter, open
@@ -89,6 +95,7 @@ export const UploadTray = memo(function UploadTray({
   onResume,
   onCancelItem,
   onRetryItem,
+  onSetConcurrency,
 }: UploadTrayProps) {
   const [trayCollapsed, setTrayCollapsed] = useState(false);
   const [trayFilter, setTrayFilter] = useState<TrayFilter>("auto");
@@ -142,12 +149,18 @@ export const UploadTray = memo(function UploadTray({
       const pct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
       const remaining = totalBytes - uploadedBytes;
       const eta = throughput > 0 ? remaining / throughput : 0;
+      // Progress restarts from zero at every retry, so a rate or an ETA computed
+      // while files are being re-sent is meaningless: say so instead of showing it.
+      const retrying = queue.items.some(
+        (item) => item.state.attempts > 0 && ACTIVE_PHASES.includes(item.state.phase),
+      );
       const formatEta = (s: number) => {
         if (!Number.isFinite(s) || s <= 0) return "";
-        if (s < 60) return `~${Math.ceil(s)}s`;
-        const m = Math.floor(s / 60);
-        const sec = Math.ceil(s % 60);
-        return `~${m}m${sec > 0 ? ` ${sec}s` : ""}`;
+        if (s < 60) return `~${Math.ceil(s)} s`;
+        const totalMin = Math.ceil(s / 60);
+        if (totalMin < 60) return `~${totalMin} min`;
+        const h = Math.floor(totalMin / 60);
+        return `~${h} h ${String(totalMin % 60).padStart(2, "0")} min`;
       };
       return totalBytes > 0 ? (
         <div className="tray-progress">
@@ -156,7 +169,9 @@ export const UploadTray = memo(function UploadTray({
           </div>
           <span className="tray-progress-label">
             {formatBytes(uploadedBytes)} / {formatBytes(totalBytes)} ({pct}%)
-            {throughput > 0 && !queue.finished ? (
+            {retrying && !queue.finished ? (
+              " · estimation indisponible (reprises en cours)"
+            ) : throughput > 0 && !queue.finished ? (
               <>
                 {" · "}
                 {formatBytes(Math.round(throughput))}/s
@@ -186,12 +201,37 @@ export const UploadTray = memo(function UploadTray({
           ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
           : ""}
       </span>
-      {transferActive ? (
-        <span className="muted">
-          jusqu'à {queue.concurrency} en parallèle
-        </span>
+      {!queue.finished ? (
+        <label className="muted queue-concurrency">
+          Envois simultanés{" "}
+          <select
+            value={queue.maxConcurrency}
+            onChange={(event) => onSetConcurrency(Number(event.target.value))}
+            aria-describedby="queue-concurrency-hint"
+          >
+            {Array.from(new Set([...CONCURRENCY_CHOICES, queue.maxConcurrency]))
+              .sort((a, b) => a - b)
+              .map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+          </select>
+          {transferActive && queue.concurrency < queue.maxConcurrency
+            ? ` (${queue.concurrency} actuellement)`
+            : ""}
+        </label>
       ) : null}
     </div>
+    {!queue.finished &&
+    queue.maxConcurrency > 1 &&
+    queue.items.some((item) => item.sizeBytes >= LARGE_FILE_BYTES && !item.state.checksum) ? (
+      <p className="muted queue-detail" id="queue-concurrency-hint">
+        Fichiers volumineux : plusieurs envois en parallèle se partagent votre connexion et
+        chaque fichier dure plus longtemps. Si des fichiers sont interrompus et repris, choisissez
+        1 envoi à la fois.
+      </p>
+    ) : null}
     {(() => {
       const count = (...phases: TransferPhase[]) =>
         queue.items.filter((item) => phases.includes(item.state.phase)).length;

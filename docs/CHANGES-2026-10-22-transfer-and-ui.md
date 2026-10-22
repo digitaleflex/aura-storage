@@ -25,6 +25,18 @@ the pull request of the fork `letriplenesty-ai/aura-storage`.
 Weak effects, measured or checked: catalogue queries (< 25 ms at 100 000 rows),
 the boto connection pool, `If-None-Match: *`.
 
+## Confirmed on the pilot (user report, same day)
+
+A batch of 64 videos (0.6-1.2 GB each, 28.5 GB) uploaded four at a time showed
+"Nouvelle tentative (4)" on every running file at 37-74 %, a 260 KB/s rate and an
+ETA of ~1791 min. The four files were at ~455-470 MB each: ~0.38 MB/s per file x
+1200 s = 460 MB, i.e. every PUT was cut by Traefik's 1200 s `readTimeout` and
+restarted from zero. This confirms cause 1 above (it was ranked, not measured).
+Follow-up: `TRAEFIK_READ_TIMEOUT` (default 3600 s), long-PUT detection (queue
+drops to one upload at a time, a second cut stops the file with an explanation),
+an "Envois simultanés" selector, and no rate/ETA while files are being re-sent.
+The ETA was also wrong because the rate window restarts when progress drops.
+
 ## Transfer engine and API
 
 | PR | Change |

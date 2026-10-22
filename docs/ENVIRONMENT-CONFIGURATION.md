@@ -99,6 +99,7 @@ local `.env`; every value below is optional.
 | `AURA_QUOTA_BYTES_PER_DAY` / `AURA_QUOTA_FILES_PER_DAY` | `0` (off) | Daily per-space budget. The counter is **in memory** (reset on restart) and is only debited for requests that are actually accepted |
 | `AURA_STORAGE_CAPACITY_BYTES` / `AURA_STORAGE_HIGH_WATERMARK` | `0` (off) / `90` | Capacity guard: uploads are refused with 507 beyond the watermark |
 | `AURA_MULTIPART_ENABLED` | `0` | Multipart uploads; keep off until validated on the pinned SeaweedFS |
+| `TRAEFIK_READ_TIMEOUT` | `3600s` | Longest a single request may take, **body included**: the longest one file may take to upload as a single PUT. Was fixed at `1200s`; on a ~12 Mbit/s uplink with four parallel uploads that cut every file above ~460 MB after 20 minutes and restarted it from zero |
 | `SEAWEEDFS_S3_CACHE_MB` | `256` | `-s3.cacheCapacityMB` of the S3 gateway |
 | `SEAWEEDFS_S3_READER_CACHE_MB` | `512` | `-s3.readerCacheSizeMB`: a **blocking** global memory budget for S3 reads. At the former 128 MB, concurrent re-reads (commit, verifier, scrubber, downloads) queued behind each other. Effect on the pilot not measured yet |
 
