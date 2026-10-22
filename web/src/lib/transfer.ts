@@ -186,6 +186,11 @@ function isNearExpiry(intent: UploadIntentResponse, nowMs: number): boolean {
 }
 
 export interface RunTransferOptions {
+  /**
+   * Called once when the bytes are stored and the server answers "verifying"
+   * (N5): the file no longer uses the uplink, so the queue may free its slot.
+   */
+  onVerifying?: () => void;
   folderId: string | null;
   /** Stable per-submission key: reused by automatic retries, new on a new submit. */
   idempotencyKey: string;
@@ -416,11 +421,12 @@ export async function runTransfer(
     committed: { status: string; checksum_sha256?: string },
   ): Promise<TransferResult> => {
     let current = committed;
+    if (current.status === "verifying") options.onVerifying?.();
     for (let polls = 0; current.status === "verifying"; polls += 1) {
       if (aborted()) return cancel();
       if (!deps.objectStatus) break;
       emit({ phase: "validating", error: null });
-      await deps.sleep(Math.min(15_000, 1_000 * 2 ** Math.min(polls, 4)));
+      await deps.sleep(Math.min(5_000, 1_000 * 2 ** Math.min(polls, 3)));
       try {
         current = await deps.objectStatus(id);
       } catch (err) {
@@ -475,18 +481,46 @@ export async function runTransfer(
     }
 
     try {
-      await deps.upload(current.upload_url, file, {
-        headers: current.headers,
-        onProgress: (loaded, total) =>
-          emit({
-            phase: "uploading",
-            transferredBytes: loaded,
-            progress: total > 0 ? Math.min(1, loaded / total) : 0,
-          }),
-        signal: options.signal,
-      });
+      try {
+        await deps.upload(current.upload_url, file, {
+          headers: current.headers,
+          onProgress: (loaded, total) =>
+            emit({
+              phase: "uploading",
+              transferredBytes: loaded,
+              progress: total > 0 ? Math.min(1, loaded / total) : 0,
+            }),
+          signal: options.signal,
+        });
+      } catch (err) {
+        // 412: the PUT is conditional (If-None-Match: *), so the object already
+        // exists on this key, left by an earlier attempt whose commit failed.
+        // The bytes are there: go straight to the commit instead of failing.
+        if (!(err instanceof PresignedUploadError && err.status === 412)) throw err;
+      }
       emit({ phase: "validating", progress: 1, transferredBytes: file.size });
-      const committed = await deps.commit(current.id);
+      // The bytes are stored: a failing commit retries the commit only, never
+      // the whole upload (which would resend everything, then hit 412/409).
+      let committed: { status: string; checksum_sha256?: string };
+      for (let tries = 0; ; tries += 1) {
+        try {
+          committed = await deps.commit(current.id);
+          break;
+        } catch (err) {
+          if (aborted() || classifyError(err) === "aborted") return cancel();
+          // 504: the server gave up and discarded the bytes; only a re-upload helps.
+          const retryable =
+            classifyError(err) === "retryable" && !(err instanceof ApiError && err.status === 504);
+          if (!retryable) throw err;
+          if (tries >= config.maxAttempts - 1) {
+            emit({ phase: "failed", error: messageOf(err), failureKind: "retryable" });
+            return { state, objectId: current.id };
+          }
+          attempts += 1;
+          emit({ attempts, error: messageOf(err) });
+          await deps.sleep(backoffDelay(tries, config, deps.random));
+        }
+      }
       return settle(current.id, committed);
     } catch (err) {
       if (aborted() || classifyError(err) === "aborted") {
@@ -796,6 +830,9 @@ export function startUploadQueue(
   });
 
   let active = 0;
+  // Files whose bytes are stored and only await the server's integrity check:
+  // still in flight (finish detection) but no longer holding an upload slot.
+  let verifyingSlots = 0;
   let finished = false;
   // Held while the scheduler must not start new files (explicit pause/offline).
   let schedulerPaused = false;
@@ -933,6 +970,7 @@ export function startUploadQueue(
       },
     };
     active += 1;
+    let slotReleased = false;
     item.state = { ...idleTransfer(item.file), phase: "requesting-intent" };
     emit();
     runTransfer(item.file, tracked, {
@@ -940,6 +978,12 @@ export function startUploadQueue(
       idempotencyKey: item.idempotencyKey ?? queueItemId(),
       signal: controller.signal,
       config: options.config,
+      onVerifying: () => {
+        if (slotReleased) return;
+        slotReleased = true;
+        verifyingSlots += 1;
+        pump();
+      },
       onUpdate: (state) => {
         item.state = state;
         emit();
@@ -950,6 +994,7 @@ export function startUploadQueue(
         item.controller = null;
         item.settled = true;
         active -= 1;
+        if (slotReleased) verifyingSlots -= 1;
         adaptToOutcome(item, lastError);
         emit();
         pump();
@@ -976,7 +1021,7 @@ export function startUploadQueue(
     // actives and staggered reservations share the same budget, so ten parallel
     // uploads never become ten simultaneous connection bursts.
     let immediateStarted = false;
-    while (active + pendingStarts < effectiveConcurrency) {
+    while (active - verifyingSlots + pendingStarts < effectiveConcurrency) {
       const item = nextQueued();
       if (!item) break;
       if (!immediateStarted || startStaggerMs <= 0) {
