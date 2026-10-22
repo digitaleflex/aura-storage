@@ -618,6 +618,13 @@ class Repository:
         ).fetchone()
         return {"stored": int(row["stored"]), "reserved": int(row["reserved"])}
     # -- periodic integrity scrub ------------------------------------------
+    def has_pending_uploads(self, since: int) -> bool:
+        """True if an upload intent created at or after ``since`` is still pending."""
+        return self.conn.execute(
+            "SELECT 1 FROM objects WHERE status = 'pending' AND created_at >= ? LIMIT 1",
+            (since,),
+        ).fetchone() is not None
+
     def claim_scrub(self, now: int, lease_until: int, checked_before: int):
         """Take the available object checked longest ago (never-checked first),
         under a lease, if it is due (checked before ``checked_before``)."""
