@@ -226,3 +226,22 @@ test("the cancel button asks before stopping, and keeping the import leaves it r
   await expect(page.getByRole("heading", { name: "Arrêter l'import ?" })).toBeVisible();
   expect(mocks.calls).not.toContain("abort");
 });
+
+test("a big batch lists only what needs attention; 'Tous' lists everything", async ({ page }) => {
+  await installMocks(page, { putDelayMs: 300 });
+  await login(page);
+  // Several files start the import by themselves (auto-queue).
+  await page.getByTestId("files-input").setInputFiles(
+    Array.from({ length: 40 }, (_, i) => ({
+      name: `lot-${i}.pdf`,
+      mimeType: "application/pdf",
+      buffer: Buffer.from("hello world"),
+    })),
+  );
+  const tray = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
+  await expect(tray.getByRole("group", { name: "Fichiers affichés" })).toBeVisible();
+  // Finished files drop out of the default view: never all 40 rows at once.
+  await expect(tray.locator("li.queue-item")).not.toHaveCount(40);
+  await tray.getByRole("button", { name: "Tous" }).click();
+  await expect(tray.locator("li.queue-item")).toHaveCount(40);
+});

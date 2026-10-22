@@ -2945,3 +2945,14 @@ body.density-compact .ledger-row {
 body.density-compact .nav a {
   padding: 6px 10px;
 }
+
+.queue-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+}
+.queue-filter [aria-pressed="true"] {
+  background: var(--surface-2, rgba(0, 0, 0, 0.06));
+  font-weight: 600;
+}
