@@ -8,6 +8,7 @@ import {
   runTransfer,
   startUploadQueue,
 } from "../src/lib/transfer";
+import { ThroughputWindow } from "../src/lib/throughput";
 import type { QueueState, TransferDeps, TransferState } from "../src/lib/transfer";
 
 /**
@@ -1099,4 +1100,19 @@ test("the online event replays a transient failure without any click", async () 
     if (hadWindow) globals.window = previousWindow;
     else delete globals.window;
   }
+});
+
+test("throughput is measured over a sliding window, not since the start", async () => {
+  const w = new ThroughputWindow(10_000);
+  expect(w.rate()).toBe(0);
+  // 50 s at 1 MB/s, then a long verification pause with no progress, then 4 MB/s.
+  for (let t = 0; t <= 50_000; t += 1000) w.push(t, t * 1000);
+  expect(Math.round(w.rate())).toBe(1_000_000);
+  for (let t = 51_000; t <= 80_000; t += 1000) w.push(t, 50_000_000);
+  expect(w.rate()).toBe(0); // idle window: no stale figure
+  for (let t = 81_000; t <= 91_000; t += 1000) w.push(t, 50_000_000 + (t - 80_000) * 4000);
+  expect(Math.round(w.rate())).toBe(4_000_000);
+  // A restart that lowers the cumulative count does not produce a negative rate.
+  w.push(92_000, 0);
+  expect(w.rate()).toBe(0);
 });
