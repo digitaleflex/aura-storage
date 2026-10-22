@@ -2967,3 +2967,39 @@ body.density-compact .nav a {
 .elapsed {
   font-variant-numeric: tabular-nums;
 }
+
+.file-detail {
+  margin: 0.4rem 0 0.2rem;
+  padding: 0.5rem 0.75rem;
+  border: var(--bw, 1px) solid var(--field-line);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.file-detail-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 0.75rem;
+  margin: 0 0 0.4rem;
+}
+.file-detail-facts dt {
+  color: var(--muted, inherit);
+}
+.file-detail-facts dd {
+  margin: 0;
+  min-width: 0;
+}
+.file-detail-hash {
+  word-break: break-all;
+  user-select: all;
+}
+.file-detail-steps {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+/* The tray floats over the page: with per-file explanations it can grow tall
+   enough to cover the page's own buttons, so its body scrolls instead. */
+.tray .transfer {
+  max-height: min(320px, 40vh);
+  overflow-y: auto;
+}

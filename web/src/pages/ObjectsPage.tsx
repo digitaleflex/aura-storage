@@ -17,6 +17,7 @@ import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
 import { ThroughputWindow } from "../lib/throughput";
 import { Elapsed } from "../components/Elapsed";
+import { FileDetail } from "../components/FileDetail";
 import {
   addEntries,
   clearOwner,
@@ -601,6 +602,7 @@ export function ObjectsPage() {
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [trayCollapsed, setTrayCollapsed] = useState(false);
   const [trayFilter, setTrayFilter] = useState<TrayFilter>("auto");
+  const [detailId, setDetailId] = useState<string | null>(null);
   // Directory import: which folder of the plan is being created (item P1.7).
   const [folderProgress, setFolderProgress] = useState<{
     done: number;
@@ -3685,6 +3687,15 @@ export function ObjectsPage() {
                   {item.state.phase === "available" ? (
                     <span className="chip chip-muted">SHA-256 vérifié</span>
                   ) : null}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-small"
+                    aria-expanded={detailId === item.id}
+                    aria-label={`Détails de ${item.fileName}`}
+                    onClick={() => setDetailId(detailId === item.id ? null : item.id)}
+                  >
+                    Détails
+                  </button>
                   {ACTIVE_PHASES.includes(item.state.phase) ? (
                     <button
                       type="button"
@@ -3731,6 +3742,9 @@ export function ObjectsPage() {
                     {formatBytes(item.state.sizeBytes)} (
                     {Math.round(item.state.progress * 100)} %)
                   </p>
+                ) : null}
+                {detailId === item.id ? (
+                  <FileDetail item={item} formatBytes={formatBytes} />
                 ) : null}
                 {(() => {
                   const text = describeItem(item, waitingIndex.get(item.id) ?? 0);

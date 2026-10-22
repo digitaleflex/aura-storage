@@ -258,3 +258,24 @@ test("the tray explains what is happening to each file", async ({ page }) => {
   await expect(tray.locator(".elapsed").first()).toHaveText(/^\d+:\d{2}$/);
   await expect(tray.getByTestId("queue-breakdown")).toContainText("disponibles");
 });
+
+test("a file's details show its steps, object id and the server SHA-256", async ({ page }) => {
+  await installMocks(page);
+  await login(page);
+  await chooseFile(page);
+  await page.getByRole("button", { name: "Importer et valider" }).click();
+  const tray = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
+  await expect(tray.getByText("Disponible").first()).toBeVisible();
+  await tray.getByRole("button", { name: "Détails de rapport.pdf" }).click();
+  const detail = tray.getByTestId("file-detail");
+  await expect(detail).toContainText("rapport.pdf");
+  await expect(detail).toContainText("obj-1");
+  await expect(detail).toContainText("abc");
+  const steps = detail.getByRole("list", { name: "Étapes" });
+  await expect(steps).toContainText("Autorisation demandée");
+  await expect(steps).toContainText("Envoi des octets");
+  await expect(steps).toContainText("Vérification d'intégrité");
+  await expect(steps).toContainText("Disponible");
+  await tray.getByRole("button", { name: "Détails de rapport.pdf" }).click();
+  await expect(detail).toHaveCount(0);
+});

@@ -175,3 +175,21 @@ test("the state says how long a phase lasts and what the server is doing", async
   expect(last.mode).toBeUndefined();
   expect(last.since!).toBeGreaterThan(validating[0]!.since!);
 });
+
+test("the state keeps every phase with its start time, and the server checksum", async () => {
+  let clock = 0;
+  const { d } = deps(["verifying", "available"]);
+  const result = await runTransfer(FILE, d, {
+    folderId: null, idempotencyKey: "k", now: () => (clock += 100),
+  });
+  const log = result.state.phaseLog ?? [];
+  const phases = log.map((e) => e.phase);
+  expect(phases[0]).toBe("requesting-intent");
+  expect(phases).toContain("uploading");
+  expect(phases).toContain("validating");
+  expect(phases[phases.length - 1]).toBe("available");
+  // Strictly increasing start times; a repeated validating poll is not a new step.
+  expect(log.every((e, i) => i === 0 || e.at > log[i - 1]!.at)).toBe(true);
+  expect(phases.filter((p) => p === "validating")).toHaveLength(1);
+  expect(result.state.checksum).toBe("abc");
+});
