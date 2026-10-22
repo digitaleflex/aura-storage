@@ -2772,6 +2772,12 @@ export function ObjectsPage() {
             aria-labelledby="details-title"
           >
           <div className="drawer-head">
+            <span
+              className={`file-tile file-tile-lg file-tile-${fileKind(details.content_type)}`}
+              aria-hidden="true"
+            >
+              <FileTypeIcon contentType={details.content_type} />
+            </span>
             <div className="drawer-title">
               <span className="muted">{typeLabel(details.content_type)}</span>
               <h2 id="details-title">{details.display_name}</h2>

@@ -1,3 +1,4 @@
+import { frenchNote, healthDetail } from "../lib/adminText";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, hasAdminAccess, hasScope, SERVICE_SCOPES } from "../lib/api";
@@ -582,7 +583,7 @@ export function AdminPage() {
   const objectsTotal = Object.values(objectsByStatus).reduce((a, b) => a + b, 0);
 
   return (
-    <div className="stack">
+    <div className="stack admin-page">
       <div className="page-head">
         <h1>Administration</h1>
       </div>
@@ -891,23 +892,13 @@ export function AdminPage() {
                       </span>
                     </td>
                     <td className="muted">
-                      {component.latency_ms !== undefined
-                        ? `${component.latency_ms} ms`
-                        : null}
-                      {component.uptime_s !== undefined
-                        ? ` · démarrée depuis ${component.uptime_s} s`
-                        : null}
-                      {component.free_bytes !== undefined
-                        ? ` · libres : ${formatBytes(component.free_bytes)}`
-                        : null}
-                      {component.error ? ` · ${component.error}` : null}
-                      {component.note ? ` · ${component.note}` : null}
+                      {healthDetail(component, formatBytes)}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <p className="muted">{health.data.note}</p>
+            <p className="callout">{frenchNote(health.data.note)}</p>
             <div className="section-head">
               <h3>Candidats orphelins</h3>
               <button
@@ -1064,6 +1055,29 @@ export function AdminPage() {
           <p className="muted">Chargement…</p>
         ) : (
           <>
+            {(() => {
+              const ok = integrity.data.results.ok?.count ?? 0;
+              const unchecked = integrity.data.results.unchecked?.count ?? 0;
+              const bad =
+                (integrity.data.results.mismatch?.count ?? 0) +
+                (integrity.data.results.missing?.count ?? 0);
+              return (
+                <div className="stat-grid stat-grid-integrity" aria-hidden="true">
+                  <div className={ok > 0 ? "stat stat-ok" : "stat"}>
+                    <span className="value">{ok}</span>
+                    <span className="label">Intacts</span>
+                  </div>
+                  <div className="stat">
+                    <span className="value">{unchecked}</span>
+                    <span className="label">Pas encore relus</span>
+                  </div>
+                  <div className={bad > 0 ? "stat stat-danger" : "stat"}>
+                    <span className="value">{bad}</span>
+                    <span className="label">En défaut</span>
+                  </div>
+                </div>
+              );
+            })()}
             <p className="muted" data-testid="integrity-summary">
               Chaque fichier est relu et son SHA-256 recalculé au moins tous les{" "}
               {integrity.data.interval_days} jours :{" "}
