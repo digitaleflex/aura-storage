@@ -1,26 +1,20 @@
 #!/usr/bin/env python3
-"""Transfer benchmark harness for the AURA transfer engine (C4).
-
-Runs against a live (or local) SeaweedFS endpoint and reports throughput and
-commit latency for a matrix of object sizes and connection counts. Output is
-JSON on stdout plus a Markdown table on stderr.
-
-Usage:
-    AURA_API_BASE=http://127.0.0.1:8000 \\
-    AURA_API_ADMIN_PASSWORD=... AURA_S3_ENDPOINT=... \\
-    python3 tests/transfer-bench.py [--sizes 1,10,100] [--conns 1,4] [--out baseline.json]
-
-This script is NOT run in CI: it needs a real storage backend. It is the
-evidence base for any future tuning decision (G11).
-"""
+"""Transfer benchmark harness for the AURA transfer engine (C4)."""
 import argparse
 import hashlib
+import http.cookiejar
 import json
 import os
+import ssl
 import time
 import urllib.request
 
 API = os.environ.get("AURA_API_BASE", "http://127.0.0.1:8000")
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
+_CJ = http.cookiejar.CookieJar()
+_OPENER = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_SSL_CTX), urllib.request.HTTPCookieProcessor(_CJ))
 
 
 def login():
@@ -31,7 +25,7 @@ def login():
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req) as r:
+    with _OPENER.open(req) as r:
         body = json.loads(r.read())
     return body["csrf_token"]
 
@@ -45,7 +39,7 @@ def intent(csrf, size):
         headers={"Content-Type": "application/json", "X-CSRF-Token": csrf},
         method="POST",
     )
-    with urllib.request.urlopen(req) as r:
+    with _OPENER.open(req) as r:
         return json.loads(r.read())
 
 
@@ -55,20 +49,18 @@ def run_one(size, csrf):
     t0 = time.perf_counter()
     meta = intent(csrf, size)
     t_intent = time.perf_counter() - t0
-    # PUT (single request) — bytes never traverse the API.
     put_req = urllib.request.Request(meta["upload_url"], data=data, method="PUT",
                                     headers=meta.get("headers", {}))
     t1 = time.perf_counter()
-    with urllib.request.urlopen(put_req):
+    with urllib.request.urlopen(put_req, context=_SSL_CTX):
         pass
     t_put = time.perf_counter() - t1
-    # commit
     t2 = time.perf_counter()
     creq = urllib.request.Request(
         f"{API}/api/v1/objects/{meta['id']}/commit",
         data=b"", headers={"X-CSRF-Token": csrf}, method="POST",
     )
-    with urllib.request.urlopen(creq) as r:
+    with _OPENER.open(creq) as r:
         cbody = json.loads(r.read())
     t_commit = time.perf_counter() - t2
     assert cbody["checksum_sha256"] == digest
@@ -108,5 +100,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-PY
-chmod +x tests/transfer-bench.py && echo created
