@@ -434,6 +434,10 @@ paths:
                     size_bytes: 482133
                     checksum_sha256: 9f2c41a7d0b8e6534c1f9a2b7d8e0c3f5a6b9d2e8c1f4a7b0d3e6c9f2a5b8d1e
                     checksum_algorithm: sha256
+                    commit_timing:
+                      head_ms: 12.481
+                      hash_ms: 87.203
+                      total_ms: 101.917
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not committable (including aborted/expired/deleted) }
@@ -1563,6 +1567,17 @@ components:
         size_bytes: { type: integer }
         checksum_sha256: { type: string, description: Hex SHA-256 streamed server-side }
         checksum_algorithm: { type: string, enum: [sha256] }
+        commit_timing:
+          type: [object, "null"]
+          description: >-
+            Durations of the commit phases, in milliseconds. The property is
+            absent when the object was already available, so no commit was
+            performed here, and null when the commit was won by a concurrent
+            request, whose phases were therefore not measured here.
+          properties:
+            head_ms: { type: number, description: Time spent reading the object metadata }
+            hash_ms: { type: number, description: Time spent streaming and hashing the body }
+            total_ms: { type: number, description: Total duration of the commit }
     ObjectSummary:
       type: object
       required: [id, display_name, content_type, size_bytes, status, created_at, updated_at]

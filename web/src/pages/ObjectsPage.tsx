@@ -13,7 +13,7 @@ import {
   hasScope,
   putToPresignedUrl,
 } from "../lib/api";
-import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
+import type { CommitTiming, FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
 import {
   addEntries,
@@ -270,20 +270,50 @@ function typeLabel(contentType: string): string {
   return contentType.split("/")[1] ?? contentType;
 }
 
+/** Variant class shared by the status badge and the loaded-pages tally, so the
+ * two never diverge on colour semantics. */
+function statusVariantClass(status: string): string {
+  if (status === "available") return "status status-ok";
+  if (status === "pending" || status === "verifying") return "status status-warn";
+  if (status === "failed") return "status status-error";
+  // Deletion stays neutral grey: it never borrows the activity colour.
+  if (status === "deleted") return "status status-muted";
+  return "status";
+}
+
 /** Status shown as a dot plus a word, so it never relies on colour alone. */
 function StatusLabel({ status }: { status: string }) {
-  const variant =
-    status === "available"
-      ? "status status-ok"
-      : status === "pending" || status === "verifying"
-        ? "status status-warn"
-        : status === "failed"
-          ? "status status-error"
-          : status === "deleted"
-            ? // Deletion stays neutral grey: it never borrows the activity colour.
-              "status status-muted"
-            : "status";
-  return <span className={variant}>{STATUS_LABELS[status] ?? status}</span>;
+  return <span className={statusVariantClass(status)}>{STATUS_LABELS[status] ?? status}</span>;
+}
+
+/** Commit phase durations, in whole milliseconds, French number grouping. */
+const MS_FORMAT = new Intl.NumberFormat("fr-FR");
+
+/** "128\u00A0ms" — non-breaking space so the unit never wraps on its own. */
+function formatMs(value: number): string {
+  return `${MS_FORMAT.format(Math.round(value))}\u00A0ms`;
+}
+
+/** Server-side commit durations for a transfer that reached `available`.
+ * Renders nothing when the timing is absent (already-available object) or
+ * null (commit won by a concurrent request), or when a value is not finite. */
+function CommitTimingLine({ timing }: { timing?: CommitTiming | null }) {
+  if (!timing) return null;
+  const { head_ms, hash_ms, total_ms } = timing;
+  if (
+    !Number.isFinite(head_ms) ||
+    !Number.isFinite(hash_ms) ||
+    !Number.isFinite(total_ms)
+  ) {
+    return null;
+  }
+  return (
+    <p className="muted commit-timing">
+      Commit serveur — total <span className="mono num">{formatMs(total_ms)}</span>{" "}
+      (métadonnées <span className="mono num">{formatMs(head_ms)}</span> · SHA-256{" "}
+      <span className="mono num">{formatMs(hash_ms)}</span>)
+    </p>
+  );
 }
 
 /** Server-side soft delete accepts only `available` or `pending` rows; anything
@@ -1679,6 +1709,21 @@ export function ObjectsPage() {
 
   const items = objectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
 
+  // Répartition des statuts sur les pages déjà chargées. Elle ne peut pas
+  // vivre dans le filtre d'état : celui-ci sert justement à charger les autres
+  // statuts, donc un compteur y serait circulaire et partiel par construction.
+  // `deleted` et `purging` n'apparaissent jamais sans filtre : l'API applique
+  // `hide_deleted = status is None` et ne renvoie donc pas ces lignes.
+  const statusTally = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of items) {
+      counts.set(item.status, (counts.get(item.status) ?? 0) + 1);
+    }
+    return STATUS_OPTIONS.filter((option) => option.value !== "")
+      .map((option) => ({ ...option, count: counts.get(option.value) ?? 0 }))
+      .filter((entry) => entry.count > 0);
+  }, [items]);
+
   // Only deletable rows are selectable: the server refuses anything else
   // with 409, so offering them would manufacture failures.
   // In master mode the trash can be selected too: its rows are purgeable.
@@ -2551,6 +2596,35 @@ export function ObjectsPage() {
               />
             </label>
           </div>
+        ) : null}
+
+        {statusFilter === "" ? (
+          statusTally.length > 0 ? (
+            <div className="filters-tally">
+              <span className="filters-tally-label">Répartition chargée</span>
+              <span className="filters-tally-list">
+                {statusTally.map((entry) => (
+                  <span
+                    key={entry.value}
+                    className={`filters-tally-item ${statusVariantClass(entry.value)}`}
+                  >
+                    {`${entry.label} · ${entry.count}`}
+                  </span>
+                ))}
+              </span>
+              {objectsQuery.hasNextPage ? (
+                <span
+                  className="filters-tally-note"
+                  title="Décompte partiel : toutes les pages ne sont pas encore chargées."
+                >
+                  Partielle
+                  <span className="visually-hidden">
+                    {" — toutes les pages ne sont pas encore chargées"}
+                  </span>
+                </span>
+              ) : null}
+            </div>
+          ) : null
         ) : null}
 
         {objectsQuery.isError ? (
@@ -3557,6 +3631,9 @@ export function ObjectsPage() {
                     </button>
                   ) : null}
                 </div>
+                {item.state.phase === "available" ? (
+                  <CommitTimingLine timing={item.state.commitTiming} />
+                ) : null}
                 {item.state.phase === "uploading" ? (
                   <div
                     className="progress"

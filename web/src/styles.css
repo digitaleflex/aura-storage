@@ -1032,6 +1032,45 @@ select:focus-visible {
   line-height: 1.7;
 }
 
+/* Répartition des statuts sur les pages déjà chargées (hors filtre d'état :
+   le filtre charge justement les autres statuts). Chaque entrée porte aussi
+   la classe `.status`, qui fournit la pastille et la couleur sémantique. */
+.filters-tally {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.filters-tally-label {
+  font-weight: var(--fw-semibold);
+  color: var(--muted);
+}
+
+.filters-tally-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+
+.filters-tally-item {
+  font-weight: var(--fw-medium);
+}
+
+.filters-tally-note {
+  border: var(--bw) solid var(--line-2);
+  border-radius: var(--radius-small);
+  padding: 0 var(--space-1);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  color: var(--muted);
+  line-height: var(--lh-mono);
+}
+
 /* ------------------------------------------------------------------ */
 /* Object register: dense rows, mono for anything you compare.         */
 /* ------------------------------------------------------------------ */
@@ -1572,6 +1611,13 @@ select:focus-visible {
 
 .queue-line .transfer-name {
   min-width: 0;
+}
+
+/* Durées du commit serveur : même registre atténué que le reste de la file. */
+.commit-timing {
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-std);
 }
 
 /* Files chosen but not yet submitted. */
@@ -2942,4 +2988,8 @@ body.density-compact .ledger-row {
 }
 body.density-compact .nav a {
   padding: 6px 10px;
+}
+body.density-compact .filters-tally {
+  margin-top: var(--space-2);
+  gap: var(--space-1) var(--space-2);
 }
