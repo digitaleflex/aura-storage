@@ -2372,9 +2372,25 @@ export function ObjectsPage() {
             {transferActive ? "Transfert…" : "Importer et valider"}
           </button>
           {transferActive ? (
-            <button type="button" className="btn" onClick={handleCancelUpload}>
-              Annuler
-            </button>
+            <ConfirmAction
+              label="Annuler"
+              title="Arrêter l'import ?"
+              message={
+                <>
+                  {queue.items.length - queue.done} fichier(s) sur {queue.items.length} ne sont
+                  pas encore transférés ({formatBytes(
+                    queue.items.reduce(
+                      (sum, item) => sum + (item.state.phase === "available" ? 0 : item.sizeBytes),
+                      0,
+                    ),
+                  )}). Les envois en cours sont interrompus ; les fichiers déjà validés restent.
+                </>
+              }
+              confirmLabel="Arrêter l'import"
+              danger
+              className="btn"
+              onConfirm={handleCancelUpload}
+            />
           ) : null}
           {!transferActive && (queue.failed > 0 || queue.cancelled > 0) ? (
             <button type="button" className="btn" onClick={handleRetryFailed}>
