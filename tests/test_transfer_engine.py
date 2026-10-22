@@ -305,10 +305,10 @@ def test_truncated_upload_is_failed_and_not_downloadable(monkeypatch):
 # ---------------------------------------------------------------------------
 # Commit deadline + bounded S3 client (G3b, #120)
 # ---------------------------------------------------------------------------
-def test_commit_past_the_global_deadline_fails_the_intent_with_504(monkeypatch):
-    # A 0 s deadline is already exceeded when the first chunk arrives, so the
-    # hashing loop must abort with a terminal failed intent and 504 instead of
-    # streaming (and holding a worker slot) forever.
+def test_commit_past_the_global_deadline_hands_over_to_the_verifier(monkeypatch):
+    # A 0 s deadline is already exceeded when the first chunk arrives. The
+    # request must stop holding a worker, but the bytes are kept: a slow disk is
+    # not corruption, so the object goes to async verification (202).
     monkeypatch.setattr(main.settings, "commit_deadline_s", 0)
     data = os.urandom(64 * 1024)
     s3 = DummyS3(data)
@@ -316,12 +316,17 @@ def test_commit_past_the_global_deadline_fails_the_intent_with_504(monkeypatch):
     c, headers = _admin()
     oid = _intent(c, headers, size_bytes=len(data)).json()["id"]
     r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
-    assert r.status_code == 504, r.text
-    assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "failed"
-    # The unreachable bytes of the failed intent are dropped best-effort.
-    assert len(s3.deleted) == 1
-    # Terminal: a second commit cannot resurrect it (a fresh upload is needed).
-    assert c.post(f"/api/v1/objects/{oid}/commit", headers=headers).status_code == 409
+    assert r.status_code == 202, r.text
+    assert r.json()["status"] == "verifying"
+    assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "verifying"
+    assert s3.deleted == []  # nothing is deleted on a timeout
+    # The worker (no deadline of its own) finishes the check.
+    from api.verifier import verify_one
+
+    monkeypatch.setattr(main.settings, "commit_deadline_s", 300)
+    while verify_one(main.repo, s3, main.settings) is not None:
+        pass
+    assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "available"
 
 
 def test_stream_sha256_checks_the_deadline_between_chunks():
