@@ -311,8 +311,15 @@ test("a page that throws shows the branded error page, not the router default", 
   await installMocks(page);
   // A malformed usage answer makes the shell throw while rendering.
   await page.route("**/api/v1/admin/usage**", (route) => route.fulfill({ json: { totals: {} } }));
-  await login(page);
-  await expect(page.getByRole("heading", { name: "Cette page n'a pas pu s'afficher" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Recharger la page" })).toBeVisible();
+  // Not the shared login(): it waits for the files heading, which may already be gone.
+  await page.goto("/login");
+  await page.getByLabel("Identifiant").fill("admin");
+  await page.getByLabel("Mot de passe").fill("pw");
+  await page.getByRole("button", { name: "Se connecter" }).click();
+  // The shell fetches usage after login: give the crash time under a loaded runner.
+  await expect(page.getByRole("heading", { name: "Cette page n'a pas pu s'afficher" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByRole("button", { name: "Recharger la page" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Something went wrong!")).toHaveCount(0);
 });
