@@ -686,12 +686,14 @@ export interface QueueOptions {
 }
 
 /**
- * Default parallelism. Raised from 3 to 10 for the MVP so a batch import is not
- * serialized behind a three-wide window. The global semaphore (slots are shared
- * by actives and staggered reservations) plus the 250 ms stagger still bound how
- * fast connections are opened, so a wider window does not become a burst.
+ * Default parallelism. A wide window (10) shares one uplink between ten PUTs, so
+ * each file takes ~10/3 longer, trips Traefik's 1200 s readTimeout earlier and
+ * makes the server re-read ten objects at once on the same disk (commit rehash
+ * is 5.8-7.1x slower under 4 concurrent writes, see
+ * docs/engineering/commit-latency-bench.md). Four keeps the link busy without
+ * those costs; adaptive concurrency still backs off to 1 on congestion.
  */
-export const DEFAULT_QUEUE_CONCURRENCY = 10;
+export const DEFAULT_QUEUE_CONCURRENCY = 4;
 export const DEFAULT_START_STAGGER_MS = 250;
 /** Base congestion tolerance, tuned for the historical cap of 3 concurrent files. */
 export const DEFAULT_CONGESTION_THRESHOLD = 2;
