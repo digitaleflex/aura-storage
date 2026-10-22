@@ -45,6 +45,15 @@ minimal house CSS (no Tailwind), Playwright for e2e.
   batches above 30 files, throughput over a 20 s sliding window, pause/resume,
   retry of failed files while the import runs, and confirmation before stopping.
   Progress-only updates are coalesced to one per 250 ms.
+- Inline preview (`PreviewModal`): images (PNG/JPEG/GIF/WebP/AVIF), PDF, audio,
+  **video** (MP4/WebM/OGG in a `<video>` player) and the **text family** — plain
+  text, Markdown, JSON (indented), CSV/TSV (table, 200 rows × 30 columns at most).
+  Text is read with `fetch` (first 256 KiB only, then the transfer is cancelled) and
+  rendered as escaped text; if the browser cannot read the storage URL it falls back
+  to a sandboxed frame. HTML, SVG, XML and scripts are never previewed (they would
+  run in the storage origin). Word/Excel/PowerPoint have no preview: download only.
+  The server allow-list is `PREVIEWABLE_CONTENT_TYPES` in `api/main.py`
+  (mirrored in `src/lib/preview.ts`).
 - Files page: a vault overview (space used vs capacity, verified files, files
   awaiting validation, per-file size limit — real catalogue figures only), a
   ledger with file-type tiles and status pills, a welcoming empty state, and a

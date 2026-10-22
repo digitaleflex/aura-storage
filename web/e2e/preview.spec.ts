@@ -19,16 +19,30 @@ const ITEMS = [
   item("pdf-1", "contrat.pdf", "application/pdf"),
   item("html-1", "page.html", "text/html"),
   item("bad-1", "forcee.png", "image/png"),
+  item("vid-1", "entretien.mp4", "video/mp4"),
+  item("csv-1", "budget.csv", "text/csv"),
+  item("json-1", "config.json", "application/json"),
+  item("txt-1", "notes.txt", "text/plain"),
 ];
+
+const BODIES: Record<string, { type: string; body: string }> = {
+  "csv-1": { type: "text/csv", body: 'poste,montant\n"Salaires, net",1200\nLoyer,<b>800</b>\n' },
+  "json-1": { type: "application/json", body: '{"a":[1,2],"b":"<script>1</script>"}' },
+  "txt-1": { type: "text/plain", body: "ligne 1\n<img src=x onerror=alert(1)>\n" },
+};
 
 async function setup(page: Page) {
   const PNG = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
     "base64",
   );
-  await page.route("**/fake-s3/**", (route) =>
-    route.fulfill({ status: 200, contentType: "image/png", body: PNG }),
-  );
+  await page.route("**/fake-s3/**", (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").pop() ?? "";
+    const text = BODIES[id];
+    return text
+      ? route.fulfill({ status: 200, contentType: text.type, body: text.body })
+      : route.fulfill({ status: 200, contentType: "image/png", body: PNG });
+  });
   await page.route("**/api/v1/**", async (route: Route) => {
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
@@ -116,4 +130,45 @@ test("the details panel offers Aperçu for a previewable file", async ({ page })
   await page.getByRole("button", { name: "Détails de plan.png" }).click();
   await page.getByRole("dialog", { name: "plan.png" }).getByRole("button", { name: "Aperçu" }).click();
   await expect(page.locator("img.preview-media")).toBeVisible();
+});
+
+test("a video opens in a <video> player", async ({ page }) => {
+  await setup(page);
+  await openMenu(page, "entretien.mp4");
+  await page.getByRole("menuitem", { name: "Aperçu" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.locator("video.preview-media")).toHaveAttribute("src", "/fake-s3/vid-1");
+  await expect(dialog.locator("video.preview-media")).toHaveAttribute("controls", "");
+});
+
+test("a CSV opens as a table, with cells shown as text and not as markup", async ({ page }) => {
+  await setup(page);
+  await openMenu(page, "budget.csv");
+  await page.getByRole("menuitem", { name: "Aperçu" }).click();
+  const table = page.getByRole("dialog").locator("table.preview-table");
+  await expect(table.getByRole("columnheader", { name: "poste" })).toBeVisible();
+  await expect(table.getByRole("cell", { name: "Salaires, net" })).toBeVisible();
+  await expect(table.getByRole("cell", { name: "<b>800</b>" })).toBeVisible();
+  await expect(table.locator("b")).toHaveCount(0);
+});
+
+test("JSON is indented and plain text never runs the markup it contains", async ({ page }) => {
+  await setup(page);
+  await openMenu(page, "config.json");
+  await page.getByRole("menuitem", { name: "Aperçu" }).click();
+  const pre = page.getByRole("dialog").locator("pre.preview-text");
+  await expect(pre).toContainText('"a": [');
+  await expect(pre).toContainText("<script>1</script>");
+  await page.getByRole("button", { name: "Fermer l'aperçu" }).click();
+
+  let dialogs = 0;
+  page.on("dialog", () => {
+    dialogs += 1;
+  });
+  await openMenu(page, "notes.txt");
+  await page.getByRole("menuitem", { name: "Aperçu" }).click();
+  const text = page.getByRole("dialog").locator("pre.preview-text");
+  await expect(text).toContainText("<img src=x onerror=alert(1)>");
+  await expect(page.getByRole("dialog").locator("img")).toHaveCount(0);
+  expect(dialogs).toBe(0);
 });

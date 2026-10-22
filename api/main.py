@@ -1728,6 +1728,13 @@ PREVIEWABLE_CONTENT_TYPES = frozenset({
     "application/pdf",
     "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg",
     "audio/webm", "audio/mp4", "audio/aac", "audio/flac",
+    # Video plays in a <video> element (media-src is limited to the S3 host).
+    "video/mp4", "video/webm", "video/ogg",
+    # Plain-text family, rendered by the SPA as escaped text / a table (never as
+    # markup). text/html, image/svg+xml and anything that can carry script stay
+    # out of this list: they would run inside the S3 origin.
+    "text/plain", "text/csv", "text/tab-separated-values", "text/markdown",
+    "application/json",
 })
 
 

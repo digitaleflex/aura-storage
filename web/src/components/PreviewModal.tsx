@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../lib/api";
 import { describeError } from "../lib/errors";
 import type { ObjectItem, PreviewIntentResponse } from "../lib/api";
-import { previewKind } from "../lib/preview";
+import { previewKind, textFlavor } from "../lib/preview";
+import { TextPreview } from "./TextPreview";
 
 /** Above this size the browser does real work; warn instead of pulling it silently. */
 const PREVIEW_WARN_BYTES = 50 * 1024 * 1024;
@@ -125,6 +126,16 @@ export function PreviewModal({
                 className="preview-media"
                 src={intent.preview_url}
                 alt={`Aperçu de ${item.display_name}`}
+              />
+            ) : kind === "video" ? (
+              <video className="preview-media" src={intent.preview_url} controls preload="metadata">
+                Votre navigateur ne peut pas lire cette vidéo.
+              </video>
+            ) : kind === "text" ? (
+              <TextPreview
+                url={intent.preview_url}
+                flavor={textFlavor(intent.content_type ?? item.content_type)}
+                name={item.display_name}
               />
             ) : kind === "audio" ? (
               <audio className="preview-audio" src={intent.preview_url} controls preload="metadata">

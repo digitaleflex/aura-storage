@@ -406,10 +406,11 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: "Presigned GET URL bound to Content-Disposition inline and the object content type, plus display_name, content_type and size_bytes; the client falls back to a download when the type is not renderable" }
+        "200": { description: "Presigned GET URL bound to Content-Disposition inline and the object content type, plus display_name, content_type and size_bytes. Allow-listed types only: PNG/JPEG/GIF/WebP/AVIF, PDF, audio (MP3, WAV, OGG, WebM, MP4/AAC, FLAC), video (MP4, WebM, OGG) and text (plain, CSV, TSV, Markdown, JSON); anything else is 415 and the client falls back to a download" }
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
+        "415": { description: Content type is not on the inline-preview allow-list }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)
