@@ -275,3 +275,20 @@ def test_runner_translates_placeholders_for_postgres_only():
     sq = _FakePostgresConn()
     migrations._Runner(sq, "sqlite").exec("UPDATE t SET x = ? WHERE id = ?", (1, 2))
     assert sq.executed == [("UPDATE t SET x = ? WHERE id = ?", (1, 2))]
+
+
+def test_hot_path_indexes_exist():
+    """Idempotency lookups and in-flight probes must not scan the catalogue."""
+    import api.main as main
+
+    if main.repo.dialect == "sqlite":
+        rows = main.repo.conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'index'"
+        ).fetchall()
+        found = {r["name"]: (r["sql"] or "") for r in rows}
+    else:
+        cur = main.repo.conn.execute("SELECT indexname, indexdef FROM pg_indexes")
+        found = {r["indexname"]: r["indexdef"] for r in cur.fetchall()}
+    assert "idx_objects_idem" in found
+    assert "idx_objects_inflight" in found
+    assert "verifying" in found["idx_objects_inflight"]  # partial index
