@@ -60,6 +60,10 @@ export interface TransferState {
    * bytes are stored and the integrity check waits in the server's queue (202).
    */
   verifyMode?: "inline" | "background";
+  /** Every phase this file went through, with the time (ms epoch) it began. */
+  phaseLog?: Array<{ phase: TransferPhase; at: number }>;
+  /** SHA-256 the server recorded once the file is available. */
+  checksum?: string;
 }
 
 export interface TransferResult {
@@ -226,7 +230,14 @@ export async function runTransfer(
   const emit = (patch: Partial<TransferState>): void => {
     // Stamp every phase change so the UI can say how long a step has lasted.
     const changed = patch.phase !== undefined && patch.phase !== state.phase;
-    state = { ...state, ...patch, ...(changed ? { phaseSince: now() } : {}) };
+    const at = now();
+    state = {
+      ...state,
+      ...patch,
+      ...(changed
+        ? { phaseSince: at, phaseLog: [...(state.phaseLog ?? []), { phase: patch.phase!, at }] }
+        : {}),
+    };
     // Leaving the validating phase clears what the server was doing.
     if (changed && patch.phase !== "validating") state = { ...state, verifyMode: undefined };
     options.onUpdate?.(state);
@@ -460,7 +471,14 @@ export async function runTransfer(
       });
       return { state, objectId: id };
     }
-    emit({ phase: "available", error: null, intentId: id, progress: 1, transferredBytes: file.size });
+    emit({
+      phase: "available",
+      error: null,
+      intentId: id,
+      progress: 1,
+      transferredBytes: file.size,
+      checksum: current.checksum_sha256,
+    });
     return { state, objectId: id, checksum: current.checksum_sha256 };
   };
 
