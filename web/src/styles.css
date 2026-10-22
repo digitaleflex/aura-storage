@@ -3003,3 +3003,64 @@ body.density-compact .nav a {
   max-height: min(320px, 40vh);
   overflow-y: auto;
 }
+
+/* -- Design pass (visual audit) ---------------------------------------------
+   The top bar is dark in both themes (--side), but its text inherited the page
+   ink: in the light theme the account name was dark on dark. */
+.topbar {
+  color: #e8ecf2;
+}
+.topbar .whoami-role {
+  color: #b8c1cd;
+}
+
+/* The global bar sat in a flex row without a width, so it collapsed to nothing:
+   stack it above its label so progress is actually visible. */
+.tray-progress {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 10px 16px 4px;
+}
+.tray-progress .progress {
+  margin-top: 0;
+  height: 6px;
+  border-radius: 3px;
+}
+.tray-progress .progress-bar {
+  border-radius: 3px;
+}
+.queue-item .progress {
+  margin: 6px 0 4px;
+  height: 4px;
+  border-radius: 2px;
+}
+
+@media (max-width: 640px) {
+  /* Dock the tray to the bottom edge instead of floating over the form. */
+  .tray {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+  }
+  .tray .transfer {
+    max-height: 32vh;
+  }
+  /* Name on its own line; size, status and actions share the next one. */
+  .queue-line .transfer-name {
+    flex: 1 1 100%;
+    overflow-wrap: anywhere;
+  }
+  .queue-line {
+    gap: 6px 10px;
+  }
+}
+
+/* Ghost buttons and icons in the (always dark) top bar were mid-grey on dark. */
+.topbar .btn-ghost,
+.topbar .topbar-sidebar-toggle,
+.topbar .topbar-mobile-toggle,
+.topbar .session a {
+  color: #d5dbe4;
+}
