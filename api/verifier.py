@@ -128,6 +128,13 @@ def run_forever(repo, s3ops, settings, *, stop: threading.Event | None = None,
     last_purge_sweep = 0.0
     while not stop.is_set():
         try:
+            if settings.verify_pause_while_uploading and repo.has_pending_uploads(
+                int(time.time()) - settings.verify_pause_window_s
+            ):
+                # Uploads are running: verify once they are done (the re-read
+                # would compete with the PUTs for the disk).
+                stop.wait(settings.verify_poll_s)
+                continue
             outcome = verify_one(repo, s3ops, settings, audit=audit)
         except Exception:
             # Never let one bad row kill the worker; its lease expires and

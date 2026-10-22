@@ -121,8 +121,14 @@ class Settings:
     # Asynchronous integrity check (N5). At or above this size, commit answers
     # 202 'verifying' and a worker hashes the object outside the request.
     verify_async_threshold_bytes: int = _int(
-        "AURA_VERIFY_ASYNC_THRESHOLD_BYTES", 256 * 1024 * 1024
+        "AURA_VERIFY_ASYNC_THRESHOLD_BYTES", 32 * 1024 * 1024
     )
+    # Hold verification back while uploads are running: the re-read competes
+    # with the PUTs for the disk (5.8-7.1x slower under 4 concurrent writes,
+    # docs/engineering/commit-latency-bench.md). A pending intent created within
+    # the window counts as a running upload; abandoned ones age out of it.
+    verify_pause_while_uploading: bool = _int("AURA_VERIFY_PAUSE_WHILE_UPLOADING", 1) != 0
+    verify_pause_window_s: int = _int("AURA_VERIFY_PAUSE_WINDOW_S", 300)
     # "inline": a worker thread inside the API process (default). "off": run
     # `python -m api.verifier` as its own process instead.
     verify_worker: str = os.environ.get("AURA_VERIFY_WORKER", "inline")

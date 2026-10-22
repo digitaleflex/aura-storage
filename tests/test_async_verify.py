@@ -230,3 +230,34 @@ def test_verifying_objects_cannot_be_deleted_or_aborted(_setup):
     assert c.delete(f"/api/v1/objects/{oid}", headers=headers).status_code == 409
     assert c.post(f"/api/v1/objects/{oid}/abort", headers=headers).status_code == 409
     assert c.get("/api/v1/objects?status=verifying", headers=headers).status_code == 200
+
+
+def test_the_background_verifier_waits_while_an_upload_is_running(_setup, monkeypatch):
+    import threading
+
+    from api.verifier import run_forever
+
+    monkeypatch.setattr(main.settings, "verify_poll_s", 0.05)
+    # Pending intents left by other test modules would keep the worker waiting.
+    _sql("UPDATE objects SET status = 'aborted' WHERE status = 'pending'")
+    c, headers = _admin()
+    oid = _upload(c, headers)
+    assert c.post(f"/api/v1/objects/{oid}/commit", headers=headers).status_code == 202
+    running = _upload(c, headers)  # another file is still being sent (pending)
+
+    stop = threading.Event()
+    t = threading.Thread(target=run_forever, args=(main.repo, _setup, main.settings),
+                         kwargs={"stop": stop}, daemon=True)
+    t.start()
+    try:
+        time.sleep(0.5)
+        assert _status(oid) == "verifying"  # held back: an upload is running
+        _sql("UPDATE objects SET status = 'aborted' WHERE id = ?", (running,))
+        for _ in range(100):
+            if _status(oid) == "available":
+                break
+            time.sleep(0.05)
+        assert _status(oid) == "available"  # verified once the uploads are done
+    finally:
+        stop.set()
+        t.join(timeout=2)
