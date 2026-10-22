@@ -208,8 +208,21 @@ test("cancel aborts the backend intent and shows a cancelled state", async ({ pa
   await page.getByRole("button", { name: "Importer et valider" }).click();
   await expect(page.getByRole("button", { name: "Annuler" })).toBeVisible();
   await page.getByRole("button", { name: "Annuler" }).click();
+  // Stopping an import asks for confirmation (a stray click must not kill a
+  // multi-hour import); "Annuler" in the dialog only closes it.
+  await page.getByRole("button", { name: "Arrêter l'import" }).click();
 
   await expect(page.getByText("Import annulé.")).toBeVisible();
   await expect.poll(() => mocks.calls.includes("abort")).toBe(true);
   expect(mocks.calls).not.toContain("commit");
+});
+
+test("the cancel button asks before stopping, and keeping the import leaves it running", async ({ page }) => {
+  const mocks = await installMocks(page, { putDelayMs: 1500 });
+  await login(page);
+  await chooseFile(page);
+  await page.getByRole("button", { name: "Importer et valider" }).click();
+  await page.getByRole("button", { name: "Annuler" }).first().click();
+  await expect(page.getByRole("heading", { name: "Arrêter l'import ?" })).toBeVisible();
+  expect(mocks.calls).not.toContain("abort");
 });

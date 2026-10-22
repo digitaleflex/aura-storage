@@ -271,7 +271,7 @@ services:
       AURA_MULTIPART_SESSION_TTL: ${AURA_MULTIPART_SESSION_TTL:-604800}
       # Asynchronous integrity check (N5): objects at or above the threshold are
       # hashed by a worker thread in this container, outside the commit request.
-      AURA_VERIFY_ASYNC_THRESHOLD_BYTES: ${AURA_VERIFY_ASYNC_THRESHOLD_BYTES:-268435456}
+      AURA_VERIFY_ASYNC_THRESHOLD_BYTES: ${AURA_VERIFY_ASYNC_THRESHOLD_BYTES:-33554432}
       AURA_VERIFY_WORKER: ${AURA_VERIFY_WORKER:-inline}
       # Master mode: password-confirmed elevation for bulk purges (seconds) and
       # the most objects one bulk call may purge.

@@ -67,7 +67,7 @@
 
   --line: #e3e6eb;
   --line-2: #d3d8df;
-  --field-line: #a9b2be;
+  --field-line: #7b8594;
 
   /* Accent : la seule couleur d'action du produit. TEINTE dorée demandée
      (#A96B13) assombrie à #9d660d : la proposition brute ne passait pas
@@ -676,7 +676,9 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: none;
+  /* Keep a real outline: the halo alone is ~1.6:1 on white (WCAG 2.4.7/1.4.11). */
+  outline: 2px solid var(--signal-bright);
+  outline-offset: 2px;
   box-shadow: var(--shadow-focus);
 }
 
