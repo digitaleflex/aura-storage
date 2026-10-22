@@ -178,17 +178,12 @@ services:
       # SeaweedFS default "*". AllowedHeaders stays "*" so the preflight for the
       # signed `x-amz-server-side-encryption` header on presigned PUTs is echoed.
       - -s3.allowedOrigins=https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
-      # Filer-level read cache (open-source SeaweedFS): keeps hot objects in
-      # memory/disk so repeated GETs do not hit the volume servers.
-      - -filer.cacheCapacityMB=${SEAWEEDFS_FILER_CACHE_MB:-256}
-      - -filer.cacheDir=/data/cache
     environment:
       TZ: ${TZ:-Africa/Porto-Novo}
       # SeaweedFS SSE-S3 envelope-encryption key. Keep identical across all S3 gateways.
       WEED_S3_SSE_KEK: ${WEED_S3_SSE_KEK:?Set a 64-character hex WEED_S3_SSE_KEK in .env}
     volumes:
       - ${AURA_DATA_DIR:-./data}/filer:/data
-      - ${AURA_DATA_DIR:-./data}/filer-cache:/data/cache
       - ./config/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
     networks:
       - storage
