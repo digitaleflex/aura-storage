@@ -279,3 +279,40 @@ test("a file's details show its steps, object id and the server SHA-256", async 
   await tray.getByRole("button", { name: "Détails de rapport.pdf" }).click();
   await expect(detail).toHaveCount(0);
 });
+
+test("the vault overview shows real figures and the empty state invites to import", async ({ page }) => {
+  await installMocks(page);
+  await page.route("**/api/v1/admin/usage**", (route) =>
+    route.fulfill({
+      json: {
+        measured_at: 1,
+        limits: { max_object_bytes: 5_368_709_120, max_pending_intents: 100, intent_ttl: 900, allow_empty_objects: false },
+        capacity: { capacity_bytes: 1_000_000_000, high_watermark_pct: 90, accept_until_bytes: 900_000_000, stored_bytes: 800_000_000, reserved_bytes: 0, free_for_uploads_bytes: 100_000_000 },
+        totals: { objects_by_status: { available: 3, pending: 1, verifying: 2 }, available_count: 3, stored_bytes: 800_000_000 },
+        spaces: [],
+      },
+    }),
+  );
+  await login(page);
+  const overview = page.getByTestId("vault-overview");
+  await expect(overview).toContainText("Fichiers vérifiés");
+  const tiles = overview.locator(".overview-tile");
+  await expect(tiles.nth(1).locator(".overview-value")).toHaveText("3"); // verified
+  await expect(tiles.nth(2).locator(".overview-value")).toHaveText("3"); // pending + verifying
+  const meter = overview.getByRole("meter", { name: "Espace utilisé" });
+  await expect(meter).toHaveAttribute("aria-valuenow", "80");
+  await expect(meter).toHaveClass(/meter-warn/);
+  // Empty catalogue: an invitation, with the import action.
+  await expect(page.getByText("Aucun fichier dans ce dossier.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Importer des fichiers" })).toBeVisible();
+});
+
+test("a page that throws shows the branded error page, not the router default", async ({ page }) => {
+  await installMocks(page);
+  // A malformed usage answer makes the shell throw while rendering.
+  await page.route("**/api/v1/admin/usage**", (route) => route.fulfill({ json: { totals: {} } }));
+  await login(page);
+  await expect(page.getByRole("heading", { name: "Cette page n'a pas pu s'afficher" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Recharger la page" })).toBeVisible();
+  await expect(page.getByText("Something went wrong!")).toHaveCount(0);
+});

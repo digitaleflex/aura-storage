@@ -11,6 +11,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { ObjectsPage } from "./pages/ObjectsPage";
 import { lazy, Suspense } from "react";
 import { Loading } from "./components/Loading";
+import { RouteError } from "./components/RouteError";
 
 const AdminPage = lazy(() => import("./pages/AdminPage").then((m) => ({ default: m.AdminPage })));
 
@@ -63,7 +64,11 @@ const basepath = import.meta.env.VITE_SUBPATH
   ? `/${import.meta.env.VITE_SUBPATH.replace(/^\//, "").replace(/\/$/, "")}`
   : undefined;
 
-export const router = createRouter({ routeTree, basepath });
+export const router = createRouter({
+  routeTree,
+  basepath,
+  defaultErrorComponent: ({ error }) => <RouteError error={error} />,
+});
 
 declare module "@tanstack/react-router" {
   interface Register {
