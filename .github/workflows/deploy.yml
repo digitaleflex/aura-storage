@@ -1,8 +1,11 @@
 name: Auto-Deployment Zéro Downtime
 
+# Manual only. This job opens an SSH session on the production VPS and runs
+# scripts/deploy.sh, so it must never fire on a merge: a merge to main would
+# ship code that has not passed acceptance on the pilot (docs/DEPLOYMENT.md).
+# Start it deliberately from the Actions tab ("Run workflow") once the
+# validation workflow is green and the backup/restore gate is satisfied.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
