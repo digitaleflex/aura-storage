@@ -3031,3 +3031,558 @@ body.density-compact .filters-tally {
   background: var(--surface-2, rgba(0, 0, 0, 0.06));
   font-weight: 600;
 }
+
+.queue-detail {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+}
+.queue-breakdown {
+  margin: 0.25rem 0;
+}
+.elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+.file-detail {
+  margin: 0.4rem 0 0.2rem;
+  padding: 0.5rem 0.75rem;
+  border: var(--bw, 1px) solid var(--field-line);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.file-detail-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 0.75rem;
+  margin: 0 0 0.4rem;
+}
+.file-detail-facts dt {
+  color: var(--muted, inherit);
+}
+.file-detail-facts dd {
+  margin: 0;
+  min-width: 0;
+}
+.file-detail-hash {
+  word-break: break-all;
+  user-select: all;
+}
+.file-detail-steps {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+/* The tray floats over the page: with per-file explanations it can grow tall
+   enough to cover the page's own buttons, so its body scrolls instead. */
+.tray .transfer {
+  max-height: min(320px, 40vh);
+  overflow-y: auto;
+}
+
+/* -- Design pass (visual audit) ---------------------------------------------
+   The top bar is dark in both themes (--side), but its text inherited the page
+   ink: in the light theme the account name was dark on dark. */
+.topbar {
+  color: #e8ecf2;
+}
+.topbar .whoami-role {
+  color: #b8c1cd;
+}
+
+/* The global bar sat in a flex row without a width, so it collapsed to nothing:
+   stack it above its label so progress is actually visible. */
+.tray-progress {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 10px 16px 4px;
+}
+.tray-progress .progress {
+  margin-top: 0;
+  height: 6px;
+  border-radius: 3px;
+}
+.tray-progress .progress-bar {
+  border-radius: 3px;
+}
+.queue-item .progress {
+  margin: 6px 0 4px;
+  height: 4px;
+  border-radius: 2px;
+}
+
+@media (max-width: 640px) {
+  /* Dock the tray to the bottom edge instead of floating over the form. */
+  .tray {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+  }
+  .tray .transfer {
+    max-height: 32vh;
+  }
+  /* Name on its own line; size, status and actions share the next one. */
+  .queue-line .transfer-name {
+    flex: 1 1 100%;
+    overflow-wrap: anywhere;
+  }
+  .queue-line {
+    gap: 6px 10px;
+  }
+}
+
+/* Ghost buttons and icons in the (always dark) top bar were mid-grey on dark. */
+.topbar .btn-ghost,
+.topbar .topbar-sidebar-toggle,
+.topbar .topbar-mobile-toggle,
+.topbar .session a {
+  color: #d5dbe4;
+}
+
+/* =========================================================================
+   Design pass v3 — vault overview, file tiles, ledger polish.
+   Tokens only; every colour pair below exists in both themes.
+   ========================================================================= */
+
+/* -- Overview strip ------------------------------------------------------ */
+.overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4, 16px);
+  margin: 0 0 var(--space-5, 20px);
+}
+.overview-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 14px 16px 15px;
+  background: var(--steel-1);
+  border: var(--bw) solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-1);
+  transition: transform var(--dur-std, 110ms) var(--ease-std, ease),
+    box-shadow var(--dur-std, 110ms) var(--ease-std, ease);
+}
+.overview-tile:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-2);
+}
+.overview-label {
+  font-size: var(--fs-xs, 12px);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.overview-value {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: var(--track-tight, -0.01em);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.overview-sub {
+  font-size: var(--fs-xs, 12px);
+  color: var(--muted);
+}
+.meter {
+  height: 6px;
+  margin: 6px 0 2px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+.meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--ok);
+  transition: width var(--dur-slow, 160ms) var(--ease-std, ease);
+}
+.meter-warn > span {
+  background: var(--warn);
+}
+.meter-danger > span {
+  background: var(--danger);
+}
+@media (max-width: 900px) {
+  .overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 480px) {
+  .overview-value {
+    font-size: 22px;
+  }
+}
+
+/* -- File tiles ---------------------------------------------------------- */
+.ledger-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.file-tile {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--steel-2);
+  color: var(--ink-2);
+}
+.file-tile svg {
+  width: 17px;
+  height: 17px;
+}
+.file-tile-pdf {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.file-tile-audio {
+  background: var(--run-bg);
+  color: var(--run);
+}
+.file-tile-image {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.file-tile-video {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.file-tile-archive {
+  background: var(--signal-soft);
+  color: var(--signal);
+}
+.file-tile-doc {
+  background: var(--steel-3, var(--steel-2));
+  color: var(--ink-2);
+}
+
+/* -- Ledger polish ------------------------------------------------------- */
+.ledger-head {
+  position: sticky;
+  top: var(--band-h, 60px);
+  z-index: 2;
+  background: var(--steel-1);
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+.ledger-row {
+  padding-block: 9px;
+}
+.ledger-row:hover {
+  background: color-mix(in srgb, var(--signal-soft) 55%, var(--steel-1));
+}
+.ledger-row input[type="checkbox"],
+.ledger-head input[type="checkbox"] {
+  accent-color: var(--signal);
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+.status {
+  padding: 2px 9px 2px 8px;
+  border-radius: 999px;
+  background: var(--steel-2);
+  line-height: 1.5;
+}
+.status-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.status-warn {
+  background: var(--run-bg);
+  color: var(--run);
+}
+.status-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.status-ok::before {
+  background: var(--ok);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overview-tile,
+  .overview-tile:hover {
+    transform: none;
+    transition: none;
+  }
+}
+
+.ledger-head > :first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ledger-head {
+  align-items: center;
+}
+
+/* Native controls (checkboxes, selects, scrollbars) follow the active theme:
+   without this they stayed bright white inside the dark theme. */
+:root {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+  }
+}
+
+/* -- Route error page ---------------------------------------------------- */
+.route-error {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--steel-0);
+}
+.route-error-card {
+  width: min(520px, 100%);
+  padding: 32px;
+  text-align: center;
+  background: var(--steel-1);
+  border: var(--bw) solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-2);
+}
+.route-error-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  margin-bottom: 12px;
+  border-radius: 16px;
+  background: var(--side);
+  color: #ffffff;
+}
+.route-error-card h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+.route-error-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0 14px;
+}
+.route-error-detail {
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.route-error-detail code {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--steel-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* -- Welcoming empty state ----------------------------------------------- */
+.empty-rich {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 36px 16px 40px;
+  text-align: center;
+}
+.empty-mark {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: var(--signal-soft);
+  color: var(--signal);
+}
+.empty-mark svg {
+  width: 26px;
+  height: 26px;
+}
+.empty-title {
+  margin: 4px 0 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.empty-help {
+  max-width: 460px;
+  margin: 0 0 8px;
+}
+
+/* The top bar is sticky: scrolling an element into view (focus, anchors,
+   assistive tech) must leave it below the bar, not underneath (WCAG 2.4.11). */
+html {
+  scroll-padding-top: calc(var(--band-h, 60px) + 16px);
+}
+
+/* =========================================================================
+   Administration — sections become panels, details become readable.
+   ========================================================================= */
+.admin-page .section:not([hidden]) {
+  background: var(--steel-1);
+  border: var(--bw) solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-1);
+  padding: 18px 22px 20px;
+  margin-bottom: var(--space-5, 20px);
+}
+.admin-page .section-head {
+  align-items: center;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: var(--bw) solid var(--steel-2);
+}
+.admin-page .section-head h2 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: var(--track-tight, -0.01em);
+}
+.admin-page .section h2:not(.section-head h2) {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+/* A sub-section inside a panel (orphans, recent errors) */
+.admin-page .section .section-head:not(:first-child) {
+  margin-top: 22px;
+}
+.admin-page .section-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.admin-page .stat-grid {
+  margin: 4px 0 8px;
+}
+.admin-page .stat {
+  box-shadow: none;
+  background: var(--steel-0);
+}
+.stat-ok {
+  border-color: var(--ok);
+  background: var(--ok-bg);
+}
+.stat-ok .value {
+  color: var(--ok);
+}
+.stat-danger {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+.stat-danger .value {
+  color: var(--danger);
+}
+.stat-grid-integrity {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 560px) {
+  .stat-grid-integrity {
+    grid-template-columns: 1fr;
+  }
+}
+.callout {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--signal);
+  border-radius: 0 8px 8px 0;
+  background: var(--signal-soft);
+  color: var(--ink-2);
+  font-size: var(--fs-sm, 13px);
+}
+.admin-page .table th {
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.admin-page .table tbody tr:hover {
+  background: color-mix(in srgb, var(--signal-soft) 55%, var(--steel-1));
+}
+.admin-page .section h3:not(.section-head h3) {
+  margin: 20px 0 0;
+  padding-top: 14px;
+  border-top: var(--bw) solid var(--steel-2);
+  font-size: 15px;
+}
+
+/* -- Details drawer: tile in the header, compact label/value grid ---------- */
+.drawer-head {
+  align-items: center;
+  gap: 12px;
+}
+.drawer-head .drawer-title {
+  flex: 1;
+}
+.file-tile-lg {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+.file-tile-lg svg {
+  width: 22px;
+  height: 22px;
+}
+.detail-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 18px;
+  row-gap: 0;
+  margin-top: 14px;
+}
+.detail-list dt,
+.detail-list dd {
+  margin: 0;
+  padding: 9px 0;
+  border-bottom: var(--bw) solid var(--steel-2);
+}
+.detail-list dt {
+  font-size: 12.5px;
+}
+.detail-list dd {
+  font-size: 13.5px;
+}
+.detail-list .detail-hash {
+  padding-bottom: 12px;
+}
+.detail-list .detail-hash .btn {
+  margin-left: auto;
+}
+
+/* -- Dialogs ----------------------------------------------------------------- */
+.dialog {
+  border-radius: 16px;
+  box-shadow: var(--shadow-3);
+}
+.dialog::backdrop {
+  background: color-mix(in srgb, #05080d 55%, transparent);
+  backdrop-filter: blur(3px);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dialog[open] {
+    animation: dialog-in var(--dur-slow, 160ms) var(--ease-std, ease);
+  }
+  @keyframes dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}

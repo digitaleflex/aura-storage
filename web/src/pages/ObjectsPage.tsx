@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   useInfiniteQuery,
@@ -13,9 +13,19 @@ import {
   hasScope,
   putToPresignedUrl,
 } from "../lib/api";
-import type { CommitTiming, FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
+import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
-import { ThroughputWindow } from "../lib/throughput";
+
+import {
+  CascadeOp,
+  CascadeFailure,
+  CascadeState,
+  scanCascade,
+  planCascadeOps,
+  cascadeOpKey,
+} from "../lib/cascade";import { ThroughputWindow } from "../lib/throughput";
+import { UploadTray } from "../components/UploadTray";
+import { VaultOverview } from "../components/VaultOverview";
 import {
   addEntries,
   clearOwner,
@@ -28,7 +38,6 @@ import type {
   QueueInput,
   QueueState,
   TransferDeps,
-  TransferPhase,
   UploadQueue,
 } from "../lib/transfer";
 import {
@@ -77,35 +86,6 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
     ].includes(type);
   }
   return false;
-}
-
-/** Which files the upload tray lists. "auto" shows everything for a small
- * batch and only what still needs attention for a big one: rendering every row
- * of a 10 000-file import costs 22-57 ms per refresh (~50k DOM nodes). */
-type TrayFilter = "auto" | "active" | "failed" | "all";
-const TRAY_AUTO_ALL_MAX = 30;
-const TRAY_ROW_CAP = 100;
-
-/** Human label for each transfer phase (import → validation → availability). */
-const PHASE_LABEL: Record<TransferPhase, string> = {
-  idle: "En attente",
-  "requesting-intent": "Autorisation…",
-  uploading: "Envoi…",
-  validating: "Vérification d'intégrité…",
-  available: "Disponible",
-  failed: "Échec",
-  cancelled: "Annulé",
-};
-
-/** Phases that are still moving (offer a per-file interrupt). */
-const ACTIVE_PHASES: TransferPhase[] = ["requesting-intent", "uploading", "validating"];
-
-/** Chip style for a queue item's phase. */
-function queuePhaseClass(phase: TransferPhase): string {
-  if (phase === "available") return "chip chip-ok";
-  if (phase === "failed") return "chip chip-error";
-  if (phase === "cancelled" || phase === "idle") return "chip chip-muted";
-  return "chip chip-warn";
 }
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
@@ -258,6 +238,26 @@ function FileTypeIcon({ contentType }: { contentType: string }) {
   );
 }
 
+/** Visual family of a file, for the coloured tile in the ledger. */
+function fileKind(contentType: string): string {
+  const value = contentType.toLowerCase();
+  if (value === "application/pdf") return "pdf";
+  if (value.startsWith("audio/")) return "audio";
+  if (value.startsWith("image/")) return "image";
+  if (value.startsWith("video/")) return "video";
+  if (value === "application/zip" || value === "application/gzip" || value === "application/x-tar") {
+    return "archive";
+  }
+  if (
+    value.includes("wordprocessingml") || value.includes("spreadsheetml") ||
+    value.includes("presentationml") || value === "application/msword" ||
+    value.startsWith("text/")
+  ) {
+    return "doc";
+  }
+  return "other";
+}
+
 function typeLabel(contentType: string): string {
   const value = contentType.toLowerCase();
   if (value === "application/pdf") return "PDF";
@@ -270,6 +270,11 @@ function typeLabel(contentType: string): string {
     value === "application/x-tar"
   ) {
     return "Archive";
+  }
+  if (value.includes("wordprocessingml") || value === "application/msword") return "Word";
+  if (value.includes("spreadsheetml") || value === "application/vnd.ms-excel") return "Excel";
+  if (value.includes("presentationml") || value === "application/vnd.ms-powerpoint") {
+    return "PowerPoint";
   }
   if (value === "application/json") return "JSON";
   if (value === "text/csv") return "CSV";
@@ -295,35 +300,6 @@ function StatusLabel({ status }: { status: string }) {
 }
 
 /** Commit phase durations, in whole milliseconds, French number grouping. */
-const MS_FORMAT = new Intl.NumberFormat("fr-FR");
-
-/** "128\u00A0ms" — non-breaking space so the unit never wraps on its own. */
-function formatMs(value: number): string {
-  return `${MS_FORMAT.format(Math.round(value))}\u00A0ms`;
-}
-
-/** Server-side commit durations for a transfer that reached `available`.
- * Renders nothing when the timing is absent (already-available object) or
- * null (commit won by a concurrent request), or when a value is not finite. */
-function CommitTimingLine({ timing }: { timing?: CommitTiming | null }) {
-  if (!timing) return null;
-  const { head_ms, hash_ms, total_ms } = timing;
-  if (
-    !Number.isFinite(head_ms) ||
-    !Number.isFinite(hash_ms) ||
-    !Number.isFinite(total_ms)
-  ) {
-    return null;
-  }
-  return (
-    <p className="muted commit-timing">
-      Commit serveur — total <span className="mono num">{formatMs(total_ms)}</span>{" "}
-      (métadonnées <span className="mono num">{formatMs(head_ms)}</span> · SHA-256{" "}
-      <span className="mono num">{formatMs(hash_ms)}</span>)
-    </p>
-  );
-}
-
 /** Server-side soft delete accepts only `available` or `pending` rows; anything
  * else is refused with 409. The bulk selection and the per-row "Supprimer"
  * action share this predicate so they never diverge. */
@@ -341,204 +317,6 @@ function isDeletable(item: ObjectItem): boolean {
   return item.status === "available" || item.status === "pending";
 }
 
-// -- Recursive (cascade) folder deletion ------------------------------------
-// The server refuses a folder that still holds files or subfolders (409). The
-// only sanctioned way to delete such a folder is to empty it explicitly: this
-// flow removes every object of the subtree, then the now-empty folders from the
-// leaves up to the target. Nothing is ever reported as deleted until the API
-// confirms it, and nothing is removed without an explicit confirmation.
-
-/** One file in the target subtree, resolved through real list requests. */
-interface CascadeObject {
-  id: string;
-  name: string;
-  folderId: string;
-  /** Human path ("Racine / Dossier / Sous-dossier"). */
-  path: string;
-}
-
-/** One folder of the target subtree; the target itself is included. */
-interface CascadeFolder {
-  id: string;
-  name: string;
-  parentId: string | null;
-  path: string;
-}
-
-/** The real content snapshot of a folder (never guessed, always listed). */
-interface CascadePlan {
-  rootId: string;
-  rootName: string;
-  objects: CascadeObject[];
-  folders: CascadeFolder[];
-  fileCount: number;
-  /** Descendant folders only: the target is not its own "subfolder". */
-  folderCount: number;
-}
-
-/** One delete step, ordered so a folder is emptied before it is removed. */
-interface CascadeOp {
-  kind: "object" | "folder";
-  id: string;
-  label: string;
-  path: string;
-}
-
-/** A step that failed; kept so the user can retry or abandon it explicitly. */
-interface CascadeFailure {
-  key: string;
-  kind: "object" | "folder";
-  id: string;
-  label: string;
-  path: string;
-  error: string;
-}
-
-type CascadePhase = "scanning" | "confirm" | "deleting" | "done";
-
-interface CascadeState {
-  rootId: string;
-  rootName: string;
-  phase: CascadePhase;
-  plan: CascadePlan | null;
-  ops: CascadeOp[];
-  done: number;
-  /** Path of the item currently being processed (live progress). */
-  current: string | null;
-  failures: CascadeFailure[];
-  cancelled: boolean;
-  scanError: string | null;
-}
-
-/** The server caps `limit` at 100; page until a short page comes back. */
-const CASCADE_PAGE_SIZE = 100;
-
-/** Every object filed directly in one folder, across all pages. */
-async function fetchFolderObjects(folderId: string): Promise<ObjectItem[]> {
-  const out: ObjectItem[] = [];
-  let offset = 0;
-  // Hard guard: a server that ignores `offset` can never spin forever.
-  for (let guard = 0; guard < 1000; guard += 1) {
-    const page = await api.listObjects({
-      folderId,
-      limit: CASCADE_PAGE_SIZE,
-      offset,
-    });
-    out.push(...page.items);
-    if (page.items.length < CASCADE_PAGE_SIZE) break;
-    offset += page.items.length;
-  }
-  return out;
-}
-
-/** Build the real content snapshot of `rootId`: descendant folders + files. */
-async function scanCascade(rootId: string, rootName: string): Promise<CascadePlan> {
-  const all = await api.listAllFolders();
-  const byId = new Map(all.items.map((folder) => [folder.id, folder]));
-  const childMap = new Map<string | null, FolderItem[]>();
-  for (const folder of all.items) {
-    const key = folder.parent_id ?? null;
-    const bucket = childMap.get(key);
-    if (bucket) bucket.push(folder);
-    else childMap.set(key, [folder]);
-  }
-  const pathOf = (id: string): string => {
-    const names: string[] = [];
-    let cursor: string | null = id;
-    let guard = 0;
-    while (cursor && guard < 64) {
-      const folder: FolderItem | undefined = byId.get(cursor);
-      if (!folder) break;
-      names.unshift(folder.name);
-      cursor = folder.parent_id;
-      guard += 1;
-    }
-    return ["Racine", ...names].join(" / ");
-  };
-  const folders: CascadeFolder[] = [];
-  const seen = new Set<string>();
-  const stack: string[] = [rootId];
-  while (stack.length > 0) {
-    const id = stack.pop();
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    const folder = byId.get(id);
-    if (!folder) continue;
-    folders.push({
-      id,
-      name: folder.name,
-      parentId: folder.parent_id,
-      path: pathOf(id),
-    });
-    for (const child of childMap.get(id) ?? []) stack.push(child.id);
-  }
-  const objects: CascadeObject[] = [];
-  for (const folder of folders) {
-    const list = await fetchFolderObjects(folder.id);
-    for (const item of list) {
-      objects.push({
-        id: item.id,
-        name: item.display_name,
-        folderId: folder.id,
-        path: folder.path,
-      });
-    }
-  }
-  return {
-    rootId,
-    rootName,
-    objects,
-    folders,
-    fileCount: objects.length,
-    folderCount: Math.max(0, folders.length - 1),
-  };
-}
-
-/** Flatten the snapshot into a leaf-first (post-order) list of delete steps:
- * a folder's files, its subfolders (recursively), then the folder itself, so
- * every folder is empty by the time its own DELETE is issued. */
-function planCascadeOps(plan: CascadePlan): CascadeOp[] {
-  const inTree = new Set(plan.folders.map((folder) => folder.id));
-  const children = new Map<string, CascadeFolder[]>();
-  for (const folder of plan.folders) {
-    if (folder.id === plan.rootId) continue;
-    const parent = folder.parentId;
-    if (!parent || !inTree.has(parent)) continue;
-    const bucket = children.get(parent);
-    if (bucket) bucket.push(folder);
-    else children.set(parent, [folder]);
-  }
-  const objectsByFolder = new Map<string, CascadeObject[]>();
-  for (const object of plan.objects) {
-    const bucket = objectsByFolder.get(object.folderId);
-    if (bucket) bucket.push(object);
-    else objectsByFolder.set(object.folderId, [object]);
-  }
-  const byId = new Map(plan.folders.map((folder) => [folder.id, folder]));
-  const ops: CascadeOp[] = [];
-  const visit = (folderId: string) => {
-    for (const object of objectsByFolder.get(folderId) ?? []) {
-      ops.push({
-        kind: "object",
-        id: object.id,
-        label: object.name,
-        path: object.path,
-      });
-    }
-    for (const child of children.get(folderId) ?? []) visit(child.id);
-    const self = byId.get(folderId);
-    if (self) {
-      ops.push({ kind: "folder", id: self.id, label: self.name, path: self.path });
-    }
-  };
-  visit(plan.rootId);
-  return ops;
-}
-
-/** Stable identity of a step, so a successful retry clears its failure entry. */
-function cascadeOpKey(op: { kind: string; id: string }): string {
-  return `${op.kind}:${op.id}`;
-}
 
 /** The whole folder tree is fetched in one request (`?all=true`); the hierarchy
  * is rebuilt client-side from parent_id for breadcrumbs and the move pickers. */
@@ -594,8 +372,6 @@ export function ObjectsPage() {
   // The import panel opens on demand (header button) and stays open while it
   // holds pending files, a queue or an error; a drop anywhere also opens it.
   const [intakeOpen, setIntakeOpen] = useState(false);
-  const [trayCollapsed, setTrayCollapsed] = useState(false);
-  const [trayFilter, setTrayFilter] = useState<TrayFilter>("auto");
   // Directory import: which folder of the plan is being created (item P1.7).
   const [folderProgress, setFolderProgress] = useState<{
     done: number;
@@ -612,6 +388,16 @@ export function ObjectsPage() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const throughputRef = useRef(new ThroughputWindow());
+  // Stable callbacks for the memoised <UploadTray>: inline arrows would change
+  // on every render and defeat the memo.
+  const clearTray = useCallback(() => setQueue(emptyQueue()), []);
+  const pauseQueue = useCallback(() => queueRef.current?.pauseAll(), []);
+  const resumeQueue = useCallback(() => queueRef.current?.resumeAll(), []);
+  const cancelQueueItem = useCallback((id: string) => queueRef.current?.cancelItem(id), []);
+  const retryQueueItem = useCallback((id: string) => {
+    setUploadError(null);
+    queueRef.current?.retryItem(id);
+  }, []);
   const libraryRefreshRef = useRef({ at: 0, done: 0 });
 
   // File d'attente automatique : placeholder (defini plus bas apres transferActive)
@@ -2116,19 +1902,6 @@ export function ObjectsPage() {
             {subfolders.length} dossier{subfolders.length > 1 ? "s" : ""} ·{" "}
             {items.length} fichier{items.length > 1 ? "s" : ""}
             {objectsQuery.hasNextPage ? " (d'autres restent à charger)" : ""}
-            {usageQuery.data ? (
-              <>
-                {" · "}
-                <span>
-                  Espace utilisé : {formatBytes(usageQuery.data.totals.stored_bytes)}
-                </span>
-                <span className="visually-hidden">
-                  {" "}
-                  — Usage réel (admin), mesuré le{" "}
-                  {formatDateTime(usageQuery.data.measured_at)}.
-                </span>
-              </>
-            ) : null}
           </p>
         </div>
         <div className="head-actions">
@@ -2199,6 +1972,12 @@ export function ObjectsPage() {
           ) : null}
         </div>
       </div>
+
+      <VaultOverview
+        usage={usageQuery.data}
+        formatBytes={formatBytes}
+        measuredLabel={usageQuery.data ? formatDateTime(usageQuery.data.measured_at) : ""}
+      />
 
       {actionError ? (
         <p role="alert" className="alert alert-error">
@@ -2693,11 +2472,34 @@ export function ObjectsPage() {
             ))}
           </div>
         ) : items.length === 0 && visibleFolders.length === 0 ? (
-          <p className="empty">
-            {hasActiveFilters
-              ? "Aucun fichier ne correspond à ces critères."
-              : "Aucun fichier dans ce dossier."}
-          </p>
+          <div className="empty empty-rich">
+            <span className="empty-mark" aria-hidden="true">
+              <FileTypeIcon contentType={hasActiveFilters ? "" : "application/pdf"} />
+            </span>
+            <p className="empty-title">
+              {hasActiveFilters
+                ? "Aucun fichier ne correspond à ces critères."
+                : "Aucun fichier dans ce dossier."}
+            </p>
+            {!hasActiveFilters ? (
+              <>
+                <p className="muted empty-help">
+                  Glissez des fichiers ou des dossiers n'importe où sur la page. Chaque
+                  fichier n'est déclaré disponible qu'une fois sa taille et son empreinte
+                  SHA-256 vérifiées par le serveur.
+                </p>
+                {canCreate ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setIntakeOpen(true)}
+                  >
+                    Importer des fichiers
+                  </button>
+                ) : null}
+              </>
+            ) : null}
+          </div>
         ) : (
           <>
             {selectedIds.size > 0 ? (
@@ -2838,6 +2640,12 @@ export function ObjectsPage() {
                         });
                       }}
                     />{" "}
+                    <span
+                      className={`file-tile file-tile-${fileKind(item.content_type)}`}
+                      aria-hidden="true"
+                    >
+                      <FileTypeIcon contentType={item.content_type} />
+                    </span>
                     <button
                       type="button"
                       className="link-button"
@@ -3009,6 +2817,12 @@ export function ObjectsPage() {
             aria-labelledby="details-title"
           >
           <div className="drawer-head">
+            <span
+              className={`file-tile file-tile-lg file-tile-${fileKind(details.content_type)}`}
+              aria-hidden="true"
+            >
+              <FileTypeIcon contentType={details.content_type} />
+            </span>
             <div className="drawer-title">
               <span className="muted">{typeLabel(details.content_type)}</span>
               <h2 id="details-title">{details.display_name}</h2>
@@ -3522,250 +3336,17 @@ export function ObjectsPage() {
       </Dialog>
 
       {queue.items.length > 0 ? (
-        <section className="tray" aria-labelledby="tray-title">
-          <div className="tray-head">
-            <h2 id="tray-title">
-              Import · {queue.done} sur {queue.items.length} terminé
-              {queue.done > 1 ? "s" : ""}
-            </h2>
-            <button
-              type="button"
-              className="btn btn-ghost btn-small"
-              aria-expanded={!trayCollapsed}
-              onClick={() => setTrayCollapsed((value) => !value)}
-            >
-              {trayCollapsed ? "Agrandir" : "Réduire"}
-            </button>
-            {queue.finished ? (
-              <button
-                type="button"
-                className="btn btn-ghost btn-small"
-                onClick={() => setQueue(emptyQueue())}
-              >
-                Effacer
-              </button>
-            ) : queue.schedulerPaused ? (
-              <button
-                type="button"
-                className="btn btn-ghost btn-small"
-                onClick={() => queueRef.current?.resumeAll()}
-              >
-                Reprendre
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn btn-ghost btn-small"
-                onClick={() => queueRef.current?.pauseAll()}
-              >
-                Pause
-              </button>
-            )}
-          </div>
-          {/* Barre de progression globale */}
-          {(() => {
-            const totalBytes = queue.items.reduce((sum, item) => sum + item.sizeBytes, 0);
-            const uploadedBytes = queue.items.reduce((sum, item) => sum + item.state.transferredBytes, 0);
-            const pct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
-            // Débit sur les ~20 dernières secondes (pas depuis le début : les pauses,
-            // les fichiers déjà présents et les vérifications faussaient le chiffre).
-            const throughput = throughputRef.current.rate();
-            const remaining = totalBytes - uploadedBytes;
-            const eta = throughput > 0 ? remaining / throughput : 0;
-            const formatEta = (s: number) => {
-              if (!Number.isFinite(s) || s <= 0) return "";
-              if (s < 60) return `~${Math.ceil(s)}s`;
-              const m = Math.floor(s / 60);
-              const sec = Math.ceil(s % 60);
-              return `~${m}m${sec > 0 ? ` ${sec}s` : ""}`;
-            };
-            return totalBytes > 0 ? (
-              <div className="tray-progress">
-                <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-                  <span className="progress-bar" style={{ width: `${pct}%` }} />
-                </div>
-                <span className="tray-progress-label">
-                  {formatBytes(uploadedBytes)} / {formatBytes(totalBytes)} ({pct}%)
-                  {throughput > 0 && !queue.finished ? (
-                    <>
-                      {" · "}
-                      {formatBytes(Math.round(throughput))}/s
-                      {eta > 0 ? ` · ${formatEta(eta)}` : ""}
-                    </>
-                  ) : null}
-                </span>
-              </div>
-            ) : null;
-          })()}
-        <div
-          className="transfer"
-          data-testid="transfer-status"
-          hidden={trayCollapsed}
-        >
-          {/* One short announcement per finished file; the per-byte texts of the
-              list below are not live (a screen reader would read them nonstop). */}
-          <span className="visually-hidden" role="status">
-            {queue.done}/{queue.items.length} fichiers transférés
-          </span>
-          <div className="queue-head">
-            <span className="muted">
-              {queue.done}/{queue.items.length} transféré
-              {queue.items.length > 1 ? "s" : ""}
-              {queue.failed > 0 ? ` · ${queue.failed} en échec` : ""}
-              {queue.cancelled > 0
-                ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
-                : ""}
-            </span>
-            {transferActive ? (
-              <span className="muted">
-                jusqu'à {queue.concurrency} en parallèle
-              </span>
-            ) : null}
-          </div>
-          {queue.schedulerPaused ? (
-            <p className="muted" role="status">
-              Connexion perdue : la file est suspendue et reprendra
-              automatiquement dès que le réseau revient.
-            </p>
-          ) : null}
-          {transferActive &&
-          queue.maxConcurrency > 1 &&
-          queue.concurrency < queue.maxConcurrency ? (
-            <p className="muted" role="status">
-              Connexion difficile : envois limités à {queue.concurrency} à la
-              fois — retour à {queue.maxConcurrency} dès que ça passe.
-            </p>
-          ) : null}
-          {queue.items.length > TRAY_AUTO_ALL_MAX ? (
-            <div className="queue-filter" role="group" aria-label="Fichiers affichés">
-              {(
-                [
-                  ["auto", "Auto"],
-                  ["active", "En cours"],
-                  ["failed", "Échecs"],
-                  ["all", "Tous"],
-                ] as Array<[TrayFilter, string]>
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  className="btn btn-ghost btn-small"
-                  aria-pressed={trayFilter === value}
-                  onClick={() => setTrayFilter(value)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {(() => {
-            if (trayCollapsed) return null;
-            const mode =
-              trayFilter === "auto"
-                ? queue.items.length > TRAY_AUTO_ALL_MAX
-                  ? "active"
-                  : "all"
-                : trayFilter;
-            const needsAttention = (phase: TransferPhase) =>
-              phase !== "available" && phase !== "idle" && phase !== "cancelled";
-            const matching = queue.items.filter((item) =>
-              mode === "all"
-                ? true
-                : mode === "failed"
-                  ? item.state.phase === "failed" || item.state.phase === "cancelled"
-                  : needsAttention(item.state.phase),
-            );
-            const shown = matching.slice(0, TRAY_ROW_CAP);
-            const hiddenCount = queue.items.length - shown.length;
-            return (
-              <>
-          <ul className="queue">
-            {shown.map((item) => (
-              <li key={item.id} className="queue-item">
-                <div className="queue-line">
-                  <span className="transfer-name">{item.fileName}</span>
-                  <span className="muted">{formatBytes(item.sizeBytes)}</span>
-                  <span className={queuePhaseClass(item.state.phase)}>
-                    {PHASE_LABEL[item.state.phase]}
-                  </span>
-                  {item.state.phase === "available" ? (
-                    <span className="chip chip-muted">SHA-256 vérifié</span>
-                  ) : null}
-                  {ACTIVE_PHASES.includes(item.state.phase) ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-small"
-                      aria-label={`Interrompre ${item.fileName}`}
-                      onClick={() => queueRef.current?.cancelItem(item.id)}
-                    >
-                      ×
-                    </button>
-                  ) : null}
-                  {item.state.phase === "failed" ||
-                  item.state.phase === "cancelled" ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-small"
-                      aria-label={`Relancer ${item.fileName}`}
-                      onClick={() => {
-                        setUploadError(null);
-                        queueRef.current?.retryItem(item.id);
-                      }}
-                    >
-                      Relancer
-                    </button>
-                  ) : null}
-                </div>
-                {item.state.phase === "available" ? (
-                  <CommitTimingLine timing={item.state.commitTiming} />
-                ) : null}
-                {item.state.phase === "uploading" ? (
-                  <div
-                    className="progress"
-                    role="progressbar"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={Math.round(item.state.progress * 100)}
-                    aria-label={`Progression de ${item.fileName}`}
-                  >
-                    <span
-                      className="progress-bar"
-                      style={{ width: `${Math.round(item.state.progress * 100)}%` }}
-                    />
-                  </div>
-                ) : null}
-                {item.state.phase === "uploading" ? (
-                  <p className="muted">
-                    {formatBytes(item.state.transferredBytes)} /{" "}
-                    {formatBytes(item.state.sizeBytes)} (
-                    {Math.round(item.state.progress * 100)} %)
-                  </p>
-                ) : null}
-                {item.state.attempts > 0 &&
-                ACTIVE_PHASES.includes(item.state.phase) ? (
-                  <p className="muted">
-                    Nouvelle tentative ({item.state.attempts})…
-                  </p>
-                ) : null}
-                {item.state.error && item.state.phase === "failed" ? (
-                  <p className="muted">{item.state.error}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          {hiddenCount > 0 ? (
-            <p className="muted">
-              {hiddenCount} autre{hiddenCount > 1 ? "s" : ""} fichier
-              {hiddenCount > 1 ? "s" : ""} non affiché{hiddenCount > 1 ? "s" : ""} (
-              {queue.done} transféré{queue.done > 1 ? "s" : ""}, {queue.failed} en échec) —
-              choisissez « Tous » ou « Échecs » pour les parcourir.
-            </p>
-          ) : null}
-              </>
-            );
-          })()}
-        </div>
-        </section>
+        <UploadTray
+          queue={queue}
+          throughput={throughputRef.current.rate()}
+          formatBytes={formatBytes}
+          onClear={clearTray}
+          onPause={pauseQueue}
+          onResume={resumeQueue}
+          onCancelItem={cancelQueueItem}
+          onRetryItem={retryQueueItem}
+        />
+
       ) : null}
 
       <MasterModeDialog

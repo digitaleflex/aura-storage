@@ -245,3 +245,81 @@ test("a big batch lists only what needs attention; 'Tous' lists everything", asy
   await tray.getByRole("button", { name: "Tous" }).click();
   await expect(tray.locator("li.queue-item")).toHaveCount(40);
 });
+
+test("the tray explains what is happening to each file", async ({ page }) => {
+  await installMocks(page, { putDelayMs: 1500 });
+  await login(page);
+  await chooseFile(page);
+  await page.getByRole("button", { name: "Importer et valider" }).click();
+  const tray = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
+  await expect(tray.getByTestId("queue-breakdown")).toContainText("en envoi");
+  await expect(tray.getByText("Envoi direct vers le stockage chiffré.")).toBeVisible();
+  // The step shows how long it has lasted (m:ss).
+  await expect(tray.locator(".elapsed").first()).toHaveText(/^\d+:\d{2}$/);
+  await expect(tray.getByTestId("queue-breakdown")).toContainText("disponibles");
+});
+
+test("a file's details show its steps, object id and the server SHA-256", async ({ page }) => {
+  await installMocks(page);
+  await login(page);
+  await chooseFile(page);
+  await page.getByRole("button", { name: "Importer et valider" }).click();
+  const tray = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
+  await expect(tray.getByText("Disponible").first()).toBeVisible();
+  await tray.getByRole("button", { name: "Détails de rapport.pdf" }).click();
+  const detail = tray.getByTestId("file-detail");
+  await expect(detail).toContainText("rapport.pdf");
+  await expect(detail).toContainText("obj-1");
+  await expect(detail).toContainText("abc");
+  const steps = detail.getByRole("list", { name: "Étapes" });
+  await expect(steps).toContainText("Autorisation demandée");
+  await expect(steps).toContainText("Envoi des octets");
+  await expect(steps).toContainText("Vérification d'intégrité");
+  await expect(steps).toContainText("Disponible");
+  await tray.getByRole("button", { name: "Détails de rapport.pdf" }).click();
+  await expect(detail).toHaveCount(0);
+});
+
+test("the vault overview shows real figures and the empty state invites to import", async ({ page }) => {
+  await installMocks(page);
+  await page.route("**/api/v1/admin/usage**", (route) =>
+    route.fulfill({
+      json: {
+        measured_at: 1,
+        limits: { max_object_bytes: 5_368_709_120, max_pending_intents: 100, intent_ttl: 900, allow_empty_objects: false },
+        capacity: { capacity_bytes: 1_000_000_000, high_watermark_pct: 90, accept_until_bytes: 900_000_000, stored_bytes: 800_000_000, reserved_bytes: 0, free_for_uploads_bytes: 100_000_000 },
+        totals: { objects_by_status: { available: 3, pending: 1, verifying: 2 }, available_count: 3, stored_bytes: 800_000_000 },
+        spaces: [],
+      },
+    }),
+  );
+  await login(page);
+  const overview = page.getByTestId("vault-overview");
+  await expect(overview).toContainText("Fichiers vérifiés");
+  const tiles = overview.locator(".overview-tile");
+  await expect(tiles.nth(1).locator(".overview-value")).toHaveText("3"); // verified
+  await expect(tiles.nth(2).locator(".overview-value")).toHaveText("3"); // pending + verifying
+  const meter = overview.getByRole("meter", { name: "Espace utilisé" });
+  await expect(meter).toHaveAttribute("aria-valuenow", "80");
+  await expect(meter).toHaveClass(/meter-warn/);
+  // Empty catalogue: an invitation, with the import action.
+  await expect(page.getByText("Aucun fichier dans ce dossier.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Importer des fichiers" })).toBeVisible();
+});
+
+test("a page that throws shows the branded error page, not the router default", async ({ page }) => {
+  await installMocks(page);
+  // A malformed usage answer makes the shell throw while rendering.
+  await page.route("**/api/v1/admin/usage**", (route) => route.fulfill({ json: { totals: {} } }));
+  // Not the shared login(): it waits for the files heading, which may already be gone.
+  await page.goto("/login");
+  await page.getByLabel("Identifiant").fill("admin");
+  await page.getByLabel("Mot de passe").fill("pw");
+  await page.getByRole("button", { name: "Se connecter" }).click();
+  // The shell fetches usage after login: give the crash time under a loaded runner.
+  await expect(page.getByRole("heading", { name: "Cette page n'a pas pu s'afficher" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByRole("button", { name: "Recharger la page" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Something went wrong!")).toHaveCount(0);
+});

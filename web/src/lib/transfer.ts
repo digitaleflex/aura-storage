@@ -61,6 +61,18 @@ export interface TransferState {
    * différée. Ce module ne les interprète jamais.
    */
   commitTiming?: CommitTiming | null;
+  /** When (ms since epoch) the current phase began; drives "since 0:42" labels. */
+  phaseSince?: number;
+  /**
+   * What the server is doing while the phase is "validating": `inline` = the
+   * commit request is re-reading and hashing the object; `background` = the
+   * bytes are stored and the integrity check waits in the server's queue (202).
+   */
+  verifyMode?: "inline" | "background";
+  /** Every phase this file went through, with the time (ms epoch) it began. */
+  phaseLog?: Array<{ phase: TransferPhase; at: number }>;
+  /** SHA-256 the server recorded once the file is available. */
+  checksum?: string;
 }
 
 export interface TransferResult {
@@ -225,7 +237,18 @@ export async function runTransfer(
   const now = options.now ?? (() => Date.now());
   let state: TransferState = idleTransfer(file);
   const emit = (patch: Partial<TransferState>): void => {
-    state = { ...state, ...patch };
+    // Stamp every phase change so the UI can say how long a step has lasted.
+    const changed = patch.phase !== undefined && patch.phase !== state.phase;
+    const at = now();
+    state = {
+      ...state,
+      ...patch,
+      ...(changed
+        ? { phaseSince: at, phaseLog: [...(state.phaseLog ?? []), { phase: patch.phase!, at }] }
+        : {}),
+    };
+    // Leaving the validating phase clears what the server was doing.
+    if (changed && patch.phase !== "validating") state = { ...state, verifyMode: undefined };
     options.onUpdate?.(state);
   };
   const aborted = (): boolean => options.signal?.aborted === true;
@@ -405,7 +428,7 @@ export async function runTransfer(
         return { state, objectId: current.id };
       }
 
-      emit({ phase: "validating", progress: 1, transferredBytes: file.size, error: null });
+      emit({ phase: "validating", progress: 1, transferredBytes: file.size, error: null, verifyMode: "inline" });
       try {
         const committed = await withRetry(() => deps.commit(current.id));
         return settle(current.id, committed);
@@ -441,7 +464,7 @@ export async function runTransfer(
     for (let polls = 0; current.status === "verifying"; polls += 1) {
       if (aborted()) return cancel();
       if (!deps.objectStatus) break;
-      emit({ phase: "validating", error: null });
+      emit({ phase: "validating", error: null, verifyMode: "background" });
       await deps.sleep(Math.min(5_000, 1_000 * 2 ** Math.min(polls, 3)));
       try {
         current = await deps.objectStatus(id);
@@ -473,6 +496,7 @@ export async function runTransfer(
       // Porté par l'état de la file : l'UI le lit sur l'élément correspondant,
       // aucun affichage n'est décidé ici.
       commitTiming,
+      checksum: current.checksum_sha256,
     });
     return { state, objectId: id, checksum: current.checksum_sha256 };
   };
@@ -523,7 +547,7 @@ export async function runTransfer(
         // The bytes are there: go straight to the commit instead of failing.
         if (!(err instanceof PresignedUploadError && err.status === 412)) throw err;
       }
-      emit({ phase: "validating", progress: 1, transferredBytes: file.size });
+      emit({ phase: "validating", progress: 1, transferredBytes: file.size, verifyMode: "inline" });
       // The bytes are stored: a failing commit retries the commit only, never
       // the whole upload (which would resend everything, then hit 412/409).
       let committed: { status: string; checksum_sha256?: string };
