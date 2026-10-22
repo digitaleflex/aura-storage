@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   useInfiniteQuery,
@@ -16,8 +16,7 @@ import {
 import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
 import { ThroughputWindow } from "../lib/throughput";
-import { Elapsed } from "../components/Elapsed";
-import { FileDetail } from "../components/FileDetail";
+import { UploadTray } from "../components/UploadTray";
 import {
   addEntries,
   clearOwner,
@@ -30,8 +29,6 @@ import type {
   QueueInput,
   QueueState,
   TransferDeps,
-  QueueItem,
-  TransferPhase,
   UploadQueue,
 } from "../lib/transfer";
 import {
@@ -80,68 +77,6 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
     ].includes(type);
   }
   return false;
-}
-
-/** Which files the upload tray lists. "auto" shows everything for a small
- * batch and only what still needs attention for a big one: rendering every row
- * of a 10 000-file import costs 22-57 ms per refresh (~50k DOM nodes). */
-type TrayFilter = "auto" | "active" | "failed" | "all";
-const TRAY_AUTO_ALL_MAX = 30;
-const TRAY_ROW_CAP = 100;
-
-/** Human label for each transfer phase (import → validation → availability). */
-const PHASE_LABEL: Record<TransferPhase, string> = {
-  idle: "En attente",
-  "requesting-intent": "Autorisation…",
-  uploading: "Envoi…",
-  validating: "Vérification d'intégrité…",
-  available: "Disponible",
-  failed: "Échec",
-  cancelled: "Annulé",
-};
-
-/** Phases that are still moving (offer a per-file interrupt). */
-const ACTIVE_PHASES: TransferPhase[] = ["requesting-intent", "uploading", "validating"];
-
-/** Chip style for a queue item's phase. */
-/** One plain-language sentence on what is happening to a file right now. */
-function describeItem(item: QueueItem, waitingAhead: number): string | null {
-  const st = item.state;
-  switch (st.phase) {
-    case "idle":
-      return waitingAhead > 0
-        ? `En attente d'une place dans la file (${waitingAhead} fichier${waitingAhead > 1 ? "s" : ""} avant lui).`
-        : "En attente d'une place dans la file.";
-    case "requesting-intent":
-      return "Demande d'autorisation d'envoi au serveur.";
-    case "uploading":
-      return st.attempts > 0
-        ? `Envoi direct vers le stockage chiffré (reprise n° ${st.attempts}).`
-        : "Envoi direct vers le stockage chiffré.";
-    case "validating":
-      return st.verifyMode === "background"
-        ? "Octets reçus. Le serveur vérifie l'intégrité (SHA-256) en tâche de fond : le fichier sera disponible ensuite, même si vous fermez la page."
-        : "Octets reçus. Le serveur relit le fichier et calcule son empreinte SHA-256 avant de le publier.";
-    case "failed":
-      return st.failureKind === "retryable"
-        ? "Interrompu par un incident réseau ou serveur : « Relancer » reprend ce fichier."
-        : st.failureKind === "expired"
-          ? "L'autorisation d'envoi a expiré trop de fois : « Relancer » en demande une nouvelle."
-          : st.failureKind === "fatal"
-            ? "Refusé par le serveur : réessayer ne changera pas le résultat sans corriger la cause."
-            : null;
-    case "cancelled":
-      return "Annulé par vous. « Relancer » le remet dans la file.";
-    default:
-      return null;
-  }
-}
-
-function queuePhaseClass(phase: TransferPhase): string {
-  if (phase === "available") return "chip chip-ok";
-  if (phase === "failed") return "chip chip-error";
-  if (phase === "cancelled" || phase === "idle") return "chip chip-muted";
-  return "chip chip-warn";
 }
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
@@ -600,9 +535,6 @@ export function ObjectsPage() {
   // The import panel opens on demand (header button) and stays open while it
   // holds pending files, a queue or an error; a drop anywhere also opens it.
   const [intakeOpen, setIntakeOpen] = useState(false);
-  const [trayCollapsed, setTrayCollapsed] = useState(false);
-  const [trayFilter, setTrayFilter] = useState<TrayFilter>("auto");
-  const [detailId, setDetailId] = useState<string | null>(null);
   // Directory import: which folder of the plan is being created (item P1.7).
   const [folderProgress, setFolderProgress] = useState<{
     done: number;
@@ -619,6 +551,16 @@ export function ObjectsPage() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const throughputRef = useRef(new ThroughputWindow());
+  // Stable callbacks for the memoised <UploadTray>: inline arrows would change
+  // on every render and defeat the memo.
+  const clearTray = useCallback(() => setQueue(emptyQueue()), []);
+  const pauseQueue = useCallback(() => queueRef.current?.pauseAll(), []);
+  const resumeQueue = useCallback(() => queueRef.current?.resumeAll(), []);
+  const cancelQueueItem = useCallback((id: string) => queueRef.current?.cancelItem(id), []);
+  const retryQueueItem = useCallback((id: string) => {
+    setUploadError(null);
+    queueRef.current?.retryItem(id);
+  }, []);
   const libraryRefreshRef = useRef({ at: 0, done: 0 });
 
   // File d'attente automatique : placeholder (defini plus bas apres transferActive)
@@ -3485,296 +3427,16 @@ export function ObjectsPage() {
       </Dialog>
 
       {queue.items.length > 0 ? (
-        <section className="tray" aria-labelledby="tray-title">
-          <div className="tray-head">
-            <h2 id="tray-title">
-              Import · {queue.done} sur {queue.items.length} terminé
-              {queue.done > 1 ? "s" : ""}
-            </h2>
-            <button
-              type="button"
-              className="btn btn-ghost btn-small"
-              aria-expanded={!trayCollapsed}
-              onClick={() => setTrayCollapsed((value) => !value)}
-            >
-              {trayCollapsed ? "Agrandir" : "Réduire"}
-            </button>
-            {queue.finished ? (
-              <button
-                type="button"
-                className="btn btn-ghost btn-small"
-                onClick={() => setQueue(emptyQueue())}
-              >
-                Effacer
-              </button>
-            ) : queue.schedulerPaused ? (
-              <button
-                type="button"
-                className="btn btn-ghost btn-small"
-                onClick={() => queueRef.current?.resumeAll()}
-              >
-                Reprendre
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn btn-ghost btn-small"
-                onClick={() => queueRef.current?.pauseAll()}
-              >
-                Pause
-              </button>
-            )}
-          </div>
-          {/* Barre de progression globale */}
-          {(() => {
-            const totalBytes = queue.items.reduce((sum, item) => sum + item.sizeBytes, 0);
-            const uploadedBytes = queue.items.reduce((sum, item) => sum + item.state.transferredBytes, 0);
-            const pct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
-            // Débit sur les ~20 dernières secondes (pas depuis le début : les pauses,
-            // les fichiers déjà présents et les vérifications faussaient le chiffre).
-            const throughput = throughputRef.current.rate();
-            const remaining = totalBytes - uploadedBytes;
-            const eta = throughput > 0 ? remaining / throughput : 0;
-            const formatEta = (s: number) => {
-              if (!Number.isFinite(s) || s <= 0) return "";
-              if (s < 60) return `~${Math.ceil(s)}s`;
-              const m = Math.floor(s / 60);
-              const sec = Math.ceil(s % 60);
-              return `~${m}m${sec > 0 ? ` ${sec}s` : ""}`;
-            };
-            return totalBytes > 0 ? (
-              <div className="tray-progress">
-                <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-                  <span className="progress-bar" style={{ width: `${pct}%` }} />
-                </div>
-                <span className="tray-progress-label">
-                  {formatBytes(uploadedBytes)} / {formatBytes(totalBytes)} ({pct}%)
-                  {throughput > 0 && !queue.finished ? (
-                    <>
-                      {" · "}
-                      {formatBytes(Math.round(throughput))}/s
-                      {eta > 0 ? ` · ${formatEta(eta)}` : ""}
-                    </>
-                  ) : null}
-                </span>
-              </div>
-            ) : null;
-          })()}
-        <div
-          className="transfer"
-          data-testid="transfer-status"
-          hidden={trayCollapsed}
-        >
-          {/* One short announcement per finished file; the per-byte texts of the
-              list below are not live (a screen reader would read them nonstop). */}
-          <span className="visually-hidden" role="status">
-            {queue.done}/{queue.items.length} fichiers transférés
-          </span>
-          <div className="queue-head">
-            <span className="muted">
-              {queue.done}/{queue.items.length} transféré
-              {queue.items.length > 1 ? "s" : ""}
-              {queue.failed > 0 ? ` · ${queue.failed} en échec` : ""}
-              {queue.cancelled > 0
-                ? ` · ${queue.cancelled} annulé${queue.cancelled > 1 ? "s" : ""}`
-                : ""}
-            </span>
-            {transferActive ? (
-              <span className="muted">
-                jusqu'à {queue.concurrency} en parallèle
-              </span>
-            ) : null}
-          </div>
-          {(() => {
-            const count = (...phases: TransferPhase[]) =>
-              queue.items.filter((item) => phases.includes(item.state.phase)).length;
-            const parts = [
-              [count("requesting-intent", "uploading"), "en envoi"],
-              [count("validating"), "en vérification d'intégrité"],
-              [count("idle"), "en attente"],
-              [count("failed"), "en échec"],
-              [count("available"), "disponibles"],
-            ]
-              .filter(([n]) => (n as number) > 0)
-              .map(([n, label]) => `${n} ${label}`);
-            return parts.length > 0 ? (
-              <p className="muted queue-breakdown" data-testid="queue-breakdown">
-                {parts.join(" · ")}
-              </p>
-            ) : null;
-          })()}
-          {queue.schedulerPaused ? (
-            <p className="muted" role="status">
-              Connexion perdue : la file est suspendue et reprendra
-              automatiquement dès que le réseau revient.
-            </p>
-          ) : null}
-          {transferActive &&
-          queue.maxConcurrency > 1 &&
-          queue.concurrency < queue.maxConcurrency ? (
-            <p className="muted" role="status">
-              Connexion difficile : envois limités à {queue.concurrency} à la
-              fois — retour à {queue.maxConcurrency} dès que ça passe.
-            </p>
-          ) : null}
-          {queue.items.length > TRAY_AUTO_ALL_MAX ? (
-            <div className="queue-filter" role="group" aria-label="Fichiers affichés">
-              {(
-                [
-                  ["auto", "Auto"],
-                  ["active", "En cours"],
-                  ["failed", "Échecs"],
-                  ["all", "Tous"],
-                ] as Array<[TrayFilter, string]>
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  className="btn btn-ghost btn-small"
-                  aria-pressed={trayFilter === value}
-                  onClick={() => setTrayFilter(value)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {(() => {
-            if (trayCollapsed) return null;
-            const mode =
-              trayFilter === "auto"
-                ? queue.items.length > TRAY_AUTO_ALL_MAX
-                  ? "active"
-                  : "all"
-                : trayFilter;
-            const needsAttention = (phase: TransferPhase) =>
-              phase !== "available" && phase !== "idle" && phase !== "cancelled";
-            const matching = queue.items.filter((item) =>
-              mode === "all"
-                ? true
-                : mode === "failed"
-                  ? item.state.phase === "failed" || item.state.phase === "cancelled"
-                  : needsAttention(item.state.phase),
-            );
-            const shown = matching.slice(0, TRAY_ROW_CAP);
-            // Position of each waiting file in the queue (1 = next to start).
-            const waitingIndex = new Map<string, number>();
-            let waitingSeen = 0;
-            for (const item of queue.items) {
-              if (item.state.phase === "idle") {
-                waitingIndex.set(item.id, waitingSeen);
-                waitingSeen += 1;
-              }
-            }
-            const hiddenCount = queue.items.length - shown.length;
-            return (
-              <>
-          <ul className="queue">
-            {shown.map((item) => (
-              <li key={item.id} className="queue-item">
-                <div className="queue-line">
-                  <span className="transfer-name">{item.fileName}</span>
-                  <span className="muted">{formatBytes(item.sizeBytes)}</span>
-                  <span className={queuePhaseClass(item.state.phase)}>
-                    {PHASE_LABEL[item.state.phase]}
-                    {ACTIVE_PHASES.includes(item.state.phase) ? (
-                      <>
-                        {" · "}
-                        <Elapsed since={item.state.phaseSince} />
-                      </>
-                    ) : null}
-                  </span>
-                  {item.state.phase === "available" ? (
-                    <span className="chip chip-muted">SHA-256 vérifié</span>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-small"
-                    aria-expanded={detailId === item.id}
-                    aria-label={`Détails de ${item.fileName}`}
-                    onClick={() => setDetailId(detailId === item.id ? null : item.id)}
-                  >
-                    Détails
-                  </button>
-                  {ACTIVE_PHASES.includes(item.state.phase) ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-small"
-                      aria-label={`Interrompre ${item.fileName}`}
-                      onClick={() => queueRef.current?.cancelItem(item.id)}
-                    >
-                      ×
-                    </button>
-                  ) : null}
-                  {item.state.phase === "failed" ||
-                  item.state.phase === "cancelled" ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-small"
-                      aria-label={`Relancer ${item.fileName}`}
-                      onClick={() => {
-                        setUploadError(null);
-                        queueRef.current?.retryItem(item.id);
-                      }}
-                    >
-                      Relancer
-                    </button>
-                  ) : null}
-                </div>
-                {item.state.phase === "uploading" ? (
-                  <div
-                    className="progress"
-                    role="progressbar"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={Math.round(item.state.progress * 100)}
-                    aria-label={`Progression de ${item.fileName}`}
-                  >
-                    <span
-                      className="progress-bar"
-                      style={{ width: `${Math.round(item.state.progress * 100)}%` }}
-                    />
-                  </div>
-                ) : null}
-                {item.state.phase === "uploading" ? (
-                  <p className="muted">
-                    {formatBytes(item.state.transferredBytes)} /{" "}
-                    {formatBytes(item.state.sizeBytes)} (
-                    {Math.round(item.state.progress * 100)} %)
-                  </p>
-                ) : null}
-                {detailId === item.id ? (
-                  <FileDetail item={item} formatBytes={formatBytes} />
-                ) : null}
-                {(() => {
-                  const text = describeItem(item, waitingIndex.get(item.id) ?? 0);
-                  return text ? <p className="muted queue-detail">{text}</p> : null;
-                })()}
-                {item.state.attempts > 0 &&
-                ACTIVE_PHASES.includes(item.state.phase) ? (
-                  <p className="muted">
-                    Nouvelle tentative ({item.state.attempts})…
-                  </p>
-                ) : null}
-                {item.state.error && item.state.phase === "failed" ? (
-                  <p className="muted">{item.state.error}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          {hiddenCount > 0 ? (
-            <p className="muted">
-              {hiddenCount} autre{hiddenCount > 1 ? "s" : ""} fichier
-              {hiddenCount > 1 ? "s" : ""} non affiché{hiddenCount > 1 ? "s" : ""} (
-              {queue.done} transféré{queue.done > 1 ? "s" : ""}, {queue.failed} en échec) —
-              choisissez « Tous » ou « Échecs » pour les parcourir.
-            </p>
-          ) : null}
-              </>
-            );
-          })()}
-        </div>
-        </section>
+        <UploadTray
+          queue={queue}
+          throughput={throughputRef.current.rate()}
+          formatBytes={formatBytes}
+          onClear={clearTray}
+          onPause={pauseQueue}
+          onResume={resumeQueue}
+          onCancelItem={cancelQueueItem}
+          onRetryItem={retryQueueItem}
+        />
       ) : null}
 
       <MasterModeDialog
