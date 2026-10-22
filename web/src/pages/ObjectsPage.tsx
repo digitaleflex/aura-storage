@@ -15,6 +15,7 @@ import {
 } from "../lib/api";
 import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
+import { ThroughputWindow } from "../lib/throughput";
 import {
   addEntries,
   clearOwner,
@@ -83,7 +84,7 @@ const PHASE_LABEL: Record<TransferPhase, string> = {
   idle: "En attente",
   "requesting-intent": "Autorisation…",
   uploading: "Envoi…",
-  validating: "Validation…",
+  validating: "Vérification d'intégrité…",
   available: "Disponible",
   failed: "Échec",
   cancelled: "Annulé",
@@ -572,7 +573,8 @@ export function ObjectsPage() {
   } | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const uploadStartTimeRef = useRef<number | null>(null);
+  const throughputRef = useRef(new ThroughputWindow());
+  const libraryRefreshRef = useRef({ at: 0, done: 0 });
 
   // File d'attente automatique : placeholder (defini plus bas apres transferActive)
 
@@ -811,6 +813,8 @@ export function ObjectsPage() {
       return { file, folderId, key, idempotencyKey: idem };
     });
     void addEntries(journal);
+    throughputRef.current.reset();
+    libraryRefreshRef.current = { at: Date.now(), done: 0 };
     const uploadQueue = startUploadQueue(inputs, transferDeps(activeCsrf), {
       folderId: currentFolderId,
       onUpdate: handleQueueUpdate,
@@ -1288,6 +1292,18 @@ export function ObjectsPage() {
   /** Shared queue subscriber: mirrors state and reacts when it settles. */
   function handleQueueUpdate(next: QueueState) {
     setQueue(next);
+    const nowMs = Date.now();
+    throughputRef.current.push(
+      nowMs,
+      next.items.reduce((sum, item) => sum + item.state.transferredBytes, 0),
+    );
+    // Files become visible as they are verified, not only when the whole batch
+    // ends (an import can run for hours): refresh the ledger at most every 10 s.
+    const refresh = libraryRefreshRef.current;
+    if (!next.finished && next.done > refresh.done && nowMs - refresh.at >= 10_000) {
+      libraryRefreshRef.current = { at: nowMs, done: next.done };
+      invalidateLibrary();
+    }
     // Confirmed by the server, or cancelled on purpose: nothing left to resume.
     const settled = next.items
       .filter(
@@ -1347,7 +1363,6 @@ export function ObjectsPage() {
         return;
       }
     }
-    uploadStartTimeRef.current = Date.now();
     launchQueue(
       csrf,
       pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
@@ -2376,7 +2391,7 @@ export function ObjectsPage() {
               Annuler
             </button>
           ) : null}
-          {!transferActive && (queue.failed > 0 || queue.cancelled > 0) ? (
+          {queue.failed > 0 || (!transferActive && queue.cancelled > 0) ? (
             <button type="button" className="btn" onClick={handleRetryFailed}>
               Réessayer les échecs
             </button>
@@ -3454,10 +3469,9 @@ export function ObjectsPage() {
             const totalBytes = queue.items.reduce((sum, item) => sum + item.sizeBytes, 0);
             const uploadedBytes = queue.items.reduce((sum, item) => sum + item.state.transferredBytes, 0);
             const pct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
-            // Throughput et ETA
-            const startTime = uploadStartTimeRef.current;
-            const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
-            const throughput = elapsed > 1 ? uploadedBytes / elapsed : 0;
+            // Débit sur les ~20 dernières secondes (pas depuis le début : les pauses,
+            // les fichiers déjà présents et les vérifications faussaient le chiffre).
+            const throughput = throughputRef.current.rate();
             const remaining = totalBytes - uploadedBytes;
             const eta = throughput > 0 ? remaining / throughput : 0;
             const formatEta = (s: number) => {
