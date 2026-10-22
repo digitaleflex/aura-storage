@@ -1174,6 +1174,17 @@ def _cache_set(key: str | None, status: int, body):
     _RESP_CACHE[key] = (time.time(), status, body)
 
 
+def _defer_slow_commit(oid, size, head, principal):
+    """The synchronous check ran past its deadline: the bytes may well be fine
+    (a slow disk under load is not corruption), so hand the object to the
+    verification worker instead of deleting it. The client follows the 202."""
+    repo.mark_verifying(oid, head.get("ETag"))
+    audit_event("commit", principal["id"], "deadline_deferred", {"object_id": oid})
+    return JSONResponse(status_code=202, content={
+        "id": oid, "status": VERIFYING, "size_bytes": size,
+    })
+
+
 @app.post("/api/v1/objects/{oid}/commit")
 def commit_object(
     oid: str, response: Response, request: Request,
@@ -1282,12 +1293,7 @@ def commit_object(
         repo.set_status(oid, "failed")
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
     except CommitDeadlineExceeded:
-        repo.set_status(oid, "failed")
-        try:
-            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
-        except Exception:
-            pass
-        raise HTTPException(status_code=504, detail="commit exceeded deadline")
+        return _defer_slow_commit(oid, size, head, principal)
     except Exception:
         raise HTTPException(status_code=422, detail="upload not readable at storage")
     hash_s = time.perf_counter() - hash_started
@@ -1331,13 +1337,7 @@ def commit_object(
 
     # Hard deadline guard for the synchronous commit path.
     if settings.commit_deadline_s and (time.perf_counter() - started) > settings.commit_deadline_s:
-        repo.set_status(oid, "failed")
-        try:
-            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
-        except Exception:
-            pass
-        audit_event("commit", principal["id"], "deadline", {"object_id": oid})
-        raise HTTPException(status_code=504, detail="commit exceeded deadline")
+        return _defer_slow_commit(oid, size, head, principal)
 
     row_version = row.get("version")
     n = repo.mark_available(oid, size, digest, expected_version=row_version)
