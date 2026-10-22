@@ -373,6 +373,41 @@ test("queue transfers every file with bounded concurrency", async () => {
   expect(Math.max(...states.map((s) => s.active))).toBeLessThanOrEqual(2);
 });
 
+test("progress-only events are coalesced, phase changes are not", async () => {
+  const file = fakeFile("big.bin", 1000);
+  const deps: TransferDeps = {
+    requestIntent: async (input) => ({
+      id: input.fileName,
+      status: "pending",
+      method: "PUT",
+      upload_url: "https://s3.example/put",
+      headers: {},
+      content_type: "application/octet-stream",
+      size_bytes: input.sizeBytes,
+      expires_in: 900,
+      expires_at: null,
+      idempotent_replay: false,
+    }),
+    upload: async (_url, _file, opts) => {
+      // A burst of 500 progress events within a few milliseconds.
+      for (let i = 1; i <= 500; i += 1) opts.onProgress?.(i * 2, 1000);
+    },
+    commit: async (id) => ({ id, status: "available", size_bytes: 1000, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+  const states: QueueState[] = [];
+  const final = await startUploadQueue([file], deps, {
+    folderId: null,
+    onUpdate: (s) => states.push(s),
+  }).done;
+  expect(final.done).toBe(1);
+  expect(states.length).toBeLessThan(40); // not ~500
+  expect(states[states.length - 1]?.finished).toBe(true);
+  expect(states.some((s) => s.items[0]?.state.phase === "validating")).toBe(true);
+});
+
 test("one failing file does not stop the others, and retry re-runs only it", async () => {
   const files = [fakeFile("ok.bin"), fakeFile("bad.bin"), fakeFile("ok2.bin")];
   let badCommitAttempts = 0;

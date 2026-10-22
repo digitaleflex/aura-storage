@@ -600,6 +600,8 @@ export interface UploadQueue {
 }
 
 export interface QueueOptions {
+  /** Minimum gap between progress-only snapshots (default 250 ms; 0 = every event). */
+  progressIntervalMs?: number;
   folderId: string | null;
   /** How many files transfer at once (default 10). */
   concurrency?: number;
@@ -824,7 +826,29 @@ export function startUploadQueue(
     finished: finished || (active === 0 && items.every((item) => item.settled)),
   });
 
-  const emit = () => options.onUpdate?.(snapshot());
+  // Byte-progress events arrive ~20/s per XHR (200/s at ten files). Each emit
+  // copies the whole queue and re-renders the page, so progress-only updates
+  // are coalesced to one per `progressIntervalMs`; every phase change, and the
+  // final state, is emitted at once.
+  const progressIntervalMs = Math.max(0, options.progressIntervalMs ?? 250);
+  let progressTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastEmitAt = 0;
+  const emit = () => {
+    if (progressTimer !== null) {
+      clearTimeout(progressTimer);
+      progressTimer = null;
+    }
+    lastEmitAt = Date.now();
+    options.onUpdate?.(snapshot());
+  };
+  const emitProgress = () => {
+    const wait = progressIntervalMs - (Date.now() - lastEmitAt);
+    if (wait <= 0) {
+      emit();
+    } else if (progressTimer === null) {
+      progressTimer = setTimeout(emit, wait);
+    }
+  };
 
   /**
    * A file that stopped on a transient error is not really finished: the next
@@ -941,8 +965,11 @@ export function startUploadQueue(
       signal: controller.signal,
       config: options.config,
       onUpdate: (state) => {
+        const progressOnly =
+          state.phase === "uploading" && item.state.phase === "uploading";
         item.state = state;
-        emit();
+        if (progressOnly) emitProgress();
+        else emit();
       },
     })
       .catch(() => undefined)
