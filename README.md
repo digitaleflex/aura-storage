@@ -11,6 +11,7 @@
 - [Architecture decisions and boundaries](docs/ARCHITECTURE.md)
 - [File transfer contract: API + presigned S3 URLs, FTPS boundaries](docs/FILE-TRANSFER.md)
 - [Vault transfer engine: upload state machine, progress, retries, cancellation, integrity](docs/TRANSFER-ENGINE.md)
+- [Integration guide: how another service gets the URL of a file (curl, Python, Node)](docs/INTEGRATION-GUIDE.md)
 - [Local validation: what to run before pushing, and what it proves](docs/LOCAL-VALIDATION.md)
 - [Changes of 2026-10-22: slow-upload audit, transfer engine and UI](docs/CHANGES-2026-10-22-transfer-and-ui.md)
 - [Measure upload speed before/after a deployment (read-only)](docs/MEASURE-TRANSFER.md)
