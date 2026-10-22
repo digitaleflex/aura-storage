@@ -650,6 +650,31 @@ def test_is_previewable_ignores_parameters_and_case():
     assert not main.is_previewable("")
 
 
+def test_preview_intent_serves_video_and_text_family_inline(monkeypatch):
+    # Video plays in <video>; text/CSV/JSON are rendered by the SPA as escaped
+    # text. Each is served inline with the object's own (allow-listed) type.
+    monkeypatch.setattr(main, "s3ops", DummyS3(b"a,b\n1,2\n"))
+    c, headers = _admin()
+    for name, ctype in (("clip.mp4", "video/mp4"), ("clip.webm", "video/webm"),
+                        ("notes.txt", "text/plain"), ("table.csv", "text/csv"),
+                        ("data.json", "application/json"), ("readme.md", "text/markdown")):
+        oid = _intent(c, headers, name=name, size_bytes=8, content_type=ctype).json()["id"]
+        assert c.post(f"/api/v1/objects/{oid}/commit", headers=headers).status_code == 200
+        r = c.post(f"/api/v1/objects/{oid}/preview-intent", headers=headers)
+        assert r.status_code == 200, (ctype, r.status_code, r.text)
+        assert "response-content-disposition=inline" in r.json()["preview_url"]
+
+
+def test_markup_types_stay_out_of_the_text_family():
+    # Anything that can carry script must stay download-only (it would run in
+    # the storage origin if served inline).
+    for ctype in ("text/html", "text/xml", "application/xhtml+xml", "image/svg+xml",
+                  "text/javascript", "application/javascript", "video/x-flv"):
+        assert not main.is_previewable(ctype), ctype
+    for ctype in ("video/mp4", "text/plain; charset=utf-8", "TEXT/CSV", "application/json"):
+        assert main.is_previewable(ctype), ctype
+
+
 def test_preview_intent_matches_download_scoping(monkeypatch):
     monkeypatch.setattr(main, "s3ops", DummyS3(b"x"))
     c, headers = _admin()

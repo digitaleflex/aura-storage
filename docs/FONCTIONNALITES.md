@@ -83,6 +83,7 @@ S3 via des URLs présignées de courte durée (`api/s3.py`).
 | `GET /api/v1/objects/{oid}` | `objects:read` | Métadonnées seules ; 404 hors périmètre |
 | `PATCH /api/v1/objects/{oid}` | `objects:write` | **humain uniquement** : classe/déclasse l'objet dans un dossier logique possédé (`folder_id`, `null` = racine) |
 | `POST /api/v1/objects/{oid}/download-intent` | `objects:read` | URL GET présignée + nom, type, taille, checksum ; 409 si non `available` |
+| `POST /api/v1/objects/{oid}/preview-intent` | `objects:read` | URL GET présignée `Content-Disposition: inline` pour l'aperçu intégré ; **liste blanche** : images (PNG, JPEG, GIF, WebP, AVIF), PDF, audio, vidéo (MP4, WebM, OGG) et texte (brut, CSV, TSV, Markdown, JSON) ; 415 pour tout le reste (HTML, SVG, XML, Office…) → téléchargement seul ; 409 si non `available` |
 | `DELETE /api/v1/objects/{oid}` | `objects:delete` | Soft delete (`deleted`) ; 409 si non supprimable |
 | `POST /api/v1/objects/{oid}/purge` | `objects:purge` | Destructif (operator/admin) : supprime les octets **puis** la ligne. Un échec de suppression S3 conserve la ligne et renvoie **502** (M06) |
 

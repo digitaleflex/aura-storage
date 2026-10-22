@@ -3511,3 +3511,47 @@ html {
     }
   }
 }
+
+/* -- Preview: video and text family --------------------------------------- */
+video.preview-media {
+  width: 100%;
+  max-height: 70vh;
+  background: #000;
+  border-radius: 10px;
+}
+.preview-text {
+  margin: 0;
+  max-height: 65vh;
+  overflow: auto;
+  padding: 14px 16px;
+  background: var(--steel-2);
+  border: var(--bw) solid var(--line);
+  border-radius: 10px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.preview-table-wrap {
+  max-height: 65vh;
+  overflow: auto;
+  border: var(--bw) solid var(--line);
+  border-radius: 10px;
+}
+.preview-table {
+  margin: 0;
+  font-size: 12.5px;
+}
+.preview-table th {
+  position: sticky;
+  top: 0;
+  background: var(--steel-1);
+}
+.preview-table td,
+.preview-table th {
+  white-space: nowrap;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
