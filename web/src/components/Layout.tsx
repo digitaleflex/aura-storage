@@ -30,11 +30,21 @@ function initials(name: string): string {
 }
 
 /**
+ * Paramètres de recherche portés par le shell.
+ *
+ * Les routes du shell ne déclarent pas de `validateSearch` : on type donc
+ * explicitement la seule clé lue ici, plutôt que de laisser le `{}` du
+ * routeur (ou un `any`) diffuser dans le composant.
+ */
+type ShellSearch = { sidebar?: string };
+
+/**
  * App shell: a dark navigation sidebar (stacks above the content on a phone)
  * and a light top bar that says who is signed in. Pages render in `.content`.
  * - Largeur contrôlée par le token --side-w (248px par défaut).
  * - État actif géré par le routeur TanStack + classe .nav-link-active.
- * - Collapsible : bouton en topbar + mémorisation en URL (?sidebar=collapsed).
+ * - Collapsible : bouton en topbar + état porté par l'URL (`?sidebar=collapsed`
+ *   ; la clé est absente quand la barre est étendue — l'URL reste propre).
  * - S'ouvre/referme sur clic de lien dans la sidebar mobile.
  */
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -58,9 +68,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
     retry: false,
   });
 
-  // État collapsible : persistant en URL (?sidebar=collapsed|expanded)
-  const urlParams = new URLSearchParams(location.search);
-  const sidebarCollapsed = urlParams.get("sidebar") === "collapsed";
+  // État collapsible : la source de vérité est l'URL (état partageable, lien
+  // profond). `location.search` est l'objet de paramètres *analysé* par le
+  // routeur — le comparer à une chaîne, ou le renvoyer au routeur sous forme
+  // de chaîne, le faisait échouer : le paramètre ne revenait jamais et la
+  // barre ne se repliait pas.
+  const shellSearch = location.search as ShellSearch;
+  const sidebarCollapsed = shellSearch.sidebar === "collapsed";
 
   // Mobile drawer state
   const [mobileOpen, setMobileOpen] = React.useState(false);
@@ -152,15 +166,30 @@ export function Layout({ children }: { children: React.ReactNode }) {
     };
   }, [mobileOpen]);
 
-  // Mise à jour de l'URL lors du toggle
+  /**
+   * Replie ou déplie la barre latérale en portant l'état dans l'URL.
+   *
+   * Convention : `?sidebar=collapsed` matérialise le repli, l'absence de la
+   * clé vaut l'état par défaut (barre étendue). On n'écrit jamais
+   * `?sidebar=expanded` : une URL partagée reste lisible et le paramètre
+   * n'apparaît que lorsqu'il porte une information.
+   *
+   * `search` est fourni sous forme fonctionnelle : le routeur attend un
+   * objet (une chaîne y serait sérialisée caractère par caractère) et la
+   * forme fonctionnelle préserve les autres paramètres de la requête au lieu
+   * de les écraser. La clé repart à `undefined` — et non supprimée de
+   * l'objet — parce que le routeur sérialise l'objet renvoyé tel quel : une
+   * clé `undefined` est omise de l'URL.
+   */
   const toggleSidebar = (collapsed: boolean) => {
-    const search = new URLSearchParams(location.search);
-    search.set("sidebar", collapsed ? "collapsed" : "expanded");
-    const newSearch = search.toString();
-    // Remplace les params existants mais garde d'autres éventuels
-    const updatedSearch =
-      location.search === newSearch ? "" : newSearch;
-    navigate({ to: location.pathname, search: updatedSearch });
+    void navigate({
+      to: location.pathname,
+      search: (prev) => {
+        const next: ShellSearch = { ...(prev as ShellSearch) };
+        next.sidebar = collapsed ? "collapsed" : undefined;
+        return next;
+      },
+    });
   };
 
   async function handleLogout() {
@@ -181,12 +210,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
         className={`sidebar${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
         aria-label="Barre latérale AURA Vault"
       >
-        {/* Brand section — réduit à l'icône quand collapsed */}
-        <Link to="/" className="brand">
+        {/* Brand section — réduit à l'icône quand collapsed. Le lien porte
+            lui-même son nom accessible (« AURA Vault ») : le libellé visible
+            peut donc être masqué sans que la marque perde son identité pour un
+            lecteur d'écran. Le masquage passe par `font-size: 0`
+            (`.brand-name-hidden`), pas par `display: none` : le texte reste
+            dans l'arbre d'accessibilité. */}
+        <Link to="/" className="brand" aria-label="AURA Vault">
           <VaultMark />
-          <span
-            aria-label={sidebarCollapsed ? "AURA Vault" : undefined}
-          >
+          <span className={sidebarCollapsed ? "brand-name-hidden" : undefined}>
             AURA Vault
           </span>
         </Link>

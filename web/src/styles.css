@@ -278,7 +278,11 @@ h3 {
   overflow: hidden;
 }
 
-/* Sidebar collapsed: icône seule, largeur réduite */
+/* Sidebar repliée : rail d'icônes.
+   Les libellés sont masqués par `font-size: 0` — la technique déjà employée
+   par la requête tablette plus bas — et non par `display: none` : le texte
+   reste dans l'arbre d'accessibilité, donc le nom accessible des liens et de
+   la marque survit au repli. */
 .sidebar.sidebar-collapsed {
   width: 56px;
   transition: width var(--dur-slow) var(--ease-std);
@@ -290,31 +294,64 @@ h3 {
   padding: var(--space-2) 0;
 }
 
+/* Libellés de navigation : taille nulle + centrage de la pastille. Le `gap`
+   tombe à zéro : le texte, réduit à zéro, reste un item de flex et
+   laisserait une gouttière qui décentre l'icône. */
+.sidebar-collapsed .nav-link {
+  font-size: 0;
+  gap: 0;
+  justify-content: center;
+  padding-inline: 0;
+}
+
+/* Marque : plus de gouttière ni d'écart, sinon l'emblème de 26 px serait
+   rogné par les 56 px du rail. */
+.sidebar-collapsed .brand {
+  gap: 0;
+  justify-content: center;
+  padding-inline: 0;
+}
+
+/* L'indicateur de stockage n'a pas de place dans le rail : son libellé passe
+   à taille nulle (l'icône reste centrée et la région `aria-live` continue
+   d'annoncer la consommation). */
+.sidebar-collapsed .sidebar-foot {
+  font-size: 0;
+  gap: 0;
+  justify-content: center;
+  padding-inline: 0;
+}
+
+/* Sections de navigation (marqueurs de regroupement) : le séparateur et le
+   titre consomment les tokens de la barre latérale, pas des variables
+   maison. */
 .sidebar-collapsed .nav .sidebar-section {
   margin-bottom: var(--space-2);
-  border-top: 1px solid var(--sidebar-section-hover);
-  padding: var(--spacing-xs) 0;
+  border-top: 1px solid var(--side-2);
+  padding: var(--space-1) 0;
 }
 
 .sidebar-collapsed .sidebar-section .section-title {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 600;
-  color: var(--section-title-color);
+  color: var(--side-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin: 0 0 var(--spacing-xs) 0;
+  margin: 0 0 var(--space-1) 0;
 }
 
+/* Survol du rail : même teinte que l'état actif de la barre. */
 .sidebar-collapsed .nav a:hover {
-  background: var(--sidebar-section-hover);
+  background: var(--side-2);
 }
 
-/* Brand collapsed : icône seule, texte masqué */
+/* Marque : une seule définition (les deux blocs historiques se doublonnaient
+   et le second écrasait le premier). */
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-sm);
-  padding: var(--spacing-sm) 0;
+  gap: 10px;
+  padding: 4px 8px;
   font-size: 16px;
   font-weight: 600;
   color: #ffffff;
@@ -334,8 +371,10 @@ h3 {
   transition: color var(--dur-std) var(--ease-std);
 }
 
+/* Libellé de marque masqué (barre repliée) : `font-size: 0` conserve le
+   texte dans l'arbre d'accessibilité, là où `display: none` le supprimerait. */
 .brand-name-hidden {
-  display: none;
+  font-size: 0;
 }
 
 /* Bouton de togglage sidebar dans la topbar */
@@ -479,22 +518,6 @@ h3 {
 .sidebar button:focus-visible {
   outline-color: var(--signal);
   outline-offset: 2px;
-}
-
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 8px;
-  font-size: 16px;
-  font-weight: 600;
-  color: #ffffff;
-  text-decoration: none;
-}
-
-.brand svg {
-  flex: none;
-  color: var(--side-muted);
 }
 
 .nav {
@@ -2519,8 +2542,10 @@ p .chip {
   .sidebar-foot {
     display: none;
   }
+  /* Même masquage propre que le rail replié : le titre de section est mis à
+     taille nulle plutôt que retiré, il reste dans l'arbre d'accessibilité. */
   .sidebar-section .section-title {
-    display: none;
+    font-size: 0;
   }
 }
 
