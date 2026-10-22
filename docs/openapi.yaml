@@ -1519,7 +1519,7 @@ paths:
       responses:
         "200": { description: Plan and uploaded parts }
         "401": { description: Authentication required }
-        "404": { description: Object not found, or not a multipart upload }
+        "404": { description: "Object not found, or not a multipart upload" }
   /api/v1/objects/{oid}/multipart/parts:
     post:
       summary: "Presigned URLs for a batch of multipart parts (objects:write)"
