@@ -574,6 +574,15 @@ class Repository:
             (at, result, oid),
         )
 
+    def has_active_transfers(self, since: int) -> bool:
+        """True while uploads are in flight: a verifying object, or a pending
+        intent created at or after ``since``. The scrubber yields to them."""
+        return self._one(
+            "SELECT 1 AS n FROM objects WHERE status = 'verifying' "
+            "OR (status = 'pending' AND created_at >= %s) LIMIT 1",
+            (since,),
+        ) is not None
+
     def release_scrub(self, oid: str) -> None:
         """Give the object back unchecked (storage outage): retried next run."""
         self._run("UPDATE objects SET scrub_lease_until = NULL WHERE id = %s", (oid,))
@@ -620,15 +629,17 @@ class Repository:
         if expected_version is None:
             return self._run(
                 "UPDATE objects SET status = 'available', size_bytes = %s, "
-                "checksum_sha256 = %s, version = version + 1, updated_at = %s "
+                "checksum_sha256 = %s, version = version + 1, updated_at = %s, "
+                "scrubbed_at = %s, scrub_result = 'ok' "
                 "WHERE id = %s AND status IN ('pending', 'verifying')",
-                (size_bytes, checksum_sha256, self.now(), oid),
+                (size_bytes, checksum_sha256, self.now(), self.now(), oid),
             )
         return self._run(
             "UPDATE objects SET status = 'available', size_bytes = %s, "
-            "checksum_sha256 = %s, version = version + 1, updated_at = %s "
+            "checksum_sha256 = %s, version = version + 1, updated_at = %s, "
+            "scrubbed_at = %s, scrub_result = 'ok' "
             "WHERE id = %s AND status IN ('pending', 'verifying') AND version = %s",
-            (size_bytes, checksum_sha256, self.now(), oid, expected_version),
+            (size_bytes, checksum_sha256, self.now(), self.now(), oid, expected_version),
         )
 
     def set_multipart(self, oid: str, upload_id: Optional[str],

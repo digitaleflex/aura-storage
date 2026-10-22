@@ -77,6 +77,8 @@ def store(monkeypatch):
     monkeypatch.setattr(main.settings, "verify_async_threshold_bytes", 10 ** 12)
     # Every object already in the catalogue counts as freshly checked, so each
     # test only sees the objects it creates.
+    # Pending intents left by other test modules would keep the scrubber idle.
+    _sql("UPDATE objects SET status = 'aborted' WHERE status IN ('pending', 'verifying')")
     _sql("UPDATE objects SET scrubbed_at = ?, scrub_result = 'ok' WHERE status = 'available'",
          (int(time.time()),))
     return s
@@ -97,6 +99,9 @@ def _stored(store, c, headers, data: bytes) -> tuple[str, str]:
     key = _sql("SELECT object_key FROM objects WHERE id = ?", (oid,))["object_key"]
     store.objects[key] = data
     assert c.post(f"/api/v1/objects/{oid}/commit", headers=headers).status_code == 200
+    # A committed object is stamped as just verified; these tests exercise the
+    # scrubber on never-checked objects (legacy rows), so clear the stamp.
+    _sql("UPDATE objects SET scrubbed_at = NULL, scrub_result = NULL WHERE id = ?", (oid,))
     return oid, key
 
 
@@ -190,3 +195,34 @@ def test_admin_routes_need_admin(store):
     _stored(store, c, headers, b"abc")
     out = c.post("/api/v1/admin/integrity/scrub", headers=headers).json()
     assert out["ok"] == 1 and out["bytes"] == 3
+
+
+def test_a_freshly_verified_object_is_not_reread_by_the_scrubber(store):
+    c, headers = _admin()
+    data = b"just uploaded"
+    r = c.post("/api/v1/objects/upload-intents",
+               json={"display_name": "new.pdf", "size_bytes": len(data)}, headers=headers)
+    oid = r.json()["id"]
+    key = _sql("SELECT object_key FROM objects WHERE id = ?", (oid,))["object_key"]
+    store.objects[key] = data
+    assert c.post(f"/api/v1/objects/{oid}/commit", headers=headers).status_code == 200
+    row = _sql("SELECT scrubbed_at, scrub_result FROM objects WHERE id = ?", (oid,))
+    assert row["scrub_result"] == "ok" and row["scrubbed_at"] is not None
+    reads = store.reads
+    assert scrub_one(main.repo, store, main.settings) is None
+    assert store.reads == reads
+
+
+def test_the_scrubber_yields_while_uploads_are_in_flight(store):
+    c, headers = _admin()
+    _stored(store, c, headers, b"checked later")
+    r = c.post("/api/v1/objects/upload-intents",
+               json={"display_name": "busy.pdf", "size_bytes": 5}, headers=headers)
+    busy = r.json()["id"]  # stays pending: an upload is running
+    reads = store.reads  # the commit's own rehash is not a scrub read
+    assert scrub_run(main.repo, store, main.settings)["bytes"] == 0
+    assert store.reads == reads
+    # Once the upload is gone (aborted), the scrubber resumes.
+    assert c.delete(f"/api/v1/objects/{busy}/upload", headers=headers).status_code in (200, 204, 404)
+    _sql("UPDATE objects SET status = 'aborted' WHERE id = ?", (busy,))
+    assert scrub_run(main.repo, store, main.settings)["ok"] == 1

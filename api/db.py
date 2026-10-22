@@ -648,6 +648,16 @@ class Repository:
         )
         self.conn.commit()
 
+    def has_active_transfers(self, since: int) -> bool:
+        """True while uploads are in flight: a verifying object, or a pending
+        intent created at or after ``since``. The scrubber yields to them."""
+        row = self.conn.execute(
+            "SELECT 1 FROM objects WHERE status = 'verifying' "
+            "OR (status = 'pending' AND created_at >= ?) LIMIT 1",
+            (since,),
+        ).fetchone()
+        return row is not None
+
     def release_scrub(self, oid: str) -> None:
         """Give the object back unchecked (storage outage): retried next run."""
         self.conn.execute("UPDATE objects SET scrub_lease_until = NULL WHERE id = ?", (oid,))
@@ -698,16 +708,18 @@ class Repository:
         if expected_version is None:
             cur = self.conn.execute(
                 "UPDATE objects SET status = 'available', size_bytes = ?, "
-                "checksum_sha256 = ?, version = version + 1, updated_at = ? "
+                "checksum_sha256 = ?, version = version + 1, updated_at = ?, "
+                "scrubbed_at = ?, scrub_result = 'ok' "
                 "WHERE id = ? AND status IN ('pending', 'verifying')",
-                (size_bytes, checksum_sha256, self.now(), oid),
+                (size_bytes, checksum_sha256, self.now(), self.now(), oid),
             )
         else:
             cur = self.conn.execute(
                 "UPDATE objects SET status = 'available', size_bytes = ?, "
-                "checksum_sha256 = ?, version = version + 1, updated_at = ? "
+                "checksum_sha256 = ?, version = version + 1, updated_at = ?, "
+                "scrubbed_at = ?, scrub_result = 'ok' "
                 "WHERE id = ? AND status IN ('pending', 'verifying') AND version = ?",
-                (size_bytes, checksum_sha256, self.now(), oid, expected_version),
+                (size_bytes, checksum_sha256, self.now(), self.now(), oid, expected_version),
             )
         self.conn.commit()
         return cur.rowcount
