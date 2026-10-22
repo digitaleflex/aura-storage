@@ -178,6 +178,10 @@ services:
       # SeaweedFS default "*". AllowedHeaders stays "*" so the preflight for the
       # signed `x-amz-server-side-encryption` header on presigned PUTs is echoed.
       - -s3.allowedOrigins=https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      # S3 GET read cache (SeaweedFS 4.48): in-memory chunk cache shared across
+      # requests. 0 disables.
+      - -s3.cacheCapacityMB=${SEAWEEDFS_S3_CACHE_MB:-256}
+      - -s3.readerCacheSizeMB=${SEAWEEDFS_S3_READER_CACHE_MB:-128}
     environment:
       TZ: ${TZ:-Africa/Porto-Novo}
       # SeaweedFS SSE-S3 envelope-encryption key. Keep identical across all S3 gateways.
