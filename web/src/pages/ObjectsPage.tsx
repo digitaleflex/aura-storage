@@ -16,6 +16,7 @@ import {
 import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import { emptyQueue, startUploadQueue } from "../lib/transfer";
 import { ThroughputWindow } from "../lib/throughput";
+import { Elapsed } from "../components/Elapsed";
 import {
   addEntries,
   clearOwner,
@@ -28,6 +29,7 @@ import type {
   QueueInput,
   QueueState,
   TransferDeps,
+  QueueItem,
   TransferPhase,
   UploadQueue,
 } from "../lib/transfer";
@@ -101,6 +103,39 @@ const PHASE_LABEL: Record<TransferPhase, string> = {
 const ACTIVE_PHASES: TransferPhase[] = ["requesting-intent", "uploading", "validating"];
 
 /** Chip style for a queue item's phase. */
+/** One plain-language sentence on what is happening to a file right now. */
+function describeItem(item: QueueItem, waitingAhead: number): string | null {
+  const st = item.state;
+  switch (st.phase) {
+    case "idle":
+      return waitingAhead > 0
+        ? `En attente d'une place dans la file (${waitingAhead} fichier${waitingAhead > 1 ? "s" : ""} avant lui).`
+        : "En attente d'une place dans la file.";
+    case "requesting-intent":
+      return "Demande d'autorisation d'envoi au serveur.";
+    case "uploading":
+      return st.attempts > 0
+        ? `Envoi direct vers le stockage chiffré (reprise n° ${st.attempts}).`
+        : "Envoi direct vers le stockage chiffré.";
+    case "validating":
+      return st.verifyMode === "background"
+        ? "Octets reçus. Le serveur vérifie l'intégrité (SHA-256) en tâche de fond : le fichier sera disponible ensuite, même si vous fermez la page."
+        : "Octets reçus. Le serveur relit le fichier et calcule son empreinte SHA-256 avant de le publier.";
+    case "failed":
+      return st.failureKind === "retryable"
+        ? "Interrompu par un incident réseau ou serveur : « Relancer » reprend ce fichier."
+        : st.failureKind === "expired"
+          ? "L'autorisation d'envoi a expiré trop de fois : « Relancer » en demande une nouvelle."
+          : st.failureKind === "fatal"
+            ? "Refusé par le serveur : réessayer ne changera pas le résultat sans corriger la cause."
+            : null;
+    case "cancelled":
+      return "Annulé par vous. « Relancer » le remet dans la file.";
+    default:
+      return null;
+  }
+}
+
 function queuePhaseClass(phase: TransferPhase): string {
   if (phase === "available") return "chip chip-ok";
   if (phase === "failed") return "chip chip-error";
@@ -3548,6 +3583,24 @@ export function ObjectsPage() {
               </span>
             ) : null}
           </div>
+          {(() => {
+            const count = (...phases: TransferPhase[]) =>
+              queue.items.filter((item) => phases.includes(item.state.phase)).length;
+            const parts = [
+              [count("requesting-intent", "uploading"), "en envoi"],
+              [count("validating"), "en vérification d'intégrité"],
+              [count("idle"), "en attente"],
+              [count("failed"), "en échec"],
+              [count("available"), "disponibles"],
+            ]
+              .filter(([n]) => (n as number) > 0)
+              .map(([n, label]) => `${n} ${label}`);
+            return parts.length > 0 ? (
+              <p className="muted queue-breakdown" data-testid="queue-breakdown">
+                {parts.join(" · ")}
+              </p>
+            ) : null;
+          })()}
           {queue.schedulerPaused ? (
             <p className="muted" role="status">
               Connexion perdue : la file est suspendue et reprendra
@@ -3602,6 +3655,15 @@ export function ObjectsPage() {
                   : needsAttention(item.state.phase),
             );
             const shown = matching.slice(0, TRAY_ROW_CAP);
+            // Position of each waiting file in the queue (1 = next to start).
+            const waitingIndex = new Map<string, number>();
+            let waitingSeen = 0;
+            for (const item of queue.items) {
+              if (item.state.phase === "idle") {
+                waitingIndex.set(item.id, waitingSeen);
+                waitingSeen += 1;
+              }
+            }
             const hiddenCount = queue.items.length - shown.length;
             return (
               <>
@@ -3613,6 +3675,12 @@ export function ObjectsPage() {
                   <span className="muted">{formatBytes(item.sizeBytes)}</span>
                   <span className={queuePhaseClass(item.state.phase)}>
                     {PHASE_LABEL[item.state.phase]}
+                    {ACTIVE_PHASES.includes(item.state.phase) ? (
+                      <>
+                        {" · "}
+                        <Elapsed since={item.state.phaseSince} />
+                      </>
+                    ) : null}
                   </span>
                   {item.state.phase === "available" ? (
                     <span className="chip chip-muted">SHA-256 vérifié</span>
@@ -3664,6 +3732,10 @@ export function ObjectsPage() {
                     {Math.round(item.state.progress * 100)} %)
                   </p>
                 ) : null}
+                {(() => {
+                  const text = describeItem(item, waitingIndex.get(item.id) ?? 0);
+                  return text ? <p className="muted queue-detail">{text}</p> : null;
+                })()}
                 {item.state.attempts > 0 &&
                 ACTIVE_PHASES.includes(item.state.phase) ? (
                   <p className="muted">

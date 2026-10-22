@@ -245,3 +245,16 @@ test("a big batch lists only what needs attention; 'Tous' lists everything", asy
   await tray.getByRole("button", { name: "Tous" }).click();
   await expect(tray.locator("li.queue-item")).toHaveCount(40);
 });
+
+test("the tray explains what is happening to each file", async ({ page }) => {
+  await installMocks(page, { putDelayMs: 1500 });
+  await login(page);
+  await chooseFile(page);
+  await page.getByRole("button", { name: "Importer et valider" }).click();
+  const tray = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
+  await expect(tray.getByTestId("queue-breakdown")).toContainText("en envoi");
+  await expect(tray.getByText("Envoi direct vers le stockage chiffré.")).toBeVisible();
+  // The step shows how long it has lasted (m:ss).
+  await expect(tray.locator(".elapsed").first()).toHaveText(/^\d+:\d{2}$/);
+  await expect(tray.getByTestId("queue-breakdown")).toContainText("disponibles");
+});
