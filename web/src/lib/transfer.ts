@@ -15,6 +15,7 @@ import { ApiError, PresignedUploadError } from "./api";
 import { describeError } from "./errors";
 import type {
   CommitResponse,
+  CommitTiming,
   MultipartPartUrls,
   MultipartStatus,
   UploadIntentResponse,
@@ -52,6 +53,14 @@ export interface TransferState {
    * a fresh submission, not a silent replay.
    */
   failureKind?: "retryable" | "expired" | "fatal" | "aborted";
+  /**
+   * Durées du commit serveur, transportées telles quelles depuis la réponse de
+   * commit pour que l'affichage puisse les lire sur l'état de l'upload.
+   * `null` (ou absent) signifie « pas mesuré pour cette requête » : objet déjà
+   * publié, commit gagné par une requête concurrente, ou vérification
+   * différée. Ce module ne les interprète jamais.
+   */
+  commitTiming?: CommitTiming | null;
 }
 
 export interface TransferResult {
@@ -418,8 +427,15 @@ export async function runTransfer(
    */
   const settle = async (
     id: string,
-    committed: { status: string; checksum_sha256?: string },
+    committed: {
+      status: string;
+      checksum_sha256?: string;
+      commit_timing?: CommitTiming | null;
+    },
   ): Promise<TransferResult> => {
+    // Figé avant le suivi : les réponses de `objectStatus` décrivent l'objet et
+    // ne portent pas les timings du commit, qui ne valent que pour cette requête.
+    const commitTiming = committed.commit_timing ?? null;
     let current = committed;
     if (current.status === "verifying") options.onVerifying?.();
     for (let polls = 0; current.status === "verifying"; polls += 1) {
@@ -448,7 +464,16 @@ export async function runTransfer(
       });
       return { state, objectId: id };
     }
-    emit({ phase: "available", error: null, intentId: id, progress: 1, transferredBytes: file.size });
+    emit({
+      phase: "available",
+      error: null,
+      intentId: id,
+      progress: 1,
+      transferredBytes: file.size,
+      // Porté par l'état de la file : l'UI le lit sur l'élément correspondant,
+      // aucun affichage n'est décidé ici.
+      commitTiming,
+    });
     return { state, objectId: id, checksum: current.checksum_sha256 };
   };
 

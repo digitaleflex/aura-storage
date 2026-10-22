@@ -1362,9 +1362,15 @@ def commit_object(
         fresh = _as_dict(repo.get_object(oid, **_object_scope(principal)))
         if fresh and fresh.get("status") == "available" and fresh.get("checksum_sha256") == digest:
             audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
+            # Le commit a été fait par une requête concurrente : les phases
+            # HEAD/hash ne sont pas mesurées *ici*, donc les inventer (0, ou des
+            # durées partielles) serait mensonger. On expose explicitement
+            # ``null`` — le front type le champ en ``CommitTiming | null`` et sait
+            # distinguer « non mesuré » de « mesuré ».
             return {
                 "id": oid, "status": "available", "size_bytes": fresh.get("size_bytes", size),
                 "checksum_sha256": digest, "checksum_algorithm": "sha256",
+                "commit_timing": None,
             }
         raise HTTPException(status_code=409, detail="concurrent commit conflict")
     audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
@@ -1380,7 +1386,19 @@ def commit_object(
     result = {
         "id": oid, "status": "available", "size_bytes": size,
         "checksum_sha256": digest, "checksum_algorithm": "sha256",
+        # Mêmes mesures que l'en-tête ``Server-Timing`` ci-dessus, mais dans le
+        # corps pour le front (l'en-tête reste la source lue par le bench et les
+        # logs). Ce sont des mesures de la requête courante, jamais persistées :
+        # elles décrivent un commit, pas l'objet.
+        "commit_timing": {
+            "head_ms": round(head_ms, 3),
+            "hash_ms": round(hash_ms, 3),
+            "total_ms": round(total_ms, 3),
+        },
     }
+    # Le cache d'idempotence conserve le corps tel que produit par la requête qui
+    # a réellement commité : un rejeu avec la même clé renvoie donc *ses* timings,
+    # ce qui est cohérent (c'est bien ce commit-là qui a publié l'objet).
     _cache_set(ck, 200, result)
     return result
 

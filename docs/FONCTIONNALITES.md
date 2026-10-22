@@ -1,7 +1,7 @@
 # AURA — Catalogue fonctionnel
 
-**Statut :** inventaire vérifié ligne à ligne dans le code à la date du 2026-10-16
-(branche de travail `feat/vault-ui-polish`), sur `api/main.py`, `api/authz.py`,
+**Statut :** inventaire vérifié ligne à ligne dans le code à la date du 2026-10-16,
+sur `api/main.py`, `api/authz.py`,
 `api/identity.py`, `api/s3.py`, `api/lifecycle.py`, `api/transfer.py`,
 `api/object_query.py`, `api/config.py`, puis recoupé avec `docs/AUTHORIZATION-MATRIX.md`,
 `docs/API-SPECIFICATION.md` et `docs/openapi.yaml`.

@@ -157,6 +157,52 @@ paths:
                     scopes: [objects:read, objects:write]
                     csrf_token: null
         "401": { description: Authentication required }
+  /api/v1/me/master-mode:
+    post:
+      summary: Enter master mode on this session (objects:purge, human only)
+      tags: [auth]
+      description: >-
+        Short, password-confirmed elevation for bulk destructive actions, bound
+        to this browser session and audited. The current password is re-verified
+        here; failures count towards the same per-IP login rate limit as
+        /api/v1/login.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password: { type: string, minLength: 1, maxLength: 1024, format: password }
+      responses:
+        "200":
+          description: Master mode active until master_until (epoch seconds)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MasterModeState" }
+              examples:
+                elevated:
+                  value: { master_until: 1761130500 }
+        "401": { description: Authentication required }
+        "403": { description: "Password does not match, CSRF validation failed, or a service identity (human-only capability)" }
+        "422": { description: Missing or empty password }
+        "429": { description: Too many failed attempts from this client; see Retry-After }
+    delete:
+      summary: Leave master mode on this session (any authenticated caller)
+      tags: [auth]
+      responses:
+        "200":
+          description: Master mode cleared for this session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MasterModeState" }
+              examples:
+                cleared:
+                  value: { master_until: null }
+        "401": { description: Authentication required }
+        "403": { description: Service identities have no session to clear (human-only) }
   /api/v1/objects:
     get:
       summary: List objects visible to the caller
@@ -257,6 +303,68 @@ paths:
         "401": { description: Authentication required }
         "403": { description: Access denied }
         "422": { description: "Malformed folder_id, or an unsupported status/sort/order value" }
+  /api/v1/objects/bulk-purge:
+    post:
+      summary: Purge many objects in one call (objects:purge, human only, master mode)
+      tags: [objects]
+      description: >-
+        Master mode is required: without it the call is refused with 403, so a
+        stolen session cannot mass-delete. At most AURA_MASTER_BULK_MAX (500 by
+        default) ids per call. Ids are canonicalized one by one; a malformed id
+        is reported in not_found instead of failing the whole call. A storage
+        delete failure is reported in failed and keeps the catalogue row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  minItems: 1
+                  items: { type: string }
+                  description: Object ids to purge; malformed ids are reported in not_found
+      responses:
+        "200":
+          description: Per-id outcome; every requested id appears in exactly one list
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BulkPurgeResult" }
+              examples:
+                mixed:
+                  value:
+                    purged: [7c63c78d-d790-498e-acb5-870d53cfc0fd]
+                    not_found: [not-an-object-id]
+                    failed: []
+        "401": { description: Authentication required }
+        "403": { description: "Not authorised, or master mode is not active" }
+        "422": { description: "Empty id list, or more ids than the per-call cap" }
+  /api/v1/objects/trash/empty:
+    post:
+      summary: Purge the caller's whole trash in one call (objects:purge, human only, master mode)
+      tags: [objects]
+      description: >-
+        Master mode is required (403 otherwise). Purges at most
+        AURA_MASTER_BULK_MAX soft-deleted objects per call and sets `more` when
+        the trash still holds rows: the client simply calls again.
+      responses:
+        "200":
+          description: Per-id outcome plus `more` when soft-deleted rows remain
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BulkPurgeResult" }
+              examples:
+                emptied:
+                  value:
+                    purged: [7c63c78d-d790-498e-acb5-870d53cfc0fd]
+                    not_found: []
+                    failed: []
+                    more: false
+        "401": { description: Authentication required }
+        "403": { description: "Not authorised, or master mode is not active" }
   /api/v1/objects/upload-intents:
     post:
       summary: Create a short-lived upload intent (capability objects:write)
@@ -326,6 +434,10 @@ paths:
                     size_bytes: 482133
                     checksum_sha256: 9f2c41a7d0b8e6534c1f9a2b7d8e0c3f5a6b9d2e8c1f4a7b0d3e6c9f2a5b8d1e
                     checksum_algorithm: sha256
+                    commit_timing:
+                      head_ms: 12.481
+                      hash_ms: 87.203
+                      total_ms: 101.917
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not committable (including aborted/expired/deleted) }
@@ -348,6 +460,81 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not abortable }
+  /api/v1/objects/{oid}/multipart:
+    get:
+      summary: Multipart upload status — plan and parts already held (objects:write)
+      tags: [objects]
+      description: >-
+        Lets a resumed upload send only the missing parts. The plan is computed
+        server-side from the declared size; uploaded_parts lists the part numbers
+        the backend already holds at the planned size.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200":
+          description: Part plan and the part numbers already stored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MultipartStatus" }
+              examples:
+                resumed:
+                  value:
+                    id: 7c63c78d-d790-498e-acb5-870d53cfc0fd
+                    size_bytes: 52428800
+                    part_size_bytes: 8388608
+                    part_count: 7
+                    uploaded_parts: [1, 2, 3]
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+        "409": { description: No multipart upload in progress for this object }
+        "410": { description: "Upload intent expired, or the multipart upload no longer exists" }
+        "422": { description: Identifier is not a canonical UUID v4 }
+        "502": { description: Storage unavailable; the held parts cannot be listed }
+  /api/v1/objects/{oid}/multipart/parts:
+    post:
+      summary: Presign PUT URLs for requested multipart parts (objects:write)
+      tags: [objects]
+      description: >-
+        Returns one short-lived presigned PUT per requested part number (at most
+        100 per call), each bound to the exact byte length of that part. Part
+        numbers are deduplicated and sorted. PUT the bytes directly to the URL;
+        the API never proxies them.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [part_numbers]
+              properties:
+                part_numbers:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Presigned part URLs with the exact size each part must carry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MultipartPartBatch" }
+              examples:
+                firstTwo:
+                  value:
+                    id: 7c63c78d-d790-498e-acb5-870d53cfc0fd
+                    expires_in: 900
+                    parts:
+                      - part_number: 1
+                        size_bytes: 8388608
+                        url: https://aura-storage.eurinhash.com/spaces/aura/objects/7c63c78d-d790-498e-acb5-870d53cfc0fd?partNumber=1&x-amz-signature-redacted
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+        "409": { description: No multipart upload in progress for this object }
+        "410": { description: "Upload intent expired, or the multipart upload no longer exists" }
+        "422": { description: "Identifier is not a canonical UUID v4, or a part number is out of range" }
   /api/v1/objects/{oid}:
     get:
       summary: Get object metadata
@@ -388,6 +575,134 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not deletable }
+  /api/v1/objects/{oid}/restore:
+    post:
+      summary: Restore a soft-deleted object from the trash (objects:delete)
+      tags: [objects]
+      description: >-
+        Same capability as the delete it reverses. Only a committed object can
+        come back: a soft-deleted pending intent never received its bytes and is
+        refused.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200":
+          description: Object available again
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObjectSummary" }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+        "409": { description: "Object is not in the trash, or was never uploaded" }
+        "422": { description: Identifier is not a canonical UUID v4 }
+  /api/v1/objects/{oid}/share:
+    post:
+      summary: Mint a public read-only share link (objects:read, human only)
+      tags: [objects]
+      description: >-
+        Human-only on purpose: a leaked machine token must not be able to mint
+        unauthenticated links. Everything is bounded server-side — expiry, an
+        optional use ceiling and the content type allowed to render inline; the
+        token is returned exactly once and only its SHA-256 fingerprint is
+        stored. The link is redeemed outside this API root, at GET /s/{token}.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                expires_in:
+                  type: integer
+                  minimum: 60
+                  description: Seconds of validity; omitted = AURA_SHARE_TTL_DEFAULT, above AURA_SHARE_TTL_MAX is refused with 422
+                max_uses:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000000
+                  description: Burn-after-N-read ceiling; omitted = unlimited
+                content_disposition:
+                  type: string
+                  enum: [attachment, inline]
+                  default: attachment
+                  description: Inline is refused with 422 for active document types
+      responses:
+        "200":
+          description: Share created; the token is returned once and never stored in clear text
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObjectShareCreated" }
+              examples:
+                publicLink:
+                  value:
+                    id: 0b5f7e2a-9c41-4d63-8f10-2a7b6c5d9e43
+                    object_id: 7c63c78d-d790-498e-acb5-870d53cfc0fd
+                    url: /s/aura_share_9f2c41a7d0b8e653
+                    token: aura_share_9f2c41a7d0b8e653
+                    expires_in: 604800
+                    expires_at: 1761734400
+                    max_uses: 5
+                    content_disposition: attachment
+        "401": { description: Authentication required }
+        "403": { description: "Not authorised, or a service identity (human-only capability)" }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not available }
+        "422": { description: "Identifier is not a canonical UUID v4, expiry above the maximum, inline for a non-renderable type, or an invalid body field" }
+  /api/v1/objects/{oid}/shares:
+    get:
+      summary: List the share links of an object (objects:read)
+      tags: [objects]
+      description: >-
+        Never returns the tokens themselves; `active` is computed server-side
+        from expiry, use count and revocation so a client never re-implements
+        the rules.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200":
+          description: Share links created for the object (never the tokens)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ObjectShare" }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+        "422": { description: Identifier is not a canonical UUID v4 }
+  /api/v1/objects/{oid}/shares/{sid}:
+    delete:
+      summary: Revoke a share link immediately (objects:read, human only, creator only)
+      tags: [objects]
+      description: >-
+        Idempotent: revoking an already revoked link returns the original
+        revoked_at and never rewrites it. Only the creator may revoke; any other
+        caller gets 403.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+        - $ref: "#/components/parameters/ShareId"
+      responses:
+        "200":
+          description: Link revoked (or already revoked)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, revoked]
+                properties:
+                  id: { $ref: "#/components/schemas/Uuid4" }
+                  revoked: { type: boolean, enum: [true] }
+                  revoked_at: { type: integer, description: Epoch seconds of the original revocation }
+        "401": { description: Authentication required }
+        "403": { description: Not the creator of this share link }
+        "404": { description: "Object or share not found, or the share belongs to another object" }
+        "422": { description: Identifier is not a canonical UUID v4 }
   /api/v1/objects/{oid}/download-intent:
     post:
       summary: Create a short-lived download intent (objects:read)
@@ -532,6 +847,141 @@ paths:
         "200": { description: "Reconcile counts (expired, storage_deletes_attempted, storage_failures); failed storage deletes keep the intent pending" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
+  /api/v1/admin/reconcile-terminal:
+    post:
+      summary: Delete bytes of terminal rows past retention (admin:write)
+      tags: [administration]
+      description: >-
+        Sweeps failed, aborted and soft-deleted rows older than the 7-day
+        retention, across every space. A row is dropped only after its bytes were
+        actually deleted; a storage failure keeps it for a later sweep and is
+        counted in storage_failures.
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
+          description: Rows inspected per terminal status (server clamps to 1..5000)
+      responses:
+        "200":
+          description: "Cleaned rows, storage deletes attempted and storage failures"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cleaned, storage_deletes_attempted, storage_failures]
+                properties:
+                  cleaned: { type: integer }
+                  storage_deletes_attempted: { type: integer }
+                  storage_failures: { type: integer }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/reconcile-reverse:
+    post:
+      summary: Reverse sweep — storage keys with no catalogue row (admin:write)
+      tags: [administration]
+      description: >-
+        Lists the `aura/` prefix in every registered bucket and reports keys the
+        catalogue does not account for. Dry-run by default; with dry_run=false
+        the orphan keys are deleted. At most 500 keys are inspected per bucket.
+      parameters:
+        - in: query
+          name: dry_run
+          schema: { type: boolean, default: true }
+          description: When false, delete the reported orphan keys
+      responses:
+        "200":
+          description: "Scan counts, up to 50 orphan keys with their size, deletions and failures"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [scanned, orphans, orphan_keys, deleted, failures, dry_run]
+                properties:
+                  scanned: { type: integer }
+                  orphans: { type: integer, description: Number of orphan keys found }
+                  orphan_keys:
+                    type: array
+                    maxItems: 50
+                    items:
+                      type: object
+                      properties:
+                        bucket: { type: string }
+                        key: { type: string }
+                        size: { type: integer }
+                  deleted: { type: integer }
+                  failures: { type: integer }
+                  dry_run: { type: boolean }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/integrity:
+    get:
+      summary: Scrub results and the objects at fault (admin:read)
+      tags: [administration]
+      description: >-
+        `mismatch` means the stored bytes no longer match the SHA-256 verified at
+        import; `missing` means storage lost the object. Both call for a restore
+        from backup — nothing is changed automatically.
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+          description: Problem rows returned (server clamps to 1..500)
+      responses:
+        "200":
+          description: "Scrub interval, counts per result with the oldest sweep time, and problem rows"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [interval_days, results, problems]
+                properties:
+                  interval_days: { type: integer, description: Configured AURA_SCRUB_INTERVAL_DAYS }
+                  results:
+                    type: object
+                    description: Keyed by scrub result (ok, mismatch, missing, error, unchecked)
+                    additionalProperties:
+                      type: object
+                      required: [count]
+                      properties:
+                        count: { type: integer }
+                        oldest: { type: [integer, "null"], description: Oldest scrubbed_at for this result }
+                  problems:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, space_id, display_name, size_bytes, scrub_result]
+                      properties:
+                        id: { $ref: "#/components/schemas/Uuid4" }
+                        space_id: { $ref: "#/components/schemas/Uuid4" }
+                        display_name: { type: string }
+                        size_bytes: { type: integer }
+                        scrub_result: { type: string, enum: [mismatch, missing] }
+                        scrubbed_at: { type: [integer, "null"] }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/integrity/scrub:
+    post:
+      summary: Run one bounded scrub pass now (admin:write)
+      tags: [administration]
+      description: >-
+        Same byte budget as the periodic pass. Verification stops early on a
+        storage error rather than hammering the backend.
+      responses:
+        "200":
+          description: Per-result counts and bytes read during this pass
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, mismatch, missing, error, bytes]
+                properties:
+                  ok: { type: integer }
+                  mismatch: { type: integer }
+                  missing: { type: integer }
+                  error: { type: integer }
+                  bytes: { type: integer, description: Bytes read this pass }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
   /api/v1/admin/stats:
     get:
       summary: Aggregate counts (admin:read)
@@ -631,6 +1081,130 @@ paths:
         "200": { description: "Checked count, candidate rows and check time" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
+  /api/v1/admin/storage-orphans:
+    get:
+      summary: Storage bytes the catalogue does not account for (admin:read)
+      tags: [administration]
+      description: >-
+        Read-only and non-destructive: only registered buckets are scanned and
+        nothing is deleted here. Bounded per call (`max_keys` per bucket) and
+        resumable by passing the returned `next_start_after` back. A bucket that
+        cannot be listed is reported with an `error` instead of failing the whole
+        call.
+      parameters:
+        - in: query
+          name: bucket
+          schema: { type: string, maxLength: 63 }
+          description: Restrict the scan to one registered bucket; omitted = every bucket
+        - in: query
+          name: start_after
+          schema: { type: string, maxLength: 1024 }
+          description: Resume after this key (the previous response's next_start_after)
+        - in: query
+          name: max_keys
+          schema: { type: integer, minimum: 1, maximum: 50000, default: 5000 }
+          description: Keys scanned per bucket (server clamps to 1..50000)
+      responses:
+        "200":
+          description: "Grace window, per-bucket report with orphan keys and stale multipart uploads"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [grace_seconds, buckets, checked_at]
+                properties:
+                  grace_seconds: { type: integer, description: AURA_ORPHAN_GRACE_SECONDS applied before a key is reported }
+                  buckets:
+                    type: array
+                    items:
+                      type: object
+                      required: [bucket]
+                      properties:
+                        bucket: { type: string }
+                        error: { type: string, description: Present when the bucket could not be listed }
+                        scanned: { type: integer }
+                        orphans:
+                          type: array
+                          items:
+                            type: object
+                            required: [key, size_bytes, last_modified, reason]
+                            properties:
+                              key: { type: string }
+                              size_bytes: { type: integer }
+                              last_modified: { type: integer, description: Epoch seconds }
+                              reason: { type: string, description: Why the key is unaccounted for }
+                              object_id: { type: [string, "null"], description: Catalogue row id when the row exists but is not available }
+                        orphan_bytes: { type: integer }
+                        next_start_after: { type: [string, "null"], description: Resume cursor; null when the bucket was fully scanned }
+                        stale_uploads:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              key: { type: string }
+                              upload_id: { type: string }
+                              initiated: { type: integer }
+                              object_id: { type: [string, "null"] }
+                  checked_at: { type: integer }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "404": { description: Bucket not registered }
+  /api/v1/admin/storage-orphans/cleanup:
+    post:
+      summary: Remove listed orphan keys and abort listed uploads (admin:write)
+      tags: [administration]
+      description: >-
+        Destructive and explicit: only the listed keys and uploads are touched,
+        and each item is re-checked just before acting (still unaccounted for,
+        older than the grace window, inside the AURA key prefix). Anything else is
+        skipped with a reason. At most 100 keys and 100 uploads per call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [bucket]
+              properties:
+                bucket: { type: string, minLength: 1, maxLength: 63 }
+                keys:
+                  type: array
+                  maxItems: 100
+                  items: { type: string, minLength: 1, maxLength: 1024 }
+                uploads:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [key, upload_id]
+                    properties:
+                      key: { type: string, minLength: 1, maxLength: 1024 }
+                      upload_id: { type: string, minLength: 1, maxLength: 1024 }
+      responses:
+        "200":
+          description: Removed keys, aborted upload ids and skipped items with their reason
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [removed, aborted_uploads, skipped]
+                properties:
+                  removed: { type: array, items: { type: string } }
+                  aborted_uploads: { type: array, items: { type: string } }
+                  skipped:
+                    type: array
+                    items:
+                      type: object
+                      required: [key, reason]
+                      properties:
+                        key: { type: string }
+                        reason: { type: string }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "404": { description: Bucket not registered }
+        "422": { description: "Empty bucket name, or more than 100 keys/uploads" }
   /api/v1/admin/usage:
     get:
       summary: Real consumption per space plus configured limits (admin:read)
@@ -1142,6 +1716,17 @@ components:
         size_bytes: { type: integer }
         checksum_sha256: { type: string, description: Hex SHA-256 streamed server-side }
         checksum_algorithm: { type: string, enum: [sha256] }
+        commit_timing:
+          type: [object, "null"]
+          description: >-
+            Durations of the commit phases, in milliseconds. The property is
+            absent when the object was already available, so no commit was
+            performed here, and null when the commit was won by a concurrent
+            request, whose phases were therefore not measured here.
+          properties:
+            head_ms: { type: number, description: Time spent reading the object metadata }
+            hash_ms: { type: number, description: Time spent streaming and hashing the body }
+            total_ms: { type: number, description: Total duration of the commit }
     ObjectSummary:
       type: object
       required: [id, display_name, content_type, size_bytes, status, created_at, updated_at]
@@ -1189,6 +1774,86 @@ components:
         buckets: { type: integer }
         service_identities: { type: integer }
         active_service_identities: { type: integer }
+    BulkPurgeResult:
+      type: object
+      required: [purged, not_found, failed]
+      properties:
+        purged: { type: array, items: { $ref: "#/components/schemas/Uuid4" } }
+        not_found:
+          type: array
+          items: { type: string }
+          description: Unknown, out-of-scope or malformed ids
+        failed:
+          type: array
+          items: { $ref: "#/components/schemas/Uuid4" }
+          description: Storage delete failed; the catalogue row is kept
+        more: { type: boolean, description: True when the trash still holds soft-deleted rows (empty-trash only) }
+    MasterModeState:
+      type: object
+      required: [master_until]
+      properties:
+        master_until:
+          type: [integer, "null"]
+          description: Epoch seconds at which master mode expires; null when inactive
+    MultipartStatus:
+      type: object
+      required: [id, size_bytes, part_size_bytes, part_count, uploaded_parts]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        size_bytes: { type: integer, description: Declared total size }
+        part_size_bytes: { type: integer, description: Planned size of each part except the last }
+        part_count: { type: integer }
+        uploaded_parts:
+          type: array
+          items: { type: integer }
+          description: Part numbers already stored at the planned size
+    MultipartPartBatch:
+      type: object
+      required: [id, expires_in, parts]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        expires_in: { type: integer, description: Seconds of validity of every URL in this batch }
+        parts:
+          type: array
+          items:
+            type: object
+            required: [part_number, size_bytes, url]
+            properties:
+              part_number: { type: integer }
+              size_bytes: { type: integer, description: Exact byte length this part must carry }
+              url: { type: string, description: Presigned PUT URL for this part }
+    ObjectShareCreated:
+      type: object
+      required: [id, object_id, url, token, expires_in, expires_at, max_uses, content_disposition]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        object_id: { $ref: "#/components/schemas/Uuid4" }
+        url: { type: string, description: "Path (/s/<token>) or absolute URL when AURA_SHARE_BASE_URL is configured" }
+        token:
+          type: string
+          description: Returned exactly once; the catalogue keeps only its SHA-256 fingerprint
+        expires_in: { type: integer }
+        expires_at: { type: integer, description: Epoch seconds }
+        max_uses: { type: [integer, "null"], description: Use ceiling; null = unlimited }
+        content_disposition: { type: string, enum: [attachment, inline] }
+    ObjectShare:
+      type: object
+      required: [id, object_id, created_by, created_by_kind, content_disposition, created_at, expires_at, max_uses, use_count, active]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        object_id: { $ref: "#/components/schemas/Uuid4" }
+        created_by: { $ref: "#/components/schemas/Uuid4" }
+        created_by_kind: { type: string, enum: [user, service] }
+        content_disposition: { type: string, enum: [attachment, inline] }
+        created_at: { type: integer }
+        expires_at: { type: integer }
+        max_uses: { type: [integer, "null"] }
+        use_count: { type: integer }
+        last_used_at: { type: [integer, "null"] }
+        revoked_at: { type: [integer, "null"] }
+        active:
+          type: boolean
+          description: Computed server-side from expiry, use count and revocation
   parameters:
     ObjectId:
       in: path
@@ -1218,6 +1883,11 @@ components:
     BucketId:
       in: path
       name: bid
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid4" }
+    ShareId:
+      in: path
+      name: sid
       required: true
       schema: { $ref: "#/components/schemas/Uuid4" }
   securitySchemes:
