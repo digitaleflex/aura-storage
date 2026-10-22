@@ -64,6 +64,8 @@ export interface TransferState {
   phaseLog?: Array<{ phase: TransferPhase; at: number }>;
   /** SHA-256 the server recorded once the file is available. */
   checksum?: string;
+  /** How many times a single PUT ran for a long time and then failed. */
+  longPutCuts?: number;
 }
 
 export interface TransferResult {
@@ -83,6 +85,12 @@ export interface TransferConfig {
   partConcurrency: number;
   /** Attempts per part, including the first; a failed part only resends itself. */
   partMaxAttempts: number;
+  /**
+   * A single PUT that fails after this long was almost certainly cut by a
+   * request-duration limit (the proxy's readTimeout) rather than by a blip: at
+   * the current share of the uplink the file cannot finish in time.
+   */
+  longPutMs: number;
 }
 
 export const DEFAULT_TRANSFER_CONFIG: TransferConfig = {
@@ -92,6 +100,7 @@ export const DEFAULT_TRANSFER_CONFIG: TransferConfig = {
   maxIntentRefreshes: 2,
   partConcurrency: 4,
   partMaxAttempts: 6,
+  longPutMs: 600_000,
 };
 
 /** Part URLs requested per call (the API accepts up to 100). */
@@ -203,6 +212,11 @@ export interface RunTransferOptions {
    * (N5): the file no longer uses the uplink, so the queue may free its slot.
    */
   onVerifying?: () => void;
+  /**
+   * Called when a long PUT (>= `longPutMs`) failed: the queue gives this file
+   * the whole uplink by running one transfer at a time.
+   */
+  onLongPutCut?: () => void;
   folderId: string | null;
   /** Stable per-submission key: reused by automatic retries, new on a new submit. */
   idempotencyKey: string;
@@ -247,6 +261,7 @@ export async function runTransfer(
   let intent: UploadIntentResponse | null = null;
   let attempts = 0;
   let refreshes = 0;
+  let longPutCuts = 0;
 
   const cancel = async (): Promise<TransferResult> => {
     const id = intent?.id ?? null;
@@ -510,6 +525,8 @@ export async function runTransfer(
       return { state, objectId: current.id };
     }
 
+    const putStartedAt = now();
+    let putFinished = false;
     try {
       try {
         await deps.upload(current.upload_url, file, {
@@ -528,6 +545,7 @@ export async function runTransfer(
         // The bytes are there: go straight to the commit instead of failing.
         if (!(err instanceof PresignedUploadError && err.status === 412)) throw err;
       }
+      putFinished = true;
       emit({ phase: "validating", progress: 1, transferredBytes: file.size, verifyMode: "inline" });
       // The bytes are stored: a failing commit retries the commit only, never
       // the whole upload (which would resend everything, then hit 412/409).
@@ -566,6 +584,34 @@ export async function runTransfer(
         }
         emit({ phase: "failed", error: "URL expirée.", failureKind: "expired" });
         return { state, objectId: null };
+      }
+      // A PUT that ran for a long time and then died is a different problem from a
+      // blip: resending from zero at the same pace dies at the same place. Give the
+      // file the whole uplink (one transfer at a time) and, if it happens again,
+      // stop and say why instead of looping for hours.
+      const putMs = now() - putStartedAt;
+      if (kind === "retryable" && putMs >= config.longPutMs && !putFinished) {
+        longPutCuts += 1;
+        const minutes = Math.round(putMs / 60_000);
+        const why =
+          `Envoi interrompu après ${minutes} min. À votre vitesse actuelle ce fichier ne peut pas ` +
+          "être envoyé avant la limite de durée d'une requête du serveur.";
+        options.onLongPutCut?.();
+        if (longPutCuts >= 2) {
+          emit({
+            phase: "failed",
+            longPutCuts,
+            failureKind: "fatal",
+            error:
+              `${why} Deux tentatives ont échoué au même endroit : envoyez les fichiers un par un, ` +
+              "ou demandez à l'administrateur d'augmenter TRAEFIK_READ_TIMEOUT ou d'activer l'envoi en plusieurs parties.",
+          });
+          return { state, objectId: current.id };
+        }
+        emit({ attempts: attempts + 1, longPutCuts, error: `${why} Nouvel essai avec toute la bande passante…` });
+        attempts += 1;
+        await deps.sleep(backoffDelay(attempts - 1, config, deps.random));
+        continue;
       }
       if (kind === "retryable" && attempts < config.maxAttempts - 1) {
         attempts += 1;
@@ -647,6 +693,11 @@ export interface UploadQueue {
   pauseAll(): void;
   /** Resume the scheduler and every suspended file. */
   resumeAll(): void;
+  /**
+   * Change how many files upload at once (1 = the whole uplink for one file).
+   * Takes effect for files that have not started; running transfers continue.
+   */
+  setConcurrency(n: number): void;
   /** Re-queue the failed and cancelled files, keeping the success ones. */
   retryFailed(): void;
   /**
@@ -801,7 +852,7 @@ export function startUploadQueue(
   deps: TransferDeps,
   options: QueueOptions,
 ): UploadQueue {
-  const maxConcurrency = Math.max(
+  let maxConcurrency = Math.max(
     1,
     options.maxConcurrency ?? options.concurrency ?? DEFAULT_QUEUE_CONCURRENCY,
   );
@@ -1034,6 +1085,13 @@ export function startUploadQueue(
       idempotencyKey: item.idempotencyKey ?? queueItemId(),
       signal: controller.signal,
       config: options.config,
+      onLongPutCut: () => {
+        // A PUT died after running for a long time: sharing the uplink is why.
+        effectiveConcurrency = 1;
+        healthyStreak = 0;
+        congestedStreak = 0;
+        emit();
+      },
       onVerifying: () => {
         if (slotReleased) return;
         slotReleased = true;
@@ -1270,6 +1328,17 @@ export function startUploadQueue(
     pauseAll,
     resumeAll,
     retryTransient,
+    setConcurrency(n: number) {
+      const next = Math.max(1, Math.floor(n));
+      if (!Number.isFinite(next)) return;
+      // An explicit choice replaces whatever the adaptation had settled on.
+      maxConcurrency = next;
+      effectiveConcurrency = next;
+      healthyStreak = 0;
+      congestedStreak = 0;
+      emit();
+      pump();
+    },
     retryFailed() {
       let requeued = false;
       for (const item of items) {

@@ -13,11 +13,18 @@ services:
       - --providers.docker.network=aura-edge
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
-      # Uploads are direct presigned PUTs whose entire body is one request. The
-      # Traefik default readTimeout (60s) cut large uploads mid-body -> HTTP 502
-      # and the UI reported "Réseau interrompu.". 1200s is bounded (slowloris
-      # protection stays), yet covers the 900s presigned-URL/intent TTL.
-      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=1200s
+      # Uploads are direct presigned PUTs whose entire body is one request, so
+      # readTimeout (the whole request, body included) is the longest a single
+      # file may take. The Traefik default (60s) cut large uploads mid-body
+      # (HTTP 502, "Réseau interrompu."); 1200s was then too short for large
+      # videos on an ordinary uplink: with four uploads sharing ~12 Mbit/s each
+      # file got ~0.38 MB/s, so every PUT died at ~460 MB after 20 minutes and
+      # restarted from zero (observed on the pilot, 2026-10-22). Default 3600s,
+      # still bounded (slowloris protection stays); raise it in .env for larger
+      # files or slower links, or enable multipart uploads (docs/MULTIPART-UPLOAD-PLAN.md).
+      # The presigned-URL TTL does not matter here: it is only checked when the
+      # request starts.
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=${TRAEFIK_READ_TIMEOUT:-3600s}
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?Set ACME_EMAIL in .env}

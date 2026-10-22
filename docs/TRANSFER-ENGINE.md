@@ -185,11 +185,34 @@ on a large object. Three layers bound it, in this order:
    the bytes, `504`) discarded valid files;
 3. the app proxy (`app/nginx.conf`) gives the commit route a 310 s read/send
    timeout (the default 60 s would cut the response and hide the API's own
-   outcome), and Traefik's entrypoint already allows 1200 s.
+   outcome), and Traefik's entrypoint allows `TRAEFIK_READ_TIMEOUT` (3600 s by default).
 
 The API deadline stays below the proxy timeout on purpose, so the API's own
 answer reaches the client instead of the proxy's generic `504`. Raise one,
 raise all three.
+
+### A PUT that runs long and then dies
+
+Observed on the pilot (2026-10-22): 64 videos of 0.6-1.2 GB, four uploads in
+parallel, aggregate ~1.5 MB/s. Each file got ~0.38 MB/s, so a PUT lasted longer
+than Traefik's `readTimeout` (then 1200 s) and was cut at ~460 MB, restarted from
+zero ("Nouvelle tentative (4)") and cut again: none could ever complete.
+
+* `TRAEFIK_READ_TIMEOUT` (default now 3600 s) sets that limit; raise it for larger
+  files or slower links.
+* The engine detects the pattern: a single PUT that fails after at least
+  `TransferConfig.longPutMs` (10 min) calls `onLongPutCut`, the queue drops its
+  effective parallelism to 1 (the file gets the whole uplink) and retries once.
+  A second cut stops the file as `failed`/`fatal` with an explicit message instead
+  of looping for hours.
+* The tray has an **Envois simultanés** selector (1-4, remembered per browser,
+  `queue.setConcurrency`) and says when large files make parallel uploads a bad
+  idea. Progress, rate and ETA are not shown while files are being re-sent
+  ("estimation indisponible"): a retry restarts from zero.
+* The real fix for files that cannot finish in one request is multipart (each part
+  is a short request, a cut resumes at the failed part): see
+  [MULTIPART-UPLOAD-PLAN.md](MULTIPART-UPLOAD-PLAN.md); it stays off until
+  validated on SeaweedFS 4.48.
 
 ### Verification is deferred, and does not hold a queue slot
 

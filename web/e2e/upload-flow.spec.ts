@@ -323,3 +323,18 @@ test("a page that throws shows the branded error page, not the router default", 
   await expect(page.getByRole("button", { name: "Recharger la page" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Something went wrong!")).toHaveCount(0);
 });
+
+test("the tray lets the user choose how many files upload at once, and remembers it", async ({ page }) => {
+  await installMocks(page, { putDelayMs: 3000 });
+  await login(page);
+  await page.getByTestId("files-input").setInputFiles([
+    { name: "a.pdf", mimeType: "application/pdf", buffer: Buffer.from("hello world") },
+    { name: "b.pdf", mimeType: "application/pdf", buffer: Buffer.from("hello world") },
+  ]);
+  const tray = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
+  const select = tray.getByLabel("Envois simultanés");
+  await expect(select).toHaveValue("4");
+  await select.selectOption("1");
+  await expect(select).toHaveValue("1");
+  expect(await page.evaluate(() => window.localStorage.getItem("aura.upload.concurrency"))).toBe("1");
+});

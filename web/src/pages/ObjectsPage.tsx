@@ -25,6 +25,7 @@ import {
   cascadeOpKey,
 } from "../lib/cascade";import { ThroughputWindow } from "../lib/throughput";
 import { UploadTray } from "../components/UploadTray";
+import { readConcurrencyPref, writeConcurrencyPref } from "../lib/uploadPrefs";
 import { VaultOverview } from "../components/VaultOverview";
 import {
   addEntries,
@@ -393,6 +394,10 @@ export function ObjectsPage() {
   const pauseQueue = useCallback(() => queueRef.current?.pauseAll(), []);
   const resumeQueue = useCallback(() => queueRef.current?.resumeAll(), []);
   const cancelQueueItem = useCallback((id: string) => queueRef.current?.cancelItem(id), []);
+  const setQueueConcurrency = useCallback((n: number) => {
+    writeConcurrencyPref(n);
+    queueRef.current?.setConcurrency(n);
+  }, []);
   const retryQueueItem = useCallback((id: string) => {
     setUploadError(null);
     queueRef.current?.retryItem(id);
@@ -640,6 +645,7 @@ export function ObjectsPage() {
     libraryRefreshRef.current = { at: Date.now(), done: 0 };
     const uploadQueue = startUploadQueue(inputs, transferDeps(activeCsrf), {
       folderId: currentFolderId,
+      concurrency: readConcurrencyPref(),
       onUpdate: handleQueueUpdate,
       // A file whose PUT died with the link is replayed by the queue as soon as
       // the browser reports the network back: say so, instead of leaving the
@@ -3300,6 +3306,7 @@ export function ObjectsPage() {
           onResume={resumeQueue}
           onCancelItem={cancelQueueItem}
           onRetryItem={retryQueueItem}
+          onSetConcurrency={setQueueConcurrency}
         />
       ) : null}
 

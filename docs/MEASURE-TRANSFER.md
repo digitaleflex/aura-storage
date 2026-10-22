@@ -27,7 +27,7 @@ Mêmes étapes avec le même lot, fichiers `*-apres.log`.
 | Mesure | Signification | Bon signe |
 |---|---|---|
 | `Commit re-read` MiB/s, p95 `hash_ms` | coût de la relecture d'intégrité | p95 en baisse, débit stable quand 4 envois tournent |
-| `Proxy PUTs … cut or >= 1100s` | envois coupés par Traefik (`readTimeout` 1200 s) | 0 |
+| `Proxy PUTs … cut or >= 1100s` | envois coupés par Traefik (`readTimeout`, `TRAEFIK_READ_TIMEOUT` ; 1200 s avant le 2026-10-22 : adaptez `--cut-seconds`) | 0 |
 | `Storage throttling lines` | SlowDown/Throttling du stockage | 0 |
 | Temps total du lot | ce que l'utilisateur ressent | en baisse à débit montant égal |
 
