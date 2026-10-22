@@ -132,3 +132,32 @@ n'apporterait aucune réutilisation réelle.
   `main.tsx`).
 - Composants non modifiés : grid ledger/page-ref (`vault-workspace`,
   `register`), drawer hash, upload tray, cascade, preview, master mode.
+
+## v3 — additions of the 2026-10-22 design pass
+
+Method: real screenshots (light, dark, mobile), reviewed one by one, then fixed.
+Only existing tokens are used.
+
+- **Vault overview** (`.overview`, `.overview-tile`, `.meter`): real catalogue
+  figures only. Meter tone follows the capacity watermark (`--ok` → `--warn` at
+  75 % of it → `--danger` at it).
+- **File tiles** (`.file-tile-{pdf,audio,image,video,archive,doc}`): a family →
+  token pair (`--danger`, `--run`, `--ok`, `--warn`, `--signal`, neutral), each
+  with its `-bg`/soft background.
+- **Status pills** (`.status-{ok,warn,error}`): dot + word on a tinted pill; never
+  colour alone.
+- **Top bar**: dark in both themes, so its text uses fixed light values
+  (`#e8ecf2`, role `#b8c1cd`, buttons `#d5dbe4`), not the page ink.
+- **Native controls follow the theme**: `color-scheme` is set on `:root` (and per
+  `data-theme` / `prefers-color-scheme`), otherwise checkboxes and selects stay
+  white in the dark theme.
+- **Sticky bar and scrolling**: `html { scroll-padding-top }` keeps scrolled-to
+  and focused elements below the bar (WCAG 2.4.11).
+- **Administration panels**: `.admin-page .section` becomes a card; table headers
+  are small caps; `.callout` is the one accent-bordered note style.
+- **Tray**: floating (docked full width under 640 px), body scrolls (max 40 vh,
+  32 vh on mobile) so it cannot cover the page's own buttons.
+- **Motion**: dialogs and overview tiles animate briefly and are static under
+  `prefers-reduced-motion`.
+- **Field borders** `--field-line` ≥ 3:1 (light `#7b8594`, dark `#5d6e83`); the
+  focus ring is a real 2 px outline, not only a halo.

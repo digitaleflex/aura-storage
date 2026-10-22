@@ -11,6 +11,14 @@ matrix*); the pilot has partial dated live evidence — the API runs on the pilo
 PostgreSQL and an SSE-S3 smoke test PASSed on the pinned SeaweedFS 4.48
 (2026-10-15 and 2026-10-16 logs linked from `README.md`).
 
+> **Update 2026-10-22.** The engine changed substantially after an audit of slow
+> uploads: default concurrency, commit/upload retry separation, slot release
+> during verification, verification after uploads, scrubber behaviour, progress
+> coalescing and a per-file detail view. See
+> [CHANGES-2026-10-22-transfer-and-ui.md](CHANGES-2026-10-22-transfer-and-ui.md)
+> for the list with reasons, and [MEASURE-TRANSFER.md](MEASURE-TRANSFER.md) to
+> measure the effect. **None of this has been measured on the pilot yet.**
+
 This document is the transfer-engine companion to the contract in
 [File Transfer Contract](FILE-TRANSFER.md) and the plan in
 [Secure and Efficient Bulk Transfers](SECURE-BULK-TRANSFERS.md). Where they
@@ -48,12 +56,27 @@ idle → requesting-intent → uploading → validating → available
 - `uploading` — direct browser → S3 PUT. Real progress is shown from the XHR
   `upload.onprogress` event (`role="progressbar"`, `aria-valuenow`).
 - `validating` — the browser calls commit; the backend streams the object,
-  checks the size and computes SHA-256.
+  checks the size and computes SHA-256. `TransferState.verifyMode` says what the
+  server is doing: `inline` (the commit request is re-reading and hashing) or
+  `background` (bytes stored, the integrity check waits in the server's queue and
+  the client polls, `202 verifying`).
 - `available` — **only** reached when commit returned success. The UI never
-  infers success from the upload PUT alone.
+  infers success from the upload PUT alone. `TransferState.checksum` then holds
+  the SHA-256 recorded by the server.
 - `failed` / `cancelled` — terminal, with the reason shown. A failure also
   records `failureKind` (`retryable`, `expired`, `fatal`, `aborted`) so the
   queue can tell an outage from a decision the server will never reverse.
+
+Every phase change is stamped: `phaseSince` (start of the current phase) and
+`phaseLog` (every phase with its start time) feed the "since 0:42" labels and
+the per-file detail view.
+
+**Upload and commit are retried separately.** Once the PUT succeeded, a failing
+commit (5xx, network) retries the commit only; resending the whole file would hit
+`412` (the PUT is conditional, `If-None-Match: *`) or `409` and end `failed` with
+intact bytes. A `412` on the PUT means the object already exists on that key, so
+the engine goes straight to the commit. A `504` still re-uploads, because the
+server may have discarded the bytes.
 
 Errors are classified (`classifyError`) into `retryable`, `expired`, `aborted`
 and `fatal`, so the UI retries only what can succeed and never loops on an
@@ -68,7 +91,7 @@ authorization or validation error.
 | Block accidental double submit | submit disabled while active; stable `Idempotency-Key` per submission dedupes at the API |
 | Cancel only when the backend supports it | `POST /api/v1/objects/{oid}/abort` exists, so the UI offers cancel and calls it; no fake client-only cancel |
 | Controlled retries with backoff + jitter | `backoffDelay` (equal jitter, exponential, capped) for network/5xx; expired URLs get a fresh intent (bounded) |
-| Adaptive parallelism + paced starts | the queue shrinks its effective parallelism after repeated congestion failures (network/5xx/expired, never fatal/cancelled) and restores it after sustained success; parallel PUT starts are staggered (`QueueOptions.startStaggerMs`). JDownLoader-inspired, adapted from chunks to whole files |
+| Adaptive parallelism + paced starts | default ceiling **4** files at once (was 10: ten PUTs split one uplink ten ways, hit the proxy's 1200 s read timeout sooner and trigger ten commit re-reads on the same disk). The queue shrinks its effective parallelism after repeated congestion failures (network/5xx/expired, never fatal/cancelled) and restores it after sustained success; parallel PUT starts are staggered (`QueueOptions.startStaggerMs`). JDownLoader-inspired, adapted from chunks to whole files |
 | Per-file retry + stuck-intent abandon | `retryItem(id)` restarts one failed/cancelled file as a fresh submission; catalogue rows stuck `pending` offer "Abandonner l'envoi" (backend abort + partial bytes removed), and `aborted` is a listed status |
 | Distinguish upload / validation / availability / failure | the five phases above |
 | Handle expired URLs and network errors | 403 → new intent; network/5xx → retry; both bounded |
@@ -156,16 +179,33 @@ on a large object. Three layers bound it, in this order:
    `read_timeout=60` and adaptive retries (3) — a stalled backend fails instead
    of hanging the request;
 2. the commit itself has a global deadline, `AURA_COMMIT_DEADLINE_S` (default
-   300 s), checked between chunks: past it the intent is `failed` and the
-   client gets `504`;
+   300 s), checked between chunks: past it the object is **handed to the
+   verification worker** (`202 verifying`) instead of being deleted. A slow disk
+   under load is not corruption, and the former behaviour (mark `failed`, delete
+   the bytes, `504`) discarded valid files;
 3. the app proxy (`app/nginx.conf`) gives the commit route a 310 s read/send
    timeout (the default 60 s would cut the response and hide the API's own
    outcome), and Traefik's entrypoint already allows 1200 s.
 
-The API deadline stays below the proxy timeout on purpose: the API's structured
-`504` (which marks the intent `failed`) must reach the client instead of the
-proxy's generic one (which would leave it `pending`). Raise one, raise all
-three.
+The API deadline stays below the proxy timeout on purpose, so the API's own
+answer reaches the client instead of the proxy's generic `504`. Raise one,
+raise all three.
+
+### Verification is deferred, and does not hold a queue slot
+
+* From `AURA_VERIFY_ASYNC_THRESHOLD_BYTES` (32 MiB) `commit` answers
+  `202 verifying`; the verifier (`api/verifier.py`) re-reads and hashes outside
+  the request. A file is not downloadable or shareable until it is `available`.
+* While an upload intent younger than `AURA_VERIFY_PAUSE_WINDOW_S` is pending, the
+  verifier waits (`AURA_VERIFY_PAUSE_WHILE_UPLOADING`): the re-read costs 37-45 %
+  of the PUT time when idle and was measured 5.8-7.1x slower under four
+  concurrent writes (`engineering/commit-latency-bench.md`).
+* In the browser, a file that gets `202` calls `onVerifying` and releases its
+  upload slot (polling is capped at 5 s and does not block the next uploads).
+* The antivirus hook runs on the synchronous commit and inside the verifier, so
+  no path publishes an object without it.
+* The periodic scrubber stamps a freshly verified object as just checked and
+  yields while uploads are in flight, so a bulk import is not read a third time.
 
 ## Large files and multipart: analysis, gaps, proposal
 
@@ -280,11 +320,18 @@ against a real endpoint. It is **not** run in CI and was **not** run here.
 | `AURA_ALLOWED_CONTENT_TYPES` | empty | Server-side media-type allow-list (`image/*`, `text/plain`, …) |
 | `AURA_IDEMPOTENCY_KEY_MAX` | `200` | Max accepted `Idempotency-Key` length |
 
+The verification, antivirus, scrubber, quota and SeaweedFS cache settings added
+since are listed in
+[ENVIRONMENT-CONFIGURATION.md](ENVIRONMENT-CONFIGURATION.md#transfer-and-integrity-settings-reference).
+
 ## Open questions / pending decisions
 
-- AURA does not enforce a per-app/per-tenant quota or rate limit on byte
-  transfers yet; only a per-scope pending-intent cap and the login/M2M rate
-  limiters exist. This is tracked in `SECURE-BULK-TRANSFERS.md` (P0/P1) and is
-  **not** part of this change.
-- Quarantine/AV scanning is not implemented; objects go straight from `pending`
-  to `available` after integrity checks.
+- Daily per-space quotas exist (`AURA_QUOTA_*_PER_DAY`, off by default) but the
+  counter is in memory and per process; there is no per-tenant byte-rate limit.
+  See `SECURE-BULK-TRANSFERS.md`.
+- Antivirus scanning is an optional hook (`AURA_AV_SCAN_CMD`, off by default),
+  not a quarantine workflow: an infected object is marked `failed` and its bytes
+  deleted. It has only been exercised with a shell stub, not a real scanner.
+- Whether the browser could send the SHA-256 with the PUT
+  (`x-amz-checksum-sha256`) and let SeaweedFS 4.48 verify it, which would remove
+  the re-read, has not been proven.

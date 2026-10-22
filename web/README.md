@@ -30,12 +30,27 @@ minimal house CSS (no Tailwind), Playwright for e2e.
   URL → commit, download intent → open short-lived GET URL, file/unfile an
   object into a folder, soft-delete, purge, and the administration mutations.
 - Uploads run through the M03 transfer engine (`src/lib/transfer.ts`): real XHR
-  upload progress, explicit phases (autorisation → envoi → validation →
-  disponible), bounded retries with exponential backoff + jitter, automatic
-  recovery from an expired presigned URL, an accidental-double-submit guard
-  backed by an `Idempotency-Key`, and cancellation that calls the backend
+  upload progress, explicit phases (autorisation → envoi → vérification
+  d'intégrité → disponible), bounded retries with exponential backoff + jitter,
+  automatic recovery from an expired presigned URL, an accidental-double-submit
+  guard backed by an `Idempotency-Key`, and cancellation that calls the backend
   `abort` endpoint. Success is shown only after the backend confirms the commit.
+  The queue runs **4 files at once by default** and backs off on congestion; a
+  failing commit is retried on its own (the file is not re-sent); a file waiting
+  for the server's integrity check (`202 verifying`) releases its upload slot.
   See [Vault transfer engine](../docs/TRANSFER-ENGINE.md).
+- Import tray (`src/components/UploadTray.tsx`, memoised): one sentence per file
+  on what is happening, step duration, a one-line breakdown, a per-file detail
+  view (step timeline, object id, server SHA-256), a filter and a 100-row cap on
+  batches above 30 files, throughput over a 20 s sliding window, pause/resume,
+  retry of failed files while the import runs, and confirmation before stopping.
+  Progress-only updates are coalesced to one per 250 ms.
+- Files page: a vault overview (space used vs capacity, verified files, files
+  awaiting validation, per-file size limit — real catalogue figures only), a
+  ledger with file-type tiles and status pills, a welcoming empty state, and a
+  branded French error page for render failures (`src/components/RouteError.tsx`).
+  The administration console groups its sections into panels and shows the
+  supervision lines in French (`src/lib/adminText.ts`).
 - The UI never shows fake data as real: empty catalogue renders an explicit
   empty state, errors render explicit alerts.
 - No S3 keys in the code or bundle. All calls use relative paths; in dev,
@@ -58,6 +73,20 @@ The dev server proxies to `http://127.0.0.1:8081` (override with
 npm run build    # tsc --noEmit + vite build -> web/dist/
 npm run preview  # serves web/dist on 127.0.0.1:5173
 ```
+
+See also [Local validation](../docs/LOCAL-VALIDATION.md) for the full pre-push checklist (API, PostgreSQL, web, shell).
+
+## Layout of the shared code
+
+- `src/lib/transfer.ts` — upload engine and queue (no React; every side effect is
+  injected, so it is tested in a Playwright worker, no browser).
+- `src/lib/cascade.ts` — recursive folder deletion plan (leaves first, the target
+  last), with its own unit tests.
+- `src/lib/throughput.ts`, `src/lib/adminText.ts` — small pure helpers.
+- `src/components/` — `UploadTray`, `FileDetail`, `VaultOverview`, `Elapsed`,
+  `RouteError`, dialogs, toasts, layout.
+- `src/DESIGN-SYSTEM.md` — tokens and rules; every new colour pair must exist in
+  both themes.
 
 ## E2E smoke
 
@@ -135,5 +164,12 @@ npx playwright test
 - Cancellation is offered only because the backend has `POST /api/v1/objects/{id}/abort`.
   Retries are bounded (3 attempts, exponential backoff with jitter) and an expired
   presigned URL is re-issued at most twice per transfer.
+- The e2e suite (~136 tests) runs against mocked or local servers. The CI
+  workflow `web.yml` only runs `npm ci` and `npm run build`, so Playwright and the
+  visual-regression snapshots (`e2e/visual-regression.spec.ts-snapshots`) are
+  **not** enforced there; regenerate the snapshots with
+  `npx playwright test e2e/visual-regression.spec.ts --update-snapshots` on the
+  machine whose rendering you want as the baseline (they are stale after the
+  2026-10-22 design pass).
 - Production serving (static `dist/` + same-origin `/api` proxy) is a
   deployment concern and is not configured here.

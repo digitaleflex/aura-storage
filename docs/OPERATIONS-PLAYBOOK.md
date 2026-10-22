@@ -48,3 +48,19 @@ Check:
 - Confirm the documented backup/restore approach for the version transition.
 - Capture current image tags and config before change.
 - Do not assume downgrade compatibility for storage metadata.
+
+## Uploads feel slow, or files stay "en vérification"
+
+1. A file is `verifying` (not downloadable) from the moment its bytes are stored
+   until the server has re-read and hashed it. With
+   `AURA_VERIFY_PAUSE_WHILE_UPLOADING=1` (default) that check waits until the
+   uploads in progress are over: it is expected during a bulk import and clears
+   afterwards. Keep local originals until everything is `available`.
+2. Still `verifying` long after the import? Check the verifier is running
+   (`AURA_VERIFY_WORKER=inline` runs it in the API process, `off` needs
+   `python -m api.verifier`) and the API logs for `verify` audit events.
+3. Measure instead of guessing: [MEASURE-TRANSFER.md](MEASURE-TRANSFER.md) summarises
+   `commit timings`, PUTs cut by the proxy (Traefik `readTimeout` 1200 s) and
+   storage throttling from saved logs, before and after a change.
+4. If the UI says a file failed but the bytes are stored, retrying only repeats the
+   commit; the file is not re-sent.
