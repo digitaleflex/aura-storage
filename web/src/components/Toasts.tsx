@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface Toast {
   id: number;
@@ -46,17 +46,21 @@ function ToastItem({
   onDismiss: (id: number) => void;
 }) {
   const [visible, setVisible] = useState(false);
+  // The parent re-creates onDismiss on every render (an upload re-renders it
+  // many times a second); keeping it in a ref stops the 6 s timer restarting.
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
   useEffect(() => {
     const frame = requestAnimationFrame(() => setVisible(true));
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (toast.kind !== "error") {
-      timer = setTimeout(() => onDismiss(toast.id), 6000);
+      timer = setTimeout(() => dismissRef.current(toast.id), 6000);
     }
     return () => {
       cancelAnimationFrame(frame);
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [toast.id, toast.kind, onDismiss]);
+  }, [toast.id, toast.kind]);
   return (
     <div
       role={toast.kind === "error" ? "alert" : "status"}

@@ -3504,9 +3504,13 @@ export function ObjectsPage() {
         <div
           className="transfer"
           data-testid="transfer-status"
-          aria-live="polite"
           hidden={trayCollapsed}
         >
+          {/* One short announcement per finished file; the per-byte texts of the
+              list below are not live (a screen reader would read them nonstop). */}
+          <span className="visually-hidden" role="status">
+            {queue.done}/{queue.items.length} fichiers transférés
+          </span>
           <div className="queue-head">
             <span className="muted">
               {queue.done}/{queue.items.length} transféré
