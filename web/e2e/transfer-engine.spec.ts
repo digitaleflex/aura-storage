@@ -1,7 +1,13 @@
 import { test, expect } from "@playwright/test";
 import { ApiError, PresignedUploadError } from "../src/lib/api";
 import type { CommitResponse, UploadIntentResponse } from "../src/lib/api";
-import { backoffDelay, classifyError, runTransfer, startUploadQueue } from "../src/lib/transfer";
+import {
+  DEFAULT_QUEUE_CONCURRENCY,
+  backoffDelay,
+  classifyError,
+  runTransfer,
+  startUploadQueue,
+} from "../src/lib/transfer";
 import type { QueueState, TransferDeps, TransferState } from "../src/lib/transfer";
 
 /**
@@ -371,6 +377,40 @@ test("queue transfers every file with bounded concurrency", async () => {
   expect(peak).toBeLessThanOrEqual(2);
   // It never started more than the configured concurrency at once.
   expect(Math.max(...states.map((s) => s.active))).toBeLessThanOrEqual(2);
+});
+
+test("default queue concurrency stays narrow so one uplink is not split ten ways", async () => {
+  expect(DEFAULT_QUEUE_CONCURRENCY).toBeLessThanOrEqual(4);
+  const files = Array.from({ length: 12 }, (_, i) => fakeFile(`f${i}.bin`));
+  let running = 0;
+  let peak = 0;
+  const deps: TransferDeps = {
+    requestIntent: async (input) => ({
+      id: input.fileName,
+      status: "pending",
+      method: "PUT",
+      upload_url: "https://s3.example/put",
+      headers: { "Content-Type": "application/octet-stream" },
+      content_type: "application/octet-stream",
+      size_bytes: input.sizeBytes,
+      expires_in: 900,
+      expires_at: null,
+      idempotent_replay: false,
+    }),
+    upload: async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 5));
+      running -= 1;
+    },
+    commit: async (id) => ({ id, status: "available", size_bytes: 1, checksum_sha256: "x" }),
+    abortIntent: async () => undefined,
+    sleep: async () => undefined,
+    random: () => 0,
+  };
+  const final = await startUploadQueue(files, deps, { folderId: null }).done;
+  expect(final.done).toBe(files.length);
+  expect(peak).toBeLessThanOrEqual(DEFAULT_QUEUE_CONCURRENCY);
 });
 
 test("one failing file does not stop the others, and retry re-runs only it", async () => {
