@@ -121,8 +121,8 @@ Modifiés :
 | `cd web && npx tsc --noEmit` | OK |
 | `cd web && npm run build` | OK (tsc + Vite, 210 modules) |
 | `npx playwright test e2e/transfers.spec.ts` | 19 tests OK |
-| `npm run test:unit` (Vitest) | 25 tests OK |
-| `npx playwright test` (suite complète) | **163 tests OK** (dernière exécution après le lot D) |
+| `npm run test:unit` (Vitest) | 29 tests OK |
+| `npx playwright test` (suite complète) | **164 tests OK** (dernière exécution après l'export de diagnostic) |
 | Baselines visuelles | `transfers-desktop` et `transfers-mobile` créées ; `files-desktop` et `admin-desktop` régénérées pour la nouvelle entrée de navigation |
 
 Note d'environnement : la machine de test n'a pas les bibliothèques GUI de
@@ -290,3 +290,15 @@ Les baselines visuelles restent un contrôle local : elles dépendent du
 rasterizer et des polices de l'hôte de référence, donc le job CI les ignore
 (`test.skip` sous `CI`) et exécute le reste de la suite. Le lot D est sur
 `main` et déployé (run `40019309145`), avec CSP vérifiée.
+
+## 12. Diagnostic des échecs — phase 1 (#256)
+
+Chaque échec propose « Télécharger le diagnostic » (panneau inline et détails).
+Le JSON contient le fichier, le statut terminal, `failureKind`, le message
+assaini, les tentatives, le mode de vérification, le checksum, les timings de
+commit, la chronologie des phases, les compteurs de session et l'environnement
+client. Les URL, `s3://`, `Authorization`/token/secret/signature/`x-amz-*` sont
+remplacés par `[redacted]` ; les champs absents restent `null`.
+
+Vérifications : 29 tests unitaires, 164 tests Playwright. La persistance et la
+consultation support restent la phase 2 de #256 (adossée à #246).
