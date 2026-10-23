@@ -122,8 +122,72 @@ export function TransfersPage() {
   );
   const cancelSelectionRef = useRef<string[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
-
   const counts = useMemo(() => countTransfers(queue), [queue]);
+  const [announcement, setAnnouncement] = useState("");
+
+  // Discrete screen-reader announcements: only status transitions, never bytes.
+  const countsRef = useRef(counts);
+  const wasFinishedRef = useRef(false);
+  const lastAnnounceRef = useRef(0);
+  const wasOnlineRef = useRef(transfers.isOnline);
+  useEffect(() => {
+    const previous = countsRef.current;
+    const now = Date.now();
+    const deltaCompleted = counts.completed - previous.completed;
+    const deltaFailed = counts.failed - previous.failed;
+    const deltaCancelled = counts.cancelled - previous.cancelled;
+    const deltaQueued = counts.queued - previous.queued;
+    const previousFailed = previous.failed;
+
+    if (now - lastAnnounceRef.current >= 2000) {
+      let message = "";
+      if (counts.total > 0 && queue.finished && !wasFinishedRef.current) {
+        message =
+          counts.failed > 0
+            ? "Importation terminée avec des échecs."
+            : "Importation terminée.";
+      } else if (deltaFailed > 0) {
+        message = `${deltaFailed} nouveau${deltaFailed > 1 ? "x" : ""} échec${
+          deltaFailed > 1 ? "s" : ""
+        }.`;
+      } else if (deltaCancelled > 0) {
+        message = `${deltaCancelled} fichier${deltaCancelled > 1 ? "s" : ""} annulé${
+          deltaCancelled > 1 ? "s" : ""
+        }.`;
+      } else if (deltaCompleted > 0) {
+        message = `${deltaCompleted} fichier${deltaCompleted > 1 ? "s" : ""} terminé${
+          deltaCompleted > 1 ? "s" : ""
+        }.`;
+      } else if (deltaQueued > 0 && previousFailed > counts.failed) {
+        message = `${deltaQueued} fichier${deltaQueued > 1 ? "s" : ""} relancé${
+          deltaQueued > 1 ? "s" : ""
+        } automatiquement.`;
+      }
+      if (message) {
+        setAnnouncement(message);
+        lastAnnounceRef.current = now;
+      }
+    }
+    wasFinishedRef.current = queue.finished;
+    countsRef.current = counts;
+  }, [counts, queue.finished]);
+
+  useEffect(() => {
+    if (wasOnlineRef.current && !transfers.isOnline && queue.items.length > 0) {
+      setAnnouncement("Connexion perdue, file suspendue.");
+      lastAnnounceRef.current = Date.now();
+    } else if (
+      !wasOnlineRef.current &&
+      transfers.isOnline &&
+      queue.items.length > 0
+    ) {
+      setAnnouncement("Connexion rétablie, reprise automatique.");
+      lastAnnounceRef.current = Date.now();
+    }
+    wasOnlineRef.current = transfers.isOnline;
+  }, [transfers.isOnline, queue.items.length]);
+
+
   const positions = useMemo(() => idlePositions(queue), [queue]);
   const [clock, setClock] = useState(() => Date.now());
   const [resumable, setResumable] = useState<JournalEntry[]>([]);
@@ -805,6 +869,9 @@ export function TransfersPage() {
 
       <p className="visually-hidden" role="status">
         {queue.done}/{queue.items.length} fichiers transférés
+      </p>
+      <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
+        {announcement}
       </p>
 
       <TransferDetailsDialog

@@ -2738,7 +2738,7 @@ export function ObjectsPage() {
               </p>
             ) : null}
             <div className="ledger" role="list">
-            <div className="ledger-head">
+            <div className="ledger-head" role="listitem">
               <span>
                 <input
                   type="checkbox"

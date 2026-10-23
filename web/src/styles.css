@@ -239,7 +239,7 @@ h3 {
 }
 
 .muted {
-  color: var(--muted);
+  color: var(--ink-2);
   font-size: var(--fs-sm);
 }
 
@@ -613,7 +613,7 @@ h3 {
   display: grid;
   place-items: center;
   background: var(--signal-soft);
-  color: var(--signal);
+  color: var(--signal-2);
   font-size: 13px;
   font-weight: 600;
 }
@@ -630,7 +630,7 @@ h3 {
 
 .whoami-role {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .session a {
@@ -727,13 +727,13 @@ select:focus-visible {
 .btn-primary:disabled {
   background: var(--steel-2);
   border-color: var(--line-2);
-  color: var(--muted);
+  color: var(--ink-2);
   opacity: 1;
 }
 
 .btn-ghost {
   border-color: transparent;
-  color: var(--muted);
+  color: var(--ink-2);
   background: none;
 }
 
@@ -809,7 +809,7 @@ select:focus-visible {
 }
 
 .field input::placeholder {
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .form {
@@ -838,7 +838,7 @@ select:focus-visible {
 }
 
 .file-picker-name {
-  color: var(--muted);
+  color: var(--ink-2);
   font-size: 13px;
   overflow-wrap: anywhere;
 }
@@ -894,7 +894,7 @@ select:focus-visible {
 }
 
 .control-bar-stats {
-  color: var(--muted);
+  color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
 
@@ -939,7 +939,7 @@ select:focus-visible {
 
 .phase-badge-muted {
   background: var(--steel-2);
-  color: var(--muted);
+  color: var(--ink-2);
   border-color: var(--line-2);
 }
 
@@ -997,14 +997,14 @@ select:focus-visible {
   gap: 4px;
   font-size: 13px;
   margin: 0;
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .crumb {
   border: none;
   background: none;
   font: inherit;
-  color: var(--muted);
+  color: var(--ink-2);
   cursor: pointer;
   padding: 2px 5px;
   border-radius: var(--radius-small);
@@ -1172,12 +1172,12 @@ select:focus-visible {
   gap: var(--space-1) var(--space-3);
   margin-top: var(--space-3);
   font-size: var(--fs-xs);
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .filters-tally-label {
   font-weight: var(--fw-semibold);
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .filters-tally-list {
@@ -1197,7 +1197,7 @@ select:focus-visible {
   padding: 0 var(--space-1);
   font-size: var(--fs-2xs);
   font-weight: var(--fw-medium);
-  color: var(--muted);
+  color: var(--ink-2);
   line-height: var(--lh-mono);
 }
 
@@ -1216,7 +1216,7 @@ select:focus-visible {
   border-bottom: 1px solid var(--line);
   font-size: 12px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 /* The size header must share an edge with its right-aligned values. */
@@ -1262,7 +1262,7 @@ select:focus-visible {
 }
 
 .ledger-type {
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .ledger-size {
@@ -1271,7 +1271,7 @@ select:focus-visible {
 }
 
 .ledger-date {
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .ledger-menu {
@@ -1353,7 +1353,7 @@ select:focus-visible {
 .menu-trigger {
   border: 1px solid transparent;
   background: none;
-  color: var(--muted);
+  color: var(--ink-2);
   font: inherit;
   font-size: 16px;
   line-height: 1;
@@ -1630,7 +1630,7 @@ select:focus-visible {
 
 .tray-progress-label {
   font-size: 13px;
-  color: var(--muted);
+  color: var(--ink-2);
   white-space: nowrap;
 }
 
@@ -1672,7 +1672,7 @@ select:focus-visible {
   font: inherit;
   font-size: 12px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--ink-2);
   cursor: pointer;
 }
 
@@ -1816,7 +1816,7 @@ select:focus-visible {
 
 .chip-muted {
   background: var(--steel-2);
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .chip-error {
@@ -1890,7 +1890,7 @@ p .chip {
 
 .empty {
   padding: 22px 4px;
-  color: var(--muted);
+  color: var(--ink-2);
   font-size: 13.5px;
 }
 
@@ -2111,7 +2111,7 @@ p .chip {
 .detail-list dt {
   font-size: 12px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--ink-2);
   margin-top: 14px;
 }
 
@@ -2356,7 +2356,7 @@ p .chip {
 .stat .label {
   font-size: 13px;
   font-weight: 400;
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .table {
@@ -2370,7 +2370,7 @@ p .chip {
   text-align: left;
   font-size: 12px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--ink-2);
   padding: 8px 9px;
   border-bottom: 1px solid var(--line);
 }
@@ -2408,7 +2408,7 @@ p .chip {
   border: 0;
   border-bottom: 2px solid transparent;
   background: none;
-  color: var(--muted);
+  color: var(--ink-2);
   font: inherit;
   font-weight: 500;
   padding: 11px 14px;
@@ -2473,7 +2473,7 @@ p .chip {
   font-size: 11.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--ink-2);
   padding: 0 4px;
 }
 
@@ -2919,7 +2919,7 @@ p .chip {
   font-size: 12px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--ink-2);
 }
 
 .cascade-log-list {
@@ -3081,7 +3081,7 @@ p .chip {
   align-items: center;
   gap: 4px 6px;
   padding: 10px 2px;
-  color: var(--muted);
+  color: var(--ink-2);
   font-size: 13.5px;
 }
 
@@ -3416,7 +3416,7 @@ body.density-compact .overview-tile {
   font-size: var(--fs-xs, 12px);
   font-weight: 500;
   letter-spacing: 0.02em;
-  color: var(--muted);
+  color: var(--ink-2);
 }
 .overview-value {
   font-size: 26px;
@@ -3428,7 +3428,7 @@ body.density-compact .overview-tile {
 }
 .overview-sub {
   font-size: var(--fs-xs, 12px);
-  color: var(--muted);
+  color: var(--ink-2);
 }
 .meter {
   height: 6px;
@@ -3622,7 +3622,7 @@ body.density-compact .overview-tile {
 .route-error-detail {
   text-align: left;
   font-size: 12.5px;
-  color: var(--muted);
+  color: var(--ink-2);
 }
 .route-error-detail code {
   display: block;
@@ -3750,7 +3750,7 @@ html {
   font-size: 11.5px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--ink-2);
 }
 .admin-page .table tbody tr:hover {
   background: color-mix(in srgb, var(--signal-soft) 55%, var(--steel-1));

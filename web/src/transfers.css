@@ -416,7 +416,7 @@
   font-size: 11px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--aura-text-muted);
+  color: var(--aura-text-secondary);
   line-height: 1.35;
 }
 
@@ -741,7 +741,7 @@
 .transfers-sort-arrow {
   font-size: 10px;
   line-height: 1;
-  color: var(--aura-text-muted);
+  color: var(--aura-text-secondary);
 }
 
 .transfers-sort.is-active .transfers-sort-arrow {
@@ -749,6 +749,7 @@
 }
 
 .transfers-table thead th {
+  color: var(--aura-text-secondary);
   position: sticky;
   top: var(--band-h);
   z-index: 3;
@@ -756,7 +757,6 @@
   letter-spacing: 0.07em;
   text-transform: uppercase;
   font-weight: 500;
-  color: var(--aura-text-muted);
   background: var(--aura-surface-raised);
   white-space: nowrap;
 }

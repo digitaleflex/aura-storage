@@ -27,13 +27,34 @@ export function formatRemaining(seconds: number | null): string {
   if (seconds === null || !Number.isFinite(seconds) || seconds <= 0) {
     return "Indisponible";
   }
-  if (seconds < 45) return `~ ${Math.ceil(seconds)} s`;
-  const totalMinutes = Math.ceil(seconds / 60);
-  if (totalMinutes < 60) return `~ ${totalMinutes} min`;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
+  if (seconds < 60) return `~ ${Math.ceil(seconds)} s`;
+  if (seconds < 3600) return `~ ${Math.ceil(seconds / 60)} min`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.ceil((seconds % 3600) / 60);
   if (hours >= 24) return "> 24 h";
   return `~ ${hours} h${minutes > 0 ? ` ${String(minutes).padStart(2, "0")} min` : ""}`;
+}
+
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  if (seconds > 0 && seconds < 1) return "< 1 s";
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) {
+    return `${hours} h ${String(minutes).padStart(2, "0")} min`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+/** Parse a size typed in mebibytes; NaN/empty gives null (no constraint). */
+export function parseMegabytes(value: string): number | null {
+  const normalized = value.replace(",", ".").trim();
+  if (normalized === "") return null;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed * 1024 * 1024;
 }
 
 const TIME_FORMAT = new Intl.DateTimeFormat("fr-FR", {
@@ -49,29 +70,6 @@ const MS_FORMAT = new Intl.NumberFormat("fr-FR");
 
 export function formatMilliseconds(value: number): string {
   return `${MS_FORMAT.format(Math.round(value))}\u00A0ms`;
-}
-
-/** Parse a size typed in mebibytes; NaN/empty gives null (no constraint). */
-export function parseMegabytes(value: string): number | null {
-  const normalized = value.replace(",", ".").trim();
-  if (normalized === "") return null;
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  return parsed * 1024 * 1024;
-}
-
-/** "0:42", "12:05", "1 h 03 min" — elapsed or estimated duration. */
-export function formatDuration(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "—";
-  if (seconds > 0 && seconds < 1) return "< 1 s";
-  const total = Math.floor(seconds);
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
-  if (hours > 0) {
-    return `${hours} h ${String(minutes).padStart(2, "0")} min`;
-  }
-  return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
 /** "MP4", "PDF", "ZIP" — extension shown as a small type hint. */
