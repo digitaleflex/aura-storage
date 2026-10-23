@@ -120,8 +120,8 @@ Modifiés :
 |---|---|
 | `cd web && npx tsc --noEmit` | OK |
 | `cd web && npm run build` | OK (tsc + Vite, 210 modules) |
-| `npx playwright test e2e/transfers.spec.ts` | 11 tests OK |
-| `npx playwright test` (suite complète) | **151 tests OK** (dernière exécution après le lot A) |
+| `npx playwright test e2e/transfers.spec.ts` | 14 tests OK |
+| `npx playwright test` (suite complète) | **154 tests OK** (dernière exécution après le lot B) |
 | Baselines visuelles | `transfers-desktop` et `transfers-mobile` créées ; `files-desktop` et `admin-desktop` régénérées pour la nouvelle entrée de navigation |
 
 Note d'environnement : la machine de test n'a pas les bibliothèques GUI de
@@ -231,3 +231,20 @@ regroupées en cinq jalons GitHub :
 Cinq tests e2e supplémentaires couvrent ces comportements (titre/position/annulation/
 sélection, copie, lien depuis le plateau, hors-ligne, sticky). Suite complète :
 **151 tests OK**, build OK.
+
+## 9. Lot B — implémenté (PR #252)
+
+- **B1 #232** — filtres, recherche, type, taille et tri dans l'URL ; retour/avant
+  restaure la vue ; la saisie est debouncée et n'empile pas l'historique.
+- **B2 #233** — surlignage de 900 ms d'une ligne qui atteint Terminé ou Échec,
+  désactivé avec `prefers-reduced-motion`.
+- **B3 #234** — historique de débit sur 60 s (1 point/seconde) et sparkline dans
+  la tuile « Débit actuel ».
+- **B4 #235** — durée écoulée, débit moyen et ETA basé sur un débit lissé (EMA),
+  avec état « Estimation instable ».
+- **B5 #236** — horodatage d'ajout mémorisé par le provider, y compris pour les
+  fichiers encore en attente.
+
+Vérifications : `tsc`, build, **154 tests Playwright**. Les baselines visuelles
+ont été régénérées (sparkline + durée). Le lot B est sur `main` mais n'a pas été
+déployé.
