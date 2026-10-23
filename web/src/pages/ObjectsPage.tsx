@@ -564,22 +564,32 @@ export function ObjectsPage() {
   const transferActive = queue.active > 0;
 
   // File d'attente automatique : quand le transfert se termine et qu'il y a
-  // des fichiers en attente, les lancer automatiquement.
+  // des fichiers/dossiers en attente, les lancer automatiquement.
   useEffect(() => {
     if (transferActive) return;
-    if (pendingFiles.length === 0) return;
+    if (pendingFiles.length === 0 && pendingFolderEntries.length === 0) return;
     if (!csrf) return;
     // Petite temporisation pour laisser l'UI se stabiliser
     const timer = setTimeout(() => {
-      launchQueue(
-        csrf,
-        pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
-      );
-      setPendingFiles([]);
+      if (pendingFolderEntries.length > 0) {
+        const folderList = pendingFolderEntries.map((entry) => entry.file);
+        const folderRels = pendingFolderEntries.map((entry) => entry.rel);
+        const looseList = pendingFiles;
+        const looseRels = pendingFiles.map((file) => file.name);
+        void uploadRelPaths([...folderList, ...looseList], [...folderRels, ...looseRels]);
+        setPendingFiles([]);
+        setPendingFolderEntries([]);
+      } else {
+        launchQueue(
+          csrf,
+          pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
+        );
+        setPendingFiles([]);
+      }
       setNotice(null);
     }, 500);
     return () => clearTimeout(timer);
-  }, [transferActive, pendingFiles.length, csrf, currentFolderId]);
+  }, [transferActive, pendingFiles.length, pendingFolderEntries.length, csrf, currentFolderId]);
 
   // -- Upload journal: resume a long import after a reload --------------------
   const owner = session.data?.id ?? null;
@@ -2388,7 +2398,7 @@ export function ObjectsPage() {
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={transferActive || (pendingFiles.length === 0 && pendingFolderEntries.length === 0)}
+            disabled={pendingFiles.length === 0 && pendingFolderEntries.length === 0}
           >
             {transferActive ? "Transfert…" : "Importer et valider"}
           </button>
