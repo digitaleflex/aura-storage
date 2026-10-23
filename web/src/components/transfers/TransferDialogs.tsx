@@ -35,6 +35,7 @@ export function TransferDetailsDialog({
   onCancel,
   onCopyName,
   onCopyError,
+  onDownloadDiagnostic,
   addedAtById,
 }: {
   item: QueueItem | null;
@@ -43,6 +44,7 @@ export function TransferDetailsDialog({
   onCancel: (id: string) => void;
   onCopyName: (item: QueueItem) => void;
   onCopyError: (item: QueueItem) => void;
+  onDownloadDiagnostic: (item: QueueItem) => void;
   addedAtById: ReadonlyMap<string, number>;
 }) {
   const status = item ? displayStatus(item) : "queued";
@@ -176,6 +178,15 @@ export function TransferDetailsDialog({
                 onClick={() => onCopyError(item)}
               >
                 Copier l'erreur
+              </button>
+            ) : null}
+            {item.state.phase === "failed" ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => onDownloadDiagnostic(item)}
+              >
+                Télécharger le diagnostic
               </button>
             ) : null}
             {canCancelItem(item) ? (

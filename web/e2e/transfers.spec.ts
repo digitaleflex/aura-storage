@@ -662,6 +662,31 @@ test("lot C — virtualisation d'un gros lot", async ({ page }) => {
   await expect(page.getByText("sticky-0.pdf")).toBeVisible();
 });
 
+test("lot E — snapshot de diagnostic telechargeable pour un echec", async ({ page }) => {
+  const fs = await import("node:fs");
+  await installMocks(page, { failName: "bad.pdf" });
+  await login(page);
+  await seedFiles(page, ["bad.pdf"]);
+  await expect(page.getByTestId("transfer-status")).toContainText("Échec", {
+    timeout: 15_000,
+  });
+  await goToTransfers(page);
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Télécharger le diagnostic" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^aura-diagnostic-.+\.json$/);
+  const path = await download.path();
+  const diagnostic = JSON.parse(fs.readFileSync(path!, "utf8"));
+  expect(diagnostic.schema).toBe("aura.transfer-diagnostic/v1");
+  expect(diagnostic.reportId).toBeTruthy();
+  expect(diagnostic.file.name).toBe("bad.pdf");
+  expect(diagnostic.transfer.status).toBe("failed");
+  expect(diagnostic.transfer.failureKind).toBe("fatal");
+  expect(diagnostic.transfer.phaseLog.length).toBeGreaterThan(0);
+  expect(JSON.stringify(diagnostic)).not.toMatch(/https?:\/\//);
+});
+
 test("visual baseline — completed session", async ({ page }) => {
   test.skip(!!process.env.CI, "visual baselines are reference-host specific");
   await installMocks(page, { failName: "archive.zip" });

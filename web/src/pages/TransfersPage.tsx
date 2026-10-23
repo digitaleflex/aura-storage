@@ -36,6 +36,10 @@ import type {
 } from "../components/transfers/model";
 import { formatBytes, parseMegabytes } from "../lib/format";
 import { downloadCsv, toCsv } from "../lib/csv";
+import {
+  buildTransferDiagnostic,
+  downloadTransferDiagnostic,
+} from "../components/transfers/diagnostics";
 import { useSession } from "../lib/auth";
 import { pendingEntries } from "../lib/uploadJournal";
 import type { JournalEntry } from "../lib/uploadJournal";
@@ -410,6 +414,18 @@ export function TransfersPage() {
     } catch {
       notify("error", "Copie impossible dans ce navigateur.");
     }
+  }
+
+  function handleDownloadDiagnostic(item: QueueItem) {
+    const diagnostic = buildTransferDiagnostic(item, {
+      queue,
+      startedAt: transfers.startedAt,
+      finishedAt: transfers.finishedAt,
+      throughput: transfers.throughput,
+      addedAt: transfers.addedAt.get(item.id) ?? addedAt(item),
+    });
+    downloadTransferDiagnostic(diagnostic);
+    notify("ok", "Diagnostic téléchargé.");
   }
 
   function handleCopyName(item: QueueItem) {
@@ -863,6 +879,7 @@ export function TransfersPage() {
           onRetry={handleRetry}
           onDetails={setDetailId}
           onCopyError={handleCopyError}
+          onDownloadDiagnostic={handleDownloadDiagnostic}
           onShowMore={() => setVisible((value) => value + PAGE_SIZE)}
         />
       )}
@@ -884,6 +901,7 @@ export function TransfersPage() {
         }}
         onCopyName={handleCopyName}
         onCopyError={handleCopyError}
+        onDownloadDiagnostic={handleDownloadDiagnostic}
         addedAtById={transfers.addedAt}
       />
 
