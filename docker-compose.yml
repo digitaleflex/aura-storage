@@ -17,7 +17,7 @@ services:
       # Traefik default readTimeout (60s) cut large uploads mid-body -> HTTP 502
       # and the UI reported "Réseau interrompu.". 1200s is bounded (slowloris
       # protection stays), yet covers the 900s presigned-URL/intent TTL.
-      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=1200s
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=7200s
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?Set ACME_EMAIL in .env}
