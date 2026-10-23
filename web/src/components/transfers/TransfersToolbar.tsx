@@ -16,6 +16,8 @@ export function TransfersToolbar({
   onSelectFailed,
   onSelectActive,
   onSelectQueued,
+  exportCount,
+  onExport,
   onPauseAll,
   onResumeAll,
   onCancelAll,
@@ -34,6 +36,8 @@ export function TransfersToolbar({
   onSelectFailed: () => void;
   onSelectActive: () => void;
   onSelectQueued: () => void;
+  exportCount: number;
+  onExport: () => void;
   onPauseAll: () => void;
   onResumeAll: () => void;
   onCancelAll: () => void;
@@ -98,6 +102,11 @@ export function TransfersToolbar({
               label: `Sélectionner les fichiers en attente (${queuedCount})`,
               onSelect: onSelectQueued,
               disabled: queuedCount === 0,
+            },
+            {
+              label: `Exporter la vue (${exportCount})`,
+              onSelect: onExport,
+              disabled: exportCount === 0,
             },
             {
               label: "Effacer la file terminée",

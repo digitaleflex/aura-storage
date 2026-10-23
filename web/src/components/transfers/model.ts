@@ -224,6 +224,15 @@ export function estimatedRemainingSeconds(
 }
 
 export type SortKey = "added" | "name" | "size" | "status";
+export type SortDirection = "asc" | "desc";
+
+/** Natural direction when a column is first selected. */
+export const SORT_DEFAULT_DIRECTION: Record<SortKey, SortDirection> = {
+  added: "asc",
+  name: "asc",
+  size: "desc",
+  status: "asc",
+};
 
 const STATUS_RANK: Record<DisplayStatus, number> = {
   uploading: 0,
@@ -244,27 +253,32 @@ export function sortItems(
   items: QueueItem[],
   sort: SortKey,
   addedAtById?: ReadonlyMap<string, number>,
+  direction: SortDirection = SORT_DEFAULT_DIRECTION[sort],
 ): QueueItem[] {
+  const factor = direction === "asc" ? 1 : -1;
   const copy = [...items];
   switch (sort) {
     case "name":
-      copy.sort((a, b) => a.fileName.localeCompare(b.fileName, "fr"));
+      copy.sort(
+        (a, b) => factor * a.fileName.localeCompare(b.fileName, "fr"),
+      );
       break;
     case "size":
-      copy.sort((a, b) => b.sizeBytes - a.sizeBytes);
+      copy.sort((a, b) => factor * (a.sizeBytes - b.sizeBytes));
       break;
     case "status":
       copy.sort(
         (a, b) =>
-          STATUS_RANK[displayStatus(a)] - STATUS_RANK[displayStatus(b)] ||
-          a.fileName.localeCompare(b.fileName, "fr"),
+          factor *
+          (STATUS_RANK[displayStatus(a)] - STATUS_RANK[displayStatus(b)] ||
+            a.fileName.localeCompare(b.fileName, "fr")),
       );
       break;
     case "added":
     default: {
       const at = (item: QueueItem) =>
         addedAtById?.get(item.id) ?? addedAt(item) ?? 0;
-      copy.sort((a, b) => at(a) - at(b));
+      copy.sort((a, b) => factor * (at(a) - at(b)));
       break;
     }
   }

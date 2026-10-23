@@ -639,7 +639,7 @@
 
 .transfers-advanced {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
   gap: 10px;
   align-items: end;
   padding: 12px;
@@ -716,6 +716,36 @@
   text-align: left;
   vertical-align: middle;
   border-bottom: 1px solid var(--aura-border);
+}
+
+.transfers-sort {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.transfers-sort:hover,
+.transfers-sort.is-active {
+  color: var(--aura-text);
+}
+
+.transfers-sort-arrow {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--aura-text-muted);
+}
+
+.transfers-sort.is-active .transfers-sort-arrow {
+  color: var(--aura-primary);
 }
 
 .transfers-table thead th {
@@ -802,7 +832,8 @@
 }
 
 .transfers-file {
-  min-width: 260px;
+  min-width: 220px;
+  max-width: 420px;
 }
 
 .transfers-file-icon {
@@ -867,7 +898,8 @@
 }
 
 .transfers-progress-cell {
-  min-width: 190px;
+  min-width: 160px;
+  width: 22%;
 }
 
 .transfers-progress-head {
@@ -1104,6 +1136,92 @@
   margin: 2px 0 0;
   font-size: 12.5px;
   color: var(--aura-text-secondary);
+}
+
+/* ------------------------------------------------------------------ */
+/* Resume banner (interrupted import)                                  */
+/* ------------------------------------------------------------------ */
+.transfers-resume {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, var(--aura-info) 38%, transparent);
+  border-left: 3px solid var(--aura-info);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--aura-info) 10%, var(--aura-surface));
+}
+
+.transfers-resume-icon {
+  display: flex;
+  color: var(--aura-info);
+  flex: none;
+  margin-top: 1px;
+}
+
+.transfers-resume-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.transfers-resume-copy strong {
+  display: block;
+  font-size: 13px;
+  color: var(--aura-text);
+}
+
+.transfers-resume-copy p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--aura-text-secondary);
+  line-height: 1.55;
+}
+
+.transfers-resume .btn {
+  flex: none;
+  align-self: center;
+}
+
+/* ------------------------------------------------------------------ */
+/* Virtualized list (very large lots)                                  */
+/* ------------------------------------------------------------------ */
+.transfers-list--virtual {
+  /* A bounded scrolling surface keeps the page usable with thousands of
+     rows while the DOM only holds the visible window. */
+  max-height: calc(100vh - 260px);
+  overflow-y: auto;
+}
+
+.transfers-list--virtual .transfers-table thead th {
+  top: 0;
+}
+
+.transfers-list--virtual .transfers-row {
+  height: 64px;
+}
+
+.transfers-list--virtual .transfers-row td {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.transfers-list--virtual .transfers-error-row {
+  height: 124px;
+}
+
+.transfers-list--virtual .transfers-error-row td {
+  height: 124px;
+  padding: 0 14px 12px;
+}
+
+.transfers-list--virtual .transfers-error-panel {
+  height: 108px;
+  overflow-y: auto;
+}
+
+.transfers-spacer td {
+  padding: 0 !important;
+  border: 0 !important;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1403,9 +1521,20 @@
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1150px) {
   .transfers-col-speed {
     display: none;
+  }
+}
+
+@media (max-width: 1000px) {
+  .transfers-col-size {
+    display: none;
+  }
+
+  .transfers-table th,
+  .transfers-table td {
+    padding: 10px;
   }
 
   .transfers-file-copy {
@@ -1565,6 +1694,11 @@
 
   .transfers-table .transfers-col-select {
     width: auto;
+  }
+
+  /* The size is useful on a phone even though the desktop tablet hides it. */
+  .transfers-table .transfers-row td.transfers-col-size {
+    display: flex;
   }
 
   .transfers-table .transfers-col-select::before {
