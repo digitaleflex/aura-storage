@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useTransfers } from "../lib/transferContext";
 import { makeToast, ToastStack } from "../components/Toasts";
 import type { Toast } from "../components/Toasts";
@@ -17,17 +17,60 @@ import {
   canPauseItem,
   canResumeItem,
   countTransfers,
+  displayStatus,
   failureTitle,
   fileCategory,
   idlePositions,
   matchesStatus,
   sortItems,
 } from "../components/transfers/model";
-import type { SortKey, StatusFilter } from "../components/transfers/model";
+import type {
+  DisplayStatus,
+  SortKey,
+  StatusFilter,
+} from "../components/transfers/model";
 import { parseMegabytes } from "../lib/format";
 import type { QueueItem } from "../lib/transfer";
 
 const PAGE_SIZE = 50;
+const STATUS_FILTERS: StatusFilter[] = [
+  "all",
+  "active",
+  "queued",
+  "paused",
+  "completed",
+  "failed",
+  "cancelled",
+];
+const SORT_KEYS: SortKey[] = ["added", "name", "size", "status"];
+const TYPE_FILTERS = ["all", "audio", "video", "image", "pdf", "archive", "other"] as const;
+type TypeFilter = (typeof TYPE_FILTERS)[number];
+
+interface UrlFilters {
+  status: StatusFilter;
+  q: string;
+  type: TypeFilter;
+  min: string;
+  max: string;
+  sort: SortKey;
+}
+
+/** Read filters from the URL, falling back to defaults on unknown values. */
+function readUrlFilters(raw: unknown): UrlFilters {
+  const record = (raw ?? {}) as Record<string, unknown>;
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+  const status = text(record.status) as StatusFilter;
+  const sort = text(record.sort) as SortKey;
+  const type = text(record.type) as TypeFilter;
+  return {
+    status: STATUS_FILTERS.includes(status) ? status : "all",
+    q: text(record.q),
+    type: TYPE_FILTERS.includes(type) ? type : "all",
+    min: text(record.min),
+    max: text(record.max),
+    sort: SORT_KEYS.includes(sort) ? sort : "added",
+  };
+}
 
 /**
  * Transfers console.
@@ -42,14 +85,16 @@ export function TransfersPage() {
   const transfers = useTransfers();
   const { queue } = transfers;
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const [status, setStatus] = useState<StatusFilter>("all");
-  const [search, setSearch] = useState("");
+  // Filters live in the URL: shareable, back/forward friendly, no duplicated
+  // state. Only the search text is debounced locally for typing comfort.
+  const filters = useMemo(
+    () => readUrlFilters(location.search),
+    [location.search],
+  );
+  const [searchDraft, setSearchDraft] = useState(filters.q);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [typeFilter, setTypeFilter] = useState("all");
-  const [minSize, setMinSize] = useState("");
-  const [maxSize, setMaxSize] = useState("");
-  const [sort, setSort] = useState<SortKey>("added");
   const [visible, setVisible] = useState(PAGE_SIZE);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -61,6 +106,20 @@ export function TransfersPage() {
 
   const counts = useMemo(() => countTransfers(queue), [queue]);
   const positions = useMemo(() => idlePositions(queue), [queue]);
+  const [clock, setClock] = useState(() => Date.now());
+
+  useEffect(() => {
+    setSearchDraft(filters.q);
+  }, [filters.q]);
+
+  // A one-shot clock: duration/ETA refresh once a second, not on every tick.
+  useEffect(() => {
+    if (transfers.startedAt === null || queue.finished || queue.items.length === 0) {
+      return;
+    }
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [transfers.startedAt, queue.finished, queue.items.length]);
 
   // The page is the only place that owns the tab title; restore it on leave.
   useEffect(() => {
@@ -93,26 +152,42 @@ export function TransfersPage() {
   }, [transfers.isOnline, queue.items.length]);
 
   const filtered = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    const minBytes = parseMegabytes(minSize);
-    const maxBytes = parseMegabytes(maxSize);
+    const needle = searchDraft.trim().toLowerCase();
+    const minBytes = parseMegabytes(filters.min);
+    const maxBytes = parseMegabytes(filters.max);
     const matching = queue.items.filter((item) => {
-      if (!matchesStatus(item, status)) return false;
+      if (!matchesStatus(item, filters.status)) return false;
       if (needle && !item.fileName.toLowerCase().includes(needle)) return false;
-      if (typeFilter !== "all" && fileCategory(item.fileName) !== typeFilter) {
+      if (filters.type !== "all" && fileCategory(item.fileName) !== filters.type) {
         return false;
       }
       if (minBytes !== null && item.sizeBytes < minBytes) return false;
       if (maxBytes !== null && item.sizeBytes > maxBytes) return false;
       return true;
     });
-    return sortItems(matching, sort);
-  }, [queue.items, status, search, typeFilter, minSize, maxSize, sort]);
+    return sortItems(matching, filters.sort, transfers.addedAt);
+  }, [queue.items, filters, searchDraft, transfers.addedAt]);
 
   // A new filter set starts at the first page again.
   useEffect(() => {
     setVisible(PAGE_SIZE);
-  }, [status, search, typeFilter, minSize, maxSize, sort]);
+  }, [
+    filters.status,
+    searchDraft,
+    filters.type,
+    filters.min,
+    filters.max,
+    filters.sort,
+  ]);
+
+  // Debounce the text field into the URL (one replace per pause, not per key).
+  useEffect(() => {
+    if (searchDraft === filters.q) return;
+    const timer = window.setTimeout(() => {
+      writeFilters({ q: searchDraft }, true);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [searchDraft, filters.q]);
 
   // Drop selections whose file left the queue (clear, new import, etc.).
   const itemIds = useMemo(
@@ -150,6 +225,54 @@ export function TransfersPage() {
   const canCancel = queue.items.some((item) => canCancelItem(item));
   const canClear = queue.finished && queue.items.length > 0;
   const liveCount = queue.items.filter((item) => canCancelItem(item)).length;
+
+  // Brief row highlight when a file reaches a terminal state.
+  const [highlights, setHighlights] = useState<
+    Map<string, "success" | "danger">
+  >(() => new Map());
+  const statusesRef = useRef(new Map<string, DisplayStatus>());
+  const highlightTimersRef = useRef(new Map<string, number>());
+  useEffect(() => {
+    const nextStatuses = new Map<string, DisplayStatus>();
+    const updates = new Map<string, "success" | "danger">();
+    for (const item of queue.items) {
+      const status = displayStatus(item);
+      nextStatuses.set(item.id, status);
+      const previous = statusesRef.current.get(item.id);
+      if (
+        previous !== undefined &&
+        previous !== status &&
+        (status === "completed" || status === "failed")
+      ) {
+        updates.set(item.id, status === "completed" ? "success" : "danger");
+        const existing = highlightTimersRef.current.get(item.id);
+        if (existing) window.clearTimeout(existing);
+        const timer = window.setTimeout(() => {
+          setHighlights((current) => {
+            const next = new Map(current);
+            next.delete(item.id);
+            return next;
+          });
+          highlightTimersRef.current.delete(item.id);
+        }, 900);
+        highlightTimersRef.current.set(item.id, timer);
+      }
+    }
+    statusesRef.current = nextStatuses;
+    if (updates.size > 0) {
+      setHighlights((current) => {
+        const next = new Map(current);
+        for (const [id, tone] of updates) next.set(id, tone);
+        return next;
+      });
+    }
+  }, [queue.items]);
+  useEffect(() => {
+    const timers = highlightTimersRef.current;
+    return () => {
+      for (const timer of timers.values()) window.clearTimeout(timer);
+    };
+  }, []);
 
   const cancelPreview = useMemo(() => {
     const ids =
@@ -224,13 +347,40 @@ export function TransfersPage() {
     });
   }
 
+  function writeFilters(patch: Partial<UrlFilters>, replace = false) {
+    void navigate({
+      to: "/transfers",
+      search: (previous) => {
+        const current = readUrlFilters(previous);
+        const merged = { ...current, ...patch };
+        const next = { ...(previous as Record<string, unknown>) };
+        next.status = merged.status === "all" ? undefined : merged.status;
+        next.q = merged.q.trim() ? merged.q : undefined;
+        next.type = merged.type === "all" ? undefined : merged.type;
+        next.min = merged.min.trim() ? merged.min : undefined;
+        next.max = merged.max.trim() ? merged.max : undefined;
+        next.sort = merged.sort === "added" ? undefined : merged.sort;
+        return next;
+      },
+      replace,
+    });
+  }
+
   function resetFilters() {
-    setStatus("all");
-    setSearch("");
-    setTypeFilter("all");
-    setMinSize("");
-    setMaxSize("");
-    setSort("added");
+    setSearchDraft("");
+    void navigate({
+      to: "/transfers",
+      search: (previous) => {
+        const next = { ...(previous as Record<string, unknown>) };
+        delete next.status;
+        delete next.q;
+        delete next.type;
+        delete next.min;
+        delete next.max;
+        delete next.sort;
+        return next;
+      },
+    });
   }
 
   function handlePauseAll() {
@@ -353,7 +503,15 @@ export function TransfersPage() {
         </span>
       </header>
 
-      <TransfersOverview queue={queue} throughput={transfers.throughput} />
+      <TransfersOverview
+        queue={queue}
+        throughput={transfers.throughput}
+        rateHistory={transfers.rateHistory}
+        smoothedThroughput={transfers.smoothedThroughput}
+        startedAt={transfers.startedAt}
+        finishedAt={transfers.finishedAt}
+        now={clock}
+      />
 
       {!transfers.isOnline && queue.items.length > 0 && !queue.finished ? (
         <div className="transfers-offline" role="status">
@@ -395,20 +553,20 @@ export function TransfersPage() {
 
       <TransfersFilters
         counts={counts}
-        status={status}
-        onStatus={setStatus}
-        search={search}
-        onSearch={setSearch}
+        status={filters.status}
+        onStatus={(value) => writeFilters({ status: value })}
+        search={searchDraft}
+        onSearch={setSearchDraft}
         advancedOpen={advancedOpen}
         onToggleAdvanced={() => setAdvancedOpen((open) => !open)}
-        typeFilter={typeFilter}
-        onTypeFilter={setTypeFilter}
-        minSize={minSize}
-        onMinSize={setMinSize}
-        maxSize={maxSize}
-        onMaxSize={setMaxSize}
-        sort={sort}
-        onSort={setSort}
+        typeFilter={filters.type}
+        onTypeFilter={(value) => writeFilters({ type: value as TypeFilter })}
+        minSize={filters.min}
+        onMinSize={(value) => writeFilters({ min: value }, true)}
+        maxSize={filters.max}
+        onMaxSize={(value) => writeFilters({ max: value }, true)}
+        sort={filters.sort}
+        onSort={(value) => writeFilters({ sort: value })}
         onReset={resetFilters}
       />
 
@@ -487,6 +645,8 @@ export function TransfersPage() {
           selected={selected}
           itemRates={transfers.itemRates}
           positions={positions}
+          addedAtById={transfers.addedAt}
+          highlights={highlights}
           onToggle={toggleSelected}
           onToggleAll={toggleAll}
           onPause={transfers.pauseItem}
@@ -513,6 +673,7 @@ export function TransfersPage() {
         }}
         onCopyName={handleCopyName}
         onCopyError={handleCopyError}
+        addedAtById={transfers.addedAt}
       />
 
       <TransferCancelDialog

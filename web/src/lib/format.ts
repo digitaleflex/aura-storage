@@ -60,6 +60,20 @@ export function parseMegabytes(value: string): number | null {
   return parsed * 1024 * 1024;
 }
 
+/** "0:42", "12:05", "1 h 03 min" — elapsed or estimated duration. */
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  if (seconds > 0 && seconds < 1) return "< 1 s";
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) {
+    return `${hours} h ${String(minutes).padStart(2, "0")} min`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
 /** "MP4", "PDF", "ZIP" — extension shown as a small type hint. */
 export function fileExtension(fileName: string): string {
   const dot = fileName.lastIndexOf(".");

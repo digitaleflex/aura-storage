@@ -9,7 +9,12 @@ import {
 } from "./model";
 import { TransferIcon } from "./TransferIcon";
 import type { TransferIconName } from "./TransferIcon";
-import { formatBytes, formatRate, formatRemaining } from "../../lib/format";
+import {
+  formatBytes,
+  formatDuration,
+  formatRate,
+  formatRemaining,
+} from "../../lib/format";
 
 const RING_SIZE = 132;
 const RING_STROKE = 9;
@@ -32,15 +37,38 @@ interface Metric {
 export function TransfersOverview({
   queue,
   throughput,
+  rateHistory,
+  smoothedThroughput,
+  startedAt,
+  finishedAt,
+  now,
 }: {
   queue: QueueState;
   throughput: number;
+  rateHistory: readonly number[];
+  smoothedThroughput: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  now: number;
 }) {
   const counts = useMemo(() => countTransfers(queue), [queue]);
   const { totalBytes, transferredBytes } = useMemo(() => scopeBytes(queue), [queue]);
   const filePercent = filesPercent(counts);
   const volumePercent = bytesPercent(totalBytes, transferredBytes);
-  const remainingSeconds = estimatedRemainingSeconds(queue, throughput);
+  const etaRate = smoothedThroughput > 0 ? smoothedThroughput : 0;
+  const remainingSeconds = estimatedRemainingSeconds(queue, etaRate);
+  const unstable =
+    throughput > 0 &&
+    smoothedThroughput > 0 &&
+    Math.abs(throughput - smoothedThroughput) / smoothedThroughput > 0.75;
+  const elapsedSeconds =
+    startedAt !== null
+      ? Math.max(0, ((finishedAt ?? now) - startedAt) / 1000)
+      : 0;
+  const averageRate =
+    startedAt !== null && elapsedSeconds >= 1
+      ? transferredBytes / elapsedSeconds
+      : 0;
 
   const title = (() => {
     if (counts.total === 0) return "Aucune importation en cours";
@@ -66,7 +94,9 @@ export function TransfersOverview({
         : "Inactif";
 
   const etaValue = (() => {
-    if (remainingSeconds !== null) return formatRemaining(remainingSeconds);
+    if (remainingSeconds !== null) {
+      return unstable ? "Estimation instable" : formatRemaining(remainingSeconds);
+    }
     if (counts.total > 0 && !queue.finished && !queue.schedulerPaused) {
       return counts.active > 0 ? "Calcul en cours" : "Indisponible";
     }
@@ -169,6 +199,12 @@ export function TransfersOverview({
               style={{ width: `${volumePercent}%` }}
             />
           </div>
+          {counts.total > 0 && startedAt !== null ? (
+            <p className="transfers-overview-timing">
+              Durée {formatDuration(elapsedSeconds)} · Débit moyen{" "}
+              {formatRate(averageRate)}
+            </p>
+          ) : null}
           <p className="transfers-overview-hint">
             {counts.cancelled > 0
               ? `${counts.cancelled} fichier${counts.cancelled > 1 ? "s" : ""} annulé${
@@ -190,9 +226,47 @@ export function TransfersOverview({
             </span>
             <span className="transfers-metric-label">{metric.label}</span>
             <span className="transfers-metric-value">{metric.value}</span>
+            {metric.key === "rate" && rateHistory.length > 1 ? (
+              <RateSparkline values={rateHistory} />
+            ) : null}
           </div>
         ))}
       </div>
     </section>
+  );
+}
+
+/** Last-60-second rate trend rendered inside the "Débit actuel" tile. */
+function RateSparkline({ values }: { values: readonly number[] }) {
+  const max = Math.max(...values, 1);
+  const width = 100;
+  const height = 28;
+  const padding = 2;
+  const points = values
+    .map((value, index) => {
+      const x = (index / Math.max(values.length - 1, 1)) * width;
+      const y =
+        height - padding - (Math.max(value, 0) / max) * (height - padding * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg
+      className="transfers-sparkline"
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      role="img"
+      aria-label={`Débit global sur les ${values.length} dernières secondes`}
+    >
+      <polyline
+        points={points}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
   );
 }
