@@ -73,6 +73,16 @@ export interface TransferState {
   phaseLog?: Array<{ phase: TransferPhase; at: number }>;
   /** SHA-256 the server recorded once the file is available. */
   checksum?: string;
+  /** True when the server replayed an earlier intent for the same key. */
+  intentReplay?: boolean;
+  /** Multipart plan chosen by the server, when applicable. */
+  multipart?: { partCount: number; partSizeBytes: number };
+  /** Parts the storage already holds (multipart resume). */
+  heldParts?: number;
+  /** Parts still to send (multipart resume). */
+  missingParts?: number;
+  /** Set when this run continues an earlier intent or already-held parts. */
+  resumed?: boolean;
 }
 
 export interface TransferResult {
@@ -281,7 +291,19 @@ export async function runTransfer(
         idempotencyKey: options.idempotencyKey,
       });
       intent = created;
-      emit({ phase: "uploading", intentId: created.id, error: null });
+      emit({
+        phase: "uploading",
+        intentId: created.id,
+        error: null,
+        intentReplay: created.idempotent_replay,
+        multipart: created.multipart
+          ? {
+              partCount: created.multipart.part_count,
+              partSizeBytes: created.multipart.part_size_bytes,
+            }
+          : undefined,
+        resumed: created.idempotent_replay,
+      });
       return created;
     } catch (err) {
       if (aborted()) return null;
@@ -350,6 +372,12 @@ export async function runTransfer(
       const heldSet = new Set(held);
       const queue: number[] = [];
       for (let n = 1; n <= plan.part_count; n += 1) if (!heldSet.has(n)) queue.push(n);
+
+      emit({
+        heldParts: held.length,
+        missingParts: queue.length,
+        resumed: state.intentReplay === true || held.length > 0,
+      });
 
       let doneBytes = held.reduce((sum, n) => sum + lengthOf(n), 0);
       const inflight = new Map<number, number>();

@@ -37,7 +37,9 @@ import type {
 import { formatBytes, parseMegabytes } from "../lib/format";
 import { downloadCsv, toCsv } from "../lib/csv";
 import {
+  buildSessionDiagnostic,
   buildTransferDiagnostic,
+  downloadSessionDiagnostic,
   downloadTransferDiagnostic,
 } from "../components/transfers/diagnostics";
 import { useSession } from "../lib/auth";
@@ -422,10 +424,28 @@ export function TransfersPage() {
       startedAt: transfers.startedAt,
       finishedAt: transfers.finishedAt,
       throughput: transfers.throughput,
-      addedAt: transfers.addedAt.get(item.id) ?? addedAt(item),
+      smoothedThroughput: transfers.smoothedThroughput,
+      rateHistory: transfers.rateHistory,
+      itemRates: transfers.itemRates,
+      addedAtById: transfers.addedAt,
     });
     downloadTransferDiagnostic(diagnostic);
     notify("ok", "Diagnostic téléchargé.");
+  }
+
+  function handleDownloadSessionDiagnostic() {
+    const diagnostic = buildSessionDiagnostic(queue.items, {
+      queue,
+      startedAt: transfers.startedAt,
+      finishedAt: transfers.finishedAt,
+      throughput: transfers.throughput,
+      smoothedThroughput: transfers.smoothedThroughput,
+      rateHistory: transfers.rateHistory,
+      itemRates: transfers.itemRates,
+      addedAtById: transfers.addedAt,
+    });
+    downloadSessionDiagnostic(diagnostic);
+    notify("ok", "Diagnostic de session téléchargé.");
   }
 
   function handleCopyName(item: QueueItem) {
@@ -761,6 +781,7 @@ export function TransfersPage() {
         onSelectQueued={() => selectBy("queued")}
         exportCount={filtered.length}
         onExport={handleExport}
+        onDownloadSessionDiagnostic={handleDownloadSessionDiagnostic}
         onPauseAll={handlePauseAll}
         onResumeAll={handleResumeAll}
         onCancelAll={requestCancelAll}
