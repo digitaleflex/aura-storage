@@ -1,21 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import {
-  ApiError,
-  api,
-  hasAdminAccess,
-  hasScope,
-  putToPresignedUrl,
-} from "../lib/api";
+import { ApiError, api, hasAdminAccess, hasScope } from "../lib/api";
 import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
-import { emptyQueue, startUploadQueue } from "../lib/transfer";
-
 import {
   CascadeOp,
   CascadeFailure,
@@ -23,7 +16,7 @@ import {
   scanCascade,
   planCascadeOps,
   cascadeOpKey,
-} from "../lib/cascade";import { ThroughputWindow } from "../lib/throughput";
+} from "../lib/cascade";
 import { UploadTray } from "../components/UploadTray";
 import { VaultOverview } from "../components/VaultOverview";
 import {
@@ -34,12 +27,8 @@ import {
   removeEntries,
   type JournalEntry,
 } from "../lib/uploadJournal";
-import type {
-  QueueInput,
-  QueueState,
-  TransferDeps,
-  UploadQueue,
-} from "../lib/transfer";
+import type { QueueInput, QueueState } from "../lib/transfer";
+import { useTransfers } from "../lib/transferContext";
 import {
   MAX_UPLOAD_DEPTH,
   normalizeRelativePath,
@@ -324,13 +313,18 @@ export function ObjectsPage() {
   const { csrf } = useAuth();
   const session = useSession();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // The live queue is owned by the shell (TransfersProvider): imports keep
+  // running when the user opens the transfers page, and the same snapshot
+  // feeds the floating tray and the transfers page.
+  const transfers = useTransfers();
+  const queue = transfers.queue;
 
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   // Uploads run through the M03 transfer engine as a bounded multi-file queue.
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [pendingFolderEntries, setPendingFolderEntries] = useState<{ file: File; rel: string }[]>([]);
-  const [queue, setQueue] = useState<QueueState>(() => emptyQueue());
-  const queueRef = useRef<UploadQueue | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -417,6 +411,28 @@ export function ObjectsPage() {
   // The import panel opens on demand (header button) and stays open while it
   // holds pending files, a queue or an error; a drop anywhere also opens it.
   const [intakeOpen, setIntakeOpen] = useState(false);
+  // Arriving from the transfers page's "Ajouter des fichiers": open the
+  // existing import panel once, then drop the one-shot query parameter.
+  useEffect(() => {
+    const search = location.search as { import?: string };
+    if (search.import !== "1") return;
+    setIntakeOpen(true);
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    requestAnimationFrame(() => {
+      document
+        .getElementById("intake")
+        ?.scrollIntoView({ block: "start", behavior: reduced ? "auto" : "smooth" });
+    });
+    void navigate({
+      to: "/",
+      search: (prev) => {
+        const next = { ...(prev as { import?: string }) };
+        next.import = undefined;
+        return next;
+      },
+      replace: true,
+    });
+  }, [location.search, navigate]);
   // Directory import: which folder of the plan is being created (item P1.7).
   const [folderProgress, setFolderProgress] = useState<{
     done: number;
@@ -436,17 +452,22 @@ export function ObjectsPage() {
   } | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const throughputRef = useRef(new ThroughputWindow());
   // Stable callbacks for the memoised <UploadTray>: inline arrows would change
   // on every render and defeat the memo.
-  const clearTray = useCallback(() => setQueue(emptyQueue()), []);
-  const pauseQueue = useCallback(() => queueRef.current?.pauseAll(), []);
-  const resumeQueue = useCallback(() => queueRef.current?.resumeAll(), []);
-  const cancelQueueItem = useCallback((id: string) => queueRef.current?.cancelItem(id), []);
-  const retryQueueItem = useCallback((id: string) => {
-    setUploadError(null);
-    queueRef.current?.retryItem(id);
-  }, []);
+  const clearTray = useCallback(() => transfers.clear(), [transfers.clear]);
+  const pauseQueue = useCallback(() => transfers.pauseAll(), [transfers.pauseAll]);
+  const resumeQueue = useCallback(() => transfers.resumeAll(), [transfers.resumeAll]);
+  const cancelQueueItem = useCallback(
+    (id: string) => transfers.cancelItem(id),
+    [transfers.cancelItem],
+  );
+  const retryQueueItem = useCallback(
+    (id: string) => {
+      setUploadError(null);
+      transfers.retryItem(id);
+    },
+    [transfers.retryItem],
+  );
   const libraryRefreshRef = useRef({ at: 0, done: 0 });
 
   // File d'attente automatique : placeholder (defini plus bas apres transferActive)
@@ -696,9 +717,9 @@ export function ObjectsPage() {
       return { file, folderId, key, idempotencyKey: idem };
     });
     void addEntries(journal);
-    throughputRef.current.reset();
     libraryRefreshRef.current = { at: Date.now(), done: 0 };
-    const uploadQueue = startUploadQueue(inputs, transferDeps(activeCsrf), {
+    transfers.start(inputs, {
+      csrf: activeCsrf,
       folderId: currentFolderId,
       onUpdate: handleQueueUpdate,
       // A file whose PUT died with the link is replayed by the queue as soon as
@@ -712,7 +733,6 @@ export function ObjectsPage() {
           } automatiquement.`,
         ),
     });
-    queueRef.current = uploadQueue;
   }
 
   /** Re-selected files: send only those the journal still lists. */
@@ -774,38 +794,6 @@ export function ObjectsPage() {
   function forgetResumable() {
     if (!owner) return;
     void clearOwner(owner).then(() => setResumable([]));
-  }
-
-  /** Wire the injected engine to the real API for one authenticated session. */
-  function transferDeps(activeCsrf: string): TransferDeps {
-    return {
-      requestIntent: (input) =>
-        api.createUploadIntent(
-          {
-            display_name: input.fileName,
-            content_type: input.contentType,
-            size_bytes: input.sizeBytes,
-            folder_id: input.folderId,
-          },
-          activeCsrf,
-          { idempotencyKey: input.idempotencyKey },
-        ),
-      upload: (url, selected, opts) =>
-        putToPresignedUrl(url, selected, {
-          headers: opts.headers,
-          onProgress: opts.onProgress,
-          signal: opts.signal,
-        }),
-      commit: (id) => api.commitObject(id, activeCsrf),
-      multipartStatus: (id) => api.multipartStatus(id),
-      objectStatus: (id) => api.getObject(id),
-      partUrls: (id, numbers) => api.multipartPartUrls(id, numbers, activeCsrf),
-      abortIntent: async (id) => {
-        await api.abortObject(id, activeCsrf);
-      },
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      random: Math.random,
-    };
   }
 
   const treeQuery = useQuery({
@@ -1179,12 +1167,7 @@ export function ObjectsPage() {
   // -- handlers ------------------------------------------------------------
   /** Shared queue subscriber: mirrors state and reacts when it settles. */
   function handleQueueUpdate(next: QueueState) {
-    setQueue(next);
     const nowMs = Date.now();
-    throughputRef.current.push(
-      nowMs,
-      next.items.reduce((sum, item) => sum + item.state.transferredBytes, 0),
-    );
     // Files become visible as they are verified, not only when the whole batch
     // ends (an import can run for hours): refresh the ledger at most every 10 s.
     const refresh = libraryRefreshRef.current;
@@ -1208,7 +1191,10 @@ export function ObjectsPage() {
     if (!next.finished) return;
     if (next.done > 0) {
       invalidateLibrary();
-      notify("ok", `${next.done} fichier(s) vérifié(s) et disponible(s).`);
+      notify("ok", `${next.done} fichier(s) vérifié(s) et disponible(s).`, {
+        label: "Voir",
+        onClick: () => void navigate({ to: "/transfers" }),
+      });
     }
     if (next.failed > 0) {
       const firstFailed = next.items.find((item) => item.state.phase === "failed");
@@ -1406,12 +1392,12 @@ export function ObjectsPage() {
   }
 
   function handleCancelUpload() {
-    queueRef.current?.cancelAll();
+    transfers.cancelAll();
   }
 
   function handleRetryFailed() {
     setUploadError(null);
-    queueRef.current?.retryFailed();
+    transfers.retryFailed();
   }
 
   function handleFilesChange(selected: FileList | File[] | null) {
@@ -2315,7 +2301,7 @@ export function ObjectsPage() {
               onClick={() => {
                 setIntakeOpen(false);
                 setUploadError(null);
-                if (queue.finished) setQueue(emptyQueue());
+                if (queue.finished) transfers.clear();
               }}
             >
               Fermer
@@ -3544,7 +3530,7 @@ export function ObjectsPage() {
       {queue.items.length > 0 ? (
         <UploadTray
           queue={queue}
-          throughput={throughputRef.current.rate()}
+          throughput={transfers.throughput}
           formatBytes={formatBytes}
           onClear={clearTray}
           onPause={pauseQueue}

@@ -9,9 +9,11 @@ import { AuthProvider, RequireAuth } from "./lib/auth";
 import { FolderProvider } from "./lib/folderContext";
 import { LoginPage } from "./pages/LoginPage";
 import { ObjectsPage } from "./pages/ObjectsPage";
+import { TransfersPage } from "./pages/TransfersPage";
 import { lazy, Suspense } from "react";
 import { Loading } from "./components/Loading";
 import { RouteError } from "./components/RouteError";
+import { TransfersProvider } from "./lib/transferContext";
 
 const AdminPage = lazy(() => import("./pages/AdminPage").then((m) => ({ default: m.AdminPage })));
 
@@ -19,7 +21,9 @@ const rootRoute = createRootRoute({
   component: () => (
     <AuthProvider>
       <FolderProvider>
-        <Outlet />
+        <TransfersProvider>
+          <Outlet />
+        </TransfersProvider>
       </FolderProvider>
     </AuthProvider>
   ),
@@ -57,7 +61,24 @@ const adminRoute = createRoute({
   ),
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, loginRoute, adminRoute]);
+const transfersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/transfers",
+  component: () => (
+    <Layout>
+      <RequireAuth>
+        <TransfersPage />
+      </RequireAuth>
+    </Layout>
+  ),
+});
+
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  loginRoute,
+  adminRoute,
+  transfersRoute,
+]);
 
 // Same subpath as Vite base (dev "/app", prod "/app", unset = root).
 const basepath = import.meta.env.VITE_SUBPATH
