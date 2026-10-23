@@ -270,4 +270,4 @@ et déployé (run `40000979514`), avec CSP vérifiée.
   fixe.
 
 Vérifications : `tsc`, build, **159 tests Playwright** (5 tests dédiés au lot C).
-Le lot C est mergé dans `main` (PR #253) mais non déployé.
+Le lot C est mergé dans `main` (PR #253) et déployé (run `40008115267`), avec CSP vérifiée.
