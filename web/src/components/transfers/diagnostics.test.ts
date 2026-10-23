@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSessionDiagnostic,
   buildTransferDiagnostic,
   DIAGNOSTIC_SCHEMA,
   sanitizeDiagnosticText,
+  SESSION_DIAGNOSTIC_SCHEMA,
 } from "./diagnostics";
 import type { QueueItem, QueueState } from "../../lib/transfer";
 
@@ -86,7 +88,10 @@ describe("buildTransferDiagnostic", () => {
         startedAt: 1_700_000_000_000,
         finishedAt: 1_700_000_003_000,
         throughput: 12,
-        addedAt: 1_699_999_999_000,
+        smoothedThroughput: 10,
+        rateHistory: [8, 10, 12],
+        itemRates: new Map([["q-1", 11]]),
+        addedAtById: new Map([["q-1", 1_699_999_999_000]]),
         now: 1_700_000_004_000,
       },
       ENV,
@@ -109,6 +114,52 @@ describe("buildTransferDiagnostic", () => {
     expect(diagnostic.environment).toEqual(ENV);
   });
 
+  it("describes a resumed multipart item and the session concurrency", () => {
+    const resumed = item({
+      state: {
+        phase: "uploading",
+        transferredBytes: 60,
+        progress: 0.6,
+        intentReplay: true,
+        multipart: { partCount: 10, partSizeBytes: 10 },
+        heldParts: 6,
+        missingParts: 4,
+        resumed: true,
+      } as never,
+    });
+    const q = queue([resumed]);
+    const diagnostic = buildSessionDiagnostic(
+      q.items,
+      {
+        queue: q,
+        startedAt: 1_700_000_000_000,
+        finishedAt: null,
+        throughput: 8,
+        smoothedThroughput: 7,
+        rateHistory: [0, 4, 8],
+        itemRates: new Map([["q-1", 8]]),
+        addedAtById: new Map([["q-1", 1_699_999_999_000]]),
+        now: 1_700_000_010_000,
+      },
+      ENV,
+    );
+    expect(diagnostic.schema).toBe(SESSION_DIAGNOSTIC_SCHEMA);
+    expect(diagnostic.items).toHaveLength(1);
+    expect(diagnostic.items[0]).toMatchObject({
+      resumed: true,
+      intentReplay: true,
+      heldParts: 6,
+      missingParts: 4,
+      itemRateBytesPerSecond: 8,
+      multipart: { partCount: 10, partSizeBytes: 10 },
+    });
+    expect(diagnostic.session).toMatchObject({
+      concurrency: 4,
+      maxConcurrency: 4,
+      rateHistoryBytesPerSecond: [0, 4, 8],
+    });
+  });
+
   it("keeps missing fields null instead of inventing values", () => {
     const q = queue([item({ state: {} as never })]);
     const diagnostic = buildTransferDiagnostic(
@@ -118,7 +169,10 @@ describe("buildTransferDiagnostic", () => {
         startedAt: null,
         finishedAt: null,
         throughput: 0,
-        addedAt: null,
+        smoothedThroughput: 0,
+        rateHistory: [],
+        itemRates: new Map(),
+        addedAtById: new Map(),
         now: 0,
       },
       ENV,

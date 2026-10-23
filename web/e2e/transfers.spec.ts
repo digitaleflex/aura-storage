@@ -687,6 +687,29 @@ test("lot E — snapshot de diagnostic telechargeable pour un echec", async ({ p
   expect(JSON.stringify(diagnostic)).not.toMatch(/https?:\/\//);
 });
 
+test("lot E — diagnostic de session avec reprise et concurrence", async ({ page }) => {
+  const fs = await import("node:fs");
+  await installMocks(page);
+  await login(page);
+  await seedFiles(page, ["s-1.pdf", "s-2.pdf"]);
+  await expect(page.getByTestId("transfer-status")).toContainText("Disponible", {
+    timeout: 15_000,
+  });
+  await goToTransfers(page);
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Plus d'actions sur les transferts" }).click();
+  await page.getByRole("menuitem", { name: "Télécharger le diagnostic de session" }).click();
+  const download = await downloadPromise;
+  const path = await download.path();
+  const diagnostic = JSON.parse(fs.readFileSync(path!, "utf8"));
+  expect(diagnostic.schema).toBe("aura.transfer-session-diagnostic/v1");
+  expect(diagnostic.items).toHaveLength(2);
+  expect(diagnostic.session.concurrency).toBe(4);
+  expect(Array.isArray(diagnostic.session.rateHistoryBytesPerSecond)).toBe(true);
+  expect(diagnostic.environment.userAgent).toBeTruthy();
+});
+
 test("visual baseline — completed session", async ({ page }) => {
   test.skip(!!process.env.CI, "visual baselines are reference-host specific");
   await installMocks(page, { failName: "archive.zip" });

@@ -1,14 +1,15 @@
 import type { QueueItem, QueueState } from "../../lib/transfer";
 import {
   countTransfers,
+  displayStatus,
   failureKindLabel,
   fileCategory,
   scopeBytes,
-  displayStatus,
   STATUS_LABEL,
 } from "./model";
 
 export const DIAGNOSTIC_SCHEMA = "aura.transfer-diagnostic/v1";
+export const SESSION_DIAGNOSTIC_SCHEMA = "aura.transfer-session-diagnostic/v1";
 
 export interface DiagnosticEnvironment {
   userAgent: string;
@@ -25,7 +26,10 @@ export interface DiagnosticContext {
   startedAt: number | null;
   finishedAt: number | null;
   throughput: number;
-  addedAt: number | null;
+  smoothedThroughput: number;
+  rateHistory: readonly number[];
+  itemRates: ReadonlyMap<string, number>;
+  addedAtById: ReadonlyMap<string, number>;
   now?: number;
 }
 
@@ -33,11 +37,7 @@ export interface TransferDiagnostic {
   schema: string;
   reportId: string;
   generatedAt: string;
-  file: {
-    name: string;
-    sizeBytes: number;
-    category: string;
-  };
+  file: { name: string; sizeBytes: number; category: string };
   transfer: {
     id: string;
     status: string;
@@ -52,19 +52,43 @@ export interface TransferDiagnostic {
     verifyMode: string | null;
     checksum: string | null;
     commitTiming: { head_ms: number; hash_ms: number; total_ms: number } | null;
+    intentId: string | null;
+    intentReplay: boolean | null;
+    multipart: { partCount: number; partSizeBytes: number } | null;
+    heldParts: number | null;
+    missingParts: number | null;
+    resumed: boolean;
+    itemRateBytesPerSecond: number;
     phaseLog: Array<{ phase: string; at: string }>;
     addedAt: string | null;
     phaseSince: string | null;
   };
-  session: {
-    startedAt: string | null;
-    finishedAt: string | null;
-    throughputBytesPerSecond: number;
-    counts: ReturnType<typeof countTransfers>;
-    totalBytes: number;
-    transferredBytes: number;
-  };
+  session: SessionSnapshot;
   environment: DiagnosticEnvironment;
+}
+
+export interface SessionSnapshot {
+  startedAt: string | null;
+  finishedAt: string | null;
+  throughputBytesPerSecond: number;
+  smoothedThroughputBytesPerSecond: number;
+  rateHistoryBytesPerSecond: readonly number[];
+  counts: ReturnType<typeof countTransfers>;
+  concurrency: number;
+  maxConcurrency: number;
+  active: number;
+  schedulerPaused: boolean;
+  totalBytes: number;
+  transferredBytes: number;
+}
+
+export interface SessionDiagnostic {
+  schema: string;
+  reportId: string;
+  generatedAt: string;
+  session: SessionSnapshot;
+  environment: DiagnosticEnvironment;
+  items: TransferDiagnostic["transfer"][];
 }
 
 /** Strip URLs, signatures and token-like fields from a server message. */
@@ -97,7 +121,7 @@ export function detectEnvironment(): DiagnosticEnvironment {
   };
 }
 
-function reportId(): string {
+function newReportId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
   }
@@ -105,7 +129,62 @@ function reportId(): string {
 }
 
 function iso(value: number | null | undefined): string | null {
-  return value === null || value === undefined ? null : new Date(value).toISOString();
+  return value === null || value === undefined
+    ? null
+    : new Date(value).toISOString();
+}
+
+function sessionSnapshot(context: DiagnosticContext): SessionSnapshot {
+  const bytes = scopeBytes(context.queue);
+  return {
+    startedAt: iso(context.startedAt),
+    finishedAt: iso(context.finishedAt),
+    throughputBytesPerSecond: context.throughput,
+    smoothedThroughputBytesPerSecond: context.smoothedThroughput,
+    rateHistoryBytesPerSecond: context.rateHistory,
+    counts: countTransfers(context.queue),
+    concurrency: context.queue.concurrency,
+    maxConcurrency: context.queue.maxConcurrency,
+    active: context.queue.active,
+    schedulerPaused: context.queue.schedulerPaused,
+    totalBytes: bytes.totalBytes,
+    transferredBytes: bytes.transferredBytes,
+  };
+}
+
+function describeTransfer(
+  item: QueueItem,
+  context: DiagnosticContext,
+): TransferDiagnostic["transfer"] {
+  const status = displayStatus(item);
+  return {
+    id: item.id,
+    status,
+    statusLabel: STATUS_LABEL[status],
+    phase: item.state.phase,
+    transferredBytes: item.state.transferredBytes,
+    progress: item.state.progress,
+    attempts: item.state.attempts,
+    failureKind: item.state.failureKind ?? null,
+    failureLabel: failureKindLabel(item),
+    error: sanitizeDiagnosticText(item.state.error),
+    verifyMode: item.state.verifyMode ?? null,
+    checksum: item.state.checksum || null,
+    commitTiming: item.state.commitTiming ?? null,
+    intentId: item.state.intentId ?? null,
+    intentReplay: item.state.intentReplay ?? null,
+    multipart: item.state.multipart ?? null,
+    heldParts: item.state.heldParts ?? null,
+    missingParts: item.state.missingParts ?? null,
+    resumed: item.state.resumed === true,
+    itemRateBytesPerSecond: context.itemRates.get(item.id) ?? 0,
+    phaseLog: (item.state.phaseLog ?? []).map((entry) => ({
+      phase: entry.phase,
+      at: new Date(entry.at).toISOString(),
+    })),
+    addedAt: iso(context.addedAtById.get(item.id)),
+    phaseSince: iso(item.state.phaseSince),
+  };
 }
 
 /**
@@ -118,61 +197,57 @@ export function buildTransferDiagnostic(
   environment: DiagnosticEnvironment = detectEnvironment(),
 ): TransferDiagnostic {
   const now = context.now ?? Date.now();
-  const status = displayStatus(item);
-  const bytes = scopeBytes(context.queue);
   return {
     schema: DIAGNOSTIC_SCHEMA,
-    reportId: reportId(),
+    reportId: newReportId(),
     generatedAt: new Date(now).toISOString(),
     file: {
       name: item.fileName,
       sizeBytes: item.sizeBytes,
       category: fileCategory(item.fileName),
     },
-    transfer: {
-      id: item.id,
-      status,
-      statusLabel: STATUS_LABEL[status],
-      phase: item.state.phase,
-      transferredBytes: item.state.transferredBytes,
-      progress: item.state.progress,
-      attempts: item.state.attempts,
-      failureKind: item.state.failureKind ?? null,
-      failureLabel: failureKindLabel(item),
-      error: sanitizeDiagnosticText(item.state.error),
-      verifyMode: item.state.verifyMode ?? null,
-      checksum: item.state.checksum || null,
-      commitTiming: item.state.commitTiming ?? null,
-      phaseLog: (item.state.phaseLog ?? []).map((entry) => ({
-        phase: entry.phase,
-        at: new Date(entry.at).toISOString(),
-      })),
-      addedAt: iso(context.addedAt),
-      phaseSince: iso(item.state.phaseSince),
-    },
-    session: {
-      startedAt: iso(context.startedAt),
-      finishedAt: iso(context.finishedAt),
-      throughputBytesPerSecond: context.throughput,
-      counts: countTransfers(context.queue),
-      totalBytes: bytes.totalBytes,
-      transferredBytes: bytes.transferredBytes,
-    },
+    transfer: describeTransfer(item, context),
+    session: sessionSnapshot(context),
     environment,
   };
 }
 
-export function downloadTransferDiagnostic(diagnostic: TransferDiagnostic): void {
-  const blob = new Blob([JSON.stringify(diagnostic, null, 2)], {
+/** Same telemetry for every file, used to diagnose a slow or resumed session. */
+export function buildSessionDiagnostic(
+  items: readonly QueueItem[],
+  context: DiagnosticContext,
+  environment: DiagnosticEnvironment = detectEnvironment(),
+): SessionDiagnostic {
+  const now = context.now ?? Date.now();
+  return {
+    schema: SESSION_DIAGNOSTIC_SCHEMA,
+    reportId: newReportId(),
+    generatedAt: new Date(now).toISOString(),
+    session: sessionSnapshot(context),
+    environment,
+    items: items.map((item) => describeTransfer(item, context)),
+  };
+}
+
+function downloadJson(filename: string, payload: unknown): void {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
   });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `aura-diagnostic-${diagnostic.reportId}.json`;
+  anchor.download = filename;
   anchor.style.display = "none";
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export function downloadTransferDiagnostic(diagnostic: TransferDiagnostic): void {
+  downloadJson(`aura-diagnostic-${diagnostic.reportId}.json`, diagnostic);
+}
+
+export function downloadSessionDiagnostic(diagnostic: SessionDiagnostic): void {
+  downloadJson(`aura-session-diagnostic-${diagnostic.reportId}.json`, diagnostic);
 }

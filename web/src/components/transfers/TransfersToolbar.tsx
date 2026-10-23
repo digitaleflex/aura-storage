@@ -18,6 +18,7 @@ export function TransfersToolbar({
   onSelectQueued,
   exportCount,
   onExport,
+  onDownloadSessionDiagnostic,
   onPauseAll,
   onResumeAll,
   onCancelAll,
@@ -38,6 +39,7 @@ export function TransfersToolbar({
   onSelectQueued: () => void;
   exportCount: number;
   onExport: () => void;
+  onDownloadSessionDiagnostic: () => void;
   onPauseAll: () => void;
   onResumeAll: () => void;
   onCancelAll: () => void;
@@ -106,6 +108,11 @@ export function TransfersToolbar({
             {
               label: `Exporter la vue (${exportCount})`,
               onSelect: onExport,
+              disabled: exportCount === 0,
+            },
+            {
+              label: "Télécharger le diagnostic de session",
+              onSelect: onDownloadSessionDiagnostic,
               disabled: exportCount === 0,
             },
             {
