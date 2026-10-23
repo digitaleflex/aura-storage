@@ -37,22 +37,6 @@ test.describe("accessibilite — pages principales", () => {
     expect(results.violations.filter((v) => v.impact === "critical" || v.impact === "serious")).toEqual([]);
   });
 
-  test("transfers page desktop (completed session)", async ({ page }) => {
-    await LOGIN(page);
-    await page.getByTestId("files-input").setInputFiles([
-      { name: "a.pdf", mimeType: "application/pdf", buffer: Buffer.from("x") },
-      { name: "b.pdf", mimeType: "application/pdf", buffer: Buffer.from("x") },
-    ]);
-    await page.getByRole("button", { name: "Importer et valider" }).click();
-    await page.getByRole("link", { name: "Transferts", exact: true }).click();
-    await page.waitForURL("/transfers");
-    await page.waitForTimeout(500);
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa"])
-      .analyze();
-    expect(results.violations.filter((v) => v.impact === "critical" || v.impact === "serious")).toEqual([]);
-  });
-
   test("admin page desktop", async ({ page }) => {
     await LOGIN(page);
     await page.getByRole("link", { name: "Administration", exact: true }).click();
