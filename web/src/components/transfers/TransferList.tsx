@@ -98,6 +98,7 @@ export function TransferList({
   onRetry,
   onDetails,
   onCopyError,
+  onDownloadDiagnostic,
   onShowMore,
 }: {
   items: QueueItem[];
@@ -118,6 +119,7 @@ export function TransferList({
   onRetry: (id: string) => void;
   onDetails: (id: string) => void;
   onCopyError: (item: QueueItem) => void;
+  onDownloadDiagnostic: (item: QueueItem) => void;
   onShowMore: () => void;
 }) {
   const virtual = items.length > VIRTUALIZE_THRESHOLD;
@@ -316,6 +318,7 @@ export function TransferList({
               onRetry={onRetry}
               onDetails={onDetails}
               onCopyError={onCopyError}
+              onDownloadDiagnostic={onDownloadDiagnostic}
             />
           ))}
           {bottomSpacer > 0 ? (
@@ -354,6 +357,7 @@ function TransferRow({
   onRetry,
   onDetails,
   onCopyError,
+  onDownloadDiagnostic,
 }: {
   item: QueueItem;
   rowIndex?: number;
@@ -369,6 +373,7 @@ function TransferRow({
   onRetry: (id: string) => void;
   onDetails: (id: string) => void;
   onCopyError: (item: QueueItem) => void;
+  onDownloadDiagnostic: (item: QueueItem) => void;
 }) {
   const status: DisplayStatus = displayStatus(item);
   const tone = STATUS_TONE[status];
@@ -522,6 +527,13 @@ function TransferRow({
                     Copier l'erreur
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={() => onDownloadDiagnostic(item)}
+                >
+                  Télécharger le diagnostic
+                </button>
               </div>
             </div>
           </td>
