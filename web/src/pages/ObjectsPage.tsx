@@ -30,6 +30,11 @@ import {
 import type { QueueInput, QueueState } from "../lib/transfer";
 import { useTransfers } from "../lib/transferContext";
 import {
+  loadFilesView,
+  patchFilesView,
+  type FilesViewState,
+} from "../lib/filesViewState";
+import {
   MAX_UPLOAD_DEPTH,
   normalizeRelativePath,
   parentDirOf,
@@ -321,7 +326,13 @@ export function ObjectsPage() {
   const transfers = useTransfers();
   const queue = transfers.queue;
 
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  // The folder, filters and position the user had before a lost session. Read
+  // once: after this render the component owns the state and writes it back.
+  const [restoredView] = useState<FilesViewState | null>(() => loadFilesView());
+
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(
+    () => restoredView?.folderId ?? null,
+  );
   // Uploads run through the M03 transfer engine as a bounded multi-file queue.
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [pendingFolderEntries, setPendingFolderEntries] = useState<{ file: File; rel: string }[]>([]);
@@ -486,18 +497,26 @@ export function ObjectsPage() {
   } | null>(null);
 
   // -- search / filter / sort (server-side; M02) ---------------------------
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [typeFilter, setTypeFilter] = useState("");
-  const [minSize, setMinSize] = useState("");
-  const [maxSize, setMaxSize] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [sortField, setSortField] = useState<NonNullable<ObjectQuery["sort"]>>(
-    "created_at",
+  const [search, setSearch] = useState(() => restoredView?.search ?? "");
+  const [debouncedSearch, setDebouncedSearch] = useState(
+    () => restoredView?.search ?? "",
   );
-  const [sortOrder, setSortOrder] = useState<NonNullable<ObjectQuery["order"]>>("desc");
+  const [statusFilter, setStatusFilter] = useState(
+    () => restoredView?.statusFilter ?? "",
+  );
+  const [typeFilter, setTypeFilter] = useState(
+    () => restoredView?.typeFilter ?? "",
+  );
+  const [minSize, setMinSize] = useState(() => restoredView?.minSize ?? "");
+  const [maxSize, setMaxSize] = useState(() => restoredView?.maxSize ?? "");
+  const [fromDate, setFromDate] = useState(() => restoredView?.fromDate ?? "");
+  const [toDate, setToDate] = useState(() => restoredView?.toDate ?? "");
+  const [sortField, setSortField] = useState<NonNullable<ObjectQuery["sort"]>>(
+    () => restoredView?.sortField ?? "created_at",
+  );
+  const [sortOrder, setSortOrder] = useState<NonNullable<ObjectQuery["order"]>>(
+    () => restoredView?.sortOrder ?? "desc",
+  );
 
   // Debounce the name filter so typing does not fire one request per keystroke.
   useEffect(() => {
@@ -828,8 +847,109 @@ export function ObjectsPage() {
     return () => observer.disconnect();
   }, [objectsQuery.hasNextPage, objectsQuery.isFetchingNextPage]);
 
+  // -- restore the view after a lost session -------------------------------
+  // The guard sends the user to /login?redirect=… and the login page comes
+  // back here, but the in-memory list is gone. sessionStorage keeps the
+  // folder, filters, page depth and scroll offset; the catalogue is still
+  // re-fetched from the server (no object data is stored client-side).
+  const restorePagesRef = useRef(restoredView?.pages ?? 0);
+  const restoreScrollRef = useRef(restoredView?.scrollY ?? 0);
+  const restoreDoneRef = useRef(
+    !restoredView || (restoredView.pages <= 1 && restoredView.scrollY <= 0),
+  );
+  const initialFiltersRef = useRef(filters);
+
+  // A filter/folder change is a new view: never force the old depth onto it.
+  useEffect(() => {
+    if (filters !== initialFiltersRef.current) {
+      initialFiltersRef.current = filters;
+      restoreDoneRef.current = true;
+    }
+  }, [filters]);
+
+  // Filters and folder change slowly: one write per keystroke burst.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      patchFilesView({
+        folderId: currentFolderId,
+        search,
+        statusFilter,
+        typeFilter,
+        minSize,
+        maxSize,
+        fromDate,
+        toDate,
+        sortField,
+        sortOrder,
+      });
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [
+    currentFolderId,
+    search,
+    statusFilter,
+    typeFilter,
+    minSize,
+    maxSize,
+    fromDate,
+    toDate,
+    sortField,
+    sortOrder,
+  ]);
+
+  // Scroll offset and page depth are written together: a scroll position is
+  // only reachable if the pages that produced it are loaded again.
+  useEffect(() => {
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        patchFilesView({
+          scrollY: window.scrollY,
+          pages: objectsQuery.data?.pages.length ?? 0,
+        });
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [objectsQuery.data?.pages.length]);
+
+  // Re-load the missing pages sequentially, then put the viewport back. The
+  // auto-load observer is idle until the list is tall enough, so this is what
+  // actually reconstructs a 200+ object view.
+  useEffect(() => {
+    if (restoreDoneRef.current) return;
+    if (!objectsQuery.isSuccess) return;
+    const loaded = objectsQuery.data.pages.length;
+    if (loaded < restorePagesRef.current && objectsQuery.hasNextPage) {
+      if (!objectsQuery.isFetchingNextPage) void objectsQuery.fetchNextPage();
+      return;
+    }
+    restoreDoneRef.current = true;
+    const y = restoreScrollRef.current;
+    if (y > 0) {
+      window.requestAnimationFrame(() => window.scrollTo({ top: y, left: 0 }));
+    }
+  }, [
+    objectsQuery.isSuccess,
+    objectsQuery.data,
+    objectsQuery.hasNextPage,
+    objectsQuery.isFetchingNextPage,
+  ]);
+
   const tree = treeQuery.data?.items ?? [];
   const byId = useMemo(() => new Map(tree.map((f) => [f.id, f])), [tree]);
+  // A restored folder may have been deleted while the session was away.
+  useEffect(() => {
+    if (!treeQuery.isSuccess) return;
+    if (currentFolderId && !byId.has(currentFolderId)) {
+      setCurrentFolderId(null);
+    }
+  }, [treeQuery.isSuccess, byId, currentFolderId]);
   const childrenOf = useMemo(() => {
     const map = new Map<string | null, FolderItem[]>();
     for (const folder of tree) {
@@ -1645,7 +1765,22 @@ export function ObjectsPage() {
     return out;
   }
 
-  const items = objectsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  // Offset pagination refetches each loaded page at its old offset; if objects
+  // were inserted at the top (an import finishing), the same row can appear on
+  // two pages. Deduplicate by id so the ledger never shows a file twice or
+  // loses one to a duplicate React key.
+  const items = useMemo(() => {
+    const seen = new Set<string>();
+    const out: ObjectItem[] = [];
+    for (const page of objectsQuery.data?.pages ?? []) {
+      for (const item of page.items) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        out.push(item);
+      }
+    }
+    return out;
+  }, [objectsQuery.data]);
 
   // Répartition des statuts sur les pages déjà chargées. Elle ne peut pas
   // vivre dans le filtre d'état : celui-ci sert justement à charger les autres

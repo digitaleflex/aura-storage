@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ApiError } from "../lib/api";
 import { describeError } from "../lib/errors";
 import { useAuth } from "../lib/auth";
+import { consumeLoginRedirect } from "../lib/loginRedirect";
 import { VaultMark } from "../components/VaultMark";
 
 const GUARANTEES = [
@@ -27,7 +28,13 @@ export function LoginPage() {
     setError(null);
     try {
       await login(username, password);
-      await navigate({ to: "/" });
+      const target = consumeLoginRedirect();
+      if (target) {
+        // Full navigation: re-reads /me and restores the page the guard left.
+        window.location.assign(target);
+      } else {
+        await navigate({ to: "/" });
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setError("Identifiants invalides. Accès refusé.");

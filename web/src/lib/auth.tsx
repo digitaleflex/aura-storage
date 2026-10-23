@@ -9,9 +9,11 @@ import {
   useState,
 } from "react";
 import type { ReactNode } from "react";
-import { Navigate } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import { api, ApiError } from "./api";
 import type { SessionInfo } from "./api";
+import { clearFilesView } from "./filesViewState";
+import { rememberLoginRedirect } from "./loginRedirect";
 
 interface AuthState {
   /** CSRF token kept in memory only; never persisted. Null = not logged in. */
@@ -64,6 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
     setCsrf(null);
+    clearFilesView();
     await queryClient.invalidateQueries({ queryKey: ["session"] });
   }, [csrf, queryClient]);
 
@@ -98,12 +101,23 @@ export function useSession() {
  */
 export function RequireAuth({ children }: { children: ReactNode }) {
   const sessionQuery = useSession();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Keep the page the user was on: after logging back in, the login page
+  // returns there instead of dumping everyone on the root folder. Stored in
+  // sessionStorage rather than a query string (subpath-safe, no open redirect).
+  useEffect(() => {
+    if (!sessionQuery.isError) return;
+    rememberLoginRedirect(location.href);
+    void navigate({ to: "/login", replace: true });
+  }, [sessionQuery.isError, location.href, navigate]);
 
   if (sessionQuery.isPending) {
     return <p className="muted">Vérification de la session…</p>;
   }
   if (sessionQuery.isError) {
-    return <Navigate to="/login" />;
+    return <p className="muted">Redirection vers la connexion…</p>;
   }
   return <>{children}</>;
 }
