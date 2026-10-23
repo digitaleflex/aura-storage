@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
 
+// Baselines are generated on the reference host (fonts, hinting, OS rasterizer).
+// Running them on the GitHub runner produces false diffs, so the functional e2e
+// suite runs there and the visual suite stays a local/reference-host gate.
+test.skip(!!process.env.CI, "visual baselines are reference-host specific");
+
 /**
  * Visual regression tests for AURA Vault key pages.
  *
