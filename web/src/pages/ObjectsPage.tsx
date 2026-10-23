@@ -2030,49 +2030,52 @@ export function ObjectsPage() {
           </div>
         </div>
         <div className="head-actions">
-          {/* Actions : Importer (principale), Nouveau dossier (secondaire), Actualiser */}
+          {/* Action primaire : toujours isolée, jamais noyée dans le groupe. */}
           {canCreate ? (
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-primary head-actions-primary"
               onClick={() => setIntakeOpen(true)}
             >
               Importer
             </button>
           ) : null}
-          {canCreateFolder ? (
+          <div className="head-actions-group" role="group" aria-label="Actions courantes">
+            {canCreateFolder ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setNewFolderOpen(true)}
+              >
+                Nouveau dossier
+              </button>
+            ) : null}
             <button
               type="button"
-              className="btn"
-              onClick={() => setNewFolderOpen(true)}
+              className="btn btn-ghost"
+              title="Actualiser la liste"
+              aria-label="Actualiser la liste"
+              disabled={objectsQuery.isFetching || treeQuery.isFetching}
+              onClick={() => {
+                setActionError(null);
+                void queryClient.invalidateQueries({ queryKey: ["objects"] });
+                void queryClient.invalidateQueries({ queryKey: ["folders"] });
+              }}
             >
-              Nouveau dossier
+              {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
             </button>
-          ) : null}
-          <button
-            type="button"
-            className="btn btn-ghost"
-            title="Actualiser la liste"
-            aria-label="Actualiser la liste"
-            disabled={objectsQuery.isFetching || treeQuery.isFetching}
-            onClick={() => {
-              setActionError(null);
-              void queryClient.invalidateQueries({ queryKey: ["objects"] });
-              void queryClient.invalidateQueries({ queryKey: ["folders"] });
-            }}
-          >
-            {objectsQuery.isFetching ? "Actualisation…" : "Actualiser"}
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            aria-label="Afficher les raccourcis clavier"
-            title="Raccourcis clavier (?)"
-            aria-haspopup="dialog"
-            onClick={() => setShortcutsOpen(true)}
-          >
-            ?
-          </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              aria-label="Afficher les raccourcis clavier"
+              title="Raccourcis clavier (?)"
+              aria-keyshortcuts="?"
+              aria-haspopup="dialog"
+              onClick={() => setShortcutsOpen(true)}
+            >
+              ?
+            </button>
+          </div>
           {canPurge && !master.active ? (
             <button
               type="button"

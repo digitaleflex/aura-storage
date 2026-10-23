@@ -953,6 +953,30 @@ select:focus-visible {
   gap: 8px;
 }
 
+.head-actions-primary {
+  font-weight: 600;
+}
+
+.head-actions-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--steel-2);
+}
+
+.head-actions-group .btn {
+  background: transparent;
+  border-color: transparent;
+}
+
+.head-actions-group .btn:hover:not(:disabled) {
+  background: var(--steel-1);
+}
+
 .section {
   margin-top: 0;
 }
@@ -3725,5 +3749,16 @@ html {
       opacity: 1;
       transform: none;
     }
+  }
+}
+
+/* En-tête fichiers : le groupe d'actions secondaires occupe sa propre ligne. */
+@media (max-width: 720px) {
+  .head-actions {
+    width: 100%;
+  }
+
+  .head-actions-group {
+    flex: 1 1 100%;
   }
 }
