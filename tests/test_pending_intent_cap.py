@@ -20,7 +20,7 @@ os.environ.setdefault("AURA_AUDIT_LOG", "/tmp/opencode/aura-test-audit.jsonl")
 import api.main as main  # noqa: E402
 
 
-def _pending(space_id: str, expires_at: int) -> None:
+def _pending(space_id: str, owner_id: str, expires_at: int) -> None:
     main.repo.create_pending_object(
         space_id=space_id,
         application_id=None,
@@ -29,8 +29,8 @@ def _pending(space_id: str, expires_at: int) -> None:
         object_key=f"key-{uuid.uuid4()}",
         display_name="file.txt",
         content_type="text/plain",
-        owner_id="u1",
-        actor_id="u1",
+        owner_id=owner_id,
+        actor_id=owner_id,
         actor_kind="user",
         intent_expires_at=expires_at,
         expected_size_bytes=4,
@@ -38,11 +38,21 @@ def _pending(space_id: str, expires_at: int) -> None:
 
 
 def test_count_pending_ignores_expired_intents():
-    space_id = f"space-{uuid.uuid4()}"
+    # PostgreSQL enforces the users/spaces foreign keys (SQLite does not), so
+    # the fixture must create a real tenant instead of an arbitrary id.
+    application_id, _ = main.repo.default_scope()
+    assert application_id is not None
+    space_id = main.repo.create_space(
+        application_id, f"pending-{uuid.uuid4().hex}", "test"
+    )
+    owner_id = main.repo.create_user(
+        f"pending-{uuid.uuid4().hex}", "x", "user", space_id=space_id,
+        application_id=application_id,
+    )
     now = int(time.time())
     for _ in range(3):
-        _pending(space_id, now - 3600)  # expired long ago, not swept yet
-    _pending(space_id, now + 600)  # live
+        _pending(space_id, owner_id, now - 3600)  # expired long ago, not swept yet
+    _pending(space_id, owner_id, now + 600)  # live
 
     assert main.repo.count_pending(space_id=space_id) == 4
     assert main.repo.count_pending(
