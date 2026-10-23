@@ -120,8 +120,8 @@ Modifiés :
 |---|---|
 | `cd web && npx tsc --noEmit` | OK |
 | `cd web && npm run build` | OK (tsc + Vite, 210 modules) |
-| `npx playwright test e2e/transfers.spec.ts` | 14 tests OK |
-| `npx playwright test` (suite complète) | **154 tests OK** (dernière exécution après le lot B) |
+| `npx playwright test e2e/transfers.spec.ts` | 19 tests OK |
+| `npx playwright test` (suite complète) | **159 tests OK** (dernière exécution après le lot C) |
 | Baselines visuelles | `transfers-desktop` et `transfers-mobile` créées ; `files-desktop` et `admin-desktop` régénérées pour la nouvelle entrée de navigation |
 
 Note d'environnement : la machine de test n'a pas les bibliothèques GUI de
@@ -254,3 +254,20 @@ et déployé (run `40000979514`), avec CSP vérifiée.
 > bundle à disposition de la production, avant même le workflow de déploiement.
 > Toujours déclencher le déploiement après un build local, ou considérer ce
 > build comme une mise en production de fait.
+
+## 10. Lot C — implémenté (PR #253)
+
+- **C1 #237** — tri par clic sur les entêtes (Nom, Taille, Statut) avec `aria-sort`,
+  flèches et synchronisation URL.
+- **C2 #238** — colonnes adaptatives : vitesse masquée sous 1150 px, taille sous
+  1000 px, puis cartes sous 760 px, sans débordement horizontal.
+- **C3 #239** — bandeau « Import interrompu » quand le journal IndexedDB contient
+  des entrées, avec bouton vers l'import existant.
+- **C4 #240** — export CSV de la vue courante (séparateur `;`, BOM UTF-8,
+  échappement RFC 4180), nom horodaté.
+- **C5 #241** — virtualisation par fenêtre au-delà de 200 lignes, hauteurs
+  mesurées, spacers, `aria-rowcount`/`aria-rowindex`, panneaux d'erreur à hauteur
+  fixe.
+
+Vérifications : `tsc`, build, **159 tests Playwright** (5 tests dédiés au lot C).
+Le lot C est mergé dans `main` (PR #253) mais non déployé.

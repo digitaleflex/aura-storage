@@ -17,11 +17,11 @@ Backlog publié sur GitHub le 23 octobre 2026, regroupé en cinq jalons.
 | Transferts B — Pilotage | [#234](https://github.com/digitaleflex/aura-storage/issues/234) | Sparkline du débit global sur 60 secondes | Livré — PR #252, déployé |
 | Transferts B — Pilotage | [#235](https://github.com/digitaleflex/aura-storage/issues/235) | Durée écoulée, débit moyen et ETA stabilisé | Livré — PR #252, déployé |
 | Transferts B — Pilotage | [#236](https://github.com/digitaleflex/aura-storage/issues/236) | Horodatage fiable de l'ajout des fichiers | Livré — PR #252, déployé |
-| Transferts C — Liste & reprise | [#237](https://github.com/digitaleflex/aura-storage/issues/237) | Tri par clic sur les entêtes de colonnes | Ouvert |
-| Transferts C — Liste & reprise | [#238](https://github.com/digitaleflex/aura-storage/issues/238) | Colonnes secondaires adaptatives plutôt que masquage brutal | Ouvert |
-| Transferts C — Liste & reprise | [#239](https://github.com/digitaleflex/aura-storage/issues/239) | Bandeau de reprise d'un import interrompu après rechargement | Ouvert |
-| Transferts C — Liste & reprise | [#240](https://github.com/digitaleflex/aura-storage/issues/240) | Export CSV de la session de transferts | Ouvert |
-| Transferts C — Liste & reprise | [#241](https://github.com/digitaleflex/aura-storage/issues/241) | Virtualisation de la liste pour les très gros lots | Ouvert |
+| Transferts C — Liste & reprise | [#237](https://github.com/digitaleflex/aura-storage/issues/237) | Tri par clic sur les entêtes de colonnes | Implémenté — PR #253, non déployé |
+| Transferts C — Liste & reprise | [#238](https://github.com/digitaleflex/aura-storage/issues/238) | Colonnes secondaires adaptatives plutôt que masquage brutal | Implémenté — PR #253, non déployé |
+| Transferts C — Liste & reprise | [#239](https://github.com/digitaleflex/aura-storage/issues/239) | Bandeau de reprise d'un import interrompu après rechargement | Implémenté — PR #253, non déployé |
+| Transferts C — Liste & reprise | [#240](https://github.com/digitaleflex/aura-storage/issues/240) | Export CSV de la session de transferts | Implémenté — PR #253, non déployé |
+| Transferts C — Liste & reprise | [#241](https://github.com/digitaleflex/aura-storage/issues/241) | Virtualisation de la liste pour les très gros lots | Implémenté — PR #253, non déployé |
 | Transferts D — Qualité & CI | [#242](https://github.com/digitaleflex/aura-storage/issues/242) | Tests unitaires Vitest de model.ts et format.ts | Ouvert |
 | Transferts D — Qualité & CI | [#243](https://github.com/digitaleflex/aura-storage/issues/243) | Exécuter les e2e Playwright dans le CI | Ouvert |
 | Transferts D — Qualité & CI | [#244](https://github.com/digitaleflex/aura-storage/issues/244) | Audit d'accessibilité automatisé (axe) sur les pages clés | Ouvert |
@@ -43,6 +43,6 @@ Backlog publié sur GitHub le 23 octobre 2026, regroupé en cinq jalons.
 
 1. **Lot A — Quick wins** : livré et déployé (PR #248).
 2. **Lot B — Pilotage** : implémenté (PR #252), en attente de déploiement.
-3. Lot C — Liste & reprise.
+3. **Lot C — Liste & reprise** : implémenté (PR #253), non déployé.
 4. Lot D — Qualité & CI.
 5. Lot E — Backend & produit (décision produit requise).
