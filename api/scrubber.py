@@ -69,18 +69,20 @@ def scrub_one(repo, s3ops, settings, *, now=time.time, audit=None) -> tuple[str,
 
 
 # An upload that started within this window keeps the scrubber idle: the disk
-# is writing (and the commit re-reading) those bytes already.
+# is writing (and the commit re-reading) those bytes already. Configurable via
+# AURA_SCRUB_BUSY_WINDOW_S (default 1800s).
 BUSY_WINDOW_S = 1800
 
 
 def scrub_run(repo, s3ops, settings, *, now=time.time, audit=None,
               stop: threading.Event | None = None) -> dict:
     """One bounded pass: check due objects until the byte budget is spent."""
+    busy_window = getattr(settings, "scrub_busy_window_s", BUSY_WINDOW_S)
     counts = {"ok": 0, "mismatch": 0, "missing": 0, "error": 0, "bytes": 0}
     while counts["bytes"] < settings.scrub_bytes_per_run:
         if stop is not None and stop.is_set():
             break
-        if repo.has_active_transfers(int(now()) - BUSY_WINDOW_S):
+        if repo.has_active_transfers(int(now()) - busy_window):
             break
         out = scrub_one(repo, s3ops, settings, now=now, audit=audit)
         if out is None:

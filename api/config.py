@@ -136,6 +136,8 @@ class Settings:
     verify_heartbeat_bytes: int = _int("AURA_VERIFY_HEARTBEAT_BYTES", 256 * 1024 * 1024)
     verify_max_attempts: int = _int("AURA_VERIFY_MAX_ATTEMPTS", 8)
     verify_poll_s: int = _int("AURA_VERIFY_POLL_SECONDS", 2)
+    # Scrubber: treat transfers started within this window as "disk busy".
+    scrub_busy_window_s: int = _int("AURA_SCRUB_BUSY_WINDOW_S", 1800)
     # Hard deadline for a single commit response (seconds). Objects above the
     # async threshold return 202 quickly; this guards the synchronous path.
     av_scan_cmd: str = os.environ.get("AURA_AV_SCAN_CMD", "")
