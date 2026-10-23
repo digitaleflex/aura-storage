@@ -761,6 +761,15 @@ select:focus-visible {
   color: #ffffff;
 }
 
+/* A disabled danger button must stay readable: the generic 0.45 opacity
+   composited the pending label ("Suppression…") down to ~1.6:1. */
+.btn-danger:disabled {
+  background: var(--danger-bg);
+  border-color: var(--line-2);
+  color: var(--danger);
+  opacity: 1;
+}
+
 .btn-danger-text {
   color: var(--danger);
 }
@@ -1802,6 +1811,7 @@ p .chip {
   padding: 0;
   width: min(520px, 92vw);
   box-shadow: var(--shadow-3);
+  background: var(--steel-1);
   color: var(--ink);
 }
 
@@ -2509,7 +2519,7 @@ p .chip {
 /* Dark mode : respecte les preferences systeme.                      */
 /* ------------------------------------------------------------------ */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --side: #0a0e14;
     --side-2: #141a22;
     --side-3: #1c2430;
@@ -2744,6 +2754,17 @@ p .chip {
   font-size: 13px;
   font-weight: 600;
   color: var(--signal-2);
+}
+
+/* Drop scan: spinner + text on one line while the folder tree is walked. */
+.import-scan {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.import-scan .spinner {
+  margin-right: 0;
 }
 
 
@@ -3028,7 +3049,7 @@ body.density-compact .filters-tally {
   margin: 0.5rem 0;
 }
 .queue-filter [aria-pressed="true"] {
-  background: var(--surface-2, rgba(0, 0, 0, 0.06));
+  background: var(--steel-2);
   font-weight: 600;
 }
 
@@ -3138,6 +3159,13 @@ body.density-compact .filters-tally {
 .topbar .topbar-mobile-toggle,
 .topbar .session a {
   color: #d5dbe4;
+}
+
+.topbar .btn-ghost:hover,
+.topbar .topbar-sidebar-toggle:hover,
+.topbar .topbar-mobile-toggle:hover {
+  background: var(--side-3);
+  color: #ffffff;
 }
 
 /* =========================================================================

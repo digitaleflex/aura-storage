@@ -28,14 +28,27 @@ export function Dialog({
       el.showModal();
       // showModal() focuses the first focusable element, which is the header's
       // "Fermer" button: typing a name then Enter would close the dialog. Move
-      // focus to the first field of the body when there is one.
-      el.querySelector<HTMLElement>(
+      // focus to the first field of the body when there is one; otherwise fall
+      // back to the first non-destructive action ("Annuler" for confirmations,
+      // "Compris" for the legend), the least destructive choice.
+      const field = el.querySelector<HTMLElement>(
         ".dialog-body input:not([type=hidden]):not([disabled]), .dialog-body select, .dialog-body textarea",
-      )?.focus();
+      );
+      const action = el.querySelector<HTMLElement>(
+        ".dialog-actions button:not(.btn-danger):not([disabled])",
+      );
+      (field ?? action)?.focus();
+      // Describe the dialog by its consequence text, not just its title, so
+      // screen readers announce what is about to happen.
+      const text = el.querySelector<HTMLElement>(".dialog-body .dialog-text");
+      if (text) {
+        if (!text.id) text.id = `${titleId}-desc`;
+        el.setAttribute("aria-describedby", text.id);
+      }
     } else if (!open && el.open) {
       el.close();
     }
-  }, [open]);
+  }, [open, titleId]);
 
   return (
     <dialog ref={ref} className="dialog" onClose={onClose} aria-labelledby={titleId}>

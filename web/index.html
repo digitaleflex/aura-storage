@@ -10,6 +10,18 @@
   <meta property="og:image" content="/favicon.svg" />
   <meta name="twitter:card" content="summary" />
     <title>AURA Vault — Coffre de fichiers</title>
+    <script>
+      // Applique le thème enregistré avant le premier rendu : l'effet React
+      // arrive trop tard et produisait un flash clair/sombre au rechargement.
+      try {
+        var savedTheme = localStorage.getItem("aura-theme");
+        if (savedTheme === "dark" || savedTheme === "light") {
+          document.documentElement.setAttribute("data-theme", savedTheme);
+        }
+      } catch (error) {
+        /* Stockage indisponible : on garde la préférence système. */
+      }
+    </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
   <body>

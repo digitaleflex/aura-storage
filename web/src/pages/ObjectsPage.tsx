@@ -378,6 +378,10 @@ export function ObjectsPage() {
     total: number;
     name: string;
   } | null>(null);
+  // Folder drops can take a while (tree walk + folder creation). This drives a
+  // persistent "patientez" status so the drop never looks dead before the queue
+  // tray appears.
+  const [dropScan, setDropScan] = useState<{ files: number } | null>(null);
   // Bulk delete: the dialog stays open while the per-file loop reports its
   // real progress instead of a silent "Suppression…" (item P1.8).
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
@@ -968,7 +972,9 @@ export function ObjectsPage() {
       if (failed.length === 0) {
         notify(
           "ok",
-          `${deleted} objet(s) marqué(s) comme supprimé(s). Les octets restent jusqu'à une purge.`,
+          deleted === 1
+            ? "1 objet marqué comme supprimé. Les octets restent jusqu'à une purge."
+            : `${deleted} objets marqués comme supprimés. Les octets restent jusqu'à une purge.`,
           {
             label: "Annuler",
             onClick: () => {
@@ -980,9 +986,12 @@ export function ObjectsPage() {
           },
         );
       } else {
+        const deletedLabel = deleted === 1 ? "1 supprimé" : `${deleted} supprimés`;
+        const failedLabel =
+          failed.length === 1 ? "1 échec" : `${failed.length} échecs`;
         notify(
           "error",
-          `${deleted} supprimé(s), ${failed.length} échec(s) : ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`,
+          `${deletedLabel}, ${failedLabel} : ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`,
         );
       }
       invalidateLibrary();
@@ -1340,7 +1349,10 @@ export function ObjectsPage() {
   /** Walk dropped entries: files keep their folder-relative path (P0.2).
    * Empty (0 o) files and empty folders are skipped, but counted, so the caller
    * can tell the two cases apart instead of showing one vague message. */
-  async function collectDroppedEntries(items: DataTransferItemList): Promise<{
+  async function collectDroppedEntries(
+    items: DataTransferItemList,
+    onProgress?: (files: number) => void,
+  ): Promise<{
     entries: { file: File; rel: string }[];
     emptyFiles: number;
     emptyFolders: number;
@@ -1348,6 +1360,13 @@ export function ObjectsPage() {
     const out: { file: File; rel: string }[] = [];
     let emptyFiles = 0;
     let emptyFolders = 0;
+    // DataTransferItem access is only guaranteed during the drop dispatch:
+    // capture every item synchronously before the first await, otherwise the
+    // items after the first can be lost.
+    const roots = Array.from(items).map((item) => ({
+      entry: item.webkitGetAsEntry?.() ?? null,
+      file: item.getAsFile(),
+    }));
     const readBatch = (reader: FileSystemDirectoryReader) =>
       new Promise<FileSystemEntry[]>((resolve) => reader.readEntries(resolve));
     // Returns how many importable files this entry's subtree contributed.
@@ -1364,6 +1383,7 @@ export function ObjectsPage() {
           return 0;
         }
         out.push({ file, rel: `${base}${entry.name}` });
+        onProgress?.(out.length);
         return 1;
       }
       if (entry.isDirectory) {
@@ -1382,18 +1402,18 @@ export function ObjectsPage() {
       }
       return 0;
     };
-    for (const item of Array.from(items)) {
-      const entry = item.webkitGetAsEntry?.();
-      if (entry) {
-        await walk(entry, "");
+    for (const root of roots) {
+      if (root.entry) {
+        await walk(root.entry, "");
         continue;
       }
-      const file = item.getAsFile();
+      const file = root.file;
       if (!file) continue;
       if (file.size === 0) {
         emptyFiles += 1;
       } else {
         out.push({ file, rel: file.name });
+        onProgress?.(out.length);
       }
     }
     return {
@@ -1410,55 +1430,94 @@ export function ObjectsPage() {
   async function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragDepth(0);
-    const { entries, emptyFiles, emptyFolders } = await collectDroppedEntries(
-      e.dataTransfer.items,
+    setIntakeOpen(true);
+    setUploadError(null);
+    setDropScan({ files: 0 });
+    notify(
+      "info",
+      "Lecture du dépôt en cours — patientez pendant que les fichiers sont analysés.",
     );
-    if (entries.length === 0) {
-      // Distinguish a 0-o file from an empty folder, and recall the backend
-      // policy (empty objects are refused unless explicitly allowed).
-      const emptyFileNote = `${emptyFiles} fichier(s) vide(s) (0 o) ignoré(s) — le backend refuse les objets vides tant que la politique ne les autorise pas`;
-      let message = "Aucun fichier importable dans ce dépôt.";
-      if (emptyFiles > 0 && emptyFolders > 0) {
-        message = `Aucun fichier importable : ${emptyFileNote}, et ${emptyFolders} dossier(s) vide(s) ignoré(s).`;
-      } else if (emptyFiles > 0) {
-        message = `Aucun fichier importable : ${emptyFileNote}.`;
-      } else if (emptyFolders > 0) {
-        message = `Aucun fichier importable : ${emptyFolders} dossier(s) vide(s) ignoré(s) (aucun fichier à l'intérieur).`;
+    try {
+      // Throttle: a large folder would otherwise re-render on every file.
+      let lastReported = 0;
+      const reportScan = (files: number) => {
+        if (files === 1 || files - lastReported >= 25) {
+          lastReported = files;
+          setDropScan({ files });
+        }
+      };
+      const { entries, emptyFiles, emptyFolders } = await collectDroppedEntries(
+        e.dataTransfer.items,
+        reportScan,
+      );
+      setDropScan(null);
+      if (entries.length === 0) {
+        // Distinguish a 0-o file from an empty folder, and recall the backend
+        // policy (empty objects are refused unless explicitly allowed).
+        const emptyFileNote =
+          emptyFiles === 1
+            ? "1 fichier vide (0 o) ignoré — le backend refuse les objets vides tant que la politique ne les autorise pas"
+            : `${emptyFiles} fichiers vides (0 o) ignorés — le backend refuse les objets vides tant que la politique ne les autorise pas`;
+        const emptyFolderNote =
+          emptyFolders === 1
+            ? "1 dossier vide ignoré (aucun fichier à l'intérieur)"
+            : `${emptyFolders} dossiers vides ignorés (aucun fichier à l'intérieur)`;
+        let message = "Aucun fichier importable dans ce dépôt.";
+        if (emptyFiles > 0 && emptyFolders > 0) {
+          message = `Aucun fichier importable : ${emptyFileNote}, et ${emptyFolderNote}.`;
+        } else if (emptyFiles > 0) {
+          message = `Aucun fichier importable : ${emptyFileNote}.`;
+        } else if (emptyFolders > 0) {
+          message = `Aucun fichier importable : ${emptyFolderNote}.`;
+        }
+        setUploadError(message);
+        return;
       }
-      setUploadError(message);
-      return;
-    }
-    const hasFolders = entries.some((entry) => entry.rel.includes("/"));
-    if (transferActive) {
-      const loose = entries.filter((entry) => !entry.rel.includes("/"));
-      if (loose.length > 0) {
-        // Buffer loose files for the next run and say so (P0.1): never
-        // swallow a drop silently.
-        setUploadError(null);
-        setPendingFiles((current) => [
-          ...current,
-          ...loose.map((entry) => entry.file),
-        ]);
+      const hasFolders = entries.some((entry) => entry.rel.includes("/"));
+      if (transferActive) {
+        const loose = entries.filter((entry) => !entry.rel.includes("/"));
+        if (loose.length > 0) {
+          // Buffer loose files for the next run and say so (P0.1): never
+          // swallow a drop silently.
+          setUploadError(null);
+          setPendingFiles((current) => [
+            ...current,
+            ...loose.map((entry) => entry.file),
+          ]);
+          notify(
+            "info",
+            `Transfert en cours — ${
+              loose.length === 1
+                ? "1 fichier ajouté à la file d'attente."
+                : `${loose.length} fichiers ajoutés à la file d'attente.`
+            }` + (hasFolders ? " Les dossiers attendront la fin du transfert." : ""),
+          );
+        } else {
+          // Folder creation needs a free queue: say so instead of swallowing.
+          setUploadError(
+            "Un transfert est en cours : attendez sa fin pour déposer un dossier.",
+          );
+        }
+        return;
+      }
+      if (hasFolders) {
         notify(
           "info",
-          `Transfert en cours — ${loose.length} fichier(s) ajouté(s) à la file d'attente.` +
-            (hasFolders ? " Les dossiers attendront la fin du transfert." : ""),
+          entries.length === 1
+            ? "1 fichier prêt — préparation des dossiers…"
+            : `${entries.length} fichiers prêts — préparation des dossiers…`,
+        );
+        await uploadRelPaths(
+          entries.map((entry) => entry.file),
+          entries.map((entry) => entry.rel),
         );
       } else {
-        // Folder creation needs a free queue: say so instead of swallowing.
-        setUploadError(
-          "Un transfert est en cours : attendez sa fin pour déposer un dossier.",
-        );
+        handleFilesChange(entries.map((entry) => entry.file));
       }
-      return;
-    }
-    if (hasFolders) {
-      await uploadRelPaths(
-        entries.map((entry) => entry.file),
-        entries.map((entry) => entry.rel),
-      );
-    } else {
-      handleFilesChange(entries.map((entry) => entry.file));
+    } catch (error) {
+      setUploadError(describeError(error, "Lecture du dépôt impossible."));
+    } finally {
+      setDropScan(null);
     }
   }
 
@@ -1764,7 +1823,11 @@ export function ObjectsPage() {
   }, [detailsId]);
 
   const intakeVisible =
-    intakeOpen || pendingFiles.length > 0 || queue.items.length > 0 || uploadError !== null;
+    intakeOpen ||
+    dropScan !== null ||
+    pendingFiles.length > 0 ||
+    queue.items.length > 0 ||
+    uploadError !== null;
 
   // Subfolders are listed first in the register, like any file browser; a
   // search or filter narrows files only, so folders step aside meanwhile.
@@ -1903,6 +1966,12 @@ export function ObjectsPage() {
             {items.length} fichier{items.length > 1 ? "s" : ""}
             {objectsQuery.hasNextPage ? " (d'autres restent à charger)" : ""}
           </p>
+          <div className="control-bar">
+            <span className="control-bar-label">Vue de contrôle</span>
+            <span className="control-bar-stats">
+              {items.length} fichier(s) · {queue.items.length} en cours
+            </span>
+          </div>
         </div>
         <div className="head-actions">
           {/* Actions : Importer (principale), Nouveau dossier (secondaire), Actualiser */}
@@ -2139,7 +2208,7 @@ export function ObjectsPage() {
           <h2 id="upload-title">
             Importer{currentName ? ` dans « ${currentName} »` : ""}
           </h2>
-          {!transferActive && pendingFiles.length === 0 ? (
+          {!transferActive && pendingFiles.length === 0 && dropScan === null ? (
             <button
               type="button"
               className="btn btn-ghost btn-small"
@@ -2158,6 +2227,21 @@ export function ObjectsPage() {
           choisissez-les. Un fichier n'est déclaré disponible qu'une fois sa
           taille et son empreinte SHA-256 vérifiées par le serveur.
         </p>
+        {dropScan ? (
+          <p className="pending-hint import-scan" role="status">
+            <span className="spinner" aria-hidden="true" />
+            <span>
+              Lecture du dépôt en cours…{" "}
+              {dropScan.files === 1
+                ? "1 fichier trouvé. "
+                : dropScan.files > 1
+                  ? `${dropScan.files} fichiers trouvés. `
+                  : null}
+              Patientez pendant que les fichiers sont analysés — rien n'est encore
+              envoyé.
+            </span>
+          </p>
+        ) : null}
         {folderProgress ? (
           <p className="pending-hint" role="status">
             Arborescence : dossier {folderProgress.done + 1}/
@@ -2504,7 +2588,9 @@ export function ObjectsPage() {
           <>
             {selectedIds.size > 0 ? (
               <p role="status" className="alert">
-                {selectedIds.size} objet(s) sélectionné(s).{" "}
+                {selectedIds.size === 1
+                  ? "1 objet sélectionné."
+                  : `${selectedIds.size} objets sélectionnés.`}{" "}
                 <button
                   type="button"
                   className="btn btn-ghost btn-small"
@@ -3235,7 +3321,11 @@ export function ObjectsPage() {
         onClose={() => setBulkDeleteOpen(false)}
       >
         <div className="dialog-text">
-          Marquer <strong>{selectedIds.size} objet(s)</strong> comme supprimé(s) ?
+          Marquer{" "}
+          <strong>
+            {selectedIds.size === 1 ? "1 objet" : `${selectedIds.size} objets`}
+          </strong>{" "}
+          comme {selectedIds.size === 1 ? "supprimé" : "supprimés"} ?
           Chaque fichier est supprimé individuellement et le résultat est
           rapporté par fichier. Les octets restent jusqu'à une purge.
         </div>
