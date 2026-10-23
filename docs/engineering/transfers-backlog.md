@@ -22,10 +22,10 @@ Backlog publié sur GitHub le 23 octobre 2026, regroupé en cinq jalons.
 | Transferts C — Liste & reprise | [#239](https://github.com/digitaleflex/aura-storage/issues/239) | Bandeau de reprise d'un import interrompu après rechargement | Livré — PR #253, déployé |
 | Transferts C — Liste & reprise | [#240](https://github.com/digitaleflex/aura-storage/issues/240) | Export CSV de la session de transferts | Livré — PR #253, déployé |
 | Transferts C — Liste & reprise | [#241](https://github.com/digitaleflex/aura-storage/issues/241) | Virtualisation de la liste pour les très gros lots | Livré — PR #253, déployé |
-| Transferts D — Qualité & CI | [#242](https://github.com/digitaleflex/aura-storage/issues/242) | Tests unitaires Vitest de model.ts et format.ts | Ouvert |
-| Transferts D — Qualité & CI | [#243](https://github.com/digitaleflex/aura-storage/issues/243) | Exécuter les e2e Playwright dans le CI | Ouvert |
-| Transferts D — Qualité & CI | [#244](https://github.com/digitaleflex/aura-storage/issues/244) | Audit d'accessibilité automatisé (axe) sur les pages clés | Ouvert |
-| Transferts D — Qualité & CI | [#245](https://github.com/digitaleflex/aura-storage/issues/245) | Annonces lecteur d'écran ciblées sur les transitions de statut | Ouvert |
+| Transferts D — Qualité & CI | [#242](https://github.com/digitaleflex/aura-storage/issues/242) | Tests unitaires Vitest de model.ts et format.ts | Livré — PR #255, non déployé |
+| Transferts D — Qualité & CI | [#243](https://github.com/digitaleflex/aura-storage/issues/243) | Exécuter les e2e Playwright dans le CI | Livré — PR #255, non déployé |
+| Transferts D — Qualité & CI | [#244](https://github.com/digitaleflex/aura-storage/issues/244) | Audit d'accessibilité automatisé (axe) sur les pages clés | Livré — PR #255, non déployé |
+| Transferts D — Qualité & CI | [#245](https://github.com/digitaleflex/aura-storage/issues/245) | Annonces lecteur d'écran ciblées sur les transitions de statut | Livré — PR #255, non déployé |
 | Transferts E — Backend & produit | [#246](https://github.com/digitaleflex/aura-storage/issues/246) | Historique serveur des transferts (API + persistance) | Ouvert |
 | Transferts E — Backend & produit | [#247](https://github.com/digitaleflex/aura-storage/issues/247) | Reprise sans re-sélection via File System Access API | Ouvert |
 
@@ -44,5 +44,5 @@ Backlog publié sur GitHub le 23 octobre 2026, regroupé en cinq jalons.
 1. **Lot A — Quick wins** : livré et déployé (PR #248).
 2. **Lot B — Pilotage** : implémenté (PR #252), en attente de déploiement.
 3. **Lot C — Liste & reprise** : implémenté (PR #253), non déployé.
-4. Lot D — Qualité & CI.
+4. **Lot D — Qualité & CI** : livré (PR #255), non déployé.
 5. Lot E — Backend & produit (décision produit requise).

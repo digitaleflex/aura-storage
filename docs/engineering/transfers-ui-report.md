@@ -121,7 +121,8 @@ Modifiés :
 | `cd web && npx tsc --noEmit` | OK |
 | `cd web && npm run build` | OK (tsc + Vite, 210 modules) |
 | `npx playwright test e2e/transfers.spec.ts` | 19 tests OK |
-| `npx playwright test` (suite complète) | **159 tests OK** (dernière exécution après le lot C) |
+| `npm run test:unit` (Vitest) | 25 tests OK |
+| `npx playwright test` (suite complète) | **163 tests OK** (dernière exécution après le lot D) |
 | Baselines visuelles | `transfers-desktop` et `transfers-mobile` créées ; `files-desktop` et `admin-desktop` régénérées pour la nouvelle entrée de navigation |
 
 Note d'environnement : la machine de test n'a pas les bibliothèques GUI de
@@ -271,3 +272,21 @@ et déployé (run `40000979514`), avec CSP vérifiée.
 
 Vérifications : `tsc`, build, **159 tests Playwright** (5 tests dédiés au lot C).
 Le lot C est mergé dans `main` (PR #253) et déployé (run `40008115267`), avec CSP vérifiée.
+
+## 11. Lot D — livré (PR #255)
+
+- **D1 #242** — Vitest + `npm run test:unit`, 25 tests sur `model.ts` et
+  `format.ts` (statuts, périmètres, tri, ETA, formats, cas limites).
+- **D2 #243** — job `e2e` dans `web.yml` (API en mémoire + Vite + Playwright,
+  artefact `test-results` en échec) et tests unitaires dans le job existant.
+  Le mot de passe admin du job a été aligné sur celui utilisé par les tests.
+- **D3 #244** — suite axe sur Login, Fichiers, Transferts (vide) et
+  Administration ; correction des contrastes des en-têtes triables, des
+  libellés de métriques et de l'avatar, et de la structure ARIA du catalogue.
+- **D4 #245** — annonces lecteur d'écran discrètes sur les transitions de
+  statut et les changements réseau, throttlées à 2 s, sans annonce par octet.
+
+Les baselines visuelles restent un contrôle local : elles dépendent du
+rasterizer et des polices de l'hôte de référence, donc le job CI les ignore
+(`test.skip` sous `CI`) et exécute le reste de la suite. Le lot D est sur
+`main` mais n'a pas été déployé.
