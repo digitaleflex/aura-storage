@@ -1,0 +1,1620 @@
+/* AURA Storage — Transferts
+ * Presentation layer for the transfers console. The palette is the AURA
+ * product palette from the specification, defined once as --aura-* tokens and
+ * mapped onto the existing design tokens only inside `.shell-transfers`, so
+ * the rest of the product keeps its established look.
+ */
+
+:root {
+  --aura-bg: #090d12;
+  --aura-sidebar: #080c11;
+  --aura-surface: #101720;
+  --aura-surface-raised: #151e29;
+  --aura-border: #243140;
+  --aura-text: #f3f6fa;
+  --aura-text-secondary: #a7b5c8;
+  --aura-text-muted: #748399;
+  --aura-primary: #c5f441;
+  --aura-primary-hover: #d5ff5a;
+  --aura-success: #35e59a;
+  --aura-info: #35a7ff;
+  --aura-warning: #ffbf36;
+  --aura-danger: #ff5964;
+  --aura-danger-bg: #251417;
+}
+
+/* ------------------------------------------------------------------ */
+/* Scoped dark shell: only the transfers route.                        */
+/* ------------------------------------------------------------------ */
+.shell-transfers {
+  --side-w: 238px;
+
+  --steel-0: var(--aura-bg);
+  --steel-1: var(--aura-surface);
+  --steel-2: var(--aura-surface-raised);
+  --steel-3: var(--aura-border);
+  --steel-raised: var(--aura-surface-raised);
+
+  --ink: var(--aura-text);
+  --ink-2: var(--aura-text-secondary);
+  --muted: var(--aura-text-secondary);
+  --faint: var(--aura-text-muted);
+
+  --line: var(--aura-border);
+  --line-2: var(--aura-border);
+  --field-line: var(--aura-border);
+
+  --side: var(--aura-sidebar);
+  --side-2: color-mix(in srgb, var(--aura-primary) 12%, transparent);
+  --side-3: var(--aura-surface-raised);
+  --side-ink: var(--aura-text-secondary);
+  --side-muted: var(--aura-text-muted);
+
+  --signal: var(--aura-primary);
+  --signal-2: var(--aura-primary-hover);
+  --signal-soft: color-mix(in srgb, var(--aura-primary) 12%, transparent);
+  --signal-line: color-mix(in srgb, var(--aura-primary) 35%, transparent);
+  --signal-bright: var(--aura-primary);
+  --on-signal: var(--aura-bg);
+  --on-danger: #16080a;
+
+  --ok: var(--aura-success);
+  --ok-bg: color-mix(in srgb, var(--aura-success) 14%, transparent);
+  --run: var(--aura-info);
+  --run-bg: color-mix(in srgb, var(--aura-info) 14%, transparent);
+  --warn: var(--aura-warning);
+  --warn-bg: color-mix(in srgb, var(--aura-warning) 14%, transparent);
+  --danger: var(--aura-danger);
+  --danger-bg: var(--aura-danger-bg);
+  --danger-strong: #e04650;
+
+  background: var(--aura-bg);
+  color: var(--aura-text);
+}
+
+.shell-transfers .main {
+  background: var(--aura-bg);
+}
+
+.shell-transfers .sidebar {
+  background: var(--aura-sidebar);
+  border-right: 1px solid var(--aura-border);
+  padding: 22px 18px 18px;
+}
+
+.shell-transfers .topbar {
+  background: var(--aura-surface);
+  border-bottom: 1px solid var(--aura-border);
+  backdrop-filter: none;
+}
+
+.shell-transfers .topbar .btn[aria-label="Changer la densité d'affichage"],
+.shell-transfers .topbar .btn[aria-label="Changer le thème"] {
+  display: none;
+}
+
+.shell-transfers .content {
+  color: var(--aura-text);
+}
+
+/* Brand + navigation */
+.shell-transfers .brand {
+  color: var(--aura-text);
+}
+
+.shell-transfers .brand svg path:first-child {
+  fill: var(--aura-primary);
+}
+
+.shell-transfers .nav-link {
+  color: var(--aura-text-secondary);
+  border: 1px solid transparent;
+}
+
+.shell-transfers .nav-link:hover {
+  background: color-mix(in srgb, var(--aura-primary) 7%, transparent);
+  color: var(--aura-text);
+}
+
+.shell-transfers .nav-link-active,
+.shell-transfers .nav a.nav-link-active {
+  background: color-mix(in srgb, var(--aura-primary) 12%, transparent);
+  border-color: transparent;
+  color: var(--aura-primary);
+  font-weight: 600;
+  box-shadow: inset 3px 0 var(--aura-primary);
+}
+
+.nav-badge {
+  margin-left: auto;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--aura-surface-raised, var(--side-2));
+  border: 1px solid var(--aura-border, var(--side-3));
+  color: var(--aura-text-secondary, var(--side-muted));
+}
+
+.shell-transfers .nav-link-active .nav-badge {
+  background: color-mix(in srgb, var(--aura-primary) 18%, transparent);
+  border-color: transparent;
+  color: var(--aura-primary);
+}
+
+.sidebar-collapsed .nav-badge {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Storage usage widget (sidebar)                                      */
+/* ------------------------------------------------------------------ */
+.storage-usage {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--side-muted);
+}
+
+.storage-usage > svg {
+  color: var(--side-muted);
+}
+
+.storage-usage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.storage-usage-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--side-muted);
+}
+
+.storage-usage-values {
+  font-size: 12.5px;
+  color: var(--side-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-usage-bar {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--side-3);
+  overflow: hidden;
+}
+
+.storage-usage-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--signal-bright, var(--signal));
+  transition: width 220ms var(--ease-std);
+}
+
+.storage-usage-percent {
+  font-size: 11px;
+  color: var(--side-muted);
+}
+
+.storage-usage-note {
+  font-style: italic;
+}
+
+.storage-usage-empty {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--side-muted);
+}
+
+.sidebar-collapsed .storage-usage {
+  align-items: center;
+}
+
+.sidebar-collapsed .storage-usage-body,
+.sidebar-collapsed .storage-usage-empty {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Page                                                                */
+/* ------------------------------------------------------------------ */
+.transfers-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 1240px;
+}
+
+.transfers-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.transfers-head h1 {
+  font-size: clamp(28px, 2.6vw, 32px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--aura-text);
+}
+
+.transfers-subtitle {
+  margin: 5px 0 0;
+  color: var(--aura-text-secondary);
+  font-size: 13px;
+}
+
+.transfers-session-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--aura-border);
+  background: var(--aura-surface);
+  color: var(--aura-text-secondary);
+  font-size: 12px;
+}
+
+.transfers-session-chip svg {
+  color: var(--aura-primary);
+}
+
+/* ------------------------------------------------------------------ */
+/* Overview                                                            */
+/* ------------------------------------------------------------------ */
+.transfers-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.3fr);
+  gap: 26px;
+  padding: 22px 24px;
+  background: var(--aura-surface);
+  border: 1px solid var(--aura-border);
+  border-radius: 18px;
+}
+
+.transfers-overview-main {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  min-width: 0;
+}
+
+.transfers-ring {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  flex: none;
+}
+
+.transfers-ring-track {
+  stroke: var(--aura-border);
+}
+
+.transfers-ring-value {
+  stroke: var(--aura-primary);
+  transition: stroke-dashoffset 220ms var(--ease-std);
+}
+
+.transfers-ring-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 27px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--aura-text);
+}
+
+.transfers-overview-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.transfers-overview-copy h2 {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--aura-text);
+}
+
+.transfers-overview-files {
+  margin: 0;
+  color: var(--aura-text-secondary);
+  font-size: 13px;
+}
+
+.transfers-overview-volume {
+  margin: 0;
+  color: var(--aura-text);
+  font-size: 13.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.transfers-volume-bar {
+  height: 6px;
+  margin-top: 3px;
+  border-radius: 999px;
+  background: var(--aura-border);
+  overflow: hidden;
+  max-width: 420px;
+}
+
+.transfers-volume-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--aura-primary);
+  transition: width 220ms var(--ease-std);
+}
+
+.transfers-overview-hint {
+  margin: 3px 0 0;
+  color: var(--aura-text-muted);
+  font-size: 11.5px;
+}
+
+.transfers-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-content: stretch;
+}
+
+.transfers-metric {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "icon label"
+    "icon value";
+  align-content: center;
+  gap: 2px 9px;
+  padding: 12px 13px;
+  background: var(--aura-surface-raised);
+  border: 1px solid var(--aura-border);
+  border-radius: 12px;
+  min-height: 74px;
+}
+
+.transfers-metric-icon {
+  grid-area: icon;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: var(--aura-text-secondary);
+}
+
+.transfers-metric-label {
+  grid-area: label;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--aura-text-muted);
+  line-height: 1.35;
+}
+
+.transfers-metric-value {
+  grid-area: value;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--aura-text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.transfers-metric--primary .transfers-metric-value {
+  color: var(--aura-primary);
+}
+
+.transfers-metric--primary .transfers-metric-icon {
+  color: var(--aura-primary);
+}
+
+.transfers-metric--success .transfers-metric-value,
+.transfers-metric--success .transfers-metric-icon {
+  color: var(--aura-success);
+}
+
+.transfers-metric--info .transfers-metric-value,
+.transfers-metric--info .transfers-metric-icon {
+  color: var(--aura-info);
+}
+
+.transfers-metric--warning .transfers-metric-value,
+.transfers-metric--warning .transfers-metric-icon {
+  color: var(--aura-warning);
+}
+
+.transfers-metric--danger .transfers-metric-value,
+.transfers-metric--danger .transfers-metric-icon {
+  color: var(--aura-danger);
+}
+
+/* ------------------------------------------------------------------ */
+/* Toolbar                                                             */
+/* ------------------------------------------------------------------ */
+.transfers-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.transfers-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  padding: 12px;
+  background: var(--aura-surface);
+  border: 1px solid var(--aura-border);
+  border-radius: 14px;
+}
+
+.transfers-toolbar .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.transfers-toolbar-primary {
+  font-weight: 600;
+}
+
+.transfers-toolbar-hint {
+  margin: 0 2px;
+  color: var(--aura-text-muted);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Filters                                                             */
+/* ------------------------------------------------------------------ */
+.transfers-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  background: var(--aura-surface);
+  border: 1px solid var(--aura-border);
+  border-radius: 14px;
+}
+
+.transfers-filters-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.transfers-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.transfers-tab {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--aura-text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-std),
+    color var(--dur-fast) var(--ease-std),
+    border-color var(--dur-fast) var(--ease-std);
+}
+
+.transfers-tab:hover {
+  background: var(--aura-surface-raised);
+  color: var(--aura-text);
+}
+
+.transfers-tab.is-active {
+  border-color: var(--aura-primary);
+  background: color-mix(in srgb, var(--aura-primary) 9%, transparent);
+  color: var(--aura-primary);
+}
+
+.transfers-tab-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-size: 11px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.transfers-filters-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 320px;
+  justify-content: flex-end;
+}
+
+.transfers-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 240px;
+  max-width: 340px;
+}
+
+.transfers-search input {
+  width: 100%;
+  padding: 9px 34px;
+  border-radius: 10px;
+  border: 1px solid var(--aura-border);
+  background: var(--aura-bg);
+  color: var(--aura-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.transfers-search input::placeholder {
+  color: var(--aura-text-muted);
+}
+
+.transfers-search-icon {
+  position: absolute;
+  left: 10px;
+  display: flex;
+  color: var(--aura-text-muted);
+  pointer-events: none;
+}
+
+.transfers-search-clear {
+  position: absolute;
+  right: 5px;
+  display: flex;
+  padding: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--aura-text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.transfers-search-clear:hover {
+  color: var(--aura-text);
+}
+
+.transfers-advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.transfers-advanced-toggle.is-open {
+  border-color: var(--aura-primary);
+  color: var(--aura-primary);
+}
+
+.transfers-advanced {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--aura-surface-raised);
+  border: 1px solid var(--aura-border);
+}
+
+.transfers-field {
+  min-width: 0;
+}
+
+.transfers-field > span {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--aura-text-muted);
+}
+
+.transfers-advanced-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ------------------------------------------------------------------ */
+/* Selection bar                                                       */
+/* ------------------------------------------------------------------ */
+.transfers-bulk {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--aura-primary) 32%, var(--aura-border));
+  background: color-mix(in srgb, var(--aura-primary) 8%, var(--aura-surface));
+}
+
+.transfers-bulk-count {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--aura-primary);
+}
+
+.transfers-bulk-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+/* ------------------------------------------------------------------ */
+/* List                                                                */
+/* ------------------------------------------------------------------ */
+.transfers-list {
+  background: var(--aura-surface);
+  border: 1px solid var(--aura-border);
+  border-radius: 16px;
+  /* No clipping: the sticky header must be able to stick to the viewport,
+     and row menus must not be cut by an overflow container. */
+  overflow: visible;
+}
+
+.transfers-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.transfers-table th,
+.transfers-table td {
+  padding: 12px 14px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--aura-border);
+}
+
+.transfers-table thead th {
+  position: sticky;
+  top: var(--band-h);
+  z-index: 3;
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--aura-text-muted);
+  background: var(--aura-surface-raised);
+  white-space: nowrap;
+}
+
+.transfers-table thead th:first-child {
+  border-top-left-radius: 15px;
+}
+
+.transfers-table thead th:last-child {
+  border-top-right-radius: 15px;
+}
+
+.transfers-table tbody tr:last-child td:first-child {
+  border-bottom-left-radius: 15px;
+}
+
+.transfers-table tbody tr:last-child td:last-child {
+  border-bottom-right-radius: 15px;
+}
+
+.transfers-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.transfers-row:hover {
+  background: color-mix(in srgb, var(--aura-text) 3%, transparent);
+}
+
+.transfers-row.is-selected {
+  background: color-mix(in srgb, var(--aura-primary) 5%, transparent);
+}
+
+.transfers-table input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--aura-primary);
+  cursor: pointer;
+}
+
+.transfers-col-select {
+  width: 40px;
+}
+
+.transfers-col-actions {
+  width: 56px;
+  text-align: right;
+}
+
+.transfers-file {
+  min-width: 260px;
+}
+
+.transfers-file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-right: 10px;
+  border-radius: 9px;
+  vertical-align: middle;
+  background: var(--aura-surface-raised);
+  border: 1px solid var(--aura-border);
+  color: var(--aura-text-secondary);
+}
+
+.transfers-file-icon--success {
+  color: var(--aura-success);
+}
+
+.transfers-file-icon--danger {
+  color: var(--aura-danger);
+}
+
+.transfers-file-icon--info {
+  color: var(--aura-info);
+}
+
+.transfers-file-icon--warning {
+  color: var(--aura-warning);
+}
+
+.transfers-file-copy {
+  display: inline-flex;
+  flex-direction: column;
+  vertical-align: middle;
+  max-width: 420px;
+  min-width: 0;
+}
+
+.transfers-file-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--aura-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfers-file-meta {
+  font-size: 11.5px;
+  color: var(--aura-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.transfers-size {
+  white-space: nowrap;
+  color: var(--aura-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.transfers-progress-cell {
+  min-width: 190px;
+}
+
+.transfers-progress-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--aura-text-secondary);
+}
+
+.transfers-progress-percent {
+  font-variant-numeric: tabular-nums;
+}
+
+.transfers-progress-bytes {
+  font-size: 11px;
+  color: var(--aura-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.transfers-bar {
+  position: relative;
+  height: 6px;
+  margin: 5px 0 4px;
+  border-radius: 999px;
+  background: var(--aura-border);
+  overflow: hidden;
+}
+
+.transfers-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--aura-primary);
+  transition: width 220ms var(--ease-std);
+}
+
+.transfers-bar--success .transfers-bar-fill {
+  background: var(--aura-success);
+}
+
+.transfers-bar--danger .transfers-bar-fill {
+  background: var(--aura-danger);
+}
+
+.transfers-bar--warning .transfers-bar-fill {
+  background: var(--aura-warning);
+}
+
+.transfers-bar--muted .transfers-bar-fill {
+  background: var(--aura-text-muted);
+}
+
+.transfers-bar.is-indeterminate .transfers-bar-fill {
+  width: 35%;
+  background: var(--aura-info);
+  animation: transfers-indeterminate 1.2s var(--ease-std) infinite;
+}
+
+@keyframes transfers-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+.transfers-status-cell {
+  white-space: nowrap;
+}
+
+.transfer-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.transfer-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.transfer-badge--info {
+  color: var(--aura-info);
+  border-color: color-mix(in srgb, var(--aura-info) 38%, transparent);
+  background: color-mix(in srgb, var(--aura-info) 12%, transparent);
+}
+
+.transfer-badge--success {
+  color: var(--aura-success);
+  border-color: color-mix(in srgb, var(--aura-success) 38%, transparent);
+  background: color-mix(in srgb, var(--aura-success) 12%, transparent);
+}
+
+.transfer-badge--warning {
+  color: var(--aura-warning);
+  border-color: color-mix(in srgb, var(--aura-warning) 38%, transparent);
+  background: color-mix(in srgb, var(--aura-warning) 12%, transparent);
+}
+
+.transfer-badge--danger {
+  color: var(--aura-danger);
+  border-color: color-mix(in srgb, var(--aura-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--aura-danger) 13%, transparent);
+}
+
+.transfer-badge--muted {
+  color: var(--aura-text-secondary);
+  border-color: var(--aura-border);
+  background: var(--aura-surface-raised);
+}
+
+.transfers-speed {
+  white-space: nowrap;
+  color: var(--aura-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.transfers-col-actions .menu {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.transfers-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px;
+  border-top: 1px solid var(--aura-border);
+}
+
+/* ------------------------------------------------------------------ */
+/* Inline failure panel                                                */
+/* ------------------------------------------------------------------ */
+.transfers-error-row td {
+  padding: 0 14px 14px;
+  border-bottom: 1px solid var(--aura-border);
+}
+
+.transfers-error-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, var(--aura-danger) 38%, transparent);
+  border-left: 3px solid var(--aura-danger);
+  border-radius: 12px;
+  background: var(--aura-danger-bg);
+}
+
+.transfers-error-icon {
+  display: flex;
+  color: var(--aura-danger);
+  flex: none;
+  margin-top: 1px;
+}
+
+.transfers-error-copy {
+  min-width: 0;
+}
+
+.transfers-error-title {
+  margin: 0 0 3px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aura-text);
+}
+
+.transfers-error-text {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--aura-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.transfers-error-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--aura-warning);
+}
+
+.transfers-error-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-left: auto;
+  flex: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Offline banner                                                      */
+/* ------------------------------------------------------------------ */
+.transfers-offline {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--aura-warning) 40%, var(--aura-border));
+  border-left: 3px solid var(--aura-warning);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--aura-warning) 10%, var(--aura-surface));
+}
+
+.transfers-offline-icon {
+  display: flex;
+  color: var(--aura-warning);
+  flex: none;
+  margin-top: 1px;
+}
+
+.transfers-offline-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.transfers-offline-copy strong {
+  display: block;
+  font-size: 13px;
+  color: var(--aura-text);
+}
+
+.transfers-offline-copy p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--aura-text-secondary);
+}
+
+/* ------------------------------------------------------------------ */
+/* Empty states                                                        */
+/* ------------------------------------------------------------------ */
+.transfers-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 52px 24px;
+  text-align: center;
+  background: var(--aura-surface);
+  border: 1px dashed var(--aura-border);
+  border-radius: 16px;
+}
+
+.transfers-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--aura-primary) 10%, transparent);
+  color: var(--aura-primary);
+}
+
+.transfers-empty h2 {
+  font-size: 17px;
+  color: var(--aura-text);
+}
+
+.transfers-empty p {
+  margin: 0;
+  max-width: 540px;
+  color: var(--aura-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ------------------------------------------------------------------ */
+/* Details dialog                                                      */
+/* ------------------------------------------------------------------ */
+.shell-transfers .dialog {
+  background: var(--aura-surface);
+  border: 1px solid var(--aura-border);
+  color: var(--aura-text);
+  border-radius: 16px;
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+}
+
+.shell-transfers .dialog-body {
+  max-height: calc(100vh - 130px);
+  overflow-y: auto;
+}
+
+.shell-transfers .dialog::backdrop {
+  background: rgb(2 5 8 / 0.72);
+}
+
+.shell-transfers .dialog-head {
+  border-bottom: 1px solid var(--aura-border);
+}
+
+.shell-transfers .dialog-head h2 {
+  font-size: 16px;
+  color: var(--aura-text);
+}
+
+.transfer-details {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: min(560px, 100%);
+}
+
+.transfer-details-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.transfer-details-copy {
+  margin-left: auto;
+}
+
+.transfer-details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.transfer-details-grid > div {
+  padding: 9px 11px;
+  border: 1px solid var(--aura-border);
+  border-radius: 10px;
+  background: var(--aura-surface-raised);
+  min-width: 0;
+}
+
+.transfer-details-grid dt {
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--aura-text-muted);
+}
+
+.transfer-details-grid dd {
+  margin: 3px 0 0;
+  font-size: 13px;
+  color: var(--aura-text);
+  overflow-wrap: anywhere;
+}
+
+.transfer-details-checksum {
+  font-size: 11.5px;
+}
+
+.transfer-details-error {
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--aura-danger) 38%, transparent);
+  border-radius: 10px;
+  background: var(--aura-danger-bg);
+  font-size: 12.5px;
+  color: var(--aura-text-secondary);
+}
+
+.transfer-details-error p {
+  margin: 0 0 5px;
+}
+
+.transfer-details-error-title {
+  color: var(--aura-danger);
+  font-weight: 600;
+}
+
+.transfer-details-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.transfer-details-timeline h3 {
+  font-size: 13px;
+  color: var(--aura-text);
+  margin: 0 0 8px;
+}
+
+.transfer-details-timeline ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.transfer-details-timeline li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 5px;
+  border-bottom: 1px dashed var(--aura-border);
+  font-size: 12.5px;
+  color: var(--aura-text-secondary);
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared primitives on the transfers route                            */
+/* ------------------------------------------------------------------ */
+.shell-transfers .btn {
+  background: var(--aura-surface-raised);
+  border-color: var(--aura-border);
+  color: var(--aura-text);
+}
+
+.shell-transfers .btn:hover {
+  background: color-mix(in srgb, var(--aura-text) 6%, var(--aura-surface-raised));
+  border-color: color-mix(in srgb, var(--aura-text) 18%, var(--aura-border));
+}
+
+.shell-transfers .btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--aura-text-secondary);
+}
+
+.shell-transfers .btn-primary {
+  background: var(--aura-primary);
+  border-color: var(--aura-primary);
+  color: var(--aura-bg);
+}
+
+.shell-transfers .btn-primary:hover {
+  background: var(--aura-primary-hover);
+  border-color: var(--aura-primary-hover);
+}
+
+.shell-transfers .btn-primary:disabled {
+  background: var(--aura-surface-raised);
+  border-color: var(--aura-border);
+  color: var(--aura-text-muted);
+}
+
+.shell-transfers .btn-danger {
+  background: var(--aura-danger);
+  border-color: var(--aura-danger);
+  color: var(--on-danger);
+}
+
+.shell-transfers .btn-danger:hover {
+  background: #ff6f79;
+  border-color: #ff6f79;
+}
+
+.shell-transfers .btn-danger:disabled {
+  background: var(--aura-surface-raised);
+  border-color: var(--aura-border);
+  color: var(--aura-text-muted);
+}
+
+.shell-transfers .field input,
+.shell-transfers .field select {
+  background: var(--aura-bg);
+  border-color: var(--aura-border);
+  color: var(--aura-text);
+}
+
+.shell-transfers .field input::placeholder {
+  color: var(--aura-text-muted);
+}
+
+.shell-transfers .menu-trigger {
+  color: var(--aura-text-secondary);
+  border-radius: 8px;
+}
+
+.shell-transfers .menu-trigger:hover {
+  background: var(--aura-surface-raised);
+  color: var(--aura-text);
+}
+
+.shell-transfers .menu-panel {
+  background: var(--aura-surface-raised);
+  border: 1px solid var(--aura-border);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 0.45);
+  border-radius: 12px;
+}
+
+.shell-transfers .menu-item {
+  color: var(--aura-text);
+}
+
+.shell-transfers .menu-item:hover {
+  background: color-mix(in srgb, var(--aura-text) 7%, transparent);
+}
+
+.shell-transfers .menu-item-danger {
+  color: var(--aura-danger);
+}
+
+.shell-transfers .toast {
+  background: var(--aura-surface-raised);
+  border: 1px solid var(--aura-border);
+  color: var(--aura-text);
+}
+
+.shell-transfers .card {
+  background: var(--aura-surface);
+  border-color: var(--aura-border);
+  color: var(--aura-text);
+}
+
+/* ------------------------------------------------------------------ */
+/* Responsive                                                          */
+/* ------------------------------------------------------------------ */
+@media (max-width: 1100px) {
+  .transfers-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .transfers-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .transfers-advanced {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .transfers-advanced-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 900px) {
+  .transfers-col-speed {
+    display: none;
+  }
+
+  .transfers-file-copy {
+    max-width: 280px;
+  }
+
+  .transfers-filters-right {
+    justify-content: flex-start;
+  }
+
+  .transfers-search {
+    max-width: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .shell-transfers .whoami-text {
+    max-width: 86px;
+  }
+
+  .transfers-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .transfers-overview {
+    padding: 18px;
+    gap: 18px;
+  }
+
+  .transfers-overview-main {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .transfers-ring {
+    width: 112px;
+    height: 112px;
+  }
+
+  .transfers-ring svg {
+    width: 112px;
+    height: 112px;
+  }
+
+  .transfers-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .transfers-metric {
+    min-height: 68px;
+  }
+
+  .transfers-toolbar-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .transfers-toolbar-actions > * {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .transfers-toolbar-actions .menu {
+    justify-content: center;
+  }
+
+  .transfers-toolbar-actions .menu-trigger {
+    width: 100%;
+  }
+
+  .transfers-filters {
+    padding: 10px;
+  }
+
+  .transfers-tabs {
+    gap: 2px;
+  }
+
+  .transfers-tab {
+    padding: 6px 9px;
+    font-size: 12px;
+  }
+
+  .transfers-filters-right {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .transfers-search {
+    flex: 1 1 auto;
+  }
+
+  .transfers-advanced {
+    grid-template-columns: 1fr;
+  }
+
+  .transfers-advanced-actions {
+    justify-content: stretch;
+  }
+
+  .transfers-advanced-actions .btn {
+    flex: 1;
+  }
+
+  .transfers-bulk-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  /* Table becomes a list of cards: no squeezed columns, no horizontal scroll. */
+  .transfers-table,
+  .transfers-table thead,
+  .transfers-table tbody,
+  .transfers-table tr,
+  .transfers-table td {
+    display: block;
+    width: auto;
+  }
+
+  .transfers-table thead {
+    display: none;
+  }
+
+  .transfers-table tbody {
+    padding: 6px;
+  }
+
+  .transfers-table .transfers-row {
+    margin: 6px 0;
+    padding: 10px;
+    border: 1px solid var(--aura-border);
+    border-radius: 12px;
+    background: var(--aura-surface-raised);
+  }
+
+  .transfers-table .transfers-row td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 6px 2px;
+    border-bottom: 0;
+    text-align: right;
+  }
+
+  .transfers-table .transfers-row td::before {
+    content: attr(data-label);
+    flex: none;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--aura-text-muted);
+  }
+
+  .transfers-table .transfers-col-select {
+    width: auto;
+  }
+
+  .transfers-table .transfers-col-select::before {
+    display: none;
+  }
+
+  .transfers-table .transfers-row td.transfers-file {
+    display: block;
+    text-align: left;
+    padding-bottom: 9px;
+  }
+
+  .transfers-table .transfers-file::before {
+    display: none;
+  }
+
+  .transfers-file-copy {
+    max-width: calc(100% - 46px);
+  }
+
+  .transfers-table .transfers-progress-cell {
+    display: block;
+    text-align: left;
+  }
+
+  .transfers-table .transfers-progress-cell::before {
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .transfers-table .transfers-row td.transfers-col-actions {
+    width: auto;
+    justify-content: flex-end;
+  }
+
+  .transfers-table .transfers-col-actions::before {
+    display: none;
+  }
+
+  .transfers-table .transfers-error-row {
+    margin: 0 0 12px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .transfers-table .transfers-error-row td {
+    display: block;
+    padding: 0;
+  }
+
+  .transfers-table .transfers-error-row td::before {
+    display: none;
+  }
+
+  .transfers-offline {
+    flex-wrap: wrap;
+  }
+
+  .transfers-offline .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .transfers-error-panel {
+    flex-direction: column;
+  }
+
+  .transfers-error-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-left: 0;
+  }
+
+  .transfer-details {
+    min-width: 0;
+  }
+
+  .transfer-details-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transfers-ring-value,
+  .transfers-volume-fill,
+  .transfers-bar-fill,
+  .storage-usage-fill {
+    transition: none;
+  }
+
+  .transfers-bar.is-indeterminate .transfers-bar-fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.45;
+  }
+}

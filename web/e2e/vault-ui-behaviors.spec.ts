@@ -237,7 +237,7 @@ test("a drop during a transfer is buffered as a backlog, never swallowed", async
   ]);
 
   // The drop is acknowledged and the file is held for the next run.
-  await expect(page.getByText(/ajouté\(s\) à la file d'attente/)).toBeVisible();
+  await expect(page.getByText(/ajouté(?:s)? à la file d'attente/)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Retirer backlog.txt" }),
   ).toBeVisible();
@@ -311,7 +311,9 @@ test("storage usage is fetched and shown for an operator (admin:read)", async ({
   await expect.poll(() => mocks.usageRequests()).toBe(1);
   await expect(page.getByText("Espace utilisé")).toBeVisible();
   // 2048 bytes renders as "2.0 Ko" (real figure, not fabricated capacity).
-  await expect(page.getByText("2.0 Ko")).toBeVisible();
+  await expect(
+    page.getByRole("complementary", { name: "Barre latérale AURA Vault" }).getByText("2.0 Ko"),
+  ).toBeVisible();
   await expect(page.getByText(/Usage réel \(admin\)/)).toBeVisible();
 });
 

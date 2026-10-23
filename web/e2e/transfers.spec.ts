@@ -1,0 +1,479 @@
+import { test, expect } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
+
+/**
+ * Transfers console (breadth: queue shared with the files page, filters,
+ * details, retry, pause/resume, confirmed cancellation).
+ *
+ * The API and the presigned endpoint are mocked: no real storage is contacted.
+ * Only the browser behaviour is under test.
+ */
+
+const CSRF = "csrf-test";
+const ME = {
+  id: "u1",
+  kind: "user",
+  role: "admin",
+  space_id: "s1",
+  application_id: "a1",
+  scopes: ["objects:read", "objects:write", "objects:delete", "objects:purge"],
+};
+
+interface Mocks {
+  calls: string[];
+  intents: () => number;
+  /** Let the next commit for the rejected file succeed. */
+  disableFailure: () => void;
+}
+
+async function installMocks(
+  page: Page,
+  options: { failName?: string; putDelayMs?: number } = {},
+): Promise<Mocks> {
+  const calls: string[] = [];
+  let intentCount = 0;
+  const intentNames = new Map<string, string>();
+
+  await page.route("**/api/v1/**", async (route: Route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const method = request.method();
+
+    if (path === "/api/v1/login" && method === "POST") {
+      await route.fulfill({ json: { csrf_token: CSRF } });
+      return;
+    }
+    if (path === "/api/v1/me") {
+      await route.fulfill({ json: { ...ME, name: "admin", csrf_token: CSRF } });
+      return;
+    }
+    if (path === "/api/v1/folders") {
+      await route.fulfill({ json: { items: [] } });
+      return;
+    }
+    if (path === "/api/v1/admin/usage") {
+      await route.fulfill({
+        json: {
+          measured_at: 1_700_000_000,
+          limits: {
+            max_object_bytes: 5_368_709_120,
+            max_pending_intents: 100,
+            intent_ttl: 900,
+            allow_empty_objects: false,
+          },
+          capacity: {
+            capacity_bytes: 2_199_023_255_552,
+            high_watermark_pct: 90,
+            accept_until_bytes: 1_979_120_929_996,
+            stored_bytes: 549_755_813_888,
+            reserved_bytes: 0,
+            free_for_uploads_bytes: 1_649_267_441_664,
+          },
+          totals: {
+            objects_by_status: { available: 2 },
+            available_count: 2,
+            stored_bytes: 549_755_813_888,
+          },
+          spaces: [],
+        },
+      });
+      return;
+    }
+    if (path === "/api/v1/objects" && method === "GET") {
+      await route.fulfill({ json: { items: [] } });
+      return;
+    }
+    if (path === "/api/v1/objects/upload-intents" && method === "POST") {
+      intentCount += 1;
+      const body = request.postDataJSON() as {
+        display_name: string;
+        size_bytes: number;
+      };
+      const id = `obj-${intentCount}`;
+      intentNames.set(id, body.display_name);
+      calls.push(`intent:${body.display_name}`);
+      await route.fulfill({
+        json: {
+          id,
+          status: "pending",
+          method: "PUT",
+          upload_url: `/fake-s3/put/${id}`,
+          headers: { "Content-Type": "application/pdf" },
+          content_type: "application/pdf",
+          size_bytes: body.size_bytes,
+          expires_in: 900,
+          expires_at: Math.floor(Date.now() / 1000) + 900,
+          idempotent_replay: false,
+        },
+      });
+      return;
+    }
+    const commit = path.match(/\/api\/v1\/objects\/([^/]+)\/commit$/);
+    if (commit && method === "POST") {
+      const id = decodeURIComponent(commit[1] ?? "");
+      const intentName = intentNames.get(id);
+      const failThis =
+        options.failName !== undefined && intentName === options.failName;
+      if (failThis) {
+        calls.push(`commit-failed:${id}`);
+        await route.fulfill({ status: 507, json: { detail: "storage full" } });
+        return;
+      }
+      calls.push(`commit:${id}`);
+      await route.fulfill({
+        json: {
+          id,
+          status: "available",
+          size_bytes: 11,
+          checksum_sha256: "a".repeat(64),
+        },
+      });
+      return;
+    }
+    if (/\/api\/v1\/objects\/[^/]+\/abort$/.test(path) && method === "POST") {
+      calls.push("abort");
+      await route.fulfill({ json: { id: "obj", status: "aborted", aborted: true } });
+      return;
+    }
+    await route.fulfill({ status: 404, json: { detail: `unmocked ${method} ${path}` } });
+  });
+
+  await page.route("**/fake-s3/**", async (route: Route) => {
+    calls.push("put");
+    if (options.putDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, options.putDelayMs));
+    }
+    await route.fulfill({ status: 200, body: "" }).catch(() => undefined);
+  });
+
+  return {
+    calls,
+    intents: () => intentCount,
+    disableFailure: () => {
+      options.failName = undefined;
+    },
+  };
+}
+
+async function login(page: Page): Promise<void> {
+  await page.goto("/login");
+  await page.getByLabel("Identifiant").fill("admin");
+  await page.getByLabel("Mot de passe").fill("pw");
+  await page.getByRole("button", { name: "Se connecter", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
+}
+
+async function goToTransfers(page: Page): Promise<void> {
+  await page.getByRole("link", { name: "Transferts", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Transferts" })).toBeVisible();
+}
+
+async function seedFiles(page: Page, names: string[]): Promise<void> {
+  await page.getByTestId("files-input").setInputFiles(
+    names.map((name) => ({
+      name,
+      mimeType: name.endsWith(".png") ? "image/png" : "application/pdf",
+      buffer: Buffer.from(`contenu ${name}`),
+    })),
+  );
+  await page.getByRole("button", { name: "Importer et valider" }).click();
+}
+
+test("empty session points to the existing importer without inventing a transfer", async ({
+  page,
+}) => {
+  await installMocks(page);
+  await login(page);
+  await goToTransfers(page);
+
+  await expect(page.getByTestId("transfer-overview")).toContainText(
+    "Aucune importation en cours",
+  );
+  await expect(page.getByText("Aucun transfert dans cette session")).toBeVisible();
+  await expect(page.locator('[data-testid="transfer-row"]')).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Ajouter des fichiers" }).first().click();
+  await page.waitForURL("/");
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
+  await expect(page.locator("#intake")).toBeVisible();
+});
+
+test("shows the live queue, filters it, exposes details and retries a failure", async ({
+  page,
+}) => {
+  const mocks = await installMocks(page, { failName: "rejete.pdf" });
+  await login(page);
+  await seedFiles(page, ["rapport.pdf", "capture.png", "rejete.pdf"]);
+  await expect(page.getByTestId("transfer-status")).toContainText("Disponible", {
+    timeout: 15_000,
+  });
+  await expect(page.getByTestId("transfer-status")).toContainText("Échec");
+
+  await goToTransfers(page);
+
+  const rows = page.locator('[data-testid="transfer-row"]');
+  await expect(rows).toHaveCount(3);
+  await expect(page.locator('[data-status="completed"]')).toHaveCount(2);
+  await expect(page.locator('[data-status="failed"]')).toHaveCount(1);
+  await expect(page.getByTestId("transfer-overview")).toContainText("2 sur 3 fichiers terminés");
+  await expect(page.locator('[data-testid="transfer-error-panel"]')).toBeVisible();
+
+  // Status tabs carry real counters and match the filter.
+  await page.getByRole("button", { name: /^Terminés/ }).click();
+  await expect(rows).toHaveCount(2);
+  await page.getByRole("button", { name: /^Échecs/ }).click();
+  await expect(rows).toHaveCount(1);
+
+  // Search resets to a readable subset and clears.
+  await page.getByRole("searchbox", { name: "Rechercher un fichier" }).fill("capture");
+  await page.getByTestId("transfer-filters").getByRole("button", { name: /^Tous/ }).click();
+  await expect(rows).toHaveCount(1);
+  await page.getByRole("button", { name: "Effacer la recherche" }).click();
+  await expect(rows).toHaveCount(3);
+
+  // Details show only engine fields (checksum, attempts, timeline).
+  await page.getByRole("button", { name: "Actions pour rejete.pdf" }).click();
+  await page.getByRole("menuitem", { name: "Détails" }).click();
+  const details = page.getByTestId("transfer-details");
+  await expect(details).toBeVisible();
+  await expect(details).toContainText("Refus du serveur");
+  await expect(details).toContainText("Étapes");
+  await page.keyboard.press("Escape");
+
+  // A retry goes through the engine and the row becomes completed.
+  mocks.disableFailure();
+  await page.getByRole("button", { name: "Nouvelle tentative" }).click();
+  await expect(page.locator('[data-status="failed"]')).toHaveCount(0, {
+    timeout: 15_000,
+  });
+  await expect(page.locator('[data-status="completed"]')).toHaveCount(3);
+  // Retry opens a fresh submission (same idempotency key; the server dedupes).
+  expect(mocks.intents()).toBe(4);
+});
+
+test("pause holds files that have not started and resume releases them", async ({ page }) => {
+  await installMocks(page, { putDelayMs: 2500 });
+  await login(page);
+  await seedFiles(
+    page,
+    Array.from({ length: 8 }, (_, index) => `lot-${index}.pdf`),
+  );
+
+  await goToTransfers(page);
+  await page.getByRole("button", { name: "Pause tous les transferts" }).click();
+  await expect(page.locator('[data-status="paused"]').first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Reprendre", exact: true }).click();
+  await expect(
+    page.getByTestId("transfer-overview").getByText("Importation terminée"),
+  ).toBeVisible({ timeout: 25_000 });
+  await expect(page.locator('[data-status="completed"]')).toHaveCount(8);
+});
+
+test("cancel all asks for confirmation and aborts the backend intents", async ({ page }) => {
+  const mocks = await installMocks(page, { putDelayMs: 3000 });
+  await login(page);
+  await seedFiles(page, ["lent-a.pdf", "lent-b.pdf"]);
+  await goToTransfers(page);
+
+  await page.getByRole("button", { name: "Annuler tout" }).click();
+  const dialog = page.getByTestId("transfer-cancel-dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Les fichiers déjà vérifiés");
+  expect(mocks.calls).not.toContain("abort");
+
+  await page.getByRole("button", { name: "Tout annuler" }).click();
+  await expect.poll(() => mocks.calls.filter((call) => call === "abort").length).toBeGreaterThan(0);
+  await expect(page.locator('[data-status="cancelled"]')).toHaveCount(2, {
+    timeout: 10_000,
+  });
+  expect(mocks.calls.some((call) => call.startsWith("commit:"))).toBe(false);
+});
+
+test("advanced filters narrow the list and the empty result stays distinct", async ({
+  page,
+}) => {
+  await installMocks(page);
+  await login(page);
+  await seedFiles(page, ["rapport.pdf", "capture.png", "archive.zip"]);
+  await expect(page.getByTestId("transfer-status")).toContainText("Disponible", {
+    timeout: 15_000,
+  });
+  await goToTransfers(page);
+
+  const rows = page.locator('[data-testid="transfer-row"]');
+  await expect(rows).toHaveCount(3);
+
+  await page.getByRole("button", { name: "Filtres", exact: true }).click();
+  await page.getByLabel("Type de fichier").selectOption("image");
+  await expect(rows).toHaveCount(1);
+  await expect(page.locator('[data-testid="transfer-row"]')).toContainText("capture.png");
+
+  await page.getByLabel("Taille min. (Mo)").fill("1");
+  await expect(rows).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Aucun fichier ne correspond à ces filtres" }),
+  ).toBeVisible();
+  // Not the empty-session state.
+  await expect(page.getByText("Aucun transfert dans cette session")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Réinitialiser", exact: true }).click();
+  await expect(rows).toHaveCount(3);
+
+  // Selection is explicit and reversible.
+  await page.getByRole("checkbox", { name: "Sélectionner tous les transferts filtrés" }).check();
+  await expect(page.getByText("3 sélectionnés")).toBeVisible();
+  await page.getByRole("button", { name: "Désélectionner" }).click();
+  await expect(page.getByText("3 sélectionnés")).toHaveCount(0);
+});
+
+test("lot A — titre, position dans la file, annulation détaillée et sélection par statut", async ({
+  page,
+}) => {
+  await installMocks(page, { failName: "rejete.pdf", putDelayMs: 1200 });
+  await login(page);
+  await seedFiles(page, [
+    "a.pdf",
+    "b.pdf",
+    "rejete.pdf",
+    "d.pdf",
+    "e.pdf",
+    "f.pdf",
+    "g.pdf",
+    "h.pdf",
+  ]);
+  await goToTransfers(page);
+
+  await expect.poll(() => page.title()).toMatch(/^\(\d+\) Transferts/);
+  await expect(page.getByText(/dans la file/).first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Annuler tout" }).click();
+  const dialog = page.getByTestId("transfer-cancel-dialog");
+  await expect(dialog).toContainText(/en cours/);
+  await expect(dialog).toContainText(/en attente/);
+  await expect(dialog).toContainText("déjà vérifié");
+  await page.getByRole("button", { name: "Retour" }).click();
+
+  await page.getByRole("button", { name: "Plus d'actions sur les transferts" }).click();
+  await page
+    .getByRole("menuitem", { name: /Sélectionner les fichiers en attente/ })
+    .click();
+  await expect(page.locator(".transfers-bulk-count")).toBeVisible();
+
+  await expect(page.getByTestId("transfer-overview")).toContainText(
+    "Importation terminée",
+    { timeout: 25_000 },
+  );
+  await expect.poll(() => page.title()).toContain("échec");
+});
+
+test("lot A — copier le nom et le message d'erreur", async ({ page }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await installMocks(page, { failName: "rejete.pdf" });
+  await login(page);
+  await seedFiles(page, ["ok.pdf", "rejete.pdf"]);
+  await expect(page.getByTestId("transfer-status")).toContainText("Échec", {
+    timeout: 15_000,
+  });
+  await goToTransfers(page);
+
+  await page.getByRole("button", { name: "Copier l'erreur" }).click();
+  const errorClipboard = await page.evaluate(() => navigator.clipboard.readText());
+  expect(errorClipboard).toContain("rejete.pdf");
+  expect(errorClipboard).toContain("refusé");
+
+  await page.getByRole("button", { name: "Actions pour rejete.pdf" }).click();
+  await page.getByRole("menuitem", { name: "Détails" }).click();
+  await page.getByRole("button", { name: "Copier le nom" }).click();
+  const nameClipboard = await page.evaluate(() => navigator.clipboard.readText());
+  expect(nameClipboard).toBe("rejete.pdf");
+});
+
+test("lot A — le plateau mène à la console sans interrompre la file", async ({ page }) => {
+  await installMocks(page, { putDelayMs: 2000 });
+  await login(page);
+  await seedFiles(page, ["un.pdf", "deux.pdf"]);
+
+  await page.getByRole("link", { name: "Voir tous les transferts" }).click();
+  await page.waitForURL("/transfers");
+  await expect(page.locator('[data-testid="transfer-row"]')).toHaveCount(2);
+  await expect(page.getByTestId("transfer-overview")).toContainText("Importation en cours");
+});
+
+test("lot A — bandeau hors-ligne puis reprise au retour du réseau", async ({ page }) => {
+  await installMocks(page, { putDelayMs: 3000 });
+  await login(page);
+  await seedFiles(page, ["net-a.pdf", "net-b.pdf", "net-c.pdf", "net-d.pdf"]);
+  await goToTransfers(page);
+  await expect(page.getByText("Connexion perdue")).toHaveCount(0);
+
+  await page.context().setOffline(true);
+  await expect(page.getByText("Connexion perdue")).toBeVisible();
+
+  await page.context().setOffline(false);
+  await expect(page.getByText("Connexion perdue")).toHaveCount(0, {
+    timeout: 10_000,
+  });
+});
+
+test("lot A — en-tête de liste sticky pendant le défilement", async ({ page }) => {
+  await installMocks(page);
+  await login(page);
+  await seedFiles(
+    page,
+    Array.from({ length: 30 }, (_, index) => `sticky-${index}.pdf`),
+  );
+  await expect(page.getByTestId("transfer-status")).toContainText("30", {
+    timeout: 20_000,
+  });
+  await goToTransfers(page);
+  await expect(page.locator('[data-testid="transfer-row"]')).toHaveCount(30);
+
+  const header = page.locator(".transfers-table thead th").first();
+  await page.evaluate(() => window.scrollTo(0, 1200));
+  await page.waitForTimeout(200);
+  const box = await header.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.y).toBeGreaterThanOrEqual(55);
+  expect(box!.y).toBeLessThanOrEqual(70);
+});
+
+test("visual baseline — completed session", async ({ page }) => {
+  await installMocks(page, { failName: "archive.zip" });
+  await login(page);
+  await seedFiles(page, [
+    "presentation-client.pdf",
+    "photo-produit.png",
+    "archive.zip",
+    "budget-2026.xlsx",
+  ]);
+  await expect(page.getByTestId("transfer-status")).toContainText("Échec", {
+    timeout: 15_000,
+  });
+  await goToTransfers(page);
+  await expect(page.getByTestId("transfer-overview")).toContainText(
+    "Importation terminée",
+  );
+  await page.waitForTimeout(300);
+
+  const masks = [
+    page.locator(".transfers-file-meta"),
+    page.locator(".transfers-toolbar-hint"),
+    page.locator(".visually-hidden"),
+  ];
+
+  await expect(page).toHaveScreenshot("transfers-desktop.png", {
+    fullPage: false,
+    maxDiffPixels: 300,
+    mask: masks,
+  });
+
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(300);
+  await expect(page).toHaveScreenshot("transfers-mobile.png", {
+    fullPage: false,
+    maxDiffPixels: 300,
+    mask: masks,
+  });
+});

@@ -4,6 +4,8 @@ import { useAuth, useSession } from "../lib/auth";
 import { hasAdminAccess, api } from "../lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { VaultMark } from "./VaultMark";
+import { StorageUsage } from "./StorageUsage";
+import { useTransfers } from "../lib/transferContext";
 
 /** Local copy of formatBytes to avoid circular import with ObjectsPage. */
 function formatBytes(size: number): string {
@@ -52,6 +54,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const session = useSession();
   const navigate = useNavigate();
   const location = useLocation();
+  const transfers = useTransfers();
 
   const canAdmin = hasAdminAccess(session.data?.role);
   // Display name of the signed-in account (username for a human, identity
@@ -200,9 +203,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // Détermine si on est sur la page "Fichiers" (indexRoute exacte)
   const isFilesPage =
     location.pathname === "/" || location.pathname === "";
+  const isTransfersPage = location.pathname === "/transfers";
 
   return (
-    <div className="shell">
+    <div className={`shell${isTransfersPage ? " shell-transfers" : ""}`}>
       <a className="skip-link" href="#main-content">
         Aller au contenu principal
       </a>
@@ -245,6 +249,38 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </svg>
             Fichiers
           </Link>
+          {/* Entrée : Transferts — file d'importation de la session courante.
+              Le compteur reste un ornement (aria-hidden) : le nom accessible
+              du lien suffit, un lecteur d'écran n'a pas besoin du nombre. */}
+          <Link
+            to="/transfers"
+            activeOptions={{ exact: true }}
+            className={
+              isTransfersPage ? "nav-link nav-link-active" : "nav-link"
+            }
+            onClick={() => toggleSidebar(false)}
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M7 20V5M7 20l-3-3M7 20l3-3" />
+              <path d="M17 4v15M17 4l-3 3M17 4l3 3" />
+            </svg>
+            Transferts
+            {transfers.queue.items.length > 0 ? (
+              <span className="nav-badge" aria-hidden="true">
+                {transfers.queue.items.length}
+              </span>
+            ) : null}
+          </Link>
           {canAdmin ? (
             <Link
               to="/admin"
@@ -270,28 +306,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
           ) : null}
         </nav>
 
-        {/* Indicateur de stockage — placeholder honnête */}
-        <p className="sidebar-foot">
-          <svg
-            aria-hidden="true"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-          >
-            <rect x="5" y="11" width="14" height="10" rx="2" />
-            <path d="M8 11V8a4 4 0 0 1 8 0v3" />
-          </svg>
-          <span aria-live="polite" aria-atomic="true">
-            {usageQuery.data
-              ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes).replace(" ", "")} utilisés`
-              : canAdmin
-                ? "Stockage : chargement…"
-                : "Chiffré au repos, intégrité vérifiée"}
-          </span>
-        </p>
+        {/* Indicateur de stockage réel (capacité admin uniquement). */}
+        <StorageUsage
+          usage={usageQuery.data}
+          loading={usageQuery.isLoading}
+          formatBytes={formatBytes}
+        />
       </aside>
 
       {/* Mobile drawer overlay */}
@@ -354,6 +374,35 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 </svg>
                 Fichiers
               </Link>
+              <Link
+                to="/transfers"
+                activeOptions={{ exact: true }}
+                className={
+                  isTransfersPage ? "nav-link nav-link-active" : "nav-link"
+                }
+                onClick={() => closeMobile(false)}
+              >
+                <svg
+                  aria-hidden="true"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M7 20V5M7 20l-3-3M7 20l3-3" />
+                  <path d="M17 4v15M17 4l-3 3M17 4l3 3" />
+                </svg>
+                Transferts
+                {transfers.queue.items.length > 0 ? (
+                  <span className="nav-badge" aria-hidden="true">
+                    {transfers.queue.items.length}
+                  </span>
+                ) : null}
+              </Link>
               {canAdmin ? (
                 <Link
                   to="/admin"
@@ -378,25 +427,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 </Link>
               ) : null}
             </nav>
-            <p className="sidebar-foot">
-              <svg
-                aria-hidden="true"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-              >
-                <rect x="5" y="11" width="14" height="10" rx="2" />
-                <path d="M8 11V8a4 4 0 0 1 8 0v3" />
-              </svg>
-              <span aria-live="polite" aria-atomic="true">
-                {usageQuery.data
-                  ? `Stockage : ${formatBytes(usageQuery.data.totals.stored_bytes)} utilisés`
-                  : "Chiffré au repos, intégrité vérifiée"}
-              </span>
-            </p>
+            <StorageUsage
+              usage={usageQuery.data}
+              loading={usageQuery.isLoading}
+              formatBytes={formatBytes}
+            />
           </div>
         </>
       ) : null}

@@ -36,6 +36,14 @@ minimal house CSS (no Tailwind), Playwright for e2e.
   backed by an `Idempotency-Key`, and cancellation that calls the backend
   `abort` endpoint. Success is shown only after the backend confirms the commit.
   See [Vault transfer engine](../docs/TRANSFER-ENGINE.md).
+- Transfers console at `/transfers`: the live queue is owned by the app shell
+  (`src/lib/transferContext.tsx`), so an import started on the files page keeps
+  running and can be followed, filtered, paused, resumed, retried and cancelled
+  from the console. It shows session-only data (no server-side transfer
+  history), real counters/bytes/rate, per-file speed sampled from byte deltas,
+  inline failure details, and an explicit confirmation before aborting the
+  whole batch. The AURA dark palette is scoped to this route; other pages keep
+  their existing theme.
 - The UI never shows fake data as real: empty catalogue renders an explicit
   empty state, errors render explicit alerts.
 - No S3 keys in the code or bundle. All calls use relative paths; in dev,
@@ -80,6 +88,9 @@ expired-URL recovery and real cancellation.
 `e2e/ui-keyboard-a11y.spec.ts` mocks the API to check the `?` legend, `/` and
 `Suppr` shortcuts, row-menu Arrow/Escape focus handling and the mobile drawer's
 focus trap.
+`e2e/transfers.spec.ts` mocks the API and covers the transfers console: shared
+queue across navigation, status filters/search/advanced filters, details, retry,
+pause/resume, and confirmed cancellation (plus desktop/mobile screenshots).
 (All use the local admin password below.)
 
 ```bash

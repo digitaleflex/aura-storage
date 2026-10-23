@@ -1,4 +1,5 @@
 import { memo, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { Elapsed } from "./Elapsed";
 import { FileDetail } from "./FileDetail";
 import type { QueueItem, QueueState, TransferPhase } from "../lib/transfer";
@@ -106,6 +107,13 @@ export const UploadTray = memo(function UploadTray({
         Import · {queue.done} sur {queue.items.length} terminé
         {queue.done > 1 ? "s" : ""}
       </h2>
+      <Link
+        to="/transfers"
+        className="btn btn-ghost btn-small tray-all-link"
+        aria-label="Voir tous les transferts"
+      >
+        Tout voir
+      </Link>
       <button
         type="button"
         className="btn btn-ghost btn-small"
