@@ -30,6 +30,16 @@ export interface TransfersApi {
   isOnline: boolean;
   /** Sliding-window global rate, bytes/second; 0 when nothing is running. */
   throughput: number;
+  /** One global-rate sample per second, most recent last (max 60). */
+  rateHistory: readonly number[];
+  /** Exponentially smoothed global rate, used for a stable ETA. */
+  smoothedThroughput: number;
+  /** Session start (epoch ms), null before the first import or after a clear. */
+  startedAt: number | null;
+  /** Session end (epoch ms), null while running or before the first import. */
+  finishedAt: number | null;
+  /** First time each queue item was observed (epoch ms). */
+  addedAt: ReadonlyMap<string, number>;
   /** Per-file rates from observed byte deltas; 0 for non-uploading items. */
   itemRates: ReadonlyMap<string, number>;
   busy: boolean;
@@ -70,12 +80,36 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
   const [itemRates, setItemRates] = useState<ReadonlyMap<string, number>>(
     () => new Map(),
   );
+  const [rateHistory, setRateHistory] = useState<readonly number[]>([]);
+  const [smoothedThroughput, setSmoothedThroughput] = useState(0);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [finishedAt, setFinishedAt] = useState<number | null>(null);
+  const [addedAt, setAddedAt] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
   const { csrf } = useAuth();
   const queueRef = useRef<UploadQueue | null>(null);
   const stateRef = useRef<QueueState>(queue);
   const throughputRef = useRef(new ThroughputWindow());
+  // Per-file sampling (item id -> last sample).
   const rateHistoryRef = useRef(new Map<string, { at: number; bytes: number }>());
   const lastRatesRef = useRef(new Map<string, number>());
+  // Global telemetry: one point per second, an EMA for the ETA, and first-seen
+  // timestamps so a queued file already has an "added at" time.
+  const lastRateSampleAtRef = useRef(0);
+  const smoothedRef = useRef(0);
+  const addedAtRef = useRef(new Map<string, number>());
+
+  const resetTelemetry = useCallback(() => {
+    setRateHistory([]);
+    setSmoothedThroughput(0);
+    setStartedAt(null);
+    setFinishedAt(null);
+    setAddedAt(new Map());
+    lastRateSampleAtRef.current = 0;
+    smoothedRef.current = 0;
+    addedAtRef.current.clear();
+  }, []);
 
   const handleQueueUpdate = useCallback(
     (next: QueueState, onUpdate?: (queue: QueueState) => void) => {
@@ -84,12 +118,42 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
       setQueue(next);
 
       throughputRef.current.push(now, transferredTotal(next));
-      setThroughput(next.active > 0 ? throughputRef.current.rate() : 0);
+      const activeRate = next.active > 0 ? throughputRef.current.rate() : 0;
+      setThroughput(activeRate);
+
+      if (now - lastRateSampleAtRef.current >= 1000) {
+        lastRateSampleAtRef.current = now;
+        setRateHistory((history) => [...history.slice(-59), activeRate]);
+        smoothedRef.current =
+          smoothedRef.current === 0
+            ? activeRate
+            : smoothedRef.current * 0.7 + activeRate * 0.3;
+        setSmoothedThroughput(smoothedRef.current);
+      }
+
+      if (next.finished) {
+        setFinishedAt((previous) => previous ?? now);
+      }
 
       // Per-file rate: same idea as ThroughputWindow, but per item. The engine
       // exposes no per-file speed, so it is derived from byte deltas observed
       // over at least one second (never invented when a file is not moving).
       const ids = new Set(next.items.map((item) => item.id));
+      let addedChanged = false;
+      for (const item of next.items) {
+        if (!addedAtRef.current.has(item.id)) {
+          addedAtRef.current.set(item.id, now);
+          addedChanged = true;
+        }
+      }
+      for (const id of addedAtRef.current.keys()) {
+        if (!ids.has(id)) {
+          addedAtRef.current.delete(id);
+          addedChanged = true;
+        }
+      }
+      if (addedChanged) setAddedAt(new Map(addedAtRef.current));
+
       for (const id of rateHistoryRef.current.keys()) {
         if (!ids.has(id)) rateHistoryRef.current.delete(id);
       }
@@ -129,6 +193,8 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
       lastRatesRef.current.clear();
       setThroughput(0);
       setItemRates(new Map());
+      resetTelemetry();
+      setStartedAt(Date.now());
       const uploadQueue = startUploadQueue(entries, transferDeps(options.csrf), {
         folderId: options.folderId,
         onUpdate: (next) => handleQueueUpdate(next, options.onUpdate),
@@ -137,7 +203,7 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
       queueRef.current = uploadQueue;
       return uploadQueue;
     },
-    [handleQueueUpdate],
+    [handleQueueUpdate, resetTelemetry],
   );
 
   const pauseAll = useCallback(() => queueRef.current?.pauseAll(), []);
@@ -158,7 +224,8 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
     setQueue(empty);
     setThroughput(0);
     setItemRates(new Map());
-  }, []);
+    resetTelemetry();
+  }, [resetTelemetry]);
 
   const clear = useCallback(() => {
     if (!stateRef.current.finished) return;
@@ -207,6 +274,11 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
       queue,
       isOnline,
       throughput,
+      rateHistory,
+      smoothedThroughput,
+      startedAt,
+      finishedAt,
+      addedAt,
       itemRates,
       busy: queue.active > 0,
       start,
@@ -224,6 +296,11 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
       queue,
       isOnline,
       throughput,
+      rateHistory,
+      smoothedThroughput,
+      startedAt,
+      finishedAt,
+      addedAt,
       itemRates,
       start,
       pauseAll,

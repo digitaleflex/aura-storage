@@ -438,6 +438,86 @@ test("lot A — en-tête de liste sticky pendant le défilement", async ({ page 
   expect(box!.y).toBeLessThanOrEqual(70);
 });
 
+test("lot B — filtres dans l'URL, retour arrière et valeurs partageables", async ({
+  page,
+}) => {
+  await installMocks(page, { failName: "rejete.pdf" });
+  await login(page);
+  await seedFiles(page, ["a.pdf", "capture.png", "rejete.pdf"]);
+  await expect(page.getByTestId("transfer-status")).toContainText("Échec", {
+    timeout: 15_000,
+  });
+  await goToTransfers(page);
+  const rows = page.locator('[data-testid="transfer-row"]');
+
+  await page.getByTestId("transfer-filters").getByRole("button", { name: /^Échecs/ }).click();
+  await expect(page).toHaveURL(/status=failed/);
+  await expect(rows).toHaveCount(1);
+
+  await page.goBack();
+  await expect(page).not.toHaveURL(/status=failed/);
+  await expect(rows).toHaveCount(3);
+
+  await page.getByRole("searchbox", { name: "Rechercher un fichier" }).fill("capture");
+  await expect.poll(() => page.url()).toContain("q=capture");
+  await expect(rows).toHaveCount(1);
+
+  // A shared URL restores the filters on a fresh page load (session queue is
+  // empty then, but the controls must reflect the URL).
+  await page.goto("/transfers?status=failed&q=rejete");
+  await expect(
+    page.getByTestId("transfer-filters").getByRole("button", { name: /^Échecs/ }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("searchbox", { name: "Rechercher un fichier" })).toHaveValue(
+    "rejete",
+  );
+});
+
+test("lot B — la ligne terminee ou en echec est brievement surlignee", async ({ page }) => {
+  await installMocks(page, { failName: "bad.pdf", putDelayMs: 3000 });
+  await login(page);
+  await seedFiles(page, ["bad.pdf"]);
+  await goToTransfers(page);
+
+  await expect(page.locator('[data-highlight="danger"]')).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  await expect(page.locator('[data-highlight="danger"]')).toHaveCount(0, {
+    timeout: 3000,
+  });
+});
+
+test("lot B — horodatage d'ajout, duree, debit moyen et sparkline", async ({
+  page,
+}) => {
+  await installMocks(page, { putDelayMs: 1500 });
+  await login(page);
+  await seedFiles(page, [
+    "b-1.pdf",
+    "b-2.pdf",
+    "b-3.pdf",
+    "b-4.pdf",
+    "b-5.pdf",
+    "b-6.pdf",
+  ]);
+  await goToTransfers(page);
+
+  // Even a file that has not started keeps a first-seen timestamp.
+  await expect(
+    page.locator('[data-status="queued"]').first().getByText(/Ajouté à/),
+  ).toBeVisible();
+
+  await expect(page.getByText(/Durée \d+:\d+/)).toBeVisible();
+  await expect(page.getByText(/Débit moyen/)).toBeVisible();
+  await expect(page.locator(".transfers-sparkline")).toBeVisible({ timeout: 10_000 });
+
+  await expect(page.getByTestId("transfer-overview")).toContainText(
+    "Importation terminée",
+    { timeout: 25_000 },
+  );
+  await expect(page.getByText(/Durée \d+:\d+/)).toBeVisible();
+});
+
 test("visual baseline — completed session", async ({ page }) => {
   await installMocks(page, { failName: "archive.zip" });
   await login(page);

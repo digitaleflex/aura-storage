@@ -362,6 +362,13 @@
   transition: width 220ms var(--ease-std);
 }
 
+.transfers-overview-timing {
+  margin: 3px 0 0;
+  color: var(--aura-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .transfers-overview-hint {
   margin: 3px 0 0;
   color: var(--aura-text-muted);
@@ -376,6 +383,7 @@
 }
 
 .transfers-metric {
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   grid-template-areas:
@@ -448,6 +456,16 @@
 .transfers-metric--danger .transfers-metric-value,
 .transfers-metric--danger .transfers-metric-icon {
   color: var(--aura-danger);
+}
+
+.transfers-sparkline {
+  position: absolute;
+  right: 9px;
+  bottom: 8px;
+  width: 56px;
+  height: 18px;
+  color: color-mix(in srgb, var(--aura-primary) 75%, transparent);
+  pointer-events: none;
 }
 
 /* ------------------------------------------------------------------ */
@@ -739,6 +757,32 @@
 
 .transfers-row.is-selected {
   background: color-mix(in srgb, var(--aura-primary) 5%, transparent);
+}
+
+.transfers-row.is-just-completed {
+  animation: transfers-flash-success 900ms var(--ease-out) both;
+}
+
+.transfers-row.is-just-failed {
+  animation: transfers-flash-danger 900ms var(--ease-out) both;
+}
+
+@keyframes transfers-flash-success {
+  0% {
+    background: color-mix(in srgb, var(--aura-success) 18%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+@keyframes transfers-flash-danger {
+  0% {
+    background: color-mix(in srgb, var(--aura-danger) 18%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
 }
 
 .transfers-table input[type="checkbox"] {
@@ -1605,6 +1649,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .transfers-row.is-just-completed,
+  .transfers-row.is-just-failed {
+    animation: none;
+  }
+
   .transfers-ring-value,
   .transfers-volume-fill,
   .transfers-bar-fill,

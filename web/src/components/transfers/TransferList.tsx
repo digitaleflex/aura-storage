@@ -48,6 +48,8 @@ export function TransferList({
   selected,
   itemRates,
   positions,
+  addedAtById,
+  highlights,
   onToggle,
   onToggleAll,
   onPause,
@@ -63,6 +65,8 @@ export function TransferList({
   selected: ReadonlySet<string>;
   itemRates: ReadonlyMap<string, number>;
   positions: ReadonlyMap<string, number>;
+  addedAtById: ReadonlyMap<string, number>;
+  highlights: ReadonlyMap<string, "success" | "danger">;
   onToggle: (id: string) => void;
   onToggleAll: () => void;
   onPause: (id: string) => void;
@@ -114,6 +118,8 @@ export function TransferList({
               selected={selected.has(item.id)}
               rate={itemRates.get(item.id) ?? 0}
               position={positions.get(item.id)}
+              addedAtMs={addedAtById.get(item.id) ?? addedAt(item)}
+              highlight={highlights.get(item.id)}
               onToggle={onToggle}
               onPause={onPause}
               onResume={onResume}
@@ -144,6 +150,8 @@ function TransferRow({
   selected,
   rate,
   position,
+  addedAtMs,
+  highlight,
   onToggle,
   onPause,
   onResume,
@@ -156,6 +164,8 @@ function TransferRow({
   selected: boolean;
   rate: number;
   position: number | undefined;
+  addedAtMs: number | null;
+  highlight: "success" | "danger" | undefined;
   onToggle: (id: string) => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
@@ -192,9 +202,12 @@ function TransferRow({
   return (
     <Fragment>
       <tr
-        className={selected ? "transfers-row is-selected" : "transfers-row"}
+        className={`transfers-row${selected ? " is-selected" : ""}${
+          highlight === "success" ? " is-just-completed" : ""
+        }${highlight === "danger" ? " is-just-failed" : ""}`}
         data-testid="transfer-row"
         data-status={status}
+        data-highlight={highlight}
       >
         <td className="transfers-col-select" data-label="Sélection">
           <input
@@ -218,8 +231,8 @@ function TransferRow({
             <span className="transfers-file-meta">
               {CATEGORY_LABEL[category]}
               {item.state.verifyMode ? ` · vérification ${item.state.verifyMode === "background" ? "en tâche de fond" : "en ligne"}` : ""}
-              {addedAt(item) !== null
-                ? ` · Ajouté à ${formatClock(addedAt(item) as number)}`
+              {addedAtMs !== null
+                ? ` · Ajouté à ${formatClock(addedAtMs)}`
                 : ""}
               {status === "queued" && position !== undefined
                 ? ` · ${queuePositionLabel(position)}`

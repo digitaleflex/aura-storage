@@ -240,7 +240,11 @@ export function addedAt(item: QueueItem): number | null {
   return item.state.phaseLog?.[0]?.at ?? item.state.phaseSince ?? null;
 }
 
-export function sortItems(items: QueueItem[], sort: SortKey): QueueItem[] {
+export function sortItems(
+  items: QueueItem[],
+  sort: SortKey,
+  addedAtById?: ReadonlyMap<string, number>,
+): QueueItem[] {
   const copy = [...items];
   switch (sort) {
     case "name":
@@ -257,9 +261,12 @@ export function sortItems(items: QueueItem[], sort: SortKey): QueueItem[] {
       );
       break;
     case "added":
-    default:
-      copy.sort((a, b) => (addedAt(a) ?? 0) - (addedAt(b) ?? 0));
+    default: {
+      const at = (item: QueueItem) =>
+        addedAtById?.get(item.id) ?? addedAt(item) ?? 0;
+      copy.sort((a, b) => at(a) - at(b));
       break;
+    }
   }
   return copy;
 }

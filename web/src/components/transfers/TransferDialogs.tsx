@@ -35,6 +35,7 @@ export function TransferDetailsDialog({
   onCancel,
   onCopyName,
   onCopyError,
+  addedAtById,
 }: {
   item: QueueItem | null;
   onClose: () => void;
@@ -42,11 +43,13 @@ export function TransferDetailsDialog({
   onCancel: (id: string) => void;
   onCopyName: (item: QueueItem) => void;
   onCopyError: (item: QueueItem) => void;
+  addedAtById: ReadonlyMap<string, number>;
 }) {
   const status = item ? displayStatus(item) : "queued";
   const percent = item
     ? Math.min(100, Math.round(item.state.progress * 100))
     : 0;
+  const added = item ? addedAtById.get(item.id) ?? addedAt(item) : null;
 
   return (
     <Dialog
@@ -88,7 +91,7 @@ export function TransferDetailsDialog({
             </div>
             <div>
               <dt>Ajouté</dt>
-              <dd>{addedAt(item) !== null ? formatClock(addedAt(item) as number) : "—"}</dd>
+              <dd>{added !== null ? formatClock(added) : "—"}</dd>
             </div>
             <div>
               <dt>Dernier changement d'étape</dt>
