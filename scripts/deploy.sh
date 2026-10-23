@@ -28,12 +28,21 @@ fi
 echo "${CURRENT_NGINX_HASH}" > "${NGINX_HASH_FILE}"
 docker compose ps
 
-# Postflight: verify the expected CSP is actually served.
+# Postflight: verify the expected CSP is actually served by the app router.
+# The loopback :80 request used to hit Traefik's HTTP->HTTPS redirect (a 308
+# with no CSP), so a healthy deploy failed here. Resolve the real app domain
+# against loopback so TLS SNI and the Traefik router are both correct.
+APP_DOMAIN_VALUE="$(grep -E '^APP_DOMAIN=' "${ROOT_DIR}/.env" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")"
 EXPECTED_CSP="$(grep -o 'Content-Security-Policy[^;]*' "${ROOT_DIR}/app/nginx.conf" | head -1 || true)"
 if [[ -n "${EXPECTED_CSP}" ]]; then
-  SERVED_CSP="$(curl -sI http://127.0.0.1/ 2>/dev/null | grep -i 'content-security-policy' || true)"
-  if [[ -z "${SERVED_CSP}" ]]; then
-    echo "ERROR: no Content-Security-Policy header served after deploy" >&2
+  if [[ -z "${APP_DOMAIN_VALUE}" ]]; then
+    echo "ERROR: APP_DOMAIN is missing from .env; cannot verify the served CSP" >&2
     exit 1
   fi
+  SERVED_CSP="$(curl -sI --resolve "${APP_DOMAIN_VALUE}:443:127.0.0.1" "https://${APP_DOMAIN_VALUE}/" 2>/dev/null | grep -i 'content-security-policy' || true)"
+  if [[ -z "${SERVED_CSP}" ]]; then
+    echo "ERROR: no Content-Security-Policy header served after deploy (${APP_DOMAIN_VALUE})" >&2
+    exit 1
+  fi
+  echo "CSP verified on https://${APP_DOMAIN_VALUE}/"
 fi
