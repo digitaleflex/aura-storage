@@ -1,4 +1,9 @@
-import type { TransferCounts, StatusFilter, SortKey } from "./model";
+import type {
+  SortDirection,
+  SortKey,
+  StatusFilter,
+  TransferCounts,
+} from "./model";
 import { SORT_LABEL } from "./model";
 import { TransferIcon } from "./TransferIcon";
 
@@ -18,6 +23,8 @@ export interface TransferFiltersProps {
   onMaxSize: (value: string) => void;
   sort: SortKey;
   onSort: (value: SortKey) => void;
+  sortDirection: SortDirection;
+  onSortDirection: (value: SortDirection) => void;
   onReset: () => void;
 }
 
@@ -42,6 +49,8 @@ export function TransfersFilters({
   onMaxSize,
   sort,
   onSort,
+  sortDirection,
+  onSortDirection,
   onReset,
 }: TransferFiltersProps) {
   const tabs: Array<{ key: StatusFilter; label: string; count: number }> = [
@@ -176,6 +185,18 @@ export function TransfersFilters({
                   {SORT_LABEL[key]}
                 </option>
               ))}
+            </select>
+          </label>
+          <label className="field transfers-field">
+            <span>Sens du tri</span>
+            <select
+              value={sortDirection}
+              onChange={(event) =>
+                onSortDirection(event.target.value as SortDirection)
+              }
+            >
+              <option value="asc">Croissant</option>
+              <option value="desc">Décroissant</option>
             </select>
           </label>
           <div className="transfers-advanced-actions">

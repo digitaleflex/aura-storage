@@ -518,6 +518,150 @@ test("lot B — horodatage d'ajout, duree, debit moyen et sparkline", async ({
   await expect(page.getByText(/Durée \d+:\d+/)).toBeVisible();
 });
 
+test("lot C — tri par clic sur l'entete et dans l'URL", async ({ page }) => {
+  await installMocks(page);
+  await login(page);
+  await seedFiles(page, ["zeta.pdf", "alpha.pdf", "moyen.pdf"]);
+  await expect(page.getByTestId("transfer-status")).toContainText("Disponible", {
+    timeout: 15_000,
+  });
+  await goToTransfers(page);
+  const rows = page.locator('[data-testid="transfer-row"]');
+
+  await page.getByRole("button", { name: /Nom du fichier/ }).click();
+  await expect(rows.first().getByText("alpha.pdf")).toBeVisible();
+  await expect(
+    page.getByRole("columnheader", { name: /Nom du fichier/ }),
+  ).toHaveAttribute("aria-sort", "ascending");
+  await expect(page).toHaveURL(/sort=name/);
+
+  await page.getByRole("button", { name: /Nom du fichier/ }).click();
+  await expect(rows.first().getByText("zeta.pdf")).toBeVisible();
+  await expect(
+    page.getByRole("columnheader", { name: /Nom du fichier/ }),
+  ).toHaveAttribute("aria-sort", "descending");
+  await expect(page).toHaveURL(/dir=desc/);
+});
+
+test("lot C — colonnes adaptatives sans debordement horizontal", async ({ page }) => {
+  await installMocks(page);
+  await login(page);
+  await seedFiles(page, ["a.pdf", "b.pdf", "c.pdf"]);
+  await expect(page.getByTestId("transfer-status")).toContainText("Disponible", {
+    timeout: 15_000,
+  });
+  await goToTransfers(page);
+
+  for (const width of [1280, 1100, 950, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(150);
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(2);
+    if (width <= 1150) {
+      await expect(page.locator("th.transfers-col-speed")).toBeHidden();
+    } else {
+      await expect(page.locator("th.transfers-col-speed")).toBeVisible();
+    }
+    if (width <= 1000 && width > 760) {
+      await expect(page.locator("th.transfers-col-size")).toBeHidden();
+    }
+  }
+});
+
+test("lot C — bandeau de reprise apres un import interrompu", async ({ page }) => {
+  await installMocks(page);
+  await login(page);
+  // Simulate a journal left behind by an interrupted import (no live queue).
+  await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("aura-upload-journal", 1);
+      request.onupgradeneeded = () => {
+        const store = request.result.createObjectStore("files", { keyPath: "key" });
+        store.createIndex("owner", "owner");
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction("files", "readwrite");
+      const store = tx.objectStore("files");
+      store.put({
+        key: "k1",
+        owner: "u1",
+        rel: "reprise-a.pdf",
+        size: 1024,
+        folderId: null,
+        idempotencyKey: "i1",
+      });
+      store.put({
+        key: "k2",
+        owner: "u1",
+        rel: "reprise-b.pdf",
+        size: 2048,
+        folderId: null,
+        idempotencyKey: "i2",
+      });
+      tx.oncomplete = () => resolve();
+    });
+  });
+
+  await goToTransfers(page);
+  await expect(page.getByText("Import interrompu")).toBeVisible();
+  await expect(page.getByText("2 fichiers")).toBeVisible();
+  await page.getByRole("button", { name: "Reprendre l'import" }).click();
+  await page.waitForURL("/");
+  await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
+  await expect(page.locator("#intake")).toBeVisible();
+});
+
+test("lot C — export CSV de la vue", async ({ page }) => {
+  const fs = await import("node:fs");
+  await installMocks(page);
+  await login(page);
+  await seedFiles(page, ["rapport.pdf", "a;b.pdf"]);
+  await expect(page.getByTestId("transfer-status")).toContainText("Disponible", {
+    timeout: 15_000,
+  });
+  await goToTransfers(page);
+  await expect(page.locator('[data-testid="transfer-row"]')).toHaveCount(2);
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Plus d'actions sur les transferts" }).click();
+  await page.getByRole("menuitem", { name: /Exporter la vue/ }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^aura-transferts-\d{8}\d{4}\.csv$/);
+  const path = await download.path();
+  const content = fs.readFileSync(path!, "utf8");
+  expect(content.startsWith("\ufeff")).toBe(true);
+  expect(content).toContain("Nom;Taille (octets);Transféré (octets);Statut;Tentatives;Type d'échec;Message d'erreur;Ajouté le;Dernier changement");
+  expect(content).toContain('"a;b.pdf"');
+});
+
+test("lot C — virtualisation d'un gros lot", async ({ page }) => {
+  await installMocks(page);
+  await login(page);
+  await seedFiles(page, Array.from({ length: 250 }, (_, index) => `sticky-${index}.pdf`));
+  await expect(page.getByTestId("transfer-status")).toContainText("250", {
+    timeout: 30_000,
+  });
+  await goToTransfers(page);
+  const list = page.getByTestId("transfer-list");
+  await expect(list).toHaveAttribute("data-virtualized", "true");
+  const rendered = await page.locator('[data-testid="transfer-row"]').count();
+  expect(rendered).toBeLessThan(100);
+  expect(rendered).toBeGreaterThan(0);
+
+  await page.locator('[data-testid="transfer-list"]').evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  await page.waitForTimeout(500);
+  await expect(page.getByText("sticky-249.pdf")).toBeVisible();
+
+  await page.locator('[data-testid="transfer-list"]').evaluate((el) => el.scrollTo(0, 0));
+  await page.waitForTimeout(500);
+  await expect(page.getByText("sticky-0.pdf")).toBeVisible();
+});
+
 test("visual baseline — completed session", async ({ page }) => {
   await installMocks(page, { failName: "archive.zip" });
   await login(page);

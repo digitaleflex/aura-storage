@@ -17,19 +17,28 @@ import {
   canPauseItem,
   canResumeItem,
   countTransfers,
+  addedAt,
   displayStatus,
+  failureKindLabel,
   failureTitle,
   fileCategory,
   idlePositions,
   matchesStatus,
   sortItems,
+  SORT_DEFAULT_DIRECTION,
+  STATUS_LABEL,
 } from "../components/transfers/model";
 import type {
   DisplayStatus,
+  SortDirection,
   SortKey,
   StatusFilter,
 } from "../components/transfers/model";
-import { parseMegabytes } from "../lib/format";
+import { formatBytes, parseMegabytes } from "../lib/format";
+import { downloadCsv, toCsv } from "../lib/csv";
+import { useSession } from "../lib/auth";
+import { pendingEntries } from "../lib/uploadJournal";
+import type { JournalEntry } from "../lib/uploadJournal";
 import type { QueueItem } from "../lib/transfer";
 
 const PAGE_SIZE = 50;
@@ -53,6 +62,7 @@ interface UrlFilters {
   min: string;
   max: string;
   sort: SortKey;
+  dir: SortDirection;
 }
 
 /** Read filters from the URL, falling back to defaults on unknown values. */
@@ -60,15 +70,22 @@ function readUrlFilters(raw: unknown): UrlFilters {
   const record = (raw ?? {}) as Record<string, unknown>;
   const text = (value: unknown) => (typeof value === "string" ? value : "");
   const status = text(record.status) as StatusFilter;
-  const sort = text(record.sort) as SortKey;
+  const sort = SORT_KEYS.includes(text(record.sort) as SortKey)
+    ? (text(record.sort) as SortKey)
+    : "added";
   const type = text(record.type) as TypeFilter;
+  const direction = text(record.dir) as SortDirection;
   return {
     status: STATUS_FILTERS.includes(status) ? status : "all",
     q: text(record.q),
     type: TYPE_FILTERS.includes(type) ? type : "all",
     min: text(record.min),
     max: text(record.max),
-    sort: SORT_KEYS.includes(sort) ? sort : "added",
+    sort,
+    dir:
+      direction === "asc" || direction === "desc"
+        ? direction
+        : SORT_DEFAULT_DIRECTION[sort],
   };
 }
 
@@ -86,6 +103,8 @@ export function TransfersPage() {
   const { queue } = transfers;
   const navigate = useNavigate();
   const location = useLocation();
+  const session = useSession();
+  const owner = session.data?.id ?? null;
 
   // Filters live in the URL: shareable, back/forward friendly, no duplicated
   // state. Only the search text is debounced locally for typing comfort.
@@ -107,6 +126,27 @@ export function TransfersPage() {
   const counts = useMemo(() => countTransfers(queue), [queue]);
   const positions = useMemo(() => idlePositions(queue), [queue]);
   const [clock, setClock] = useState(() => Date.now());
+  const [resumable, setResumable] = useState<JournalEntry[]>([]);
+
+  // The journal survives a reload; re-read it when the queue settles so a
+  // successful import clears the banner on return.
+  useEffect(() => {
+    if (!owner) {
+      setResumable([]);
+      return;
+    }
+    let cancelled = false;
+    void pendingEntries(owner)
+      .then((entries) => {
+        if (!cancelled) setResumable(entries);
+      })
+      .catch(() => {
+        if (!cancelled) setResumable([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [owner, queue.done, queue.finished]);
 
   useEffect(() => {
     setSearchDraft(filters.q);
@@ -165,7 +205,12 @@ export function TransfersPage() {
       if (maxBytes !== null && item.sizeBytes > maxBytes) return false;
       return true;
     });
-    return sortItems(matching, filters.sort, transfers.addedAt);
+    return sortItems(
+      matching,
+      filters.sort,
+      transfers.addedAt,
+      filters.dir,
+    );
   }, [queue.items, filters, searchDraft, transfers.addedAt]);
 
   // A new filter set starts at the first page again.
@@ -178,6 +223,7 @@ export function TransfersPage() {
     filters.min,
     filters.max,
     filters.sort,
+    filters.dir,
   ]);
 
   // Debounce the text field into the URL (one replace per pause, not per key).
@@ -329,6 +375,16 @@ export function TransfersPage() {
     );
   }
 
+  function handleResumeImport() {
+    void navigate({
+      to: "/",
+      search: (previous) => ({
+        ...(previous as Record<string, unknown>),
+        import: "1",
+      }),
+    });
+  }
+
   function handleRetryConnection() {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       notify("error", "Toujours hors-ligne : la file reste suspendue.");
@@ -360,10 +416,22 @@ export function TransfersPage() {
         next.min = merged.min.trim() ? merged.min : undefined;
         next.max = merged.max.trim() ? merged.max : undefined;
         next.sort = merged.sort === "added" ? undefined : merged.sort;
+        next.dir =
+          merged.dir === SORT_DEFAULT_DIRECTION[merged.sort]
+            ? undefined
+            : merged.dir;
         return next;
       },
       replace,
     });
+  }
+
+  function handleSort(key: SortKey) {
+    if (filters.sort === key) {
+      writeFilters({ dir: filters.dir === "asc" ? "desc" : "asc" });
+    } else {
+      writeFilters({ sort: key, dir: SORT_DEFAULT_DIRECTION[key] });
+    }
   }
 
   function resetFilters() {
@@ -378,6 +446,7 @@ export function TransfersPage() {
         delete next.min;
         delete next.max;
         delete next.sort;
+        delete next.dir;
         return next;
       },
     });
@@ -456,6 +525,51 @@ export function TransfersPage() {
     notify("info", "Annulation demandée pour ce transfert.");
   }
 
+  function handleExport() {
+    const rows = filtered.map((item) => {
+      const status = displayStatus(item);
+      const added = transfers.addedAt.get(item.id) ?? addedAt(item);
+      return [
+        item.fileName,
+        item.sizeBytes,
+        item.state.transferredBytes,
+        STATUS_LABEL[status],
+        item.state.attempts,
+        failureKindLabel(item),
+        item.state.error ?? "",
+        added !== null ? new Date(added).toISOString() : "",
+        item.state.phaseSince !== undefined
+          ? new Date(item.state.phaseSince).toISOString()
+          : "",
+      ];
+    });
+    const csv = toCsv(
+      [
+        "Nom",
+        "Taille (octets)",
+        "Transféré (octets)",
+        "Statut",
+        "Tentatives",
+        "Type d'échec",
+        "Message d'erreur",
+        "Ajouté le",
+        "Dernier changement",
+      ],
+      rows,
+    );
+    const stamp = new Date()
+      .toISOString()
+      .slice(0, 16)
+      .replace(/[-:T]/g, "");
+    downloadCsv(`aura-transferts-${stamp}.csv`, csv);
+    notify(
+      "ok",
+      `${rows.length} ligne${rows.length > 1 ? "s" : ""} exportée${
+        rows.length > 1 ? "s" : ""
+      }.`,
+    );
+  }
+
   function handleClear() {
     transfers.clear();
     setSelected(new Set());
@@ -531,6 +645,29 @@ export function TransfersPage() {
         </div>
       ) : null}
 
+      {queue.items.length === 0 && resumable.length > 0 ? (
+        <div className="transfers-resume" role="status">
+          <span className="transfers-resume-icon" aria-hidden="true">
+            <TransferIcon name="upload" size={20} />
+          </span>
+          <div className="transfers-resume-copy">
+            <strong>Import interrompu</strong>
+            <p>
+              {resumable.length} fichier{resumable.length > 1 ? "s" : ""} (
+              {formatBytes(
+                resumable.reduce((sum, entry) => sum + entry.size, 0),
+              )}
+              ) récupérable{resumable.length > 1 ? "s" : ""}. Sélectionnez les
+              mêmes fichiers pour reprendre : ceux déjà confirmés ne seront pas
+              renvoyés.
+            </p>
+          </div>
+          <button type="button" className="btn btn-primary" onClick={handleResumeImport}>
+            Reprendre l'import
+          </button>
+        </div>
+      ) : null}
+
       <TransfersToolbar
         canPause={canPause}
         canResume={canResume}
@@ -542,6 +679,8 @@ export function TransfersPage() {
         onSelectFailed={() => selectBy("failed")}
         onSelectActive={() => selectBy("active")}
         onSelectQueued={() => selectBy("queued")}
+        exportCount={filtered.length}
+        onExport={handleExport}
         onPauseAll={handlePauseAll}
         onResumeAll={handleResumeAll}
         onCancelAll={requestCancelAll}
@@ -567,6 +706,8 @@ export function TransfersPage() {
         onMaxSize={(value) => writeFilters({ max: value }, true)}
         sort={filters.sort}
         onSort={(value) => writeFilters({ sort: value })}
+        sortDirection={filters.dir}
+        onSortDirection={(value) => writeFilters({ dir: value })}
         onReset={resetFilters}
       />
 
@@ -647,6 +788,9 @@ export function TransfersPage() {
           positions={positions}
           addedAtById={transfers.addedAt}
           highlights={highlights}
+          sort={filters.sort}
+          sortDirection={filters.dir}
+          onSort={handleSort}
           onToggle={toggleSelected}
           onToggleAll={toggleAll}
           onPause={transfers.pauseItem}

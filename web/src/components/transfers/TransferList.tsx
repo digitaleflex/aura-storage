@@ -1,4 +1,12 @@
-import { Fragment } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { QueueItem } from "../../lib/transfer";
 import { RowMenu } from "../RowMenu";
 import type { RowMenuItem } from "../RowMenu";
@@ -16,7 +24,11 @@ import {
   STATUS_LABEL,
   STATUS_TONE,
 } from "./model";
-import type { DisplayStatus } from "./model";
+import type {
+  DisplayStatus,
+  SortDirection,
+  SortKey,
+} from "./model";
 import { TransferIcon } from "./TransferIcon";
 import type { TransferIconName } from "./TransferIcon";
 import { formatBytes, formatClock, formatRate } from "../../lib/format";
@@ -29,6 +41,31 @@ const CATEGORY_ICON: Record<string, TransferIconName> = {
   archive: "archive",
   other: "file",
 };
+
+/** Above this many rows, only the rows near the viewport are in the DOM. */
+const VIRTUALIZE_THRESHOLD = 200;
+const INITIAL_WINDOW = 40;
+const FALLBACK_ROW_HEIGHT = 64;
+const FALLBACK_ERROR_HEIGHT = 124;
+const OVERSCAN_PX = 3 * FALLBACK_ROW_HEIGHT;
+
+interface RowOffset {
+  start: number;
+  height: number;
+}
+
+/** First row whose bottom edge is below `position` (binary search). */
+function findRowAt(offsets: RowOffset[], position: number): number {
+  let low = 0;
+  let high = offsets.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    const row = offsets[middle]!;
+    if (row.start + row.height <= position) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
 
 function progressPercent(item: QueueItem): number {
   const status = displayStatus(item);
@@ -50,6 +87,9 @@ export function TransferList({
   positions,
   addedAtById,
   highlights,
+  sort,
+  sortDirection,
+  onSort,
   onToggle,
   onToggleAll,
   onPause,
@@ -67,6 +107,9 @@ export function TransferList({
   positions: ReadonlyMap<string, number>;
   addedAtById: ReadonlyMap<string, number>;
   highlights: ReadonlyMap<string, "success" | "danger">;
+  sort: SortKey;
+  sortDirection: SortDirection;
+  onSort: (key: SortKey) => void;
   onToggle: (id: string) => void;
   onToggleAll: () => void;
   onPause: (id: string) => void;
@@ -77,15 +120,136 @@ export function TransferList({
   onCopyError: (item: QueueItem) => void;
   onShowMore: () => void;
 }) {
-  const shown = items.slice(0, visibleCount);
-  const hidden = items.length - shown.length;
+  const virtual = items.length > VIRTUALIZE_THRESHOLD;
+  const [range, setRange] = useState({
+    start: 0,
+    end: Math.min(INITIAL_WINDOW, items.length),
+  });
+  const [measured, setMeasured] = useState({
+    normal: FALLBACK_ROW_HEIGHT,
+    error: FALLBACK_ERROR_HEIGHT,
+  });
+  const listRef = useRef<HTMLElement | null>(null);
+
+  const offsets = useMemo<RowOffset[]>(() => {
+    let cursor = 0;
+    return items.map((item) => {
+      const height =
+        measured.normal +
+        (displayStatus(item) === "failed" ? measured.error : 0);
+      const row = { start: cursor, height };
+      cursor += height;
+      return row;
+    });
+  }, [items, measured]);
+  const totalHeight =
+    offsets.length > 0
+      ? offsets[offsets.length - 1]!.start + offsets[offsets.length - 1]!.height
+      : 0;
+
+  const offsetsRef = useRef(offsets);
+  offsetsRef.current = offsets;
+
+  const computeRange = useCallback(() => {
+    if (!virtual) return;
+    const element = listRef.current;
+    const rows = offsetsRef.current;
+    if (!element || rows.length === 0) return;
+    // The virtualized list scrolls inside its own container, not the page.
+    const viewTop = element.scrollTop;
+    const viewBottom = viewTop + element.clientHeight;
+    const start = Math.max(0, findRowAt(rows, viewTop - OVERSCAN_PX));
+    const end = Math.min(
+      rows.length,
+      findRowAt(rows, viewBottom + OVERSCAN_PX) + 1,
+    );
+    setRange((previous) =>
+      previous.start === start && previous.end === end
+        ? previous
+        : { start, end },
+    );
+  }, [virtual]);
+
+  useEffect(() => {
+    if (!virtual) return;
+    const element = listRef.current;
+    if (!element) return;
+    computeRange();
+    let frame = 0;
+    const onScrollOrResize = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        computeRange();
+      });
+    };
+    element.addEventListener("scroll", onScrollOrResize, { passive: true });
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      element.removeEventListener("scroll", onScrollOrResize);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [virtual, computeRange]);
+
+  // Rows can change (filter, completion, error panel): recompute the window.
+  useEffect(() => {
+    if (virtual) computeRange();
+  }, [virtual, offsets, computeRange]);
+
+  // Measure one normal and one error row so spacer arithmetic matches the
+  // actual rendering (borders, padding and fonts included).
+  useLayoutEffect(() => {
+    if (!virtual) return;
+    const element = listRef.current;
+    if (!element) return;
+    const normal = element.querySelector<HTMLElement>(
+      '[data-testid="transfer-row"]:not([data-status="failed"])',
+    ) ?? element.querySelector<HTMLElement>('[data-testid="transfer-row"]');
+    const error = element.querySelector<HTMLElement>(".transfers-error-row");
+    const normalHeight = normal?.getBoundingClientRect().height ?? 0;
+    const errorHeight = error?.getBoundingClientRect().height ?? 0;
+    setMeasured((previous) => {
+      const nextNormal =
+        normalHeight > 0 ? normalHeight : previous.normal;
+      const nextError = errorHeight > 0 ? errorHeight : previous.error;
+      if (
+        Math.abs(nextNormal - previous.normal) < 0.5 &&
+        Math.abs(nextError - previous.error) < 0.5
+      ) {
+        return previous;
+      }
+      return { normal: nextNormal, error: nextError };
+    });
+  }, [virtual, range, offsets]);
+
+  const shown = virtual
+    ? items.slice(range.start, range.end)
+    : items.slice(0, visibleCount);
+  const hidden = virtual ? 0 : items.length - shown.length;
+  const topSpacer = virtual && offsets[range.start] ? offsets[range.start]!.start : 0;
+  const bottomSpacer = virtual
+    ? Math.max(
+        0,
+        totalHeight -
+          (offsets[range.end - 1]
+            ? offsets[range.end - 1]!.start + offsets[range.end - 1]!.height
+            : 0),
+      )
+    : 0;
   const allSelected = items.length > 0 && items.every((item) => selected.has(item.id));
   const someSelected =
     !allSelected && items.some((item) => selected.has(item.id));
 
   return (
-    <section className="transfers-list" aria-label="Liste des transferts" data-testid="transfer-list">
-      <table className="transfers-table">
+    <section
+      ref={listRef}
+      className={`transfers-list${virtual ? " transfers-list--virtual" : ""}`}
+      aria-label="Liste des transferts"
+      data-testid="transfer-list"
+      data-virtualized={virtual ? "true" : "false"}
+    >
+      <table className="transfers-table" aria-rowcount={items.length}>
         <caption className="visually-hidden">Liste des transferts de la session</caption>
         <thead>
           <tr>
@@ -100,10 +264,29 @@ export function TransferList({
                 onChange={onToggleAll}
               />
             </th>
-            <th scope="col">Nom du fichier</th>
-            <th scope="col">Taille</th>
+            <SortableHeader
+              label="Nom du fichier"
+              field="name"
+              sort={sort}
+              direction={sortDirection}
+              onSort={onSort}
+            />
+            <SortableHeader
+              label="Taille"
+              field="size"
+              sort={sort}
+              direction={sortDirection}
+              onSort={onSort}
+              className="transfers-col-size"
+            />
             <th scope="col">Progression</th>
-            <th scope="col">Statut</th>
+            <SortableHeader
+              label="Statut"
+              field="status"
+              sort={sort}
+              direction={sortDirection}
+              onSort={onSort}
+            />
             <th scope="col" className="transfers-col-speed">Vitesse</th>
             <th scope="col" className="transfers-col-actions">
               Actions
@@ -111,9 +294,15 @@ export function TransferList({
           </tr>
         </thead>
         <tbody>
-          {shown.map((item) => (
+          {topSpacer > 0 ? (
+            <tr className="transfers-spacer" aria-hidden="true">
+              <td colSpan={7} style={{ height: topSpacer }} />
+            </tr>
+          ) : null}
+          {shown.map((item, index) => (
             <TransferRow
               key={item.id}
+              rowIndex={virtual ? range.start + index + 1 : undefined}
               item={item}
               selected={selected.has(item.id)}
               rate={itemRates.get(item.id) ?? 0}
@@ -129,6 +318,11 @@ export function TransferList({
               onCopyError={onCopyError}
             />
           ))}
+          {bottomSpacer > 0 ? (
+            <tr className="transfers-spacer" aria-hidden="true">
+              <td colSpan={7} style={{ height: bottomSpacer }} />
+            </tr>
+          ) : null}
         </tbody>
       </table>
       {hidden > 0 ? (
@@ -147,6 +341,7 @@ export function TransferList({
 
 function TransferRow({
   item,
+  rowIndex,
   selected,
   rate,
   position,
@@ -161,6 +356,7 @@ function TransferRow({
   onCopyError,
 }: {
   item: QueueItem;
+  rowIndex?: number;
   selected: boolean;
   rate: number;
   position: number | undefined;
@@ -207,6 +403,7 @@ function TransferRow({
         }${highlight === "danger" ? " is-just-failed" : ""}`}
         data-testid="transfer-row"
         data-status={status}
+        aria-rowindex={rowIndex}
         data-highlight={highlight}
       >
         <td className="transfers-col-select" data-label="Sélection">
@@ -240,7 +437,7 @@ function TransferRow({
             </span>
           </span>
         </td>
-        <td className="transfers-size" data-label="Taille">
+        <td className="transfers-size transfers-col-size" data-label="Taille">
           {formatBytes(item.sizeBytes)}
         </td>
         <td className="transfers-progress-cell" data-label="Progression">
@@ -331,5 +528,44 @@ function TransferRow({
         </tr>
       ) : null}
     </Fragment>
+  );
+}
+
+/** A table header that toggles the sort order with a real button (keyboard). */
+function SortableHeader({
+  label,
+  field,
+  sort,
+  direction,
+  onSort,
+  className,
+}: {
+  label: string;
+  field: SortKey;
+  sort: SortKey;
+  direction: SortDirection;
+  onSort: (key: SortKey) => void;
+  className?: string;
+}) {
+  const active = sort === field;
+  return (
+    <th
+      scope="col"
+      aria-sort={
+        active ? (direction === "asc" ? "ascending" : "descending") : "none"
+      }
+      className={className}
+    >
+      <button
+        type="button"
+        className={`transfers-sort${active ? " is-active" : ""}`}
+        onClick={() => onSort(field)}
+      >
+        {label}
+        <span className="transfers-sort-arrow" aria-hidden="true">
+          {active ? (direction === "asc" ? "↑" : "↓") : "↕"}
+        </span>
+      </button>
+    </th>
   );
 }
