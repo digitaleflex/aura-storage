@@ -289,4 +289,4 @@ Le lot C est mergé dans `main` (PR #253) et déployé (run `40008115267`), avec
 Les baselines visuelles restent un contrôle local : elles dépendent du
 rasterizer et des polices de l'hôte de référence, donc le job CI les ignore
 (`test.skip` sous `CI`) et exécute le reste de la suite. Le lot D est sur
-`main` mais n'a pas été déployé.
+`main` et déployé (run `40019309145`), avec CSP vérifiée.
