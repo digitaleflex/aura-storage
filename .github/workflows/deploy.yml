@@ -27,8 +27,20 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
+          # Fail the workflow when the remote script fails. Without this,
+          # appleboy/ssh-action reports success even when bootstrap aborts
+          # (it did: npm was missing from the non-interactive PATH and every
+          # "successful" deploy since then never rebuilt the frontend).
+          script_stop: true
+          # The build runs on the host, whose non-interactive SSH shell does not
+          # load the Node version manager profile.
+          command_timeout: 25m
           script: |
             cd /home/aura-admin/aura-storage
+            export PATH="/home/aura-admin/.node/v22/bin:$PATH"
+            command -v npm >/dev/null || { echo "ERROR: npm still missing from PATH"; exit 1; }
+            node --version
+            npm --version
             echo "🚀 Début déploiement $(date)"
             bash scripts/deploy.sh
             echo "✅ Déploiement terminé $(date)"
