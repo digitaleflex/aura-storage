@@ -1613,10 +1613,10 @@ select:focus-visible {
   right: 20px;
   bottom: 20px;
   z-index: var(--z-menu);
-  width: min(420px, calc(100vw - 40px));
+  width: min(560px, calc(100vw - 32px));
   background: var(--steel-1);
   border: var(--bw) solid var(--line);
-  border-radius: 14px;
+  border-radius: 16px;
   box-shadow: var(--shadow-tray);
   overflow: hidden;
 }

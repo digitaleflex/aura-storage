@@ -157,7 +157,10 @@ export const UploadTray = memo(function UploadTray({
       return totalBytes > 0 ? (
         <div className="tray-progress">
           <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-            <span className="progress-bar" style={{ width: `${pct}%` }} />
+            <span
+              className={`progress-bar${queue.finished ? "" : " is-active"}`}
+              style={{ width: `${pct}%` }}
+            />
           </div>
           <span className="tray-progress-label">
             {formatBytes(uploadedBytes)} / {formatBytes(totalBytes)} ({pct}%)
@@ -173,9 +176,9 @@ export const UploadTray = memo(function UploadTray({
       ) : null;
     })()}
   <div
-    className="transfer"
+    className={`transfer${trayCollapsed ? " is-collapsed" : ""}`}
     data-testid="transfer-status"
-    hidden={trayCollapsed}
+    aria-hidden={trayCollapsed}
   >
     {/* One short announcement per finished file; the per-byte texts of the
         list below are not live (a screen reader would read them nonstop). */}
@@ -283,7 +286,10 @@ export const UploadTray = memo(function UploadTray({
         <>
     <ul className="queue">
       {shown.map((item) => (
-        <li key={item.id} className="queue-item">
+        <li
+          key={item.id}
+          className={`queue-item${ACTIVE_PHASES.includes(item.state.phase) ? " is-active" : ""}`}
+        >
           <div className="queue-line">
             <span className="transfer-name">{item.fileName}</span>
             <span className="muted">{formatBytes(item.sizeBytes)}</span>
