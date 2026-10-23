@@ -1225,6 +1225,10 @@ export function startUploadQueue(
   };
 
   const detachListeners = (): void => {
+    if (progressTimer !== null) {
+      clearTimeout(progressTimer);
+      progressTimer = null;
+    }
     if (!hasWindow || !listenersAttached) return;
     listenersAttached = false;
     window.removeEventListener("beforeunload", onBeforeUnload);
