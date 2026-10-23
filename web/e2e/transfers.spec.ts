@@ -408,10 +408,10 @@ test("lot A — bandeau hors-ligne puis reprise au retour du réseau", async ({ 
   await expect(page.getByText("Connexion perdue")).toHaveCount(0);
 
   await page.context().setOffline(true);
-  await expect(page.getByText("Connexion perdue")).toBeVisible();
+  await expect(page.getByText("Connexion perdue", { exact: true })).toBeVisible();
 
   await page.context().setOffline(false);
-  await expect(page.getByText("Connexion perdue")).toHaveCount(0, {
+  await expect(page.getByText("Connexion perdue", { exact: true })).toHaveCount(0, {
     timeout: 10_000,
   });
 });
@@ -663,6 +663,7 @@ test("lot C — virtualisation d'un gros lot", async ({ page }) => {
 });
 
 test("visual baseline — completed session", async ({ page }) => {
+  test.skip(!!process.env.CI, "visual baselines are reference-host specific");
   await installMocks(page, { failName: "archive.zip" });
   await login(page);
   await seedFiles(page, [
