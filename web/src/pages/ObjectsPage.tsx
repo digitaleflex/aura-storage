@@ -352,6 +352,50 @@ export function ObjectsPage() {
   const cascadeDialogRef = useRef<HTMLDialogElement | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
+  /** Badges de statut : répartition des fichiers de la file par phase. */
+  const phaseBadges = useMemo(() => {
+    let paused = 0;
+    let idle = 0;
+    let uploading = 0;
+    let validating = 0;
+    let available = 0;
+    let failed = 0;
+    let cancelled = 0;
+    for (const item of queue.items) {
+      if (item.paused) paused += 1;
+      switch (item.state.phase) {
+        case "requesting-intent":
+        case "uploading":
+          uploading += 1;
+          break;
+        case "validating":
+          validating += 1;
+          break;
+        case "available":
+          available += 1;
+          break;
+        case "failed":
+          failed += 1;
+          break;
+        case "cancelled":
+          cancelled += 1;
+          break;
+        default:
+          idle += 1;
+      }
+    }
+    const entries = [
+      { key: "paused", label: "Suspendu", count: paused, tone: "warn" },
+      { key: "failed", label: "Échec", count: failed, tone: "error" },
+      { key: "validating", label: "Vérification", count: validating, tone: "run" },
+      { key: "uploading", label: "Envoi", count: uploading, tone: "run" },
+      { key: "idle", label: "En attente", count: idle, tone: "muted" },
+      { key: "available", label: "Prêt", count: available, tone: "ok" },
+      { key: "cancelled", label: "Annulé", count: cancelled, tone: "muted" },
+    ];
+    return entries.filter((entry) => entry.count > 0);
+  }, [queue.items]);
+
   function dismissToast(id: number) {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }
@@ -1971,6 +2015,18 @@ export function ObjectsPage() {
             <span className="control-bar-stats">
               {items.length} fichier(s) · {queue.items.length} en cours
             </span>
+            {phaseBadges.length > 0 ? (
+              <span className="control-bar-badges">
+                {phaseBadges.map((badge) => (
+                  <span
+                    key={badge.key}
+                    className={`phase-badge phase-badge-${badge.tone}`}
+                  >
+                    {badge.label} · {badge.count}
+                  </span>
+                ))}
+              </span>
+            ) : null}
           </div>
         </div>
         <div className="head-actions">
