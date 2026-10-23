@@ -12,11 +12,11 @@ Backlog publié sur GitHub le 23 octobre 2026, regroupé en cinq jalons.
 | Transferts A — Quick wins | [#229](https://github.com/digitaleflex/aura-storage/issues/229) | En-tête de liste sticky et hauteur de liste maîtrisée | Livré — PR #248, déployé |
 | Transferts A — Quick wins | [#230](https://github.com/digitaleflex/aura-storage/issues/230) | Copier le message d'erreur et le nom du fichier | Livré — PR #248, déployé |
 | Transferts A — Quick wins | [#231](https://github.com/digitaleflex/aura-storage/issues/231) | Titre de document dynamique (activité et échecs) | Livré — PR #248, déployé |
-| Transferts B — Pilotage | [#232](https://github.com/digitaleflex/aura-storage/issues/232) | Synchroniser filtres, recherche et tri dans l'URL | Implémenté — PR #252, non déployé |
-| Transferts B — Pilotage | [#233](https://github.com/digitaleflex/aura-storage/issues/233) | Surligner brièvement la ligne dont le statut change | Implémenté — PR #252, non déployé |
-| Transferts B — Pilotage | [#234](https://github.com/digitaleflex/aura-storage/issues/234) | Sparkline du débit global sur 60 secondes | Implémenté — PR #252, non déployé |
-| Transferts B — Pilotage | [#235](https://github.com/digitaleflex/aura-storage/issues/235) | Durée écoulée, débit moyen et ETA stabilisé | Implémenté — PR #252, non déployé |
-| Transferts B — Pilotage | [#236](https://github.com/digitaleflex/aura-storage/issues/236) | Horodatage fiable de l'ajout des fichiers | Implémenté — PR #252, non déployé |
+| Transferts B — Pilotage | [#232](https://github.com/digitaleflex/aura-storage/issues/232) | Synchroniser filtres, recherche et tri dans l'URL | Livré — PR #252, déployé |
+| Transferts B — Pilotage | [#233](https://github.com/digitaleflex/aura-storage/issues/233) | Surligner brièvement la ligne dont le statut change | Livré — PR #252, déployé |
+| Transferts B — Pilotage | [#234](https://github.com/digitaleflex/aura-storage/issues/234) | Sparkline du débit global sur 60 secondes | Livré — PR #252, déployé |
+| Transferts B — Pilotage | [#235](https://github.com/digitaleflex/aura-storage/issues/235) | Durée écoulée, débit moyen et ETA stabilisé | Livré — PR #252, déployé |
+| Transferts B — Pilotage | [#236](https://github.com/digitaleflex/aura-storage/issues/236) | Horodatage fiable de l'ajout des fichiers | Livré — PR #252, déployé |
 | Transferts C — Liste & reprise | [#237](https://github.com/digitaleflex/aura-storage/issues/237) | Tri par clic sur les entêtes de colonnes | Ouvert |
 | Transferts C — Liste & reprise | [#238](https://github.com/digitaleflex/aura-storage/issues/238) | Colonnes secondaires adaptatives plutôt que masquage brutal | Ouvert |
 | Transferts C — Liste & reprise | [#239](https://github.com/digitaleflex/aura-storage/issues/239) | Bandeau de reprise d'un import interrompu après rechargement | Ouvert |

@@ -246,5 +246,11 @@ sélection, copie, lien depuis le plateau, hors-ligne, sticky). Suite complète 
   fichiers encore en attente.
 
 Vérifications : `tsc`, build, **154 tests Playwright**. Les baselines visuelles
-ont été régénérées (sparkline + durée). Le lot B est sur `main` mais n'a pas été
-déployé.
+ont été régénérées (sparkline + durée). Le lot B est mergé dans `main` (PR #252)
+et déployé (run `40000979514`), avec CSP vérifiée.
+
+> **Note d'exploitation** : le conteneur `app` sert `./web/dist` en bind mount.
+> Un `npm run build` exécuté sur l'hôte met donc immédiatement le nouveau
+> bundle à disposition de la production, avant même le workflow de déploiement.
+> Toujours déclencher le déploiement après un build local, ou considérer ce
+> build comme une mise en production de fait.
