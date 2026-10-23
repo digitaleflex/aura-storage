@@ -328,6 +328,7 @@ export function ObjectsPage() {
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   // Uploads run through the M03 transfer engine as a bounded multi-file queue.
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [pendingFolderEntries, setPendingFolderEntries] = useState<{ file: File; rel: string }[]>([]);
   const [queue, setQueue] = useState<QueueState>(() => emptyQueue());
   const queueRef = useRef<UploadQueue | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
@@ -1211,16 +1212,21 @@ export function ObjectsPage() {
     event.preventDefault();
     setUploadError(null);
     setNotice(null);
-    if (pendingFiles.length === 0) {
-      setUploadError("Choisissez au moins un fichier.");
+    if (pendingFiles.length === 0 && pendingFolderEntries.length === 0) {
+      setUploadError("Choisissez au moins un fichier ou un dossier.");
       return;
     }
     if (transferActive) {
       // File d'attente : les fichiers sont mis en attente et seront uploadés
       // automatiquement quand le transfert en cours se termine.
-      setNotice(
-        `${pendingFiles.length} fichier(s) mis en file d'attente — ils seront uploadés automatiquement à la fin du transfert en cours.`,
-      );
+      if (pendingFiles.length > 0) {
+        setNotice(
+          `${pendingFiles.length} fichier(s) mis en file d'attente — ils seront uploadés automatiquement à la fin du transfert en cours.`,
+        );
+      }
+      if (pendingFolderEntries.length > 0) {
+        setNotice("Dossiers en attente — ils seront importés à la fin du transfert en cours.");
+      }
       return;
     }
     if (!csrf) {
@@ -1229,8 +1235,12 @@ export function ObjectsPage() {
     }
     // Garde-fou taille client : vérifier max_object_bytes avant l'upload
     const maxBytes = usageQuery.data?.limits?.max_object_bytes;
+    const combinedForSize = [
+      ...pendingFiles,
+      ...pendingFolderEntries.map((e) => e.file),
+    ];
     if (maxBytes && maxBytes > 0) {
-      const oversized = pendingFiles.filter((f) => f.size > maxBytes);
+      const oversized = combinedForSize.filter((f) => f.size > maxBytes);
       if (oversized.length > 0) {
         const names = oversized.map((f) => f.name).join(", ");
         setUploadError(
@@ -1239,6 +1249,16 @@ export function ObjectsPage() {
         );
         return;
       }
+    }
+    if (pendingFolderEntries.length > 0) {
+      const folderList = pendingFolderEntries.map((e) => e.file);
+      const folderRels = pendingFolderEntries.map((e) => e.rel);
+      const looseList = pendingFiles;
+      const looseRels = pendingFiles.map((f) => f.name);
+      void uploadRelPaths([...folderList, ...looseList], [...folderRels, ...looseRels]);
+      setPendingFiles([]);
+      setPendingFolderEntries([]);
+      return;
     }
     launchQueue(
       csrf,
@@ -1258,7 +1278,11 @@ export function ObjectsPage() {
         (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
       ),
     );
-    await uploadRelPaths(list, relPaths);
+    setUploadError(null);
+    setPendingFolderEntries((current) => [
+      ...current,
+      ...list.map((file, index) => ({ file, rel: relPaths[index] ?? file.name })),
+    ]);
   }
 
   /** Shared core: plan folders, create them, queue files with folder ids. */
@@ -1536,7 +1560,13 @@ export function ObjectsPage() {
                 : `${loose.length} fichiers ajoutés à la file d'attente.`
             }` + (hasFolders ? " Les dossiers attendront la fin du transfert." : ""),
           );
-        } else {
+        }
+        if (hasFolders) {
+          const folderEntries = entries.filter((entry) => entry.rel.includes("/"));
+          setPendingFolderEntries((current) => [...current, ...folderEntries]);
+          notify("info", "Transfert en cours — dossiers mis en attente, ils seront importés ensuite.");
+        }
+        if (loose.length === 0 && !hasFolders) {
           // Folder creation needs a free queue: say so instead of swallowing.
           setUploadError(
             "Un transfert est en cours : attendez sa fin pour déposer un dossier.",
@@ -1870,6 +1900,7 @@ export function ObjectsPage() {
     intakeOpen ||
     dropScan !== null ||
     pendingFiles.length > 0 ||
+    pendingFolderEntries.length > 0 ||
     queue.items.length > 0 ||
     uploadError !== null;
 
@@ -2357,7 +2388,7 @@ export function ObjectsPage() {
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={transferActive || pendingFiles.length === 0}
+            disabled={transferActive || (pendingFiles.length === 0 && pendingFolderEntries.length === 0)}
           >
             {transferActive ? "Transfert…" : "Importer et valider"}
           </button>
@@ -2389,6 +2420,22 @@ export function ObjectsPage() {
           ) : null}
         </form>
 
+        {pendingFolderEntries.length > 0 ? (
+          <div className="pending-folders">
+            <p className="pending-hint" role="status">
+              Dossiers en attente :{" "}
+              {Array.from(new Set(pendingFolderEntries.map((e) => e.rel.split("/")[0]))).join(", ")}{" "}
+              — {pendingFolderEntries.length} fichier(s).
+            </p>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => setPendingFolderEntries([])}
+            >
+              Retirer les dossiers
+            </button>
+          </div>
+        ) : null}
         {pendingFiles.length > 0 ? (
           <>
             {transferActive ? (
