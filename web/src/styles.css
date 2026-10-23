@@ -1622,14 +1622,14 @@ select:focus-visible {
 }
 
 .tray-progress {
-  padding: 4px 16px 8px;
+  padding: 12px 16px 6px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .tray-progress-label {
-  font-size: var(--fs-xs);
+  font-size: 13px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -1637,8 +1637,8 @@ select:focus-visible {
 .tray-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 10px 10px 16px;
+  gap: 8px;
+  padding: 12px 12px 12px 16px;
   background: var(--side);
   color: #ffffff;
 }
@@ -1646,12 +1646,14 @@ select:focus-visible {
 .tray-head h2 {
   flex: 1;
   margin: 0;
-  font-size: 15px;
+  font-size: 17px;
   color: inherit;
 }
 
 .tray-head .btn-ghost {
   color: var(--side-ink);
+  padding: 6px 10px;
+  font-size: 13px;
 }
 
 .tray-head .btn-ghost:hover {
@@ -3233,8 +3235,19 @@ body.density-compact .overview-tile {
 /* The tray floats over the page: with per-file explanations it can grow tall
    enough to cover the page's own buttons, so its body scrolls instead. */
 .tray .transfer {
-  max-height: min(320px, 40vh);
+  max-height: min(480px, 60vh);
   overflow-y: auto;
+  transition: max-height 240ms ease, opacity 200ms ease, padding 200ms ease;
+  overflow: hidden;
+}
+
+.tray .transfer.is-collapsed {
+  max-height: 0 !important;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin: 0;
+  pointer-events: none;
 }
 
 /* -- Design pass (visual audit) ---------------------------------------------
