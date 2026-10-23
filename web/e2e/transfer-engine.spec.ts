@@ -1102,6 +1102,82 @@ test("the online event replays a transient failure without any click", async () 
   }
 });
 
+test("reconnecting restores the configured concurrency after an outage", async () => {
+  const listeners = new Map<string, Array<() => void>>();
+  const fakeWindow = {
+    addEventListener: (type: string, handler: () => void) => {
+      listeners.set(type, [...(listeners.get(type) ?? []), handler]);
+    },
+    removeEventListener: (type: string, handler: () => void) => {
+      listeners.set(type, (listeners.get(type) ?? []).filter((h) => h !== handler));
+    },
+  };
+  const globals = globalThis as unknown as { window?: unknown };
+  const hadWindow = "window" in globals;
+  const previousWindow = globals.window;
+  globals.window = fakeWindow;
+
+  try {
+    let linkDown = true;
+    const states: QueueState[] = [];
+    const deps: TransferDeps = {
+      requestIntent: async (input) => ({
+        id: input.fileName,
+        status: "pending",
+        method: "PUT",
+        upload_url: `https://s3.example/put/${input.fileName}`,
+        headers: { "Content-Type": "application/octet-stream" },
+        content_type: "application/octet-stream",
+        size_bytes: input.sizeBytes,
+        expires_in: 900,
+        expires_at: null,
+        idempotent_replay: false,
+      }),
+      upload: async () => {
+        if (linkDown) throw new PresignedUploadError("network", 0, "Réseau interrompu.");
+      },
+      commit: async (id) => ({
+        id,
+        status: "available",
+        size_bytes: 10,
+        checksum_sha256: "x",
+      }),
+      abortIntent: async () => undefined,
+      sleep: async () => undefined,
+      random: () => 0,
+    };
+
+    const files = Array.from({ length: 4 }, (_, i) => fakeFile(`f${i}.bin`));
+    const queue = startUploadQueue(files, deps, {
+      folderId: null,
+      startStaggerMs: 0,
+      maxConcurrency: 4,
+      onUpdate: (state) => states.push(state),
+    });
+
+    const first = await queue.done;
+    expect(first.failed).toBe(4);
+    // Four network cuts shrink the adaptive window below its ceiling.
+    expect(states[states.length - 1]?.concurrency).toBeLessThan(4);
+
+    const fire = (type: string) => {
+      for (const handler of listeners.get(type) ?? []) handler();
+    };
+    linkDown = false;
+    fire("online");
+
+    await waitFor(() => {
+      const last = states[states.length - 1];
+      return last?.active === 0 && last?.done === 4;
+    });
+    // A new link is not congestion: the queue is back at its configured width.
+    expect(states[states.length - 1]?.concurrency).toBe(4);
+  } finally {
+    if (hadWindow) globals.window = previousWindow;
+    else delete globals.window;
+  }
+});
+
 test("throughput is measured over a sliding window, not since the start", async () => {
   const w = new ThroughputWindow(10_000);
   expect(w.rate()).toBe(0);

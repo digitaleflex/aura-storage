@@ -523,12 +523,20 @@ class Repository:
         params += [limit, offset]
         return self.conn.execute(sql, params).fetchall()
 
-    def count_pending(self, *, space_id: str, owner_id: Optional[str] = None) -> int:
+    def count_pending(
+        self, *, space_id: str, owner_id: Optional[str] = None,
+        min_expires_at: Optional[int] = None,
+    ) -> int:
         sql = "SELECT COUNT(*) AS n FROM objects WHERE status = 'pending' AND space_id = ?"
-        params = [space_id]
+        params: list = [space_id]
         if owner_id is not None:
             sql += " AND owner_id = ?"
             params.append(owner_id)
+        if min_expires_at is not None:
+            # Expired intents stay 'pending' until the sweep deletes their
+            # bytes: they must not count against the live-intent cap.
+            sql += " AND (intent_expires_at IS NULL OR intent_expires_at >= ?)"
+            params.append(min_expires_at)
         return int(self.conn.execute(sql, params).fetchone()["n"])
 
     def get_pending_by_idempotency(

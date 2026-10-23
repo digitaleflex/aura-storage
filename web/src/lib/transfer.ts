@@ -1073,6 +1073,19 @@ export function startUploadQueue(
         item.settled = true;
         active -= 1;
         if (slotReleased) verifyingSlots -= 1;
+        // A fatal failure leaves a pending intent behind (rejected bytes, an
+        // expired session, a size mismatch). Release it now: stale pending
+        // rows count against the server's pending-intent cap and would make
+        // the *next* import crawl on 429 retries.
+        if (
+          item.state.phase === "failed" &&
+          item.state.failureKind === "fatal" &&
+          item.state.intentId
+        ) {
+          void deps
+            .abortIntent(item.state.intentId)
+            .catch(() => undefined);
+        }
         adaptToOutcome(item, lastError);
         emit();
         pump();
@@ -1208,6 +1221,12 @@ export function startUploadQueue(
   };
   const onOffline = (): void => pauseAll();
   const onOnline = (): void => {
+    // The outage may have backed the queue off to one file (5xx/network are
+    // congestion signals). The link is new, so start again at the configured
+    // ceiling instead of crawling until three successes per slot rebuild it.
+    effectiveConcurrency = maxConcurrency;
+    congestedStreak = 0;
+    healthyStreak = 0;
     if (autoPauseOnOffline) resumeAll();
     if (autoRetryOnReconnect) retryTransient();
   };

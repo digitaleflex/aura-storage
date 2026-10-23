@@ -915,7 +915,12 @@ def upload_intent(
                 "expires_in": 0, "expires_at": None, "idempotent_replay": True,
             }
 
-    if repo.count_pending(**_object_scope(principal)) >= settings.max_pending_intents:
+    # Only live intents count: an expired row (whose bytes the sweep has not
+    # deleted yet) must not block a resume after a session loss.
+    live_since = int(time.time()) - settings.intent_grace_s
+    if repo.count_pending(
+        **_object_scope(principal), min_expires_at=live_since
+    ) >= settings.max_pending_intents:
         raise HTTPException(status_code=429, detail="too many pending uploads")
     _check_capacity(body.size_bytes)
 
