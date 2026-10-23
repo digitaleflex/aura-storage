@@ -58,7 +58,7 @@ jobs:
       - name: Run end-to-end tests
         run: |
           set -e
-          AURA_API_ADMIN_PASSWORD=ci-dummy-password \
+          AURA_API_ADMIN_PASSWORD=local-smoke-test-password \
           AURA_S3_ACCESS_KEY=ci-dummy-access-key-1234 \
           AURA_S3_SECRET_KEY=ci-dummy-secret-12345678901234567890 \
           AURA_S3_ENDPOINT=https://127.0.0.1:9 \
