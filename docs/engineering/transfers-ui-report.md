@@ -121,8 +121,8 @@ Modifiés :
 | `cd web && npx tsc --noEmit` | OK |
 | `cd web && npm run build` | OK (tsc + Vite, 210 modules) |
 | `npx playwright test e2e/transfers.spec.ts` | 19 tests OK |
-| `npm run test:unit` (Vitest) | 29 tests OK |
-| `npx playwright test` (suite complète) | **164 tests OK** (dernière exécution après l'export de diagnostic) |
+| `npm run test:unit` (Vitest) | 30 tests OK |
+| `npx playwright test` (suite complète) | **165 tests OK** (dernière exécution après la télémétrie de reprise) |
 | Baselines visuelles | `transfers-desktop` et `transfers-mobile` créées ; `files-desktop` et `admin-desktop` régénérées pour la nouvelle entrée de navigation |
 
 Note d'environnement : la machine de test n'a pas les bibliothèques GUI de
@@ -302,3 +302,13 @@ remplacés par `[redacted]` ; les champs absents restent `null`.
 
 Vérifications : 29 tests unitaires, 164 tests Playwright. La persistance et la
 consultation support restent la phase 2 de #256 (adossée à #246).
+
+## 13. Télémétrie de reprise et débit
+
+Le diagnostic de session (menu secondaire de `/transfers`) ajoute les données
+nécessaires à l'analyse d'une baisse de débit après reprise : `intentReplay`,
+plan multipart, `heldParts`/`missingParts`, `resumed`, débit par fichier,
+concurrence effective, flux actifs, historique de débit et timings de commit.
+
+Déploiement : run `40028340662` (succès, CSP vérifiée, bundle
+`index-4b92dGfB.js`). L'investigation est suivie dans #259.

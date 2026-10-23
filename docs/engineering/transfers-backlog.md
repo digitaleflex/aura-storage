@@ -28,7 +28,8 @@ Backlog publié sur GitHub le 23 octobre 2026, regroupé en cinq jalons.
 | Transferts D — Qualité & CI | [#245](https://github.com/digitaleflex/aura-storage/issues/245) | Annonces lecteur d'écran ciblées sur les transitions de statut | Livré — PR #255, déployé |
 | Transferts E — Backend & produit | [#246](https://github.com/digitaleflex/aura-storage/issues/246) | Historique serveur des transferts (API + persistance) | Ouvert |
 | Transferts E — Backend & produit | [#247](https://github.com/digitaleflex/aura-storage/issues/247) | Reprise sans re-sélection via File System Access API | Fermé (reporté) |
-| Transferts E — Backend & produit | [#256](https://github.com/digitaleflex/aura-storage/issues/256) | Snapshot de diagnostic des échecs (export JSON + persistance) | Phase 1 livrée (PR #257), phase 2 ouverte |
+| Transferts E — Backend & produit | [#256](https://github.com/digitaleflex/aura-storage/issues/256) | Snapshot de diagnostic des échecs (export JSON + persistance) | Phase 1 + télémétrie livrées et déployées, phase 2 ouverte |
+| Transferts E — Backend & produit | [#259](https://github.com/digitaleflex/aura-storage/issues/259) | Débit plus faible après une reprise | En investigation |
 
 ## Jalons
 
