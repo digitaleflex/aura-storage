@@ -45,6 +45,7 @@ test("rateOf ne rend jamais de débit absurde", () => {
 test("verdict classe le débit montant en Mbit/s", () => {
   expect(verdict(100_000).tone).toBe("bad"); // 0,8 Mbit/s
   expect(verdict(500_000).tone).toBe("warn"); // 4 Mbit/s
+  expect(verdict(1_000_000).tone).toBe("ok"); // 8 Mbit/s : utilisable
   expect(verdict(1_500_000).tone).toBe("ok"); // 12 Mbit/s
   expect(verdict(5_000_000).label).toContain("Bon");
 });

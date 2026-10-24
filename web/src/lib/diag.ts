@@ -92,7 +92,7 @@ export interface Verdict {
 export function verdict(bytesPerSecond: number): Verdict {
   const mbps = (bytesPerSecond * 8) / 1_000_000;
   if (mbps < 2) return { label: "Très faible : envois longs, coupures probables", tone: "bad" };
-  if (mbps < 8) return { label: "Faible : les gros fichiers resteront lents", tone: "warn" };
+  if (mbps < 5) return { label: "Faible : les gros fichiers resteront lents", tone: "warn" };
   if (mbps < 25) return { label: "Correct : les envois multipart passent", tone: "ok" };
   return { label: "Bon : le chemin ne limite pas les envois", tone: "ok" };
 }
