@@ -988,7 +988,13 @@ export const api = {
 };
 
 /** Failure kinds the transfer engine reacts to. */
-export type UploadFailureKind = "network" | "expired" | "rejected" | "aborted";
+export type UploadFailureKind =
+  | "network"
+  | "expired"
+  | "rejected"
+  /** Corps tronqué côté S3 (`IncompleteBody`) : rejouable tel quel. */
+  | "incomplete"
+  | "aborted";
 
 /** Error raised by the presigned PUT transport, classified for retry logic. */
 export class PresignedUploadError extends Error {
@@ -1009,6 +1015,22 @@ export interface PutOptions {
   /** Real byte progress, available because XHR exposes upload progress. */
   onProgress?: (loaded: number, total: number) => void;
   signal?: AbortSignal;
+}
+
+/**
+ * Code d'erreur S3 porté par le corps d'une réponse non-2xx.
+ *
+ * SeaweedFS répond en XML (`<Error><Code>IncompleteBody</Code>…`) ; les
+ * passerelles S3-compatibles peuvent répondre en JSON (`{"Code":"…"}`). Le
+ * parsing est purement textuel : aucun accès réseau, aucune URL journalisée.
+ */
+export function s3ErrorCode(body: string): string | null {
+  if (!body) return null;
+  const xml = /<Code>\s*([^<]+?)\s*<\/Code>/i.exec(body);
+  if (xml?.[1]) return xml[1].trim();
+  const json = /"Code"\s*:\s*"([^"]+)"/i.exec(body);
+  if (json?.[1]) return json[1].trim();
+  return null;
 }
 
 /**
@@ -1063,12 +1085,23 @@ export function putToPresignedUrl(
         return;
       }
       // 403 on a presigned PUT classically means the signature/URL expired.
-      const kind: UploadFailureKind = xhr.status === 403 ? "expired" : "rejected";
+      // SeaweedFS >= PR #10186 answers a truncated PUT body with HTTP 400 and
+      // `IncompleteBody` (its pinned 4.48 answered 500): surface it as its own
+      // kind so the engine retries the part instead of declaring it fatal.
+      const code = s3ErrorCode(xhr.responseText ?? "");
+      const kind: UploadFailureKind =
+        xhr.status === 403
+          ? "expired"
+          : code === "IncompleteBody"
+            ? "incomplete"
+            : "rejected";
       fail(
         new PresignedUploadError(
           kind,
           xhr.status,
-          `Dépôt refusé (HTTP ${xhr.status}).`,
+          code === "IncompleteBody"
+            ? "Corps d'envoi incomplet, nouvelle tentative."
+            : `Dépôt refusé (HTTP ${xhr.status}).`,
         ),
       );
     };

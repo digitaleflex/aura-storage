@@ -705,7 +705,11 @@ test("lot E — diagnostic de session avec reprise et concurrence", async ({ pag
   const diagnostic = JSON.parse(fs.readFileSync(path!, "utf8"));
   expect(diagnostic.schema).toBe("aura.transfer-session-diagnostic/v1");
   expect(diagnostic.items).toHaveLength(2);
-  expect(diagnostic.session.concurrency).toBe(4);
+  // The rate-aware ramp starts at one stream: the configured ceiling is still
+  // reported, but the effective width is only allowed to be within it.
+  expect(diagnostic.session.maxConcurrency).toBe(4);
+  expect(diagnostic.session.concurrency).toBeGreaterThanOrEqual(1);
+  expect(diagnostic.session.concurrency).toBeLessThanOrEqual(4);
   expect(Array.isArray(diagnostic.session.rateHistoryBytesPerSecond)).toBe(true);
   expect(diagnostic.environment.userAgent).toBeTruthy();
 });

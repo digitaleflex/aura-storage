@@ -192,6 +192,8 @@ export function classifyError(err: unknown): Classification {
     if (err.kind === "aborted") return "aborted";
     if (err.kind === "expired") return "expired";
     if (err.kind === "network") return "retryable";
+    // Corps tronqué (S3 `IncompleteBody`) : le PUT est rejouable tel quel.
+    if (err.kind === "incomplete") return "retryable";
     return classifyHttp(err.status);
   }
   if (err instanceof ApiError) {
@@ -762,6 +764,11 @@ export interface QueueOptions {
   signal?: AbortSignal;
   onUpdate?: (queue: QueueState) => void;
   config?: Partial<TransferConfig>;
+  /**
+   * Horloge injectable, partagée avec `runTransfer` et la mesure de débit.
+   * Défaut : `Date.now`. Aucun minuteur n'est créé pour la mesure.
+   */
+  now?: () => number;
 }
 
 /**
@@ -778,6 +785,33 @@ export const DEFAULT_START_STAGGER_MS = 250;
 export const DEFAULT_CONGESTION_THRESHOLD = 2;
 /** Base recovery target, tuned for the historical cap of 3 concurrent files. */
 export const DEFAULT_RECOVERY_THRESHOLD = 3;
+
+/** ~2 Mbit/s : below this, one PUT already saturates the uplink. */
+export const SLOW_LINK_BYTES_PER_S = 250_000;
+/** 1 Mo/s : a second stream can share the link without starving the first. */
+const MEDIUM_LINK_BYTES_PER_S = 1_000_000;
+/** 4 Mo/s : the measured link can carry the historical four-way window. */
+const WIDE_LINK_BYTES_PER_S = 4_000_000;
+
+/**
+ * Plafond de parallélisme justifié par le débit mesuré.
+ *
+ * Un lien lent (~600 kbit/s en production) ne doit pas recevoir quatre PUT :
+ * chacun n'aurait qu'un quart de la bande passante et une coupure emporterait
+ * les quatre parties en vol. On démarre donc à un seul flux et on n'élargit
+ * que lorsque la mesure le justifie :
+ * - < 250 ko/s : 1 (le lien est déjà saturé par un envoi) ;
+ * - < 1 Mo/s : 2 (un second flux tient sans affamer le premier) ;
+ * - < 4 Mo/s : 4 au plus (la fenêtre historique, plafonnée par l'appelant) ;
+ * - au-delà : le plafond configuré, jamais dépassé.
+ */
+export function rampCeiling(bytesPerSecond: number, maxConcurrency: number): number {
+  const ceiling = Math.max(1, maxConcurrency);
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond < SLOW_LINK_BYTES_PER_S) return 1;
+  if (bytesPerSecond < MEDIUM_LINK_BYTES_PER_S) return Math.min(2, ceiling);
+  if (bytesPerSecond < WIDE_LINK_BYTES_PER_S) return Math.min(4, ceiling);
+  return ceiling;
+}
 
 /**
  * Scale the adaptive thresholds with the configured ceiling.
@@ -867,14 +901,78 @@ export function startUploadQueue(
   const autoRetryOnReconnect = options.autoRetryOnReconnect ?? true;
   const maxReconnectRetries = Math.max(0, options.maxReconnectRetries ?? 3);
   const defaultFolder = options.folderId ?? null;
+  const now = options.now ?? (() => Date.now());
 
-  // Effective parallelism, adapted at runtime (see adaptToOutcome). It never
-  // exceeds the configured maximum, so the queue can only get gentler.
-  let effectiveConcurrency = maxConcurrency;
+  // Effective parallelism, adapted at runtime (see adaptToOutcome). It starts
+  // at one stream even with adaptive concurrency: the first measurements of a
+  // real upload are what justify widening the window (a slow uplink would
+  // otherwise receive maxConcurrency PUTs at once). It never exceeds the
+  // configured maximum, so the queue can only get gentler.
+  let effectiveConcurrency = adaptive ? 1 : maxConcurrency;
   let congestedStreak = 0;
   let healthyStreak = 0;
   // Scheduled (staggered) starts not running yet: they hold a slot like actives.
   let pendingStarts = 0;
+
+  // --- Débit agrégé du lien (phase d'envoi uniquement) ---------------------
+  // `transferredBytes` est cumulatif par fichier. On somme les fichiers en
+  // cours pour obtenir le débit du lien (et non la part d'un seul flux), et on
+  // ne mesure que les deltas pendant `uploading` : le commit et la vérification
+  // ne consomment pas la bande passante montante. Aucun timer : les events de
+  // progression émis par le transfert sont la seule source d'échantillons.
+  const RATE_EMA_ALPHA = 0.4;
+  const activeUploadBytes = new Map<string, number>();
+  let rateSampleAt = 0;
+  let rateSampleTotal = 0;
+  let lastMeasuredRate = 0; // lue par adaptToOutcome
+
+  const uploadBytesTotal = (): number => {
+    let total = 0;
+    for (const bytes of activeUploadBytes.values()) total += bytes;
+    return total;
+  };
+
+  const resetRateMeasurement = (): void => {
+    activeUploadBytes.clear();
+    rateSampleAt = 0;
+    rateSampleTotal = 0;
+    lastMeasuredRate = 0;
+  };
+
+  const measureThroughput = (id: string, state: TransferState): void => {
+    if (!adaptive) return;
+    const at = now();
+    if (state.phase !== "uploading") {
+      if (activeUploadBytes.delete(id)) {
+        // Un flux s'arrête : on reprend la base sur les flux restants sans
+        // compter la disparition de ses octets comme un débit négatif.
+        rateSampleAt = at;
+        rateSampleTotal = uploadBytesTotal();
+      }
+      return;
+    }
+    const known = activeUploadBytes.get(id);
+    activeUploadBytes.set(id, Math.max(0, state.transferredBytes));
+    if (known === undefined) {
+      // Premier event d'un flux : il pose la base, il ne mesure pas encore.
+      rateSampleAt = at;
+      rateSampleTotal = uploadBytesTotal();
+      return;
+    }
+    const total = uploadBytesTotal();
+    if (rateSampleAt > 0 && at > rateSampleAt) {
+      const delta = total - rateSampleTotal;
+      if (delta > 0) {
+        const instant = (delta * 1000) / (at - rateSampleAt);
+        lastMeasuredRate =
+          lastMeasuredRate > 0
+            ? lastMeasuredRate * (1 - RATE_EMA_ALPHA) + instant * RATE_EMA_ALPHA
+            : instant;
+      }
+    }
+    rateSampleAt = at;
+    rateSampleTotal = total;
+  };
 
   interface Internal {
     id: string;
@@ -1004,7 +1102,10 @@ export function startUploadQueue(
     if (item.state.phase === "available") {
       congestedStreak = 0;
       healthyStreak += 1;
-      if (healthyStreak >= recoveryThreshold && effectiveConcurrency < maxConcurrency) {
+      // Never restore a slot the measured link cannot carry: a slow completion
+      // keeps the ceiling at 1, even after a long healthy streak.
+      const ceiling = rampCeiling(lastMeasuredRate, maxConcurrency);
+      if (healthyStreak >= recoveryThreshold && effectiveConcurrency < ceiling) {
         effectiveConcurrency += 1;
         healthyStreak = 0;
       }
@@ -1081,6 +1182,7 @@ export function startUploadQueue(
       idempotencyKey: item.idempotencyKey ?? queueItemId(),
       signal: controller.signal,
       config: options.config,
+      now,
       onVerifying: () => {
         if (slotReleased) return;
         slotReleased = true;
@@ -1088,6 +1190,7 @@ export function startUploadQueue(
         pump();
       },
       onUpdate: (state) => {
+        measureThroughput(item.id, state);
         const progressOnly =
           state.phase === "uploading" && item.state.phase === "uploading";
         item.state = state;
@@ -1250,11 +1353,13 @@ export function startUploadQueue(
   const onOffline = (): void => pauseAll();
   const onOnline = (): void => {
     // The outage may have backed the queue off to one file (5xx/network are
-    // congestion signals). The link is new, so start again at the configured
-    // ceiling instead of crawling until three successes per slot rebuild it.
-    effectiveConcurrency = maxConcurrency;
+    // congestion signals). A new link says nothing about its capacity either:
+    // restart at one stream and let fresh measurements justify widening the
+    // window again, instead of assuming the configured ceiling.
+    effectiveConcurrency = adaptive ? 1 : maxConcurrency;
     congestedStreak = 0;
     healthyStreak = 0;
+    resetRateMeasurement();
     if (autoPauseOnOffline) resumeAll();
     if (autoRetryOnReconnect) retryTransient();
   };
