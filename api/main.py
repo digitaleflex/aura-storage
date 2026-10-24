@@ -1945,11 +1945,13 @@ def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, 
         raise HTTPException(status_code=409, detail="folder is not empty")
     if repo.folder_object_count(fid, owner_id=owner_id) > 0:
         raise HTTPException(status_code=409, detail="folder is not empty")
-    # Soft-deleted objects are hidden from every listing, so the folder reads as
-    # empty: drop their folder reference before removing the row, otherwise the
-    # objects_folder_id_fkey constraint refuses the delete on PostgreSQL. The
-    # rows survive until an explicit purge of the trash.
-    repo.detach_soft_deleted_objects(fid, owner_id=owner_id)
+    # No live object remains (committed or in-flight); the leftovers (deleted,
+    # failed, aborted, expired) are hidden from every listing, so the folder
+    # reads as empty. Detach them and mark them deleted before removing the row,
+    # otherwise the objects_folder_id_fkey constraint refuses the delete on
+    # PostgreSQL and they would resurface as unfiled rows in the root listing.
+    # The rows survive until an explicit purge of the trash.
+    repo.release_folder_objects(fid, owner_id=owner_id)
     repo.delete_folder(fid, owner_id=owner_id)
     audit_event("folder.delete", principal["id"], "success", {"folder_id": fid})
     return {"id": fid, "status": "deleted"}

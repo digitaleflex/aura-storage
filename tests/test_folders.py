@@ -330,3 +330,65 @@ def test_folder_with_only_soft_deleted_objects_can_be_deleted():
     assert u.delete(f"/api/v1/folders/{fid}", headers=h).status_code == 200
     assert u.get(f"/api/v1/folders/{fid}", headers=h).status_code == 404
     assert u.get(f"/api/v1/objects/{oid}", headers=h).status_code == 200
+
+
+def test_folder_with_leftover_objects_can_be_deleted():
+    # Regression: a folder holding only non-live leftovers (aborted/failed
+    # uploads, soft-deleted rows) used to be undeletable. The emptiness check
+    # excluded only 'deleted', so an 'aborted' row returned 409 "folder is not
+    # empty" forever while DELETE /objects refused that same row with 409
+    # "object not deletable" — the cascade delete (files first, then folders)
+    # dead-ended. Only live statuses may block now.
+    n, p = _ordinary_user()
+    u, h = _login(n, p)
+    uid = main.repo.get_user_by_name(n)["id"]
+    tag = uuid.uuid4().hex[:8]
+    fid = _mk(u, h, f"leftovers-{tag}")["id"]
+
+    doomed = []
+    for label in ("aborted", "failed", "deleted"):
+        intent = u.post("/api/v1/objects/upload-intents",
+                        json={"display_name": f"{label}-{tag}.txt", "size_bytes": 1,
+                              "folder_id": fid},
+                        headers=h)
+        assert intent.status_code == 200, intent.text
+        oid = intent.json()["id"]
+        main.repo.set_status(oid, label)
+        doomed.append(oid)
+
+    # The delete route refuses those rows, so they cannot be cleaned that way...
+    for oid in doomed:
+        assert u.delete(f"/api/v1/objects/{oid}", headers=h).status_code == 409
+
+    # ...but they no longer keep the folder non-empty.
+    r = u.delete(f"/api/v1/folders/{fid}", headers=h)
+    assert r.status_code == 200, r.text
+    assert u.get(f"/api/v1/folders/{fid}", headers=h).status_code == 404
+
+    # The rows survive, detached and normalized to 'deleted' so they never
+    # reappear as unfiled rows in the root listing.
+    for oid in doomed:
+        row = main.repo.get_object(oid, space_id=_default_space_id(), owner_id=uid)
+        assert row is not None
+        assert row["folder_id"] is None
+        assert row["status"] == "deleted"
+    unfiled = {i["id"] for i in u.get("/api/v1/objects", headers=h).json()["items"]}
+    assert not (unfiled & set(doomed))
+
+    # A live object still blocks the delete and leaves the folder intact.
+    live_fid = _mk(u, h, f"live-{tag}")["id"]
+    intent = u.post("/api/v1/objects/upload-intents",
+                    json={"display_name": f"live-{tag}.txt", "size_bytes": 1,
+                          "folder_id": live_fid},
+                    headers=h)
+    assert intent.status_code == 200, intent.text
+    live_oid = intent.json()["id"]
+    main.repo.set_status(live_oid, "available")
+
+    blocked = u.delete(f"/api/v1/folders/{live_fid}", headers=h)
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "folder is not empty"
+    assert u.get(f"/api/v1/folders/{live_fid}", headers=h).status_code == 200
+    live_row = main.repo.get_object(live_oid, space_id=_default_space_id(), owner_id=uid)
+    assert live_row["folder_id"] == live_fid
+    assert live_row["status"] == "available"

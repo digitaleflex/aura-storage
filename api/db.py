@@ -890,24 +890,32 @@ class Repository:
         ).fetchone()["n"])
 
     def folder_object_count(self, fid: str, *, owner_id: str) -> int:
-        # Only live objects keep a folder "non-empty": soft-deleted rows are
-        # hidden from every listing (api/object_query.py) but still carry a
-        # ``folder_id``, so counting them would refuse the DELETE of a folder
-        # the user already sees as empty.
+        # Only live objects keep a folder "non-empty". Live means an object the
+        # user can still act on: committed (``available``) plus in-flight
+        # uploads (``pending``/``verifying``), which must block the delete
+        # because their bytes may still land in the folder. Every other status
+        # (deleted, failed, expired, aborted, purging) is a leftover row hidden
+        # from the listings (api/object_query.py) but still carrying a
+        # ``folder_id``: counting it would refuse the DELETE of a folder the
+        # user already sees as empty, forever.
         return int(self.conn.execute(
             "SELECT COUNT(*) AS n FROM objects WHERE folder_id = ? AND owner_id = ? "
-            "AND status != 'deleted'",
+            "AND status IN ('available', 'pending', 'verifying')",
             (fid, owner_id),
         ).fetchone()["n"])
 
-    def detach_soft_deleted_objects(self, fid: str, *, owner_id: str) -> None:
-        # Called just before a folder is removed: soft-deleted objects are
-        # already gone from the UI, so drop only their folder reference to avoid
-        # a dangling ``objects.folder_id`` FK on PostgreSQL. The rows stay in the
-        # catalogue until an explicit purge.
+    def release_folder_objects(self, fid: str, *, owner_id: str) -> None:
+        # Called just before the folder row is deleted, after the counts
+        # confirmed no live object remains attached. Detach every leftover row
+        # (a dangling ``objects.folder_id`` would break the FK on PostgreSQL)
+        # and mark it ``deleted`` so failed/aborted/expired leftovers do not
+        # reappear as unfiled rows in the root listing. The guard keeps the
+        # live statuses out even if a caller skipped the count check; rows are
+        # kept in the catalogue until an explicit purge.
         self.conn.execute(
-            "UPDATE objects SET folder_id = NULL, updated_at = ? "
-            "WHERE folder_id = ? AND owner_id = ? AND status = 'deleted'",
+            "UPDATE objects SET folder_id = NULL, status = 'deleted', updated_at = ? "
+            "WHERE folder_id = ? AND owner_id = ? "
+            "AND status NOT IN ('available', 'pending', 'verifying')",
             (self.now(), fid, owner_id),
         )
         self.conn.commit()
