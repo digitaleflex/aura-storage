@@ -1,6 +1,11 @@
 import { test, expect } from "@playwright/test";
 import {
+  AUTO_DOWNLOAD_BYTES,
+  AUTO_UPLOAD_BYTES,
+  DIAG_DOWNLOAD_BYTES,
   DIAG_HISTORY_MAX,
+  DIAG_UPLOAD_BYTES,
+  WATCH_INTERVAL_MS,
   DIAG_HISTORY_KEY,
   clearHistory,
   formatRatePair,
@@ -165,4 +170,21 @@ test("effacer l'historique le vide vraiment", () => {
   // Sans stockage (navigation privée), aucune de ces fonctions ne lève.
   expect(pushHistory(record(2), null)).toHaveLength(1);
   expect(clearHistory(null)).toBeUndefined();
+});
+
+test("la surveillance consomme nettement moins que le test complet", () => {
+  const perTick = AUTO_DOWNLOAD_BYTES + AUTO_UPLOAD_BYTES;
+  expect(perTick).toBeLessThanOrEqual(4_000_000);
+  expect(perTick).toBeLessThan(DIAG_DOWNLOAD_BYTES + DIAG_UPLOAD_BYTES);
+  // Toutes les 15 min : une journée coûte ~288 Mo au pire, pas 4 Go.
+  expect(WATCH_INTERVAL_MS).toBe(15 * 60 * 1000);
+});
+
+test("le drapeau auto survit à l'aller-retour de stockage", () => {
+  const storage = new MemoryStorage();
+  pushHistory({ ...record(10), auto: true }, storage);
+  const [entry] = loadHistory(storage);
+  expect(entry?.auto).toBe(true);
+  pushHistory(record(20), storage);
+  expect(loadHistory(storage)[0]?.auto).toBeUndefined();
 });

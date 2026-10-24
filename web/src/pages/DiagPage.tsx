@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../lib/auth";
 import {
+  AUTO_DOWNLOAD_BYTES,
+  AUTO_UPLOAD_BYTES,
   DIAG_DOWNLOAD_BYTES,
   DIAG_UPLOAD_BYTES,
+  WATCH_INTERVAL_MS,
   clearHistory,
   formatRatePair,
   loadHistory,
@@ -47,10 +50,26 @@ export function DiagPage() {
   const [up, setUp] = useState<UploadSample | null>(null);
   const [progress, setProgress] = useState(0);
   const [history, setHistory] = useState<DiagRecord[]>(() => loadHistory());
+  const [watching, setWatching] = useState(false);
+  const [lastAutoAt, setLastAutoAt] = useState<number | null>(null);
+  // La surveillance appelle `run` depuis un intervalle : la valeur courante de
+  // `phase` doit être lue par référence, pas capturée à la création du timer.
+  const runningRef = useRef(false);
+  const csrfRef = useRef(csrf);
+  csrfRef.current = csrf;
 
   const running = RUNNING.includes(phase);
 
-  async function run(): Promise<void> {
+  /**
+   * Un test complet (lancé à la main) ou une mesure allégée (surveillance).
+   * Le mode allégé est délibérément plus petit : un passage automatique ne doit
+   * pas consommer la bande passante qu'il mesure.
+   */
+  async function run(auto = false): Promise<void> {
+    if (runningRef.current) return;
+    runningRef.current = true;
+    const downBytes = auto ? AUTO_DOWNLOAD_BYTES : DIAG_DOWNLOAD_BYTES;
+    const upBytes = auto ? AUTO_UPLOAD_BYTES : DIAG_UPLOAD_BYTES;
     setError(null);
     setPing(null);
     setDown(null);
@@ -62,14 +81,14 @@ export function DiagPage() {
       setPing(pings);
 
       setPhase("download");
-      const download = await runDownload(DIAG_DOWNLOAD_BYTES, (loaded, total) => {
+      const download = await runDownload(downBytes, (loaded, total) => {
         setProgress(total > 0 ? loaded / total : 0);
       });
       setDown(download);
 
       setPhase("upload");
       setProgress(0);
-      const upload = await runUpload(DIAG_UPLOAD_BYTES, csrf);
+      const upload = await runUpload(upBytes, csrfRef.current);
       setUp(upload);
       setHistory(
         pushHistory({
@@ -81,14 +100,33 @@ export function DiagPage() {
           downBytesPerSecond: download.bytesPerSecond,
           upBytesPerSecond: upload.bytesPerSecond,
           upServerBytesPerSecond: upload.serverBytesPerSecond,
+          ...(auto ? { auto: true } : {}),
         }),
       );
+      if (auto) setLastAutoAt(Date.now());
       setPhase("done");
     } catch (err) {
       setError(describeError(err, "Diagnostic interrompu. Réessayez dans un instant."));
       setPhase("failed");
+    } finally {
+      runningRef.current = false;
     }
   }
+
+  // Surveillance : mesure tout de suite, puis toutes les 15 min tant que la
+  // page est ouverte. Le timer disparaît au démontage (ou si on l'arrête).
+  useEffect(() => {
+    if (!watching) return;
+    void run(true);
+    const timer = window.setInterval(() => {
+      void run(true);
+    }, WATCH_INTERVAL_MS);
+    return () => {
+      window.clearInterval(timer);
+    };
+    // `run` lit l'état par référence : le timer n'a pas besoin d'être recréé.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watching]);
 
   const lostPercent =
     up && up.bytesPerSecond > 0
@@ -117,6 +155,14 @@ export function DiagPage() {
           <button type="button" className="btn" onClick={() => void run()} disabled={running}>
             {running ? "Test en cours…" : "Lancer le test (30 s)"}
           </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            aria-pressed={watching}
+            onClick={() => setWatching((value) => !value)}
+          >
+            {watching ? "Arrêter la surveillance" : "Surveiller toutes les 15 min"}
+          </button>
           {running ? (
             <progress
               aria-label="Progression du test"
@@ -125,6 +171,20 @@ export function DiagPage() {
             />
           ) : null}
         </div>
+
+        {watching ? (
+          <p role="status" className="muted">
+            Surveillance active : mesure allégée (2 Mo lus, 1 Mo envoyé) toutes
+            les 15 minutes, tant que cette page reste ouverte. Elle s&apos;arrête
+            si vous fermez l&apos;onglet.
+            {lastAutoAt
+              ? ` Dernière mesure automatique à ${new Date(lastAutoAt).toLocaleTimeString(
+                  "fr-FR",
+                  { hour: "2-digit", minute: "2-digit" },
+                )}.`
+              : ""}
+          </p>
+        ) : null}
 
         <p role="status" aria-live="polite" className="muted">
           {PHASE_LABEL[phase]}
@@ -257,6 +317,11 @@ export function DiagPage() {
                       hour: "2-digit",
                       minute: "2-digit",
                     })}
+                    {entry.auto ? (
+                      <span className="chip chip-muted" title="Mesure automatique">
+                        auto
+                      </span>
+                    ) : null}
                   </td>
                   <td>{ms(entry.rttAvg)}</td>
                   <td>{ms(entry.jitter)}</td>

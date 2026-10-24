@@ -13,6 +13,15 @@ export const DIAG_PING_COUNT = 10;
 export const DIAG_DOWNLOAD_BYTES = 10_000_000;
 export const DIAG_UPLOAD_BYTES = 5_000_000;
 
+/**
+ * Surveillance en onglet : mesures allégées et espacées pour ne pas consommer
+ * la bande passante qu'on cherche justement à mesurer. Un passage coûte ~3 Mo
+ * (2 Mo de descente, 1 Mo de montée) au lieu des 15 Mo du test complet.
+ */
+export const AUTO_DOWNLOAD_BYTES = 2_000_000;
+export const AUTO_UPLOAD_BYTES = 1_000_000;
+export const WATCH_INTERVAL_MS = 15 * 60 * 1000;
+
 export interface PingStats {
   samples: number[];
   min: number;
@@ -205,6 +214,8 @@ export interface DiagRecord {
   downBytesPerSecond: number;
   upBytesPerSecond: number;
   upServerBytesPerSecond: number;
+  /** Mesure automatique (surveillance) plutôt que test lancé à la main. */
+  auto?: boolean;
 }
 
 export const DIAG_HISTORY_KEY = "aura.diagnostic.history";
