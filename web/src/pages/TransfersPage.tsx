@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useTransfers } from "../lib/transferContext";
 import { makeToast, ToastStack } from "../components/Toasts";
 import type { Toast } from "../components/Toasts";
@@ -715,6 +715,9 @@ export function TransfersPage() {
           <TransferIcon name="shield" size={15} />
           Session courante
         </span>
+        <Link to="/diagnostic" className="btn btn-small">
+          Diagnostic réseau
+        </Link>
       </header>
 
       <TransfersOverview

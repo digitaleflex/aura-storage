@@ -71,6 +71,11 @@ tags:
     description: >-
       Operator and administrator reads — statistics, usage, audit search and
       retention, orphan inspection, stale-intent reconciliation.
+  - name: diagnostics
+    description: >-
+      Support measurements of the real path from the browser to Aura: bare
+      round-trips, an incompressible download stream and an upload body that is
+      counted and discarded. Nothing is stored and no payload is ever logged.
 paths:
   /health/live:
     get:
@@ -1630,6 +1635,41 @@ paths:
         "401": { description: "Authentication required" }
         "403": { description: "Not authorised" }
         "422": { description: "Invalid key list" }
+  /api/v1/diag/ping:
+    get:
+      summary: "Minimal round-trip probe for the network diagnostic (any authenticated principal)"
+      tags: [diagnostics]
+      description: >-
+        Times one bare round-trip to the API so the browser can derive RTT and
+        jitter. Never cached.
+      responses:
+        "200": { description: "Server timestamp in epoch milliseconds" }
+        "401": { description: "Authentication required" }
+  /api/v1/diag/download:
+    get:
+      summary: "Incompressible byte stream for measuring the downlink (any authenticated principal)"
+      tags: [diagnostics]
+      description: >-
+        Streams `bytes` random bytes (default 10 MB, clamped to 25 MB) with
+        `Content-Encoding: identity` and no caching, so a compressing proxy
+        cannot distort the measurement.
+      parameters:
+        - { in: query, name: bytes, required: false, schema: { type: integer, minimum: 0, maximum: 25000000 } }
+      responses:
+        "200": { description: "Random octets to time" }
+        "401": { description: "Authentication required" }
+  /api/v1/diag/upload:
+    post:
+      summary: "Consume a body and report the server-side throughput (any authenticated principal)"
+      tags: [diagnostics]
+      description: >-
+        Reads the request body in chunks without buffering or storing it and
+        returns the measured rate, so the client can compare what it sent with
+        what actually arrived. Above 25 MB the call is refused with 413.
+      responses:
+        "200": { description: "Measured bytes, duration and rate" }
+        "401": { description: "Authentication required" }
+        "413": { description: "Payload above 25 MB" }
 components:
   schemas:
     Uuid4:

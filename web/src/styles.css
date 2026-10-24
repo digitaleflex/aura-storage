@@ -3840,3 +3840,16 @@ html {
     flex: 1 1 100%;
   }
 }
+
+/* Diagnostic réseau : bouton et jauge de progression côte à côte. */
+.diag-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.diag-actions progress {
+  flex: 1 1 160px;
+  max-width: 320px;
+}

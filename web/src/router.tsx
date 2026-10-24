@@ -16,6 +16,7 @@ import { RouteError } from "./components/RouteError";
 import { TransfersProvider } from "./lib/transferContext";
 
 const AdminPage = lazy(() => import("./pages/AdminPage").then((m) => ({ default: m.AdminPage })));
+const DiagPage = lazy(() => import("./pages/DiagPage").then((m) => ({ default: m.DiagPage })));
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -73,11 +74,26 @@ const transfersRoute = createRoute({
   ),
 });
 
+const diagRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/diagnostic",
+  component: () => (
+    <Layout>
+      <RequireAuth>
+        <Suspense fallback={<Loading label="Chargement du diagnostic" />}>
+          <DiagPage />
+        </Suspense>
+      </RequireAuth>
+    </Layout>
+  ),
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   adminRoute,
   transfersRoute,
+  diagRoute,
 ]);
 
 // Same subpath as Vite base (dev "/app", prod "/app", unset = root).

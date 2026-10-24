@@ -5,13 +5,14 @@ and S3 through short-lived presigned URLs. The API never stores a browser sessio
 token in the response body and never puts S3 credentials in the frontend.
 """
 import logging
+import os
 import shutil
 import threading
 import time
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 from . import authz, ids, netinfo, shares
@@ -547,6 +548,80 @@ def ready():
         return {"status": "ready"}
     except Exception:  # never leak backend details
         return JSONResponse(status_code=503, content={"status": "not ready"})
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic réseau (support)
+# ---------------------------------------------------------------------------
+# Mesure le chemin *réel* du navigateur vers Aura (TLS, Traefik, API), pas le
+# lien de l'opérateur vers un serveur tiers. Rien n'est stocké, aucun corps
+# n'est journalisé : ces routes ne servent qu'à compter des octets et du temps.
+# Le plafond borne l'usage (un test = au plus 25 Mo dans chaque sens).
+
+DIAG_MAX_BYTES = 25_000_000
+DIAG_DEFAULT_DOWNLOAD = 10_000_000
+DIAG_CHUNK = 64 * 1024
+
+
+@app.get("/api/v1/diag/ping")
+def diag_ping(principal: dict = Depends(authorize(None))):
+    """Aller-retour minimal : le client en déduit RTT et gigue."""
+    return JSONResponse(
+        {"ts": int(time.time() * 1000)},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _diag_random_stream(total: int):
+    """Octets incompressibles : un proxy qui compresse ne fausse pas la mesure."""
+    remaining = total
+    while remaining > 0:
+        size = min(DIAG_CHUNK, remaining)
+        remaining -= size
+        yield os.urandom(size)
+
+
+@app.get("/api/v1/diag/download")
+def diag_download(
+    count: int = Query(DIAG_DEFAULT_DOWNLOAD, alias="bytes", ge=0),
+    principal: dict = Depends(authorize(None)),
+):
+    """Flux de `bytes` octets aléatoires (plafonné), pour mesurer la descente."""
+    total = max(1, min(int(count), DIAG_MAX_BYTES))
+    return StreamingResponse(
+        _diag_random_stream(total),
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Encoding": "identity",
+            "Content-Length": str(total),
+        },
+    )
+
+
+@app.post("/api/v1/diag/upload")
+async def diag_upload(request: Request, principal: dict = Depends(authorize(None))):
+    """Consomme le corps en flux et renvoie le débit mesuré côté serveur.
+
+    L'écart avec le débit vu par le navigateur dit s'il y a des octets perdus
+    en route (transit, proxy) ou un simple bridage de l'uplink.
+    """
+    started = time.perf_counter()
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > DIAG_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="payload too large")
+    elapsed = time.perf_counter() - started
+    duration_ms = max(0, int(elapsed * 1000))
+    return JSONResponse(
+        {
+            "bytes": total,
+            "duration_ms": duration_ms,
+            "bytes_per_second": int(total / elapsed) if elapsed > 0 else 0,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ---------------------------------------------------------------------------
