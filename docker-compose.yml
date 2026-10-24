@@ -359,6 +359,10 @@ services:
       - traefik.http.routers.aura-swagger-api.tls.certresolver=le
       # Same two gates as the docs UI: network allow-list first, then credential.
       - traefik.http.routers.aura-swagger-api.middlewares=api-docs-allowlist,api-docs-auth,api-ratelimit,api-secure-headers
+      # Explicit binding: this container publishes two services, so Traefik
+      # refuses to auto-link a router and silently drops it. The symptom is a
+      # 404/SPA fallback on a route that looks configured.
+      - traefik.http.routers.aura-swagger-api.service=aura-swagger-api
       - traefik.http.services.aura-swagger-api.loadbalancer.server.port=8000
       # Public share links: Host(APP_DOMAIN) + /s/* goes straight to the API,
       # never through the SPA. Priority 200 beats the app catch-all router so
@@ -372,6 +376,10 @@ services:
       - traefik.http.routers.aura-share.tls=true
       - traefik.http.routers.aura-share.tls.certresolver=le
       - traefik.http.routers.aura-share.middlewares=api-ratelimit,api-secure-headers
+      # Explicit binding, same reason as aura-swagger-api above. Without it the
+      # router is dropped and /s/<token> falls through to the app router, which
+      # answers with index.html instead of the API's 302/404.
+      - traefik.http.routers.aura-share.service=aura-share
       - traefik.http.services.aura-share.loadbalancer.server.port=8000
     depends_on:
       postgres:
