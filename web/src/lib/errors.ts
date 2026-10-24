@@ -24,6 +24,7 @@ const KNOWN_DETAILS: Record<string, string> = {
   "storage delete failed": "Le stockage n'a pas pu supprimer le fichier. La fiche est conservée ; réessayez plus tard.",
   "storage unavailable": "Le stockage ne répond pas. Réessayez dans un instant.",
   "folder not empty": "Ce dossier n'est pas vide.",
+  "folder is not empty": "Ce dossier n'est pas vide : supprimez d'abord son contenu.",
   "folder not found": "Ce dossier n'existe plus.",
   "preview not supported for this content type": "Ce type de fichier ne peut pas être affiché dans le navigateur.",
   "invalid credentials": "Identifiant ou mot de passe incorrect.",

@@ -15,6 +15,9 @@ test("API details become actionable French messages", () => {
   expect(describeError(new ApiError(507, "anything"), "x")).toContain("Espace de stockage plein");
   expect(describeError(new ApiError(401, "not authenticated"), "x")).toContain("session a expiré");
   expect(describeError(new ApiError(502, "bad gateway"), "x")).toContain("Réessayez");
+  // The server's exact string for a non-empty folder (409) is mapped: without
+  // it, deleting a folder holding files rendered "L'élément a changé".
+  expect(describeError(new ApiError(409, "folder is not empty"), "x")).toContain("pas vide");
   expect(describeError(new TypeError("Failed to fetch"), "x")).toContain("Vérifiez votre réseau");
   expect(describeError(new PresignedUploadError("network", 0, "x"), "y")).toBe(
     "Connexion au stockage interrompue.",

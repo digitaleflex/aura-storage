@@ -12,6 +12,7 @@ import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import {
   CascadeOp,
   CascadeFailure,
+  CascadeScanError,
   CascadeState,
   scanCascade,
   planCascadeOps,
@@ -1868,7 +1869,13 @@ export function ObjectsPage() {
       applyCascade({
         ...live,
         phase: "confirm",
-        scanError: `Analyse du contenu impossible. ${describeError(err, "")}`.trim(),
+        scanError:
+          err instanceof CascadeScanError
+            ? `Analyse interrompue dans « ${err.path} ». ${describeError(
+                err.cause,
+                "Réessayez dans un instant.",
+              )}`
+            : `Analyse du contenu impossible. ${describeError(err, "Réessayez dans un instant.")}`,
       });
     }
   }

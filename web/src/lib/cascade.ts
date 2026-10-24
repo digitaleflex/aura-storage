@@ -1,4 +1,4 @@
-import { api } from "./api";
+import { ApiError, api } from "./api";
 import type { FolderItem, ObjectItem } from "./api";
 
 // -- Recursive (cascade) folder deletion ------------------------------------
@@ -15,6 +15,8 @@ export interface CascadeObject {
   folderId: string;
   /** Human path ("Racine / Dossier / Sous-dossier"). */
   path: string;
+  /** Catalogue status; a missing status is treated as deletable (older API). */
+  status?: string;
 }
 
 /** One folder of the target subtree; the target itself is included. */
@@ -73,6 +75,84 @@ export interface CascadeState {
 /** The server caps `limit` at 100; page until a short page comes back. */
 export const CASCADE_PAGE_SIZE = 100;
 
+/**
+ * Listings in flight at once. The edge allows 30 req/s on average (burst 60);
+ * 4 requests at ~200 ms RTT is ~20 req/s, so a slow link is scanned quickly
+ * without tripping the rate limit.
+ */
+export const SCAN_CONCURRENCY = 4;
+
+/** Wait before the 2nd and 3rd attempt of one folder listing (3 total). */
+const RETRY_DELAYS_MS = [250, 750] as const;
+
+/** Statuses the API accepts for `DELETE /objects/{id}` (server also releases
+ * aborted/failed/expired leftovers on folder delete, so those are not ours). */
+const DELETABLE_STATUSES = new Set(["available", "pending", "verifying"]);
+
+/**
+ * A scan that could not be completed: carries the folder path so the dialog
+ * can say *where* it stopped, and the underlying cause for the message.
+ */
+export class CascadeScanError extends Error {
+  readonly path: string;
+  override readonly cause: unknown;
+
+  constructor(path: string, cause: unknown) {
+    super(`Analyse interrompue dans « ${path} ».`);
+    this.name = "CascadeScanError";
+    this.path = path;
+    this.cause = cause;
+  }
+}
+
+/**
+ * Whether retrying the same request may succeed: a fetch network failure
+ * (`TypeError`), a rate limit (429) or a server fault (>= 500). Auth and
+ * not-found errors are definitive and must fail fast.
+ */
+export function isTransientError(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  if (err instanceof ApiError) return err.status === 429 || err.status >= 500;
+  return false;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Run `fn` over `items` with at most `limit` calls in flight, preserving the
+ * input order in the results. The first rejection stops new work (in-flight
+ * calls are awaited, never cancelled) and is rethrown.
+ */
+export async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  const width = Math.max(1, Math.min(limit, items.length));
+  let next = 0;
+  let failed = false;
+  const worker = async (): Promise<void> => {
+    while (!failed) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = await fn(items[index] as T, index);
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: width }, worker));
+  return results;
+}
+
 /** Every object filed directly in one folder, across all pages. */
 export async function fetchFolderObjects(folderId: string): Promise<ObjectItem[]> {
   const out: ObjectItem[] = [];
@@ -89,6 +169,24 @@ export async function fetchFolderObjects(folderId: string): Promise<ObjectItem[]
     offset += page.items.length;
   }
   return out;
+}
+
+/** One folder's objects, retried on transient failures only. */
+async function fetchFolderObjectsResilient(
+  folderId: string,
+  path: string,
+): Promise<ObjectItem[]> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetchFolderObjects(folderId);
+    } catch (err) {
+      const delay = RETRY_DELAYS_MS[attempt];
+      if (delay === undefined || !isTransientError(err)) {
+        throw new CascadeScanError(path, err);
+      }
+      await sleep(delay);
+    }
+  }
 }
 
 /** Build the real content snapshot of `rootId`: descendant folders + files. */
@@ -132,15 +230,24 @@ export async function scanCascade(rootId: string, rootName: string): Promise<Cas
     });
     for (const child of childMap.get(id) ?? []) stack.push(child.id);
   }
+  const lists = await mapLimit(folders, SCAN_CONCURRENCY, (folder) =>
+    fetchFolderObjectsResilient(folder.id, folder.path),
+  );
   const objects: CascadeObject[] = [];
-  for (const folder of folders) {
-    const list = await fetchFolderObjects(folder.id);
-    for (const item of list) {
+  for (let index = 0; index < folders.length; index += 1) {
+    const folder = folders[index] as CascadeFolder;
+    for (const item of lists[index] ?? []) {
+      // The API refuses to delete aborted/failed/expired/deleted leftovers;
+      // planning them would abort the cascade on a 409 forever.
+      if (item.status !== undefined && !DELETABLE_STATUSES.has(item.status)) {
+        continue;
+      }
       objects.push({
         id: item.id,
         name: item.display_name,
         folderId: folder.id,
         path: folder.path,
+        status: item.status,
       });
     }
   }
