@@ -143,14 +143,14 @@ function record(at: number, up = 500_000): DiagRecord {
   };
 }
 
-test("l'historique garde les 20 mesures les plus récentes, en tête", () => {
+test("l'historique garde 24 h de mesures, les plus récentes en tête", () => {
   const storage = new MemoryStorage();
-  for (let i = 0; i < 25; i += 1) pushHistory(record(1000 + i), storage);
+  for (let i = 0; i < 120; i += 1) pushHistory(record(1000 + i), storage);
   const history = loadHistory(storage);
   expect(history).toHaveLength(DIAG_HISTORY_MAX);
-  expect(history[0]?.at).toBe(1024);
-  expect(history.at(-1)?.at).toBe(1005);
-  expect(history).toHaveLength(20);
+  expect(history[0]?.at).toBe(1119);
+  expect(history.at(-1)?.at).toBe(1024);
+  expect(DIAG_HISTORY_MAX).toBe(96);
 });
 
 test("un historique corrompu ou absent ne casse pas la page", () => {

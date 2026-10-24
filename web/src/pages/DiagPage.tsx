@@ -289,10 +289,10 @@ export function DiagPage() {
           ) : null}
         </div>
         <p className="muted">
-          Les {history.length === 0 ? "20" : history.length} dernières mesures restent
-          dans ce navigateur uniquement : rien n&apos;est envoyé ni conservé sur le
-          serveur. Comparer 8 h et 20 h distingue une saturation aux heures pleines
-          d&apos;un incident permanent.
+          Les 96 dernières mesures (24 h de surveillance) restent dans ce
+          navigateur uniquement : rien n&apos;est envoyé ni conservé sur le
+          serveur. Comparer 8 h et 20 h distingue une saturation aux heures
+          pleines d&apos;un incident permanent.
         </p>
         {history.length === 0 ? (
           <p className="muted">Aucune mesure enregistrée pour l&apos;instant.</p>

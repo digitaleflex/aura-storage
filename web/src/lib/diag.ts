@@ -219,7 +219,8 @@ export interface DiagRecord {
 }
 
 export const DIAG_HISTORY_KEY = "aura.diagnostic.history";
-export const DIAG_HISTORY_MAX = 20;
+/** 96 mesures = 24 h de surveillance à un passage toutes les 15 min. */
+export const DIAG_HISTORY_MAX = 96;
 
 /** Sous-ensemble de `Storage` : injectable dans les tests. */
 export interface HistoryStorage {
