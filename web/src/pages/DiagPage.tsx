@@ -3,13 +3,16 @@ import { useAuth } from "../lib/auth";
 import {
   DIAG_DOWNLOAD_BYTES,
   DIAG_UPLOAD_BYTES,
+  clearHistory,
   formatRatePair,
+  loadHistory,
+  pushHistory,
   runDownload,
   runPing,
   runUpload,
   verdict,
 } from "../lib/diag";
-import type { PingStats, RateSample, UploadSample } from "../lib/diag";
+import type { DiagRecord, PingStats, RateSample, UploadSample } from "../lib/diag";
 import { describeError } from "../lib/errors";
 
 /**
@@ -43,6 +46,7 @@ export function DiagPage() {
   const [down, setDown] = useState<RateSample | null>(null);
   const [up, setUp] = useState<UploadSample | null>(null);
   const [progress, setProgress] = useState(0);
+  const [history, setHistory] = useState<DiagRecord[]>(() => loadHistory());
 
   const running = RUNNING.includes(phase);
 
@@ -67,6 +71,18 @@ export function DiagPage() {
       setProgress(0);
       const upload = await runUpload(DIAG_UPLOAD_BYTES, csrf);
       setUp(upload);
+      setHistory(
+        pushHistory({
+          at: Date.now(),
+          rttMin: pings.min,
+          rttAvg: pings.avg,
+          rttMax: pings.max,
+          jitter: pings.jitter,
+          downBytesPerSecond: download.bytesPerSecond,
+          upBytesPerSecond: upload.bytesPerSecond,
+          upServerBytesPerSecond: upload.serverBytesPerSecond,
+        }),
+      );
       setPhase("done");
     } catch (err) {
       setError(describeError(err, "Diagnostic interrompu. Réessayez dans un instant."));
@@ -195,6 +211,63 @@ export function DiagPage() {
           </table>
         </section>
       ) : null}
+
+      <section className="section" aria-labelledby="diag-history-title">
+        <div className="section-head">
+          <h2 id="diag-history-title">Historique (ce navigateur)</h2>
+          {history.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => {
+                clearHistory();
+                setHistory([]);
+              }}
+            >
+              Effacer l&apos;historique
+            </button>
+          ) : null}
+        </div>
+        <p className="muted">
+          Les {history.length === 0 ? "20" : history.length} dernières mesures restent
+          dans ce navigateur uniquement : rien n&apos;est envoyé ni conservé sur le
+          serveur. Comparer 8 h et 20 h distingue une saturation aux heures pleines
+          d&apos;un incident permanent.
+        </p>
+        {history.length === 0 ? (
+          <p className="muted">Aucune mesure enregistrée pour l&apos;instant.</p>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>RTT moy.</th>
+                <th>Gigue</th>
+                <th>Descente</th>
+                <th>Montée</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((entry) => (
+                <tr key={entry.at}>
+                  <td>
+                    {new Date(entry.at).toLocaleString("fr-FR", {
+                      day: "2-digit",
+                      month: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </td>
+                  <td>{ms(entry.rttAvg)}</td>
+                  <td>{ms(entry.jitter)}</td>
+                  <td>{formatRatePair(entry.downBytesPerSecond)}</td>
+                  <td>{formatRatePair(entry.upBytesPerSecond)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
     </div>
   );
 }

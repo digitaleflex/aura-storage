@@ -189,3 +189,89 @@ export async function runUpload(
     serverBytesPerSecond: serverRate,
   };
 }
+
+// --- Historique local des mesures ------------------------------------------
+// Conservé dans le navigateur uniquement : rien n'est envoyé ni stocké côté
+// serveur. Il sert à comparer les heures (saturation) sans collecter de
+// données personnelles.
+
+export interface DiagRecord {
+  /** Epoch ms du test. */
+  at: number;
+  rttMin: number;
+  rttAvg: number;
+  rttMax: number;
+  jitter: number;
+  downBytesPerSecond: number;
+  upBytesPerSecond: number;
+  upServerBytesPerSecond: number;
+}
+
+export const DIAG_HISTORY_KEY = "aura.diagnostic.history";
+export const DIAG_HISTORY_MAX = 20;
+
+/** Sous-ensemble de `Storage` : injectable dans les tests. */
+export interface HistoryStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+function defaultStorage(): HistoryStorage | null {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return null;
+    return window.localStorage;
+  } catch {
+    return null; // navigation privée : l'historique est simplement absent
+  }
+}
+
+/** Dernières mesures, de la plus récente à la plus ancienne. */
+export function loadHistory(storage: HistoryStorage | null = defaultStorage()): DiagRecord[] {
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(DIAG_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((entry): entry is DiagRecord => {
+        if (typeof entry !== "object" || entry === null) return false;
+        const candidate = entry as DiagRecord;
+        return (
+          Number.isFinite(candidate.at) &&
+          Number.isFinite(candidate.rttAvg) &&
+          Number.isFinite(candidate.downBytesPerSecond) &&
+          Number.isFinite(candidate.upBytesPerSecond)
+        );
+      })
+      .slice(0, DIAG_HISTORY_MAX);
+  } catch {
+    return []; // entrée corrompue : on repart d'un historique vide
+  }
+}
+
+/** Ajoute une mesure en tête et renvoie l'historique à jour. */
+export function pushHistory(
+  record: DiagRecord,
+  storage: HistoryStorage | null = defaultStorage(),
+): DiagRecord[] {
+  const next = [record, ...loadHistory(storage)].slice(0, DIAG_HISTORY_MAX);
+  if (storage) {
+    try {
+      storage.setItem(DIAG_HISTORY_KEY, JSON.stringify(next));
+    } catch {
+      // Quota plein ou stockage refusé : la mesure reste affichée, sans historique.
+    }
+  }
+  return next;
+}
+
+export function clearHistory(storage: HistoryStorage | null = defaultStorage()): void {
+  if (!storage) return;
+  try {
+    storage.removeItem(DIAG_HISTORY_KEY);
+  } catch {
+    // Ignoré : rien à nettoyer si le stockage est indisponible.
+  }
+}

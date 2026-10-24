@@ -1,12 +1,18 @@
 import { test, expect } from "@playwright/test";
 import {
+  DIAG_HISTORY_MAX,
+  DIAG_HISTORY_KEY,
+  clearHistory,
   formatRatePair,
+  loadHistory,
   msStats,
+  pushHistory,
   rateOf,
   runDownload,
   runUpload,
   verdict,
 } from "../src/lib/diag";
+import type { DiagRecord } from "../src/lib/diag";
 
 /**
  * Le diagnostic réseau doit être juste : ses chiffres servent à décider si le
@@ -102,4 +108,61 @@ test("la montée remonte le débit mesuré par le serveur", async () => {
   } finally {
     globalThis.fetch = original;
   }
+});
+
+// --- Historique local -------------------------------------------------------
+
+class MemoryStorage {
+  private data = new Map<string, string>();
+  getItem(key: string): string | null {
+    return this.data.get(key) ?? null;
+  }
+  setItem(key: string, value: string): void {
+    this.data.set(key, value);
+  }
+  removeItem(key: string): void {
+    this.data.delete(key);
+  }
+}
+
+function record(at: number, up = 500_000): DiagRecord {
+  return {
+    at,
+    rttMin: 100,
+    rttAvg: 120,
+    rttMax: 150,
+    jitter: 10,
+    downBytesPerSecond: 2_000_000,
+    upBytesPerSecond: up,
+    upServerBytesPerSecond: up,
+  };
+}
+
+test("l'historique garde les 20 mesures les plus récentes, en tête", () => {
+  const storage = new MemoryStorage();
+  for (let i = 0; i < 25; i += 1) pushHistory(record(1000 + i), storage);
+  const history = loadHistory(storage);
+  expect(history).toHaveLength(DIAG_HISTORY_MAX);
+  expect(history[0]?.at).toBe(1024);
+  expect(history.at(-1)?.at).toBe(1005);
+  expect(history).toHaveLength(20);
+});
+
+test("un historique corrompu ou absent ne casse pas la page", () => {
+  const storage = new MemoryStorage();
+  expect(loadHistory(storage)).toEqual([]);
+  storage.setItem(DIAG_HISTORY_KEY, "{pas du json");
+  expect(loadHistory(storage)).toEqual([]);
+  storage.setItem(DIAG_HISTORY_KEY, JSON.stringify([{ at: "hier" }, record(42)]));
+  expect(loadHistory(storage).map((entry) => entry.at)).toEqual([42]);
+});
+
+test("effacer l'historique le vide vraiment", () => {
+  const storage = new MemoryStorage();
+  pushHistory(record(1), storage);
+  clearHistory(storage);
+  expect(loadHistory(storage)).toEqual([]);
+  // Sans stockage (navigation privée), aucune de ces fonctions ne lève.
+  expect(pushHistory(record(2), null)).toHaveLength(1);
+  expect(clearHistory(null)).toBeUndefined();
 });

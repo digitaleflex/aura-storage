@@ -204,6 +204,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const isFilesPage =
     location.pathname === "/" || location.pathname === "";
   const isTransfersPage = location.pathname === "/transfers";
+  const isDiagPage = location.pathname === "/diagnostic";
 
   return (
     <div className={`shell${isTransfersPage ? " shell-transfers" : ""}`}>
@@ -280,6 +281,27 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 {transfers.queue.items.length}
               </span>
             ) : null}
+          </Link>
+          <Link
+            to="/diagnostic"
+            activeOptions={{ exact: true }}
+            className={isDiagPage ? "nav-link nav-link-active" : "nav-link"}
+            onClick={() => toggleSidebar(false)}
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 12h4l2-6 4 12 2-6h6" />
+            </svg>
+            Diagnostic réseau
           </Link>
           {canAdmin ? (
             <Link
@@ -402,6 +424,27 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     {transfers.queue.items.length}
                   </span>
                 ) : null}
+              </Link>
+              <Link
+                to="/diagnostic"
+                activeOptions={{ exact: true }}
+                className={isDiagPage ? "nav-link nav-link-active" : "nav-link"}
+                onClick={() => closeMobile(false)}
+              >
+                <svg
+                  aria-hidden="true"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M3 12h4l2-6 4 12 2-6h6" />
+                </svg>
+                Diagnostic réseau
               </Link>
               {canAdmin ? (
                 <Link
