@@ -1,7 +1,9 @@
 # S3 multipart upload for large objects (#72)
 
-**Status (2026-10-20): implemented in code behind `AURA_MULTIPART_ENABLED`
-(default off); the compatibility gate below has NOT been run.** What exists:
+**Status (2026-10-25): implemented in code behind `AURA_MULTIPART_ENABLED`
+(default off); the compatibility gate below was RUN on 2026-10-25 against the
+pinned 4.48 image but is NOT fully closed — see the
+[verification log](verification-log-2026-10-25-multipart-compat-4.48.md).** What exists:
 two additive columns on `objects` (`multipart_upload_id`,
 `multipart_part_bytes`), `GET /api/v1/objects/{oid}/multipart` (plan + parts
 held, read from the backend with `ListParts`), `POST .../multipart/parts`
@@ -56,11 +58,16 @@ throttled PUTs of a single 37.5 MB object:
 
 The cutoff is **request-direction only** (a download over 60s completes), which
 matches `readTimeout` semantics rather than a total connection lifetime. The
-current mitigation is a bounded `readTimeout` (1200s) in `docker-compose.yml`;
+current mitigation is a bounded `readTimeout` (7200s) in `docker-compose.yml`;
 that buys time but a single request per object remains the wrong shape. It also
 sizes multipart parts: each part PUT is itself a request through the same proxy,
 so `part_size_bytes / worst_case_bandwidth` must stay comfortably below
 `readTimeout`, independently of the backend's own part limits.
+
+The 7200s sizing arithmetic is in
+[verification-log-2026-10-25-multipart-proxy-4.48.md](verification-log-2026-10-25-multipart-proxy-4.48.md):
+at 64 KiB/s a 450 MiB part is the absolute ceiling and 225 MiB the comfortable one, while
+the 16 MiB code default is 256.0s (3.56% of the deadline).
 
 ## Goals
 
@@ -80,6 +87,56 @@ so `part_size_bytes / worst_case_bandwidth` must stay comfortably below
 - No change to the single-PUT default for small/medium files.
 
 ## Compatibility gate (do this first — blocks the rest)
+
+**Recorded 2026-10-25 — executed, not a clean pass.** The gate was run against
+`chrislusf/seaweedfs:4.48` in an isolated throwaway stack: `failures=0` (36 passes,
+`unknowns=1`), harness exit code 0, one UNKNOWN (disk-level reclaim after abort is not
+provable from volume stats; only the S3 API guarantee is verified). Full evidence:
+[verification-log-2026-10-25-multipart-compat-4.48.md](verification-log-2026-10-25-multipart-compat-4.48.md).
+The run used the dedicated harness (`tests/multipart-compat-4.48.sh`, boto3 client
+plus a plain-`urllib` part consumer), not the probe script named below, and did
+not exercise a separate candidate client library.
+
+Coverage against items 1–6 below: item 1 is exercised (harness assertion; no
+failure counted); item 2 is partly exercised (presigned part PUTs over plain
+HTTP succeed and an unsigned `x-amz-server-side-encryption` header is rejected,
+but signed per-part size enforcement is not asserted); **item 3 is covered** by this
+run: a signed `x-amz-checksum-sha256` on a presigned `UploadPart` is accepted (HTTP
+200 and echoed), the same header unsigned is rejected (403 `SignatureDoesNotMatch`),
+a signed wrong digest is rejected (400 `BadDigest`), and the value is **not
+persisted** — `ListParts`, Complete and `HeadObject(ChecksumMode=ENABLED)` expose no
+checksum (POINT 9 in the
+[verification log](verification-log-2026-10-25-multipart-compat-4.48.md)), so the
+gateway validates a supplied checksum but cannot serve as a checksum store; item 4 is
+consistent with the evidence (completed ETag `…-2`, integrity verified by SHA-256,
+never by ETag; no full-object MD5 comparison was printed); item 5 is partial (Range
+GET verified; part-size/count limits were not measured in this capture).
+**Item 6 (part PUTs through Traefik plus `readTimeout` sizing) is now covered** by a
+second run on 2026-10-25: a slow 5 MiB presigned part PUT through Traefik with
+`readTimeout=7200s` returned 200 in 80.008s with an ETag equal to the local MD5 of the
+bytes sent, the identical upload through a default-60s Traefik was cut off at 60.0s,
+and at a conservative 64 KiB/s the 7200s deadline allows a 450 MiB part (225 MiB at half
+the budget) — see
+[verification-log-2026-10-25-multipart-proxy-4.48.md](verification-log-2026-10-25-multipart-proxy-4.48.md).
+**Items 2 and 5 remain UNPROBED.** The attempt to measure them was abandoned without a
+result, so nothing is claimed here about whether SeaweedFS itself enforces a signed
+per-part size, nor about its minimum part size or maximum part count. Both are mitigated
+in our own code, which is why they do not block operationally: `plan_parts`
+(`api/s3.py:187-204`) never emits a non-last part below the 5 MiB minimum and raises the
+part size to stay within 10,000 parts, and `_uploaded_parts` (`api/main.py:1234-1251`)
+keeps only parts whose number falls in `1..count` and whose byte length equals
+`part_length(...)` exactly; `_complete_multipart_session` then refuses to assemble when
+any planned part is absent (`api/main.py:1274-1278`). Residual risk if the gateway
+enforces less than the plan assumes: an invalid part is stored (occupying space until
+abort or reap) and the client sees a successful `UploadPart` that the commit later
+rejects with `409`. The compat run's disk-reclaim UNKNOWN also remains.
+
+The gate is therefore **not closed by measurement**. Whether the server-side mitigation
+above is sufficient to run multipart in production is an owner decision, recorded
+separately from this gate. State observed on the pilot on 2026-10-25:
+`AURA_MULTIPART_ENABLED=1`, `AURA_MULTIPART_PART_BYTES=5242880`,
+`AURA_MULTIPART_THRESHOLD_BYTES=33554432` (`docker exec aura-001-api printenv`), which
+is **not** the code default of `0`.
 
 Run `scripts/seaweedfs-compat-probe.py` against a **disposable** bucket on the
 exact pinned `chrislusf/seaweedfs:4.48`, then against a candidate client library.
