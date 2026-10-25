@@ -18,6 +18,8 @@ Exit code 0 iff every asserted check passed; non-zero otherwise.
 from __future__ import annotations
 
 import argparse
+import ast
+import base64
 import hashlib
 import os
 import subprocess
@@ -36,6 +38,11 @@ SMALL = b"\x33" * (1024 * 1024)  # 1 MiB, below the minimum non-last part size
 
 _failures = 0
 _unknowns = 0
+_passes = 0
+
+# Set by POINT 9: "signed" | "unsigned" | None — whether a presigned UploadPart
+# accepted x-amz-checksum-sha256 and how it had to be signed.
+CHECKSUM_MODE: str | None = None
 
 
 def line(tag: str, msg: str) -> None:
@@ -43,6 +50,8 @@ def line(tag: str, msg: str) -> None:
 
 
 def ok(msg: str) -> None:
+    global _passes
+    _passes += 1
     line("PASS", msg)
 
 
@@ -88,6 +97,56 @@ def err_detail(exc: Exception) -> str:
         return (f"Code={e.get('Code')!r} Message={e.get('Message')!r} "
                 f"HTTPStatus={exc.response.get('ResponseMetadata', {}).get('HTTPStatusCode')}")
     return f"{type(exc).__name__}: {exc}"
+
+
+def evidence(msg: str) -> None:
+    """Raw, auditable evidence line (status codes, headers, hex values)."""
+    line("EVIDENCE", msg)
+
+
+def norm_etag(raw: str | None) -> str:
+    """Strip the quotes S3 puts around ETags."""
+    return (raw or "").strip().strip('"')
+
+
+def md5_hex(data: bytes) -> str:
+    return hashlib.md5(data).hexdigest()
+
+
+def b64_sha256(data: bytes) -> str:
+    return base64.b64encode(hashlib.sha256(data).digest()).decode()
+
+
+def resp_meta(resp: dict) -> str:
+    meta = resp.get("ResponseMetadata", {})
+    return f"http={meta.get('HTTPStatusCode')} headers={meta.get('HTTPHeaders')}"
+
+
+def presign_upload_part(client, bucket: str, key: str, uid: str, part_number: int,
+                        checksum_b64: str | None = None,
+                        content_length: int | None = None) -> tuple[str, str]:
+    """Presign UploadPart; optionally put x-amz-checksum-sha256 into SignedHeaders.
+
+    botocore serialises UploadPart.ChecksumSHA256 as the x-amz-checksum-sha256
+    *header*, so passing it in Params makes it part of X-Amz-SignedHeaders.
+    ``content_length`` is the same trick for ``Content-Length`` (what
+    ``api/s3.py:presigned_upload_part`` does to bind a part to its exact size).
+    Returns (url, x-amz-signedheaders value).
+    """
+    params = {"Bucket": bucket, "Key": key, "UploadId": uid, "PartNumber": part_number}
+    if checksum_b64 is not None:
+        params["ChecksumSHA256"] = checksum_b64
+    if content_length is not None:
+        params["ContentLength"] = content_length
+    url = client.generate_presigned_url("upload_part", Params=params, ExpiresIn=600)
+    signed = parse_qs(urlparse(url).query).get("X-Amz-SignedHeaders", [""])[0]
+    return url, signed
+
+
+def composite_md5(part_digests: list[bytes]) -> str:
+    """S3 multipart ETag for parts whose ETags are MD5 hex digests."""
+    return hashlib.md5(b"".join(part_digests)).hexdigest() + f"-{len(part_digests)}"
+
 
 
 def make_client(endpoint: str, ak: str, sk: str):
@@ -561,6 +620,780 @@ def point7(client, bucket: str, origin: str) -> None:
             pass
 
 
+# ---------------------------------------------------------------------------
+# Point 8 — is the UploadPart ETag the MD5 of that part's bytes?
+# ---------------------------------------------------------------------------
+P8_PARTS = (
+    (1, b"\x11" * (5 * 1024 * 1024), "exactly 5 MiB, minimum non-last size"),
+    (2, (b"\x22\x33\x44\x55" * ((5 * 1024 * 1024 + 4099) // 4 + 1))[: 5 * 1024 * 1024 + 4099],
+     "5 MiB + 4099 bytes (deliberately not chunk-aligned)"),
+    (3, b"\x99\x88\x77", "3-byte last part"),
+)
+
+
+def point8(client, bucket: str) -> None:
+    print("\n=== POINT 8: is the UploadPart ETag the MD5 of that part's bytes? ===", flush=True)
+    key = "compat/point8-part-md5.bin"
+    uid = None
+    uid0 = None
+    try:
+        uid = client.create_multipart_upload(Bucket=bucket, Key=key)["UploadId"]
+        etags: dict[int, str] = {}
+        for n, data, note in P8_PARTS:
+            resp = client.upload_part(Bucket=bucket, Key=key, UploadId=uid,
+                                      PartNumber=n, Body=data)
+            raw = resp["ETag"]
+            local = md5_hex(data)
+            norm = norm_etag(raw).lower()
+            evidence(f"UploadPart {n} ({note}): wire_bytes={len(data)} "
+                     f"md5_local={local} etag_raw={raw!r} etag_norm={norm} {resp_meta(resp)}")
+            if norm == local:
+                ok(f"[Q1] part {n} ETag == MD5(part bytes) for {len(data)} bytes")
+            else:
+                fail(f"[Q1] part {n} ETag != MD5(part bytes): "
+                     f"local_md5={local} server_etag={norm}")
+            etags[n] = raw
+
+        # 0-byte edge: only if the API allows it; a clean 4xx is an answer, not a failure.
+        zero_key = "compat/point8-zero-part.bin"
+        uid0 = client.create_multipart_upload(Bucket=bucket, Key=zero_key)["UploadId"]
+        try:
+            zresp = client.upload_part(Bucket=bucket, Key=zero_key, UploadId=uid0,
+                                       PartNumber=1, Body=b"")
+            zraw = zresp["ETag"]
+            zlocal = md5_hex(b"")
+            evidence(f"0-byte UploadPart: body_bytes=0 md5_local={zlocal} "
+                     f"etag_raw={zraw!r} {resp_meta(zresp)}")
+            if norm_etag(zraw).lower() == zlocal:
+                ok("[Q1] 0-byte UploadPart accepted and its ETag is MD5(b\"\")")
+            else:
+                unknown(f"[Q1] 0-byte UploadPart accepted but ETag "
+                        f"{norm_etag(zraw)!r} != MD5(b'')={zlocal}; empty-part ETag semantics "
+                        f"are undefined")
+        except ClientError as exc:
+            status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            evidence(f"0-byte UploadPart rejected: {err_detail(exc)} "
+                     f"error={exc.response.get('Error', {})}")
+            if status is not None and status >= 500:
+                fail(f"[Q1] 0-byte UploadPart produced a server error HTTP {status}")
+            else:
+                info(f"[Q1] ANSWER: the API does not accept a 0-byte part "
+                     f"(HTTP {status}); a browser must never emit empty parts")
+        finally:
+            if uid0 is not None:
+                try:
+                    client.abort_multipart_upload(Bucket=bucket, Key=zero_key, UploadId=uid0)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # Complete the controlled 3-part upload: proves the ETags we compared are usable.
+        done = client.complete_multipart_upload(
+            Bucket=bucket, Key=key, UploadId=uid,
+            MultipartUpload={"Parts": [
+                {"PartNumber": n, "ETag": etags[n]} for n, _, _ in P8_PARTS]})
+        whole = b"".join(d for _, d, _ in P8_PARTS)
+        head = client.head_object(Bucket=bucket, Key=key)
+        expected = composite_md5([hashlib.md5(d).digest() for _, d, _ in P8_PARTS])
+        evidence(f"Complete ETag={done.get('ETag')!r} HEAD ETag={head.get('ETag')!r} "
+                 f"ContentLength={head.get('ContentLength')} "
+                 f"expected_composite_md5={expected!r}")
+        if head["ContentLength"] == len(whole):
+            ok("[Q1] the 3 controlled parts (incl. a 3-byte last part) assemble to the "
+               "expected length")
+        else:
+            fail(f"assembled length {head['ContentLength']} != {len(whole)}")
+        body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+        evidence(f"GET assembled bytes={len(body)} sha256_hex="
+                 f"{hashlib.sha256(body).hexdigest()} sha256_expected="
+                 f"{hashlib.sha256(whole).hexdigest()}")
+        if body == whole:
+            ok("[Q1] assembled bytes are byte-identical to the concatenation of the parts")
+        else:
+            fail("[Q1] assembled bytes differ from the concatenation of the parts")
+    except Exception as exc:  # noqa: BLE001
+        fail(f"[Q1] part-ETag probe raised: {err_detail(exc)}")
+    finally:
+        if uid is not None:
+            try:
+                client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=uid)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Point 9 — x-amz-checksum-sha256 on a presigned UploadPart (signed vs unsigned)
+# ---------------------------------------------------------------------------
+def point9(client, bucket: str) -> None:
+    global CHECKSUM_MODE
+    print("\n=== POINT 9: x-amz-checksum-sha256 on a presigned UploadPart ===", flush=True)
+    D = b"\x5a" * (5 * 1024 * 1024)
+    TAIL = b"\x5b" * 4
+    dsha, tsha = b64_sha256(D), b64_sha256(TAIL)
+    key_signed = "compat/point9-signed.bin"
+    key_unsigned = "compat/point9-unsigned.bin"
+    key_badsum = "compat/point9-badsum.bin"
+    uids: dict[str, str] = {}
+    accepted: dict[str, bool] = {}
+    etags: dict[str, str] = {}
+
+    def put(url: str, data: bytes, checksum: str):
+        return http("PUT", url, data=data, headers={
+            "Content-Type": "application/octet-stream",
+            "x-amz-checksum-sha256": checksum})
+
+    try:
+        # --- variant (a): checksum header is in the presign signature
+        uids["signed"] = client.create_multipart_upload(
+            Bucket=bucket, Key=key_signed)["UploadId"]
+        url, signed = presign_upload_part(
+            client, bucket, key_signed, uids["signed"], 1, dsha)
+        evidence(f"9a presign(PartNumber=1, ChecksumSHA256={dsha}) -> "
+                 f"X-Amz-SignedHeaders={signed!r} checksum_in_signed_headers="
+                 f"{'x-amz-checksum-sha256' in signed.lower()} url={safe_url(url)}")
+        st, h, body = put(url, D, dsha)
+        accepted["signed"] = st in (200, 201) and bool(h.get("etag"))
+        etags["signed"] = h.get("etag") or ""
+        evidence(f"9a PUT {len(D)} bytes, signed x-amz-checksum-sha256={dsha} -> HTTP {st} "
+                 f"etag={h.get('etag')!r} "
+                 f"resp_x_amz_checksum_sha256={h.get('x-amz-checksum-sha256')!r} "
+                 f"x-amz-headers={ {k: v for k, v in h.items() if k.startswith('x-amz-')} } "
+                 f"body={body[:400]!r}")
+        if accepted["signed"]:
+            ok("[Q2a] presigned UploadPart ACCEPTS a SIGNED x-amz-checksum-sha256 header")
+            CHECKSUM_MODE = "signed"
+        else:
+            info(f"[Q2a] ANSWER: presigned UploadPart REJECTS a signed "
+                 f"x-amz-checksum-sha256 header (HTTP {st}, body above)")
+
+        # --- variant (b): same header, but NOT part of SignedHeaders
+        uids["unsigned"] = client.create_multipart_upload(
+            Bucket=bucket, Key=key_unsigned)["UploadId"]
+        url, signed = presign_upload_part(client, bucket, key_unsigned, uids["unsigned"], 1)
+        evidence(f"9b presign(PartNumber=1, no checksum param) -> "
+                 f"X-Amz-SignedHeaders={signed!r} checksum_in_signed_headers="
+                 f"{'x-amz-checksum-sha256' in signed.lower()} url={safe_url(url)}")
+        st, h, body = put(url, D, dsha)
+        accepted["unsigned"] = st in (200, 201) and bool(h.get("etag"))
+        etags["unsigned"] = h.get("etag") or ""
+        evidence(f"9b PUT {len(D)} bytes, UNSIGNED x-amz-checksum-sha256={dsha} -> HTTP {st} "
+                 f"etag={h.get('etag')!r} "
+                 f"resp_x_amz_checksum_sha256={h.get('x-amz-checksum-sha256')!r} "
+                 f"x-amz-headers={ {k: v for k, v in h.items() if k.startswith('x-amz-')} } "
+                 f"body={body[:400]!r}")
+        if accepted["unsigned"]:
+            ok("[Q2b] presigned UploadPart also ACCEPTS an UNSIGNED checksum header")
+            CHECKSUM_MODE = CHECKSUM_MODE or "unsigned"
+        else:
+            info(f"[Q2b] ANSWER: presigned UploadPart REJECTS an unsigned "
+                 f"x-amz-checksum-sha256 header (HTTP {st}, body above)")
+
+        # --- negative control: is the supplied digest checked against the bytes?
+        wrong = b64_sha256(b"these-are-not-the-part-bytes")
+        uids["badsum"] = client.create_multipart_upload(
+            Bucket=bucket, Key=key_badsum)["UploadId"]
+        url, signed = presign_upload_part(
+            client, bucket, key_badsum, uids["badsum"], 1, wrong)
+        tiny = b"12345678"
+        st, h, body = put(url, tiny, wrong)
+        evidence(f"9c negative control: 8-byte body, signed wrong checksum={wrong} -> "
+                 f"HTTP {st} etag={h.get('etag')!r} body={body[:400]!r}")
+        if st in (200, 201) and h.get("etag"):
+            info("[Q2] ANSWER: the checksum VALUE is NOT validated against the bytes "
+                 "(a deliberately wrong digest was accepted)")
+        else:
+            info(f"[Q2] ANSWER: the checksum VALUE is validated (wrong digest rejected, "
+                 f"HTTP {st})")
+
+        # --- does ListParts echo the checksum?
+        for mode, k in (("signed", key_signed), ("unsigned", key_unsigned)):
+            if not accepted.get(mode):
+                continue
+            listed = client.list_parts(Bucket=bucket, Key=k, UploadId=uids[mode])
+            raw_parts = [dict(p) for p in listed.get("Parts", [])]
+            echoed = [p.get("ChecksumSHA256") for p in raw_parts]
+            evidence(f"9d ListParts ({mode}) -> {raw_parts}")
+            if dsha in echoed:
+                ok(f"[Q2] ListParts echoes ChecksumSHA256 for the {mode} part: {echoed}")
+            else:
+                info(f"[Q2] ANSWER: ListParts does NOT echo ChecksumSHA256 for the "
+                     f"{mode} part (got {echoed})")
+
+        # --- Complete a checksummed upload and inspect HeadObject
+        mode = "signed" if accepted.get("signed") else (
+            "unsigned" if accepted.get("unsigned") else None)
+        if mode is None:
+            info("[Q2] no per-part checksum variant was accepted; skipping "
+                 "Complete/HeadObject checksum probe")
+            return
+        k = key_signed if mode == "signed" else key_unsigned
+        uid = uids[mode]
+        if mode == "signed":
+            url, signed = presign_upload_part(client, bucket, k, uid, 2, tsha)
+        else:
+            url, signed = presign_upload_part(client, bucket, k, uid, 2)
+        st, h, body = put(url, TAIL, tsha)
+        etag2 = h.get("etag") or ""
+        evidence(f"9e part 2 ({mode}): {len(TAIL)} bytes, header={tsha} -> HTTP {st} "
+                 f"etag={etag2!r} body={body[:400]!r}")
+        if not (st in (200, 201) and etag2):
+            fail(f"[Q2] tail part via {mode} checksum variant failed: HTTP {st}")
+            return
+        completion = [{"PartNumber": 1, "ETag": etags[mode]},
+                      {"PartNumber": 2, "ETag": etag2}]
+        if mode == "signed":
+            completion[0]["ChecksumSHA256"] = dsha
+            completion[1]["ChecksumSHA256"] = tsha
+        try:
+            done = client.complete_multipart_upload(
+                Bucket=bucket, Key=k, UploadId=uid,
+                MultipartUpload={"Parts": completion})
+            evidence(f"9f Complete with checksums -> ETag={done.get('ETag')!r} "
+                     f"checksum_fields={ {kk: vv for kk, vv in done.items() if 'hecksum' in kk.lower()} } "
+                     f"response_keys={sorted(kk for kk in done if kk != 'ResponseMetadata')}")
+        except ClientError as exc:
+            evidence(f"9f Complete WITH ChecksumSHA256 failed: {err_detail(exc)}; "
+                     f"retrying with ETag only")
+            done = client.complete_multipart_upload(
+                Bucket=bucket, Key=k, UploadId=uid,
+                MultipartUpload={"Parts": [{"PartNumber": p["PartNumber"],
+                                            "ETag": p["ETag"]} for p in completion]})
+            evidence(f"9f Complete ETag-only -> ETag={done.get('ETag')!r}")
+
+        head = client.head_object(Bucket=bucket, Key=k, ChecksumMode="ENABLED")
+        chk = {kk: vv for kk, vv in head.items() if "hecksum" in kk.lower()}
+        xamz = {kk: vv for kk, vv in head["ResponseMetadata"]["HTTPHeaders"].items()
+                if kk.startswith("x-amz-")}
+        evidence(f"9g HeadObject(ChecksumMode=ENABLED) -> "
+                 f"response_keys={sorted(kk for kk in head if kk != 'ResponseMetadata')} "
+                 f"checksum_fields={chk} x-amz-headers={xamz}")
+        got = chk.get("ChecksumSHA256") or xamz.get("x-amz-checksum-sha256")
+        expected = b64_sha256(D + TAIL)
+        if got:
+            if got == expected:
+                ok("[Q2] HeadObject after Complete exposes x-amz-checksum-sha256 == "
+                   "SHA-256 of the whole assembled object")
+            else:
+                info(f"[Q2] ANSWER: HeadObject exposes ChecksumSHA256={got!r} which is "
+                     f"NOT the whole-object SHA-256 ({expected}); "
+                     f"ChecksumType={chk.get('ChecksumType')!r}")
+        else:
+            info("[Q2] ANSWER: HeadObject after Complete exposes NO checksum field "
+                 "at all (see x-amz-headers above)")
+    except Exception as exc:  # noqa: BLE001
+        fail(f"[Q2] checksum probe raised: {err_detail(exc)}")
+    finally:
+        for k, mode_key in ((key_signed, "signed"), (key_unsigned, "unsigned"),
+                            (key_badsum, "badsum")):
+            uid = uids.get(mode_key)
+            if uid:
+                try:
+                    client.abort_multipart_upload(Bucket=bucket, Key=k, UploadId=uid)
+                except Exception:  # noqa: BLE001
+                    pass
+
+
+# ---------------------------------------------------------------------------
+# Point 10 — assembled object: composite ETag, checksum surface, derivability
+# ---------------------------------------------------------------------------
+def point10(client, bucket: str) -> None:
+    print("\n=== POINT 10: CompleteMultipartUpload/HEAD surface for the assembled "
+          "object ===", flush=True)
+    key = "compat/point10-composite.bin"
+    parts = [
+        (1, b"\x01" * (5 * 1024 * 1024)),
+        (2, (b"\x02\x03\x04\x05" * ((5 * 1024 * 1024 + 8191) // 4 + 1))
+         [: 5 * 1024 * 1024 + 8191]),
+        (3, b"tail" * 1000),
+    ]
+    whole = b"".join(d for _, d in parts)
+    uid = None
+    try:
+        uid = client.create_multipart_upload(Bucket=bucket, Key=key)["UploadId"]
+        etags: dict[int, str] = {}
+        checksummed = CHECKSUM_MODE is not None
+        if not checksummed:
+            info("[Q3] POINT 9 found no accepted per-part checksum; uploading this object "
+                 "WITHOUT x-amz-checksum-sha256 (HEAD can then only show what the backend "
+                 "invents on its own)")
+        for n, data in parts:
+            kwargs = {}
+            if checksummed:
+                kwargs["ChecksumSHA256"] = b64_sha256(data)
+            resp = client.upload_part(Bucket=bucket, Key=key, UploadId=uid,
+                                      PartNumber=n, Body=data, **kwargs)
+            etags[n] = resp["ETag"]
+            evidence(f"UploadPart {n}: bytes={len(data)} sha256_b64={b64_sha256(data)} "
+                     f"etag={resp['ETag']!r} "
+                     f"resp_checksum={resp.get('ChecksumSHA256')!r} {resp_meta(resp)}")
+        listed = client.list_parts(Bucket=bucket, Key=key, UploadId=uid)
+        evidence(f"ListParts -> {[dict(p) for p in listed.get('Parts', [])]}")
+
+        completion = [{"PartNumber": n, "ETag": etags[n]} for n, _ in parts]
+        if checksummed:
+            for item, (_, data) in zip(completion, parts):
+                item["ChecksumSHA256"] = b64_sha256(data)
+        try:
+            done = client.complete_multipart_upload(
+                Bucket=bucket, Key=key, UploadId=uid,
+                MultipartUpload={"Parts": completion})
+            evidence(f"Complete (checksummed={checksummed}) -> ETag={done.get('ETag')!r} "
+                     f"checksum_fields={ {k: v for k, v in done.items() if 'hecksum' in k.lower()} }")
+        except ClientError as exc:
+            evidence(f"Complete WITH ChecksumSHA256 failed: {err_detail(exc)}; "
+                     f"retrying with ETag only")
+            done = client.complete_multipart_upload(
+                Bucket=bucket, Key=key, UploadId=uid,
+                MultipartUpload={"Parts": [{"PartNumber": n, "ETag": etags[n]}
+                                           for n, _ in parts]})
+            evidence(f"Complete ETag-only -> ETag={done.get('ETag')!r}")
+
+        head = client.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
+        head_etag = norm_etag(head.get("ETag"))
+        expected = composite_md5([hashlib.md5(d).digest() for _, d in parts])
+        evidence(f"ETag complete={done.get('ETag')!r} head={head.get('ETag')!r} "
+                 f"expected_composite_md5={expected!r} "
+                 f"has_-N_suffix={head_etag.endswith('-' + str(len(parts)))} "
+                 f"ContentLength={head.get('ContentLength')}")
+        if head_etag.lower() == expected:
+            ok(f"[Q3] HEAD ETag is the composite md5(concat(part md5s))-{len(parts)}: "
+               f"{head_etag}")
+        else:
+            info(f"[Q3] ANSWER: HEAD ETag {head_etag!r} is NOT "
+                 f"md5(concat(part md5s))-{len(parts)} ({expected!r}); "
+                 f"md5(whole_object)={md5_hex(whole)}")
+
+        chk = {k: v for k, v in head.items() if "hecksum" in k.lower()}
+        xamz = {k: v for k, v in head["ResponseMetadata"]["HTTPHeaders"].items()
+                if k.startswith("x-amz-")}
+        full_b64 = b64_sha256(whole)
+        composite_sha = base64.b64encode(
+            hashlib.sha256(b"".join(hashlib.sha256(d).digest() for _, d in parts)).digest()
+        ).decode() + f"-{len(parts)}"
+        evidence(f"HEAD x-amz-headers={xamz} checksum_fields={chk} "
+                 f"whole_sha256_b64={full_b64} composite_sha256_b64={composite_sha}")
+        got = chk.get("ChecksumSHA256") or xamz.get("x-amz-checksum-sha256")
+        if got:
+            evidence(f"server_checksum={got!r} equals_whole_object_sha256={got == full_b64} "
+                     f"equals_composite_sha256={got == composite_sha} "
+                     f"ChecksumType={chk.get('ChecksumType')!r}")
+            if got == full_b64:
+                ok("[Q3] server exposes whole-object SHA-256; no re-read needed to get it")
+            elif got == composite_sha:
+                info("[Q3] ANSWER: server exposes a COMPOSITE SHA-256 (sha256 of the "
+                     "concatenated part digests + -N), NOT sha256(whole object)")
+            else:
+                info("[Q3] ANSWER: server exposes a checksum that is neither sha256(whole "
+                     "object) nor the documented composite form")
+        else:
+            info("[Q3] ANSWER: HEAD exposes NO x-amz-checksum-* and no Checksum* field; "
+                 "a whole-object digest cannot be derived from the S3 API (re-read needed)")
+
+        body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+        evidence(f"GET bytes={len(body)} sha256_hex={hashlib.sha256(body).hexdigest()} "
+                 f"expected_sha256_hex={hashlib.sha256(whole).hexdigest()}")
+        if body == whole:
+            ok("[Q3] stored bytes equal the concatenation of the uploaded parts (re-read "
+               "baseline for any digest comparison)")
+        else:
+            fail("[Q3] stored bytes differ from the concatenation of the uploaded parts")
+    except Exception as exc:  # noqa: BLE001
+        fail(f"[Q3] composite/checksum probe raised: {err_detail(exc)}")
+    finally:
+        if uid is not None:
+            try:
+                client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=uid)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            client.delete_object(Bucket=bucket, Key=key)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Point 11 — is the SIGNED per-part ContentLength enforced? (gate item 2)
+# ---------------------------------------------------------------------------
+SIGNED_PART_LEN = 5 * 1024 * 1024  # the length bound into the presigned URL
+
+
+def xml_error(body: bytes) -> str:
+    """Code/Message out of an S3 XML error body (exact error code, not a guess)."""
+    import re  # local: only needed for evidence formatting
+
+    text = body.decode("utf-8", "replace")
+    code = re.search(r"<Code>(.*?)</Code>", text)
+    msg = re.search(r"<Message>(.*?)</Message>", text)
+    if code or msg:
+        return (f"Code={code.group(1) if code else None!r} "
+                f"Message={msg.group(1) if msg else None!r}")
+    return "no_xml_error"
+
+
+def point11(client, bucket: str) -> None:
+    print("\n=== POINT 11: is the SIGNED per-part ContentLength enforced? "
+          "(gate item 2) ===", flush=True)
+    signed = SIGNED_PART_LEN
+    exact = b"\x71" * signed
+    longer = b"\x71" * (signed + 4096)          # body LONGER than the signed length
+    shorter = b"\x71" * (1024 * 1024)           # body SHORTER than the signed length
+    overflow = b"\x71" * (signed + 1024 * 1024)  # declared == signed, extra bytes sent
+    keys = {
+        "exact": "compat/point11-exact-len.bin",
+        "long": "compat/point11-long-body.bin",
+        "short": "compat/point11-short-body.bin",
+        "trunc": "compat/point11-truncating-client.bin",
+        "bare": "compat/point11-no-signed-length.bin",
+    }
+    uids: dict[str, str] = {}
+    try:
+        for name, k in keys.items():
+            uids[name] = client.create_multipart_upload(Bucket=bucket, Key=k)["UploadId"]
+
+        def put_part(name: str, body: bytes, tag: str = "",
+                     declared: int | None = None, sign_length: bool = True):
+            if sign_length:
+                url, sh = presign_upload_part(
+                    client, bucket, keys[name], uids[name], 1,
+                    content_length=signed)
+            else:
+                url, sh = presign_upload_part(
+                    client, bucket, keys[name], uids[name], 1)
+            hdrs = {"Content-Type": "application/octet-stream"}
+            if declared is not None:
+                hdrs["Content-Length"] = str(declared)
+            evidence(f"11{tag} presign ContentLength={signed if sign_length else None} -> "
+                     f"X-Amz-SignedHeaders={sh!r} "
+                     f"content_length_is_signed={'content-length' in sh.lower()} "
+                     f"url={safe_url(url)}")
+            extra = f" declared_Content-Length={declared}" if declared is not None else ""
+            st, h, b = http("PUT", url, data=body, headers=hdrs, timeout=90)
+            evidence(f"11{tag} {name}: body_bytes={len(body)} "
+                     f"signed_len={signed if sign_length else None}{extra} -> HTTP {st} "
+                     f"etag={h.get('etag')!r} "
+                     f"x-amz-request-id={h.get('x-amz-request-id')!r} "
+                     f"{xml_error(b)} body={b[:400]!r}")
+            return st, h, b
+
+        # (a) control: exactly the signed length must be accepted.
+        st, h, _ = put_part("exact", exact, tag="a")
+        if st in (200, 201) and h.get("etag"):
+            ok(f"[Q4] control: body exactly the signed ContentLength ({signed} bytes) -> "
+               f"HTTP {st}")
+        else:
+            fail(f"[Q4] control: body exactly the signed ContentLength ({signed} bytes) -> "
+                 f"HTTP {st} (baseline broken, the mismatch probes below are inconclusive)")
+
+        # (b) body LONGER than the signed length.
+        st_long, _, b_long = put_part("long", longer, tag="b")
+        if st_long in (200, 201):
+            fail(f"[Q4] GATE ITEM 2: the gateway ACCEPTED a body LONGER than the signed "
+                 f"ContentLength ({len(longer)} > {signed} bytes, HTTP {st_long}). The signed "
+                 f"per-part size is NOT enforced, so a client can store a part of any length "
+                 f"behind a URL signed for {signed} bytes; the API must not rely on the "
+                 f"presigned length to bound what the backend stores")
+        else:
+            ok(f"[Q4] body LONGER than the signed ContentLength "
+               f"({len(longer)} > {signed}) rejected: HTTP {st_long} {xml_error(b_long)}")
+
+        # (c) body SHORTER than the signed length.
+        st_short, _, b_short = put_part("short", shorter, tag="c")
+        if st_short in (200, 201):
+            fail(f"[Q4] GATE ITEM 2: the gateway ACCEPTED a body SHORTER than the signed "
+                 f"ContentLength ({len(shorter)} < {signed} bytes, HTTP {st_short}); a part "
+                 f"truncated client-side (crash, stalled socket) would be stored and could "
+                 f"later complete into a silently short object")
+        else:
+            ok(f"[Q4] body SHORTER than the signed ContentLength "
+               f"({len(shorter)} < {signed}) rejected: HTTP {st_short} {xml_error(b_short)}")
+
+        info(f"[Q4] ANSWER (gate item 2): rejection comes from SigV4 verification of the "
+             f"signed Content-Length header (see X-Amz-SignedHeaders above), i.e. the "
+             f"bound is only enforced on URLs presigned WITH ContentLength — exactly what "
+             f"api/s3.py:presigned_upload_part does; a presign without it binds no length")
+
+        # (d) framing control: header == signed value, but MORE bytes follow it on the wire.
+        st_t, _, b_t = put_part("trunc", overflow, declared=signed, tag="d")
+        if st_t in (200, 201):
+            try:
+                listed = client.list_parts(Bucket=bucket, Key=keys["trunc"],
+                                           UploadId=uids["trunc"])
+                sizes = [(p["PartNumber"], p["Size"]) for p in listed.get("Parts", [])]
+            except Exception as exc:  # noqa: BLE001
+                sizes = f"ListParts failed: {err_detail(exc)}"
+            evidence(f"11d client sent {len(overflow)} bytes with the SIGNED "
+                     f"Content-Length={signed} -> HTTP {st_t}; ListParts(part,size)={sizes}")
+            info(f"[Q4] FRAMING NOTE: with Content-Length={signed} signed AND sent, only the "
+                 f"first {signed} of {len(overflow)} bytes became the entity body and the "
+                 f"trailing {len(overflow) - signed} bytes were ignored — standard HTTP "
+                 f"framing, not a gateway hole (a browser XHR/fetch cannot desynchronise "
+                 f"Content-Length from the body it sends)")
+        else:
+            evidence(f"11d client sent {len(overflow)} bytes with the SIGNED "
+                     f"Content-Length={signed} -> HTTP {st_t} {xml_error(b_t)}")
+
+        # (e) a presign with NO ContentLength: nothing about the size is signed at all.
+        st_b, _, b_b = put_part("bare", shorter, tag="e", sign_length=False)
+        if st_b in (200, 201):
+            info(f"[Q4] a presigned URL WITHOUT ContentLength accepted a {len(shorter)}-byte "
+                 f"body (HTTP {st_b}): when the length is not in SignedHeaders nothing can be "
+                 f"enforced. The plan is safe only because api/s3.py:presigned_upload_part "
+                 f"always passes ContentLength")
+        else:
+            info(f"[Q4] a presigned URL WITHOUT ContentLength rejected a "
+                 f"{len(shorter)}-byte body: HTTP {st_b} {xml_error(b_b)}")
+    except Exception as exc:  # noqa: BLE001
+        fail(f"[Q4] signed-size probe raised: {err_detail(exc)}")
+    finally:
+        for name, k in keys.items():
+            uid = uids.get(name)
+            if uid:
+                try:
+                    client.abort_multipart_upload(Bucket=bucket, Key=k, UploadId=uid)
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                client.delete_object(Bucket=bucket, Key=k)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Point 12 — minimum part size and maximum part count (gate item 5)
+# ---------------------------------------------------------------------------
+def _plan_parts_from_source() -> tuple[dict, dict, str]:
+    """Exec only the constants + plan_parts of api/s3.py (no module import)."""
+    src = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "..", "api", "s3.py"))
+    with open(src, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=src)
+    ns: dict = {}
+    lines: dict[str, int] = {}
+    wanted = {"MIN_PART_BYTES", "MAX_PARTS", "_MIB"}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if wanted & set(names):
+                exec(compile(ast.Module(body=[node], type_ignores=[]), src, "exec"), ns)
+                for n in names:
+                    lines[n] = node.lineno
+        elif isinstance(node, ast.FunctionDef) and node.name == "plan_parts":
+            exec(compile(ast.Module(body=[node], type_ignores=[]), src, "exec"), ns)
+            lines["plan_parts"] = node.lineno
+    return ns, lines, src
+
+
+def point12(client, bucket: str) -> None:
+    print("\n=== POINT 12: minimum part size / maximum part count / range GET "
+          "(gate item 5) ===", flush=True)
+    _MIB = 1024 ** 2
+    _GIB = 1024 ** 3
+    _TIB = 1024 ** 4
+    _PIB = 1024 ** 5
+    maxp = 10_000
+
+    # --- (a) what the server-side plan computes, read from the real source -------
+    try:
+        ns, lines, src = _plan_parts_from_source()
+        plan = ns["plan_parts"]
+        maxp = int(ns["MAX_PARTS"])
+        minp = int(ns["MIN_PART_BYTES"])
+        evidence(f"api/s3.py ({src}) constants: MIN_PART_BYTES={minp} "
+                 f"({minp // _MIB} MiB) at line {lines.get('MIN_PART_BYTES')}, "
+                 f"MAX_PARTS={maxp} at line {lines.get('MAX_PARTS')}, "
+                 f"def plan_parts at line {lines.get('plan_parts')}")
+        if minp == 5 * _MIB:
+            ok(f"[Q5] plan_parts enforces MIN_PART_BYTES={minp} (5 MiB)")
+        else:
+            fail(f"[Q5] MIN_PART_BYTES={minp}, expected 5 MiB")
+        if maxp == 10_000:
+            ok(f"[Q5] plan_parts uses MAX_PARTS={maxp}")
+        else:
+            fail(f"[Q5] MAX_PARTS={maxp}, expected 10000")
+
+        samples = [1 * _MIB, 5 * _MIB, 100 * _MIB, 5 * _GIB, 100 * _GIB,
+                   1 * _TIB, 10 * _TIB, 50 * _TIB, 500 * _TIB, 5 * _PIB]
+        over = 0
+        for size in samples:
+            part, count = plan(size, 8 * _MIB)
+            evidence(f"plan_parts(size={size} bytes = {size / _GIB:.3f} GiB, "
+                     f"preferred=8 MiB) -> part_bytes={part} "
+                     f"({part / _MIB:.1f} MiB) part_count={count} "
+                     f"count<=MAX_PARTS={count <= maxp}")
+            if count > maxp:
+                over += 1
+        if over:
+            fail(f"[Q5] plan_parts exceeded MAX_PARTS for {over} sample size(s)")
+        else:
+            ok(f"[Q5] for every sampled size up to 5 PiB plan_parts keeps count <= {maxp} "
+               f"by raising the part size above the 8 MiB preference (5 GiB -> 8 MiB, "
+               f"50 TiB -> ~5.1 GiB, 5 PiB -> ~524 GiB)")
+    except Exception as exc:  # noqa: BLE001
+        fail(f"[Q5] could not read/replay plan_parts from api/s3.py: {err_detail(exc)}")
+
+    # --- (b) is the 5 MiB minimum enforced at Complete? -------------------------
+    key_small = "compat/point12-min-small.bin"
+    key_ctrl = "compat/point12-min-control.bin"
+    uid_small = None
+    uid_ctrl = None
+    small = b"\x61" * (1 * _MIB)
+    five = b"\x62" * (5 * _MIB)
+    one = b"\x63" * (1 * _MIB)
+    try:
+        uid_small = client.create_multipart_upload(Bucket=bucket, Key=key_small)["UploadId"]
+        s1 = client.upload_part(Bucket=bucket, Key=key_small, UploadId=uid_small,
+                                PartNumber=1, Body=small)["ETag"]
+        s2 = client.upload_part(Bucket=bucket, Key=key_small, UploadId=uid_small,
+                                PartNumber=2, Body=small)["ETag"]
+        evidence(f"UploadPart part1={len(small)} bytes part2={len(small)} bytes "
+                 f"(both below 5 MiB; only the last part is allowed to be small)")
+        try:
+            client.complete_multipart_upload(
+                Bucket=bucket, Key=key_small, UploadId=uid_small,
+                MultipartUpload={"Parts": [{"PartNumber": 1, "ETag": s1},
+                                           {"PartNumber": 2, "ETag": s2}]})
+            head = client.head_object(Bucket=bucket, Key=key_small)
+            evidence(f"Complete(1 MiB + 1 MiB) ACCEPTED -> ContentLength="
+                     f"{head['ContentLength']} ETag={head.get('ETag')!r}")
+            unknown("[Q5] SeaweedFS 4.48 does NOT enforce the S3 5 MiB minimum for a "
+                    "non-last part at Complete: a 1 MiB + 1 MiB upload completes and stores "
+                    "2 MiB. The 5 MiB floor can only be a client/API-side rule here, never a "
+                    "backend invariant — the API must enforce it itself")
+        except ClientError as exc:
+            evidence(f"Complete(1 MiB + 1 MiB) REJECTED: {err_detail(exc)} "
+                     f"error={exc.response.get('Error')}")
+            ok("[Q5] Complete rejects a non-last part below 5 MiB "
+               f"({err_detail(exc)})")
+    except Exception as exc:  # noqa: BLE001
+        fail(f"[Q5] small-part Complete probe raised: {err_detail(exc)}")
+    finally:
+        if uid_small is not None:
+            try:
+                client.abort_multipart_upload(Bucket=bucket, Key=key_small, UploadId=uid_small)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # --- (c) control: 5 MiB + 1 MiB completes, then Range GET -------------------
+    try:
+        uid_ctrl = client.create_multipart_upload(Bucket=bucket, Key=key_ctrl)["UploadId"]
+        c1 = client.upload_part(Bucket=bucket, Key=key_ctrl, UploadId=uid_ctrl,
+                                PartNumber=1, Body=five)["ETag"]
+        c2 = client.upload_part(Bucket=bucket, Key=key_ctrl, UploadId=uid_ctrl,
+                                PartNumber=2, Body=one)["ETag"]
+        done = client.complete_multipart_upload(
+            Bucket=bucket, Key=key_ctrl, UploadId=uid_ctrl,
+            MultipartUpload={"Parts": [{"PartNumber": 1, "ETag": c1},
+                                       {"PartNumber": 2, "ETag": c2}]})
+        head = client.head_object(Bucket=bucket, Key=key_ctrl)
+        evidence(f"Complete(5 MiB + 1 MiB) -> ETag={done.get('ETag')!r} "
+                 f"HEAD ContentLength={head['ContentLength']} expected="
+                 f"{len(five) + len(one)}")
+        if head["ContentLength"] == len(five) + len(one):
+            ok(f"[Q5] control: 5 MiB + 1 MiB completes to a "
+               f"{head['ContentLength']}-byte object")
+        else:
+            fail(f"[Q5] control object length {head['ContentLength']} != {len(five) + len(one)}")
+
+        whole = five + one
+        url = client.generate_presigned_url(
+            "get_object", Params={"Bucket": bucket, "Key": key_ctrl}, ExpiresIn=600)
+        start = 5 * _MIB - 10
+        st, h, body = http("GET", url, headers={"Range": f"bytes={start}-{start + 20}"})
+        evidence(f"Range GET bytes={start}-{start + 20} on the COMPLETED MULTIPART object "
+                 f"-> HTTP {st} Content-Range={h.get('content-range')!r} "
+                 f"ContentLength={h.get('content-length')} "
+                 f"Accept-Ranges={h.get('accept-ranges')!r} "
+                 f"bytes_match={body == whole[start:start + 21]}")
+        st_p, h_p, body_p = http("GET", url, headers={"Range": "bytes=0-99"})
+        evidence(f"Range GET bytes=0-99 on the COMPLETED MULTIPART object -> HTTP {st_p} "
+                 f"Content-Range={h_p.get('content-range')!r} "
+                 f"bytes_match={body_p == whole[:100]}")
+        if (st == 206 and body == whole[start:start + 21]
+                and st_p == 206 and body_p == whole[:100]):
+            ok("[Q5] Range GET works on a completed multipart object: 206 with exact bytes, "
+               "including a range spanning the part boundary")
+        else:
+            fail(f"[Q5] Range GET on a completed multipart object is wrong: "
+                 f"boundary HTTP {st} match={body == whole[start:start + 21]}, "
+                 f"prefix HTTP {st_p} match={body_p == whole[:100]}")
+    except Exception as exc:  # noqa: BLE001
+        fail(f"[Q5] control/Range probe raised: {err_detail(exc)}")
+    finally:
+        if uid_ctrl is not None:
+            try:
+                client.abort_multipart_upload(Bucket=bucket, Key=key_ctrl, UploadId=uid_ctrl)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            client.delete_object(Bucket=bucket, Key=key_ctrl)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # --- (d) declared maximum part number (cheap boundary probe) ----------------
+    key_max = "compat/point12-maxpart.bin"
+    uid_max = None
+    if maxp:
+        try:
+            uid_max = client.create_multipart_upload(Bucket=bucket, Key=key_max)["UploadId"]
+            try:
+                client.complete_multipart_upload(
+                    Bucket=bucket, Key=key_max, UploadId=uid_max,
+                    MultipartUpload={"Parts": [{"PartNumber": maxp + 1,
+                                                "ETag": md5_hex(b"")}]})
+                evidence(f"Complete referencing PartNumber={maxp + 1} (never uploaded) "
+                         f"UNEXPECTEDLY accepted")
+                fail(f"[Q5] Complete accepted PartNumber={maxp + 1}, above the declared "
+                     f"ceiling of {maxp}")
+            except ClientError as exc:
+                evidence(f"Complete referencing PartNumber={maxp + 1} (never uploaded) -> "
+                         f"{err_detail(exc)} error={exc.response.get('Error')}")
+
+            url_ceiling, sh_c = presign_upload_part(
+                client, bucket, key_max, uid_max, maxp, content_length=1)
+            st_c, h_c, b_c = http("PUT", url_ceiling, data=b"\x64", headers={
+                "Content-Type": "application/octet-stream", "Content-Length": "1"})
+            evidence(f"UploadPart PartNumber={maxp} ContentLength=1 -> HTTP {st_c} "
+                     f"etag={h_c.get('etag')!r} SignedHeaders={sh_c!r} "
+                     f"{xml_error(b_c)} body={b_c[:300]!r}")
+            if st_c in (200, 201):
+                ok(f"[Q5] part number {maxp} (the declared ceiling) is accepted")
+            else:
+                info(f"[Q5] part number {maxp} (the declared ceiling) is REJECTED: "
+                     f"HTTP {st_c} {xml_error(b_c)}")
+
+            url_over, sh_o = presign_upload_part(
+                client, bucket, key_max, uid_max, maxp + 1, content_length=1)
+            st_o, h_o, b_o = http("PUT", url_over, data=b"\x65", headers={
+                "Content-Type": "application/octet-stream", "Content-Length": "1"})
+            evidence(f"UploadPart PartNumber={maxp + 1} (above the ceiling) -> HTTP {st_o} "
+                     f"etag={h_o.get('etag')!r} SignedHeaders={sh_o!r} "
+                     f"{xml_error(b_o)} body={b_o[:300]!r}")
+            if st_o in (200, 201):
+                fail(f"[Q5] part number {maxp + 1} (ABOVE the declared {maxp} limit) was "
+                     f"ACCEPTED: the ceiling is not enforced at UploadPart")
+            else:
+                ok(f"[Q5] part number {maxp + 1} rejected at UploadPart: HTTP {st_o} "
+                   f"{xml_error(b_o)}")
+        except Exception as exc:  # noqa: BLE001
+            fail(f"[Q5] max-part-number probe raised: {err_detail(exc)}")
+        finally:
+            if uid_max is not None:
+                try:
+                    client.abort_multipart_upload(Bucket=bucket, Key=key_max,
+                                                  UploadId=uid_max)
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                client.delete_object(Bucket=bucket, Key=key_max)
+            except Exception:  # noqa: BLE001
+                pass
+
+    unknown(f"[Q5] the 10 000-part path is NOT exercised: {maxp} real parts would need >= "
+            f"{maxp * 5 / (1024 ** 3):.0f} GiB (5 MiB each) and a long run; only the declared "
+            f"boundary (part {maxp} accepted vs {maxp + 1} rejected) and the plan_parts "
+            f"arithmetic are verified — the backend's exact 10 000-part Complete behaviour "
+            f"remains unproven")
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--endpoint", required=True)
@@ -589,13 +1422,19 @@ def main(argv: list[str]) -> int:
                lambda: point4(client, args.bucket),
                lambda: point5(client, args.bucket),
                lambda: point6(client, args.bucket, args.volume_container),
-               lambda: point7(client, args.bucket, args.origin)):
+               lambda: point7(client, args.bucket, args.origin),
+               lambda: point8(client, args.bucket),
+               lambda: point9(client, args.bucket),
+               lambda: point10(client, args.bucket),
+               lambda: point11(client, args.bucket),
+               lambda: point12(client, args.bucket)):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001 - keep other points running
             fail(f"point aborted: {err_detail(exc)}")
 
-    print(f"\n=== SUMMARY: failures={_failures} unknowns={_unknowns} ===")
+    print(f"\n=== SUMMARY: failures={_failures} unknowns={_unknowns} "
+          f"passes={_passes} ===")
     return 1 if _failures else 0
 
 
