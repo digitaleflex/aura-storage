@@ -327,3 +327,22 @@ def test_reconcile_keeps_a_live_session_and_sweeps_an_expired_one(_multipart):
     reconcile_pending(main.repo, fake, expire_after_s=3600, limit=5000)
     assert _object_status(oid) == "expired"
     assert upload_id in fake.aborted
+
+
+def test_admin_usage_reports_the_multipart_ceiling(_multipart):
+    """The web size guard reads `limits.max_object_bytes` and refuses anything
+    above it before uploading. With multipart on, that ceiling is the multipart
+    cap: reporting the single-PUT limit here would make the UI reject files the
+    API accepts."""
+    c, headers = _admin()
+    r = c.get("/api/v1/admin/usage", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["limits"]["max_object_bytes"] == 10_000
+
+
+def test_admin_usage_reports_the_single_put_ceiling_when_disabled(monkeypatch, _multipart):
+    monkeypatch.setattr(main.settings, "multipart_enabled", False)
+    c, headers = _admin()
+    r = c.get("/api/v1/admin/usage", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["limits"]["max_object_bytes"] == main.settings.max_object_bytes

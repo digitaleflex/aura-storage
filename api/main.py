@@ -2233,7 +2233,10 @@ def admin_usage(
     return {
         "measured_at": int(time.time()),
         "limits": {
-            "max_object_bytes": settings.max_object_bytes,
+            # Multipart lifts the declarable ceiling to its own cap; reporting
+            # the single-PUT limit here would make the client guard reject
+            # files the API would accept.
+            "max_object_bytes": _upload_ceiling(),
             "max_pending_intents": settings.max_pending_intents,
             "intent_ttl": settings.intent_ttl,
             "allow_empty_objects": settings.allow_empty_objects,
