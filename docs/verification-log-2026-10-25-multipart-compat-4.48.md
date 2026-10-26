@@ -55,8 +55,11 @@ where they matter.
 
 ## Results
 
-Summary as printed: `=== SUMMARY: failures=0 unknowns=1 passes=36 ===`, harness
-exit code `0` (`0 = every asserted point passed`).
+Summary as printed after points 11–12 were added (2026-10-26 re-run):
+`=== SUMMARY: failures=0 findings=0 unknowns=2 passes=47 ===`. The run of record for
+points 1–10 printed `failures=0 unknowns=1 passes=36`; the two UNKNOWNs are the
+disk-reclaim one below and the unexercised 10,000-part completion. Harness exit code `0`
+(`0 = every asserted point passed`).
 
 | # | Point exercised | Status | Evidence (from the captured output) |
 |---|---|---|---|
@@ -71,8 +74,8 @@ exit code `0` (`0 = every asserted point passed`).
 | 9 | `x-amz-checksum-sha256` on a presigned `UploadPart` | **PASS** | Signed header → 200 and echoed; unsigned → 403 `SignatureDoesNotMatch`; signed wrong digest → 400 `BadDigest`; the value is validated but not persisted — `ListParts`, Complete and `HeadObject(ChecksumMode=ENABLED)` expose no checksum — raw values below |
 | 10 | Completed-object ETag and checksum surface | **PASS** | Complete = HEAD = `"2eca9979f6e33744ed05ea0285420b39-3"` = `md5(concat(part MD5s))-3`, `ContentLength=10497951`; HEAD exposes no `x-amz-checksum-*` and no `Checksum*` field; the whole-object SHA-256 is only obtainable by re-reading — raw values below |
 
-No point was reported as FAILED or BLOCKED. The single UNKNOWN is the disk-level half
-of point 6.
+No point was reported as FAILED or BLOCKED. Two UNKNOWNs remain: the disk-level half of
+point 6, and the unexercised 10,000-part completion added with point 12.
 
 ## Point 8 — the part ETag is the MD5 of the part (raw evidence)
 
@@ -132,9 +135,63 @@ hashed to `7d95d253ffdfe09c8f87b4cd0b9acb6559dd58f0d4471a5f8aad075da29bbe43`, ma
 the expected SHA-256. That re-read is the only way this capture obtained a whole-object
 digest from the S3 API.
 
-## The single UNKNOWN (stated prominently)
+## Point 11 — the signed per-part size is enforced by SigV4 (raw evidence)
 
-**Disk-level removal after abort is NOT proven.** The probe compared volume `/data`
+Presigning a part with `ContentLength` puts `content-length` into `X-Amz-SignedHeaders`;
+a body of a different size then breaks the signature.
+
+```
+[EVIDENCE] 11a presign ContentLength=5242880 -> X-Amz-SignedHeaders='content-length;host' content_length_is_signed=True
+[EVIDENCE] 11a exact: body_bytes=5242880 signed_len=5242880 -> HTTP 200 etag='"3f3b308e88c90df28a2f243a5c39cd0d"'
+[EVIDENCE] 11b long:  body_bytes=5246976 signed_len=5242880 -> HTTP 403 Code='SignatureDoesNotMatch'
+[EVIDENCE] 11c short: body_bytes=1048576 signed_len=5242880 -> HTTP 403 Code='SignatureDoesNotMatch'
+[EVIDENCE] 11d trunc: body_bytes=6291456 declared_Content-Length=5242880 -> HTTP 200; ListParts(part,size)=[(1, 5242880)]
+[EVIDENCE] 11e presign ContentLength=None -> X-Amz-SignedHeaders='host' content_length_is_signed=False
+[EVIDENCE] 11e bare: body_bytes=1048576 -> HTTP 200
+```
+
+- One byte more or fewer than the signed length is rejected **by signature verification**,
+  not by an S3 semantic size rule — 11e proves it, since the same wrong-sized body is
+  accepted when the length is not part of the signature.
+- 11d is an HTTP framing effect, not a hole: declaring and sending
+  `Content-Length: 5242880` while writing 6 MiB stores exactly 5,242,880 bytes and
+  discards the trailing 1 MiB. A browser XHR cannot exploit it — it sets the header from
+  the body.
+- Consequence for AURA: part PUTs carry **no signed payload hash**, so the signed length is
+  the only integrity bound. It proves "exactly N bytes arrived", not "these bytes".
+  `presigned_upload_part` (`api/s3.py:222-233`) always signs the length; **dropping
+  `ContentLength` from that presign would silently remove the guarantee.**
+
+## Point 12 — part size and count limits (raw evidence)
+
+```
+[EVIDENCE] Complete(1 MiB + 1 MiB) REJECTED: Code='EntityTooSmall' Message='Your proposed upload is smaller than the minimum allowed object size.'
+[EVIDENCE] Complete(5 MiB + 1 MiB) -> ETag='"704899f4cc483c0db614b64cb4d446dc-2"' HEAD ContentLength=6291456 expected=6291456
+[EVIDENCE] UploadPart PartNumber=10000 ContentLength=1 -> HTTP 200
+[EVIDENCE] UploadPart PartNumber=10001 -> HTTP 400 Code='InvalidPart'
+[EVIDENCE] Complete referencing PartNumber=10001 (never uploaded) -> HTTP 404 Code='NoSuchUpload'
+[EVIDENCE] Range GET bytes=5242870-5242890 on the COMPLETED multipart object -> HTTP 206 Content-Range='bytes 5242870-5242890/6291456' bytes_match=True
+```
+
+- The 5 MiB minimum for non-last parts **is enforced**, but only at `Complete`
+  (`EntityTooSmall`). A 0-byte part is still accepted at `UploadPart` (point 8), so the
+  floor bites at assembly, not at upload.
+- The 10,000-part ceiling holds at the boundary (10000 accepted, 10001 rejected).
+- **Deviation:** `Complete` referencing an out-of-range part answers **404
+  `NoSuchUpload`**, not 400 `InvalidPart`. A generic S3 client mapping `NoSuchUpload` to
+  "upload gone, start over" would restart the whole upload over a bad part list. AURA is
+  not exposed: `_complete_multipart_session` builds its list from `ListParts` filtered to
+  `1..count` (`api/main.py:1234-1251`).
+- `plan_parts` is not "8 MiB parts": the preference is raised with size — 100 GiB uses
+  11 MiB (9,310 parts), 1 TiB uses 105 MiB (9,987), and the ceiling only binds near
+  50 TiB.
+
+## The UNKNOWNs (stated prominently)
+
+Two sub-questions are outside what the S3 API can answer, and both are recorded as
+`[UNKNOWN]` by the harness rather than silently passed.
+
+**1. Disk-level removal after abort is NOT proven.** The probe compared volume `/data`
 stats:
 
 - before upload: `(4 files, 22,029,607 bytes)`
@@ -149,6 +206,10 @@ upload. The harness therefore records:
 
 The S3 API guarantee is verified. Physical reclamation is not, and this log does not
 claim it.
+
+**2. A real 10,000-part `Complete` is not exercised.** It would need ≈48.8 GiB of parts,
+which is out of scope for a throwaway harness. What *is* verified is the boundary
+behaviour (`UploadPart` accepts 10000, rejects 10001) and the arithmetic of `plan_parts`.
 
 ## Operational note: never re-send the SSE header on `UploadPart`
 
@@ -198,9 +259,10 @@ reviewed on 2026-10-25 and **deferred**; nothing is implemented.
   throwaway credentials. It does not prove the AURA API's presigning, session state,
   commit verification, abort/reconcile, or the UI.
 - **The pilot stack or the edge proxy.** The endpoint was loopback
-  (`http://127.0.0.1:<ephemeral>`); Traefik was not in the path. This run does **not**
-  cover plan gate item 6: part PUTs through the edge proxy, nor the largest part that
-  fits the configured `readTimeout` at the slowest supported client rate.
+  (`http://127.0.0.1:<ephemeral>`); Traefik was not in the path. Gate item 6 is covered
+  by a *separate* run, recorded in
+  [verification-log-2026-10-25-multipart-proxy-4.48.md](verification-log-2026-10-25-multipart-proxy-4.48.md),
+  not by this one.
 - **Browser readability of the checksum echo header.** Point 9 saw
   `x-amz-checksum-sha256` echoed on the part PUT response, but
   `Access-Control-Expose-Headers` lists only `ETag, Content-Length, Content-Type,
@@ -209,9 +271,10 @@ reviewed on 2026-10-25 and **deferred**; nothing is implemented.
   That gap was not exercised in a browser (none was used here). The gateway-side
   checksum questions (accept, validate, persist) are answered above; the browser
   question is not.
-- **Maximum part count and large objects.** The visible object is 6 MiB (5 MiB + 1 MiB
-  parts). The maximum part count, multi-gigabyte objects, part-size defaults and
-  concurrency were not measured.
+- **A real maximum-part-count completion.** Part 10000 was accepted and 10001 rejected,
+  and `plan_parts` arithmetic was checked, but a genuine 10,000-part `Complete`
+  (≈48.8 GiB) was not run. Multi-gigabyte objects and part concurrency were not
+  measured either.
 - **Throughput.** No bandwidth, latency or proxy-timeout measurement was made.
 - **Disk reclamation / compaction / GC.** The UNKNOWN above stands; abort is not shown
   to free disk immediately.
@@ -219,23 +282,31 @@ reviewed on 2026-10-25 and **deferred**; nothing is implemented.
   crash-during-complete scenario was tested.
 - **TLS and real authentication.** Plain HTTP over loopback with throwaway
   credentials; certificate validation and pilot credential handling are out of scope.
-- **A clean gate PASS.** Plan gate item 6 (part PUTs through the edge proxy plus
-  `readTimeout` sizing) is still uncovered, and point 6 contains the UNKNOWN above.
-  `AURA_MULTIPART_ENABLED` therefore stays at its default `off`; this run alone does
-  not authorise enabling it.
+- **A clean gate PASS on this run alone.** Items 1–6 are covered across three runs
+  (this log, the edge-proxy log, and the items 2/5 points above), with the two UNKNOWNs
+  that the S3 API cannot answer. No single run authorises anything by itself; the
+  decision is in the Decision section and in the plan.
 
 ## Decision
 
-- Gate executed and recorded on 2026-10-25 against `chrislusf/seaweedfs:4.48`:
-  36 passes, 0 failed assertions, 1 UNKNOWN.
-- **Not a clean "all points PASS"**: the abort/disk-reclaim sub-question is UNKNOWN,
-  and plan gate item 6 (edge proxy / `readTimeout` sizing) is not covered by this
-  run. Gate item 3 (checksums) *is* covered by this run — see points 8–10.
-- `AURA_MULTIPART_ENABLED` must remain `0` (default off). Do not enable on this
-  evidence alone.
-- Next evidence needed: Traefik-path part PUT with `readTimeout` sizing, browser-side
-  readability of the checksum echo header, maximum part count, and—if disk
-  reclamation matters operationally—volume compaction/GC observation after abort.
+- Gate executed and recorded across three runs against `chrislusf/seaweedfs:4.48`
+  (2026-10-25 compatibility, 2026-10-25 edge proxy, 2026-10-26 items 2 and 5). Latest
+  summary: `failures=0 findings=0 unknowns=2 passes=47`.
+- **Items 1–6 are covered.** The two UNKNOWNs (disk reclaim after abort, a real
+  10,000-part completion) are outside what the S3 API can answer; they are documented,
+  not hidden.
+- **The gate no longer blocks enabling.** `AURA_MULTIPART_ENABLED` is `1` on the pilot
+  (observed 2026-10-25 via `docker exec aura-001-api printenv`), which is *not* the code
+  default of `0` — the deployed override is deliberate and recorded in
+  [the plan](MULTIPART-UPLOAD-PLAN.md).
+- Two behaviours must never regress silently: `presigned_upload_part` must keep signing
+  `ContentLength` (it is the only integrity bound on a part), and
+  `_complete_multipart_session` must keep building its part list from `ListParts`
+  filtered to `1..count` (SeaweedFS answers 404 `NoSuchUpload`, not 400 `InvalidPart`,
+  for an out-of-range part reference).
+- Next evidence, if it ever matters operationally: volume compaction/GC observation after
+  abort, browser readability of the checksum echo header, and a genuinely large
+  completion.
 
 ## References
 

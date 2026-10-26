@@ -11,7 +11,7 @@
 - [Architecture decisions and boundaries](docs/ARCHITECTURE.md)
 - [File transfer contract: API + presigned S3 URLs, FTPS boundaries](docs/FILE-TRANSFER.md)
 - [Vault transfer engine: upload state machine, progress, retries, cancellation, integrity](docs/TRANSFER-ENGINE.md)
-- [S3 multipart upload for large objects (implemented, `AURA_MULTIPART_ENABLED=0` by default; 4.48 compatibility gate partly recorded 2026-10-25 — disk-reclaim UNKNOWN, checksums measured, edge-proxy path proven, gateway part-size/count limits unprobed but mitigated in code)](docs/MULTIPART-UPLOAD-PLAN.md)
+- [S3 multipart upload for large objects (implemented, `AURA_MULTIPART_ENABLED=0` by default; 4.48 compatibility gate closed for items 1–6 across three runs on 2026-10-25/26 — two documented UNKNOWNs: disk reclaim after abort, and a real 10,000-part completion)](docs/MULTIPART-UPLOAD-PLAN.md)
 - [Secure and efficient bulk transfers: security, resumability, multipart, compression and benchmarks](docs/SECURE-BULK-TRANSFERS.md)
 - [Storage platform problem landscape: common failures, proven solutions, trade-offs and AURA priorities](docs/STORAGE-PLATFORM-PROBLEM-LANDSCAPE.md)
 - [Detailed deployment runbook](docs/DEPLOYMENT.md)
