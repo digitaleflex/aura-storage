@@ -168,9 +168,13 @@ What still stands, and is by design rather than debt:
 - **`.env` is not in the repository** and never should be. Provisioning it remains a
   manual step; §5 lists the keys the rebuild needs. The audit's §6 caveat still applies:
   this document could not read it.
-- **The image on the host predates the last commit.** `aura-api:local` was built before
-  the content-revisions schema (phase 1) was committed. The difference is schema-only and
-  has no effect on the running API, but the next `docker compose build api` is what makes
-  the deployed artefact correspond exactly to `b59d44c`.
+- **The deployed image now matches a pushed commit.** `aura-api:local` (`46cdf1448961`)
+  was rebuilt at 01:50:52, after the phase-1 commit `b59d44c` was pushed at 01:45:34, and
+  the container was recreated seven seconds later. This replaces an earlier version of
+  this section which claimed the image predated phase 1 — it did not.
+- **The migration is proven on the real catalogue.** On that restart the API applied
+  `0005_object_revisions` to the live PostgreSQL (`schema_migrations` newest row), and
+  `public.object_revisions` exists with **0 rows**. Phase 1 is therefore not only merged
+  but running, and nothing in the API creates a revision yet as designed.
 - Everything in §5 that is a *verification* rather than a commit — the post-boot checks —
   was not executed here and still requires a deliberate deploy.
