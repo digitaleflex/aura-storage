@@ -182,7 +182,13 @@ function classifyHttp(status: number): Classification {
   // 507: the server refused the upload because the storage is full. Retrying
   // cannot help until space is freed.
   if (status === 507) return "fatal";
-  if (status === 408 || status === 410 || status === 425 || status === 429) return "retryable";
+  // 499: the edge proxy closed the request at `respondingTimeouts.readTimeout`
+  // and answered "Client Closed Request" (measured through Traefik on
+  // 2026-10-25). Each part PUT is a fresh request with its own deadline, so
+  // resending that part is exactly the right move — declaring it fatal would
+  // throw away a multi-gigabyte upload that only lost one part.
+  if (status === 408 || status === 410 || status === 425 || status === 429
+      || status === 499) return "retryable";
   if (status >= 500) return "retryable";
   return "fatal";
 }

@@ -39,6 +39,9 @@ export function describeError(err: unknown, fallback: string): string {
     if (err.kind === "network") return "Connexion au stockage interrompue.";
     if (err.kind === "expired") return "Le lien d'envoi a expiré.";
     if (err.kind === "aborted") return "Envoi annulé.";
+    if (err.status === 499) {
+      return "L'envoi a été interrompu par le proxy (délai d'attente dépassé). Réessayez : seule la partie concernée sera renvoyée.";
+    }
     return fallback;
   }
   if (err instanceof ApiError) {
