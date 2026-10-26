@@ -296,6 +296,11 @@ test("classifyError maps transport and API errors to retry decisions", () => {
   expect(classifyError(new PresignedUploadError("rejected", 400, "x"))).toBe("fatal");
   expect(classifyError(new ApiError(503, "x"))).toBe("retryable");
   expect(classifyError(new ApiError(410, "x"))).toBe("retryable");
+  // Traefik answers 499 "Client Closed Request" when it cuts a request at
+  // respondingTimeouts.readTimeout. A part retry is a fresh request, so this
+  // must never be fatal (2026-10-25 proxy verification).
+  expect(classifyError(new ApiError(499, "x"))).toBe("retryable");
+  expect(classifyError(new PresignedUploadError("rejected", 499, "x"))).toBe("retryable");
   expect(classifyError(new ApiError(403, "x"))).toBe("expired");
   expect(classifyError(new ApiError(404, "x"))).toBe("fatal");
   expect(classifyError(new Error("boom"))).toBe("fatal");
