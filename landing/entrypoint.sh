@@ -32,4 +32,11 @@ if grep -q '\${' "$out/index.html"; then
   exit 1
 fi
 
+# The security headers and the HEAD/list-type behaviour live in nginx.conf.
+# It was mounted but never installed, so the image's default server answered
+# without CSP/X-Frame-Options/nosniff.
+if [ -f /opt/aura-landing/nginx.conf ]; then
+  cp -f /opt/aura-landing/nginx.conf /etc/nginx/conf.d/default.conf
+fi
+
 exec nginx -g 'daemon off;'

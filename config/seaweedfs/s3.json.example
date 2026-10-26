@@ -9,6 +9,16 @@
         }
       ],
       "actions": ["Admin", "Read", "Write", "List"]
+    },
+    {
+      "name": "aura-api",
+      "credentials": [
+        {
+          "accessKey": "REPLACE_WITH_API_ACCESS_KEY",
+          "secretKey": "REPLACE_WITH_API_SECRET"
+        }
+      ],
+      "actions": ["Read", "Write", "List"]
     }
   ]
 }

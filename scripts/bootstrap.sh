@@ -3,6 +3,18 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# `sudo bash scripts/deploy.sh` resets PATH, so a user-managed Node install
+# (~/.node, nvm) disappears and the whole deploy aborts on "npm not found".
+# Recover the invoking operator's toolchain before checking for it.
+if ! command -v npm >/dev/null 2>&1 && [[ -n "${SUDO_USER:-}" ]]; then
+  for candidate in "/home/${SUDO_USER}/.node"/*/bin "/home/${SUDO_USER}/.nvm/versions/node"/*/bin; do
+    if [[ -x "${candidate}/npm" ]]; then
+      export PATH="${candidate}:${PATH}"
+      break
+    fi
+  done
+fi
+
 command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker is not installed. See docs/DEPLOYMENT.md." >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "ERROR: Docker Compose plugin is unavailable." >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 is required." >&2; exit 1; }

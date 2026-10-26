@@ -14,7 +14,7 @@ jobs:
   config:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Check shell syntax
         run: |
           bash -n scripts/bootstrap.sh
@@ -86,7 +86,7 @@ jobs:
           --health-cmd "pg_isready -U aura -d aura" --health-interval 5s
           --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Create the parity-test database
         run: PGPASSWORD=ci-dummy-pg-password psql -h 127.0.0.1 -U aura -d aura -c "CREATE DATABASE aura_parity"
       - name: Run API tests on PostgreSQL

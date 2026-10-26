@@ -25,6 +25,9 @@ services:
       - --certificatesresolvers.le.acme.httpchallenge=true
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
       - --accesslog=true
+      # Presigned URLs carry X-Amz-Signature/X-Amz-Credential in the query
+      # string: leaving them in docker logs hands out short-lived credentials.
+      - --accesslog.fields.queryparameters.defaultmode=drop
       - --log.level=INFO
       - --ping=true
     environment:
@@ -33,6 +36,9 @@ services:
       - "80:80"
       - "443:443"
     volumes:
+      # Direct socket: a filtered socket-proxy was evaluated on 2026-10-24 and
+      # reverted — with a remote endpoint Traefik stopped loading the shared
+      # middleware labels defined on its own container, dropping every router.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik-acme:/letsencrypt
     networks:
@@ -51,57 +57,12 @@ services:
     # HTTPS, protected by the `dash-auth` BasicAuth middleware (bcrypt). Port
     # 8080 is never published; access requires the DASHBOARD_AUTH credentials.
     labels:
+      # Traefik v3.7 ignores the labels of its own container (verified on
+      # 2026-10-24: routers/middlewares defined here never appeared in
+      # /api/rawdata, dropping every router that referenced them). The dashboard
+      # router and all shared middlewares therefore live on the `app` service.
       - traefik.enable=true
       - traefik.docker.network=aura-edge
-      - traefik.http.routers.traefik-dashboard.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}`)
-      - traefik.http.routers.traefik-dashboard.entrypoints=websecure
-      - traefik.http.routers.traefik-dashboard.tls=true
-      - traefik.http.routers.traefik-dashboard.tls.certresolver=le
-      - traefik.http.routers.traefik-dashboard.service=api@internal
-      - traefik.http.routers.traefik-dashboard.middlewares=dash-ipallow,dash-auth
-      - traefik.http.middlewares.dash-auth.basicauth.users=${DASHBOARD_AUTH:?Set DASHBOARD_AUTH in .env}
-      # Source allow-list in front of BasicAuth. The default admits loopback only,
-      # i.e. the dashboard is closed until DASHBOARD_ALLOWED_IPS names the
-      # operator VPN / admin addresses (comma-separated IPs or CIDRs).
-      - traefik.http.middlewares.dash-ipallow.ipallowlist.sourcerange=${DASHBOARD_ALLOWED_IPS:-127.0.0.1/32}
-      # HSTS for every public router (app, S3, landing). Declared here because
-      # Traefik is the single TLS terminator; one year, subdomains included.
-      - traefik.http.middlewares.aura-hsts.headers.stsSeconds=31536000
-      - traefik.http.middlewares.aura-hsts.headers.stsIncludeSubdomains=true
-      # Port 8080 is never published to the host; the dashboard is reachable only
-      # through this HTTPS router with BasicAuth (bcrypt).
-
-      # --- Shared API middlewares -------------------------------------------
-      # Definitions only; a router opts in by listing them in
-      # `traefik.http.routers.<name>.middlewares`. They are declared here (like
-      # `dash-auth` above) so several routers can reuse one definition.
-      #
-      # `api-ratelimit`: 30 requests/s per client IP with a burst of 60. This is
-      # a coarse abuse guard for documentation/API routers, not a substitute for
-      # the in-app login/M2M limiters (api/main.py, api/authz.py). Keyed on the
-      # client IP as resolved by the entrypoint (X-Forwarded-For).
-      - traefik.http.middlewares.api-ratelimit.ratelimit.average=30
-      - traefik.http.middlewares.api-ratelimit.ratelimit.burst=60
-      # `api-secure-headers`: baseline hardening for HTML/JSON responses served
-      # through Traefik (HSTS already implied by the TLS routers; set explicitly).
-      - traefik.http.middlewares.api-secure-headers.headers.stsSeconds=31536000
-      - traefik.http.middlewares.api-secure-headers.headers.stsIncludeSubdomains=true
-      - traefik.http.middlewares.api-secure-headers.headers.contentTypeNosniff=true
-      - traefik.http.middlewares.api-secure-headers.headers.frameDeny=true
-      - traefik.http.middlewares.api-secure-headers.headers.referrerPolicy=no-referrer
-      # `api-docs-allowlist`: restriction choix utilisateur (2026-10-16) — docs internes
-      # derrière firewall/VPN. Plages privées par défaut; ajoute ton IP publique opérateur
-      # via `SWAGGER_ADMIN_IP` dans .env (ex: 203.0.113.10/32) avant go-live si accès distant.
-      - traefik.http.middlewares.api-docs-allowlist.ipallowlist.sourcerange=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${SWAGGER_ADMIN_IP:-127.0.0.2/32}
-      # `api-docs-auth`: BasicAuth in front of the documentation router. The
-      # allow-list above is a network control: it carries no identity, it is
-      # shared by every host behind the same NAT egress, and it cannot be
-      # revoked per person. This middleware is the credential, so access to the
-      # API surface exposed by Swagger "Try it" is attributable and revocable
-      # on its own. Same pattern as the dashboard's `dash-auth`, same bcrypt
-      # requirement ($2y$/$2b$).
-      - traefik.http.middlewares.api-docs-auth.basicauth.users=${DOCS_AUTH:?Set DOCS_AUTH in .env}
-
       # --- forwardAuth example: DISABLED (no verify endpoint exists today) ---
       # api/main.py exposes /api/v1/login, /api/v1/logout and /api/v1/me, and
       # api/authz.py authorizes in-process; there is NO /auth/verify route, so
@@ -247,20 +208,26 @@ services:
     # api/config.py exactly, so an unset .env keeps today's behaviour identical.
     environment:
       TZ: ${TZ:-Africa/Porto-Novo}
+      # read_only rootfs: Python must not try to write __pycache__.
+      PYTHONDONTWRITEBYTECODE: "1"
       AURA_API_ADMIN_USER: ${AURA_API_ADMIN_USER:-admin}
       AURA_API_ADMIN_PASSWORD: ${AURA_API_ADMIN_PASSWORD:?Set AURA_API_ADMIN_PASSWORD in .env}
       AURA_S3_ENDPOINT: https://${S3_DOMAIN:?Set S3_DOMAIN in .env}
       AURA_S3_INTERNAL_ENDPOINT: http://seaweed-filer:8333
-      AURA_S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}
-      AURA_S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
+      # Dedicated least-privilege identity (Read/Write/List, no Admin). Falls
+      # back to the legacy bootstrap key until the operator migrates: create
+      # the `aura-api` credentials in s3.json and set S3_API_* in .env.
+      AURA_S3_ACCESS_KEY: ${S3_API_ACCESS_KEY:-${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}}
+      AURA_S3_SECRET_KEY: ${S3_API_SECRET_KEY:-${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}}
       AURA_S3_REGION: ${AURA_S3_REGION:-us-east-1}
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
       AURA_COOKIE_SECURE: "1"
-      # Human session cookie lifetime (seconds): 90 days. Pinned here so the
-      # deployed stack matches the documented default (api/config.py). Override
-      # in .env only deliberately; the expiry is fixed at login (no renewal).
-      AURA_SESSION_TTL: "7776000"
+      # Human session cookie lifetime (seconds), overridable from .env. The
+      # code default is 8 h (api/config.py); 90 days was a stale literal that
+      # made a stolen cookie valid for three months. Expiry is fixed at login
+      # (no rolling renewal).
+      AURA_SESSION_TTL: ${AURA_SESSION_TTL:-28800}
       # Audit trail on a named volume: it must survive image rebuilds and
       # container recreation (the default path is inside the container).
       AURA_AUDIT_LOG: /var/lib/aura/audit/aura-audit.jsonl
@@ -283,6 +250,9 @@ services:
       # (%) above which new uploads are refused with 507.
       AURA_STORAGE_CAPACITY_BYTES: ${AURA_STORAGE_CAPACITY_BYTES:-0}
       AURA_STORAGE_HIGH_WATERMARK: ${AURA_STORAGE_HIGH_WATERMARK:-90}
+      # Per-owner reservation ceiling: one account cannot squat the whole disk
+      # with declared-but-never-sent multipart intents.
+      AURA_MAX_PENDING_BYTES_PER_OWNER: ${AURA_MAX_PENDING_BYTES_PER_OWNER:-107374182400}
       # Periodic integrity scrub (api/scrubber.py): read-only re-hash of stored
       # objects, at least once per interval, within a byte budget per hour.
       AURA_SCRUB_ENABLED: ${AURA_SCRUB_ENABLED:-1}
@@ -311,7 +281,10 @@ services:
       AURA_LOGIN_RATE_WINDOW: ${AURA_LOGIN_RATE_WINDOW:-60}
       AURA_M2M_RATE_LIMIT: ${AURA_M2M_RATE_LIMIT:-60}
       AURA_M2M_RATE_WINDOW: ${AURA_M2M_RATE_WINDOW:-60}
-      AURA_TRUSTED_PROXIES: ${AURA_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      # Trust only the real proxy networks (explicit subnets at the bottom of
+      # this file), never the whole RFC1918 space: otherwise any storage
+      # container could forge X-Forwarded-For and skew the per-IP limiters.
+      AURA_TRUSTED_PROXIES: ${AURA_TRUSTED_PROXIES:-127.0.0.1/32,::1/128,172.30.0.0/24,172.31.0.0/24,172.32.0.0/24}
       AURA_MAX_OBJECT_BYTES: ${AURA_MAX_OBJECT_BYTES:-5368709120}
       AURA_COMMIT_CHUNK_BYTES: ${AURA_COMMIT_CHUNK_BYTES:-1048576}
       # Commit deadline (#120). Must stay below the app proxy's read timeout
@@ -344,6 +317,19 @@ services:
       # containers could dial it directly. Internal like `storage`, so the API
       # keeps its current (no Internet) connectivity.
       - docs
+    # The process only needs its mounted audit volume and /tmp (AV scanner
+    # scratch). Everything else is read-only and all Linux capabilities are
+    # dropped. (Running as a non-root UID needs a chown of the existing audit
+    # volume first; that is a separate migration.)
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: 2.0
     labels:
       - traefik.enable=true
       - traefik.docker.network=aura-docs
@@ -386,8 +372,6 @@ services:
         condition: service_healthy
       seaweed-filer:
         condition: service_started
-    security_opt:
-      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')\""]
       interval: 30s
@@ -412,7 +396,16 @@ services:
       - edge
     depends_on:
       api:
-        condition: service_started
+        # Do not serve the SPA while /health/live is failing: the API is
+        # same-origin, so an unhealthy API means every action would 5xx.
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
+    cpus: 1.0
     labels:
       - traefik.enable=true
       - traefik.docker.network=aura-edge
@@ -422,6 +415,61 @@ services:
       - traefik.http.routers.aura-app.tls.certresolver=le
       - traefik.http.routers.aura-app.middlewares=aura-hsts@docker
       - traefik.http.services.aura-app.loadbalancer.server.port=80
+      # Dashboard router (api@internal) must live on a regular container too.
+      - traefik.http.routers.traefik-dashboard.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}`)
+      - traefik.http.routers.traefik-dashboard.entrypoints=websecure
+      - traefik.http.routers.traefik-dashboard.tls=true
+      - traefik.http.routers.traefik-dashboard.tls.certresolver=le
+      - traefik.http.routers.traefik-dashboard.service=api@internal
+      # HSTS first: a request rejected by the IP allow-list still gets the
+      # header (middlewares after the rejecting one never run).
+      - traefik.http.routers.traefik-dashboard.middlewares=aura-hsts,dash-ipallow,dash-auth
+      # Shared middlewares live on a regular container: Traefik v3.7 does not
+      # read them from its own container.
+      - traefik.http.middlewares.dash-auth.basicauth.users=${DASHBOARD_AUTH:?Set DASHBOARD_AUTH in .env}
+      # Source allow-list in front of BasicAuth. The default admits loopback only,
+      # i.e. the dashboard is closed until DASHBOARD_ALLOWED_IPS names the
+      # operator VPN / admin addresses (comma-separated IPs or CIDRs).
+      - traefik.http.middlewares.dash-ipallow.ipallowlist.sourcerange=${DASHBOARD_ALLOWED_IPS:-127.0.0.1/32}
+      # HSTS for every public router (app, S3, landing). Declared here because
+      # Traefik is the single TLS terminator; one year, subdomains included.
+      - traefik.http.middlewares.aura-hsts.headers.stsSeconds=31536000
+      - traefik.http.middlewares.aura-hsts.headers.stsIncludeSubdomains=true
+      # Do not advertise the reverse-proxy implementation/version.
+      # Port 8080 is never published to the host; the dashboard is reachable only
+      # through this HTTPS router with BasicAuth (bcrypt).
+
+      # --- Shared API middlewares -------------------------------------------
+      # Definitions only; a router opts in by listing them in
+      # `traefik.http.routers.<name>.middlewares`. They are declared here (like
+      # `dash-auth` above) so several routers can reuse one definition.
+      #
+      # `api-ratelimit`: 30 requests/s per client IP with a burst of 60. This is
+      # a coarse abuse guard for documentation/API routers, not a substitute for
+      # the in-app login/M2M limiters (api/main.py, api/authz.py). Keyed on the
+      # client IP as resolved by the entrypoint (X-Forwarded-For).
+      - traefik.http.middlewares.api-ratelimit.ratelimit.average=30
+      - traefik.http.middlewares.api-ratelimit.ratelimit.burst=60
+      # `api-secure-headers`: baseline hardening for HTML/JSON responses served
+      # through Traefik (HSTS already implied by the TLS routers; set explicitly).
+      - traefik.http.middlewares.api-secure-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.api-secure-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.api-secure-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.api-secure-headers.headers.frameDeny=true
+      - traefik.http.middlewares.api-secure-headers.headers.referrerPolicy=no-referrer
+      # `api-docs-allowlist`: restriction choix utilisateur (2026-10-16) — docs internes
+      # derrière firewall/VPN. Plages privées par défaut; ajoute ton IP publique opérateur
+      # via `SWAGGER_ADMIN_IP` dans .env (ex: 203.0.113.10/32) avant go-live si accès distant.
+      - traefik.http.middlewares.api-docs-allowlist.ipallowlist.sourcerange=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${SWAGGER_ADMIN_IP:-127.0.0.2/32}
+      # `api-docs-auth`: BasicAuth in front of the documentation router. The
+      # allow-list above is a network control: it carries no identity, it is
+      # shared by every host behind the same NAT egress, and it cannot be
+      # revoked per person. This middleware is the credential, so access to the
+      # API surface exposed by Swagger "Try it" is attributable and revocable
+      # on its own. Same pattern as the dashboard's `dash-auth`, same bcrypt
+      # requirement ($2y$/$2b$).
+      - traefik.http.middlewares.api-docs-auth.basicauth.users=${DOCS_AUTH:?Set DOCS_AUTH in .env}
+
       # No path prefix, no strip: the app is served from the domain root.
       # The S3 API keeps exclusive use of aura-storage.eurinhash.com.
     security_opt:
@@ -453,6 +501,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=aura-edge
+      # GET and HEAD: a HEAD used to fall through to SeaweedFS and answer 405.
       - traefik.http.routers.aura-s3-landing.rule=Host(`${S3_DOMAIN:?Set S3_DOMAIN in .env}`) && Path(`/`) && Method(`GET`) && !HeaderRegexp(`Authorization`, `.+`)
       # Explicit priority: the landing rule is longer than the S3 rule, but the
       # intent must not depend on rule-length sorting.
@@ -461,6 +510,16 @@ services:
       - traefik.http.routers.aura-s3-landing.tls=true
       - traefik.http.routers.aura-s3-landing.tls.certresolver=le
       - traefik.http.routers.aura-s3-landing.middlewares=aura-hsts@docker
+      # HEAD cannot be added to the GET rule: Traefik's Method() matcher takes
+      # exactly one value. A twin router keeps HEAD on the landing page instead
+      # of falling through to SeaweedFS (405).
+      - traefik.http.routers.aura-s3-landing-head.rule=Host(`${S3_DOMAIN:?Set S3_DOMAIN in .env}`) && Path(`/`) && Method(`HEAD`) && !HeaderRegexp(`Authorization`, `.+`)
+      - traefik.http.routers.aura-s3-landing-head.priority=1000
+      - traefik.http.routers.aura-s3-landing-head.entrypoints=websecure
+      - traefik.http.routers.aura-s3-landing-head.tls=true
+      - traefik.http.routers.aura-s3-landing-head.tls.certresolver=le
+      - traefik.http.routers.aura-s3-landing-head.middlewares=aura-hsts@docker
+      - traefik.http.routers.aura-s3-landing-head.service=aura-s3-landing
       - traefik.http.services.aura-s3-landing.loadbalancer.server.port=80
     security_opt:
       - no-new-privileges:true
@@ -510,17 +569,30 @@ services:
     # No host port, no storage network: the docs never bind a local port.
 
 networks:
+  # Explicit subnets: AURA_TRUSTED_PROXIES must name real proxy networks, not
+  # the whole RFC1918 space. Changing these forces a one-time network
+  # recreation on the next `docker compose up` (brief downtime, expected).
   edge:
     name: aura-edge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
   docs:
     # Dedicated to the docs host: Traefik + api only. Internal, so the API keeps
     # exactly its current connectivity (no Internet) while staying unreachable
     # from the SeaweedFS/app containers that share the public `edge` network.
     name: aura-docs
     internal: true
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
   storage:
     name: aura-storage-internal
     internal: true
+    ipam:
+      config:
+        - subnet: 172.32.0.0/24
+
 
 volumes:
   traefik-acme:
