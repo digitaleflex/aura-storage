@@ -149,6 +149,26 @@ export interface AuditPruneResponse {
   retention_days: number;
 }
 
+/**
+ * Monthly egress counters. They are estimates: AURA never proxies object bytes,
+ * so each issued intent or share redemption counts the object's full size once.
+ */
+export interface SpaceMonthUsage {
+  period: string;
+  egress_bytes: number;
+  download_intents: number;
+  preview_intents: number;
+  share_redemptions: number;
+}
+
+/** `null` means "no quota", never "zero". */
+export interface SpaceQuota {
+  storage_bytes: number | null;
+  egress_bytes_monthly: number | null;
+  updated_at: number | null;
+  updated_by: string | null;
+}
+
 /** Real per-space consumption (verified available bytes only, M07). */
 export interface UsageSpaceEntry {
   space_id: string;
@@ -160,11 +180,15 @@ export interface UsageSpaceEntry {
   available_count: number;
   stored_bytes: number;
   pending_count: number;
+  month: SpaceMonthUsage;
+  quota: SpaceQuota;
 }
 
 export interface UsageResponse {
   /** Live query time (epoch seconds): the freshness marker. */
   measured_at: number;
+  /** UTC month (`YYYY-MM`) the `month` counters belong to. */
+  period: string;
   limits: {
     max_object_bytes: number;
     max_pending_intents: number;
@@ -184,6 +208,7 @@ export interface UsageResponse {
     objects_by_status: Record<string, number>;
     available_count: number;
     stored_bytes: number;
+    egress_bytes_month: number;
   };
   spaces: UsageSpaceEntry[];
 }
@@ -565,6 +590,54 @@ export interface IdentityItem {
   last_used_at: number | null;
   revoked_at: number | null;
   rotated_at: number | null;
+}
+
+/**
+ * Admin "Intégrations" view: an external site consuming one space through its
+ * own service identity. The secret is never part of this shape — only the
+ * identity's live state, so the table can show expiry/revocation honestly.
+ */
+export interface PartnerSite {
+  id: string;
+  name: string;
+  site_url: string;
+  space_id: string;
+  identity_id: string;
+  default_ttl_seconds: number | null;
+  notes: string;
+  created_at: number;
+  updated_at: number;
+  identity: {
+    name: string | null;
+    scopes: string[];
+    expires_at: number | null;
+    last_used_at: number | null;
+    revoked_at: number | null;
+    rotated_at: number | null;
+  };
+}
+
+export interface PartnerSiteCreateInput {
+  name: string;
+  site_url: string;
+  space_id: string;
+  scopes?: string[];
+  ttl_seconds?: number;
+  default_ttl_seconds?: number | null;
+  notes?: string;
+}
+
+/** Creation returns the identity token exactly once, like `createIdentity`. */
+export interface PartnerSiteCreateResponse extends PartnerSite {
+  token: string;
+}
+
+export interface PartnerSitePatchInput {
+  name?: string;
+  site_url?: string;
+  /** Explicit null clears the recommendation. */
+  default_ttl_seconds?: number | null;
+  notes?: string;
 }
 
 export interface ListResponse<T> {
@@ -1043,6 +1116,18 @@ export const api = {
     });
   },
 
+  /** Replace the monthly quotas of a space; explicit null clears one. */
+  setSpaceQuotas(
+    id: string,
+    quotas: { storage_bytes: number | null; egress_bytes_monthly: number | null },
+    csrf: string,
+  ): Promise<{ space_id: string } & SpaceQuota> {
+    return request<{ space_id: string } & SpaceQuota>(
+      `/api/v1/admin/spaces/${encodeURIComponent(id)}/quotas`,
+      { method: "PUT", body: quotas, csrf },
+    );
+  },
+
   /** Register an additional (non-default) bucket for a space. */
   createSpaceBucket(
     spaceId: string,
@@ -1066,6 +1151,44 @@ export const api = {
       body: { is_default: isDefault },
       csrf,
     });
+  },
+
+  // --- Partner integrations (admin console "Intégrations") ---
+  listPartnerSites(): Promise<ListResponse<PartnerSite>> {
+    return request<ListResponse<PartnerSite>>("/api/v1/admin/partner-sites");
+  },
+
+  createPartnerSite(
+    input: PartnerSiteCreateInput,
+    csrf: string,
+  ): Promise<PartnerSiteCreateResponse> {
+    return request<PartnerSiteCreateResponse>("/api/v1/admin/partner-sites", {
+      method: "POST",
+      body: input,
+      csrf,
+    });
+  },
+
+  updatePartnerSite(
+    id: string,
+    input: PartnerSitePatchInput,
+    csrf: string,
+  ): Promise<PartnerSite> {
+    return request<PartnerSite>(
+      `/api/v1/admin/partner-sites/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: input, csrf },
+    );
+  },
+
+  /** Remove the integration and revoke its key in one step. */
+  deletePartnerSite(
+    id: string,
+    csrf: string,
+  ): Promise<{ id: string; deleted: boolean; identity_revoked: boolean }> {
+    return request<{ id: string; deleted: boolean; identity_revoked: boolean }>(
+      `/api/v1/admin/partner-sites/${encodeURIComponent(id)}`,
+      { method: "DELETE", csrf },
+    );
   },
 
   createIdentity(

@@ -794,6 +794,7 @@ select:focus-visible {
 .field input[type="search"],
 .field input[type="number"],
 .field input[type="date"],
+.field textarea,
 .field select {
   font-family: var(--font-ui);
   font-size: var(--field-fs);
@@ -2383,6 +2384,15 @@ p .chip {
 
 .table tbody tr:last-child td {
   border-bottom: none;
+}
+
+/* Secondary line inside a table cell (site URL, scopes, notes). */
+.table .table-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
 }
 
 .table .name {

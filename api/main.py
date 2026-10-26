@@ -10,6 +10,7 @@ import shutil
 import threading
 import time
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
@@ -116,6 +117,80 @@ def _charge_quota(space_id: str, size_bytes: int) -> None:
             raise HTTPException(status_code=429, detail="quota exceeded")
         q["files"] += 1
         q["bytes"] += size_bytes
+
+
+def _usage_period(now: float | None = None) -> str:
+    """UTC month key (``YYYY-MM``) used by the monthly counters."""
+    return time.strftime("%Y-%m", time.gmtime(time.time() if now is None else now))
+
+
+def _space_month_usage(space_id: str, period: str | None = None) -> dict:
+    """This month's counters for a space, zero-filled when nothing happened."""
+    period = period or _usage_period()
+    row = repo.get_space_usage_monthly(space_id, period) or {}
+    return {
+        "period": period,
+        "egress_bytes": int(row.get("egress_bytes") or 0),
+        "download_intents": int(row.get("download_intents") or 0),
+        "preview_intents": int(row.get("preview_intents") or 0),
+        "share_redemptions": int(row.get("share_redemptions") or 0),
+    }
+
+
+def _space_quota(space_id: str) -> dict:
+    row = repo.get_space_quotas(space_id) or {}
+    return {
+        "storage_bytes": row.get("storage_bytes"),
+        "egress_bytes_monthly": row.get("egress_bytes_monthly"),
+        "updated_at": row.get("updated_at"),
+        "updated_by": row.get("updated_by"),
+    }
+
+
+def _check_storage_quota(space_id: str, size_bytes: int) -> None:
+    """Hard per-space storage ceiling (monthly quota table).
+
+    Enforced at upload intent, after the global capacity/pending checks so a
+    request refused for another reason never reports a quota error. Pending
+    intents are not reserved against the quota: the next commit can overshoot by
+    at most the bytes already reserved, which is bounded by the pending caps.
+    """
+    quota = repo.get_space_quotas(space_id)
+    limit = int(quota["storage_bytes"]) if quota and quota.get("storage_bytes") else 0
+    if limit <= 0:
+        return
+    used = int(repo.space_usage(space_id)["stored_bytes"])
+    if used + size_bytes > limit:
+        raise HTTPException(status_code=429, detail="storage quota exceeded")
+
+
+def _check_egress_quota(space_id: str, size_bytes: int) -> None:
+    """Soft-by-design but blocking monthly egress ceiling.
+
+    AURA never sees the bytes (the client fetches the presigned S3 URL), so the
+    counter is an estimate: one issued intent or share redemption counts the
+    object's full size. The request that would cross the ceiling is refused, so
+    a quota cannot be silently exceeded by one large object.
+    """
+    quota = repo.get_space_quotas(space_id)
+    limit = (
+        int(quota["egress_bytes_monthly"])
+        if quota and quota.get("egress_bytes_monthly") else 0
+    )
+    if limit <= 0:
+        return
+    used = _space_month_usage(space_id)["egress_bytes"]
+    if used + max(0, size_bytes) > limit:
+        raise HTTPException(status_code=429, detail="monthly egress quota exceeded")
+
+
+def _record_egress(space_id: str, size_bytes: int, kind: str) -> None:
+    """Account one issued transfer. Called after success only."""
+    try:
+        repo.record_space_egress(space_id, _usage_period(), kind, size_bytes)
+    except Exception:
+        # Metering must never turn a successful download into a 500.
+        log.warning("egress metering failed for space %s (%s)", space_id, kind)
 # uvicorn installs handlers on its own loggers only and leaves the root logger
 # handler-free, so an INFO record from "api.main" is dropped by logging's
 # lastResort handler (WARNING). Route through the logger uvicorn configures so
@@ -554,6 +629,17 @@ class SpacePatchIn(BaseModel):
         return value
 
 
+class SpaceQuotasIn(BaseModel):
+    """Monthly ceilings for one space. Explicit null clears a quota.
+
+    Storage is enforced at upload intent. Egress is an estimate (issued intents
+    and share redemptions), because AURA never proxies object bytes.
+    """
+    model_config = ConfigDict(extra="forbid")
+    storage_bytes: int | None = Field(default=None, ge=0, le=10**15)
+    egress_bytes_monthly: int | None = Field(default=None, ge=0, le=10**15)
+
+
 class BucketIn(BaseModel):
     # Register an additional bucket for an existing space (#M04). The name is
     # validated against the S3 naming rules before it can be used by a client.
@@ -577,6 +663,91 @@ class IdentityIn(BaseModel):
     name: str = Field(min_length=1, max_length=63)
     scopes: list[str] = Field(default_factory=list)
     ttl_seconds: int | None = Field(default=None, ge=1)
+
+
+def _normalize_partner_url(value: str) -> str:
+    """An https origin (optionally with a base path) and nothing else.
+
+    The URL is documentation/metadata for operators, not an enforcement point,
+    but it must be a copy-pasteable origin: no credentials, query or fragment,
+    and no cleartext http.
+    """
+    parts = urlsplit(value.strip())
+    if (
+        parts.scheme != "https"
+        or not parts.netloc
+        or parts.username is not None
+        or parts.password is not None
+        or parts.query
+        or parts.fragment
+    ):
+        raise ValueError("site_url must be an https origin without credentials, query or fragment")
+    return f"https://{parts.netloc}{parts.path.rstrip('/')}"
+
+
+class PartnerSiteIn(BaseModel):
+    """Create a partner integration: metadata + its dedicated service identity.
+
+    The identity is the credential (rotated/revoked through the identity routes);
+    this row only records which external site consumes which space, and the TTL
+    its media route should target. Scopes stay data-plane only.
+    """
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=63)
+    site_url: str = Field(min_length=8, max_length=255)
+    space_id: Uuid4
+    scopes: list[str] = Field(default_factory=lambda: [OBJECTS_READ])
+    ttl_seconds: int | None = Field(default=None, ge=60)
+    default_ttl_seconds: int | None = Field(default=None, ge=60, le=604_800)
+    notes: str = Field(default="", max_length=2000)
+
+    @field_validator("site_url")
+    @classmethod
+    def valid_site_url(cls, value: str) -> str:
+        return _normalize_partner_url(value)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("name must not be blank")
+        return cleaned
+
+    @field_validator("notes")
+    @classmethod
+    def clean_notes(cls, value: str) -> str:
+        return value.strip()
+
+
+class PartnerSitePatchIn(BaseModel):
+    """Edit the trust metadata. The identity and the space are not editable:
+    moving a site to another space means a new identity and a new key."""
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=63)
+    site_url: str | None = Field(default=None, min_length=8, max_length=255)
+    default_ttl_seconds: int | None = Field(default=None, ge=60, le=604_800)
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("site_url")
+    @classmethod
+    def valid_site_url(cls, value: str | None) -> str | None:
+        return None if value is None else _normalize_partner_url(value)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("name must not be blank")
+        return cleaned
+
+    @field_validator("notes")
+    @classmethod
+    def clean_notes(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
 
 
 class FolderIn(BaseModel):
@@ -758,6 +929,15 @@ def redeem_share(token: str):
         raise _share_not_found()
     obj = _as_dict(target)
 
+    # Egress quota: checked before consuming a use, so a refused redemption
+    # never burns a max_uses slot. The public route keeps its uniform 404.
+    try:
+        _check_egress_quota(row["space_id"], int(obj["size_bytes"]))
+    except HTTPException:
+        audit_event("share-access", None, "denied",
+                    {"share_id": row["id"], "reason": "egress_quota"})
+        raise _share_not_found()
+
     # Atomic: re-checks revocation, expiry and max_uses in the same UPDATE, so
     # concurrent redemptions cannot over-use a limited link.
     if not repo.consume_share(row["id"], now):
@@ -774,6 +954,7 @@ def redeem_share(token: str):
         # something else at redemption time.
         content_type=obj["content_type"],
     )
+    _record_egress(row["space_id"], int(obj["size_bytes"]), "share")
     audit_event("share-access", None, "success", {
         "share_id": row["id"], "object_id": obj["id"],
         "use_count": int(row["use_count"]) + 1,
@@ -1100,6 +1281,7 @@ def upload_intent(
                 })
                 raise HTTPException(status_code=429, detail="too many pending bytes")
         _check_capacity(body.size_bytes)
+        _check_storage_quota(space_id, body.size_bytes)
 
     if body.folder_id is not None:
         # A client-supplied folder must exist and be owned by the caller (#61).
@@ -1893,6 +2075,7 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
     if row["status"] != "available":
         raise HTTPException(status_code=409, detail="object not available")
     _assert_bytes_intact(oid, row)
+    _check_egress_quota(row["space_id"], int(row["size_bytes"]))
     # Downloads are always an attachment: a user-uploaded HTML/SVG file must
     # never render (and execute) on the storage origin. Preview-intent is the
     # only route allowed to serve inline, and only for its allow-list.
@@ -1902,6 +2085,7 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
             "attachment", row["display_name"]
         ),
     )
+    _record_egress(row["space_id"], int(row["size_bytes"]), "download")
     audit_event("download-intent", principal["id"], "success", {"object_id": oid})
     return {
         "id": oid, "download_url": url, "method": "GET",
@@ -1977,10 +2161,12 @@ def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)))
     _assert_bytes_intact(oid, row)
     if not is_previewable(row["content_type"]):
         raise HTTPException(status_code=415, detail="preview not supported for this content type")
+    _check_egress_quota(row["space_id"], int(row["size_bytes"]))
     url = presigned_get(
         s3, row["bucket"], row["object_key"], settings.intent_ttl,
         content_disposition="inline", content_type=row["content_type"],
     )
+    _record_egress(row["space_id"], int(row["size_bytes"]), "preview")
     audit_event("preview-intent", principal["id"], "success", {"object_id": oid})
     return {
         "id": oid, "preview_url": url, "method": "GET",
@@ -2465,6 +2651,8 @@ def admin_usage(
     total_bytes = 0
     total_available = 0
     total_pending = 0
+    period = _usage_period()
+    total_egress = 0
     for space in spaces:
         space = _as_dict(space)
         usage = repo.space_usage(space["id"])
@@ -2473,6 +2661,8 @@ def admin_usage(
         total_bytes += usage["stored_bytes"]
         total_available += usage["available_count"]
         total_pending += usage["pending_count"]
+        month = _space_month_usage(space["id"], period)
+        total_egress += month["egress_bytes"]
         application = applications.get(space["application_id"])
         items.append({
             "space_id": space["id"], "space_name": space["name"],
@@ -2480,9 +2670,14 @@ def admin_usage(
             "application_id": space["application_id"],
             "application_name": application["name"] if application else None,
             **usage,
+            # Monthly counters are estimates from issued intents/redemptions
+            # (the API never proxies bytes). Quotas are null when unset.
+            "month": month,
+            "quota": _space_quota(space["id"]),
         })
     return {
         "measured_at": int(time.time()),
+        "period": period,
         "limits": {
             # Multipart lifts the declarable ceiling to its own cap; reporting
             # the single-PUT limit here would make the client guard reject
@@ -2499,6 +2694,7 @@ def admin_usage(
             "available_count": total_available,
             "pending_count": total_pending,
             "stored_bytes": total_bytes,
+            "egress_bytes_month": total_egress,
         },
         "spaces": items,
     }
@@ -2724,6 +2920,26 @@ def update_space(
     return _space_detail(sid)
 
 
+@app.put("/api/v1/admin/spaces/{sid}/quotas")
+def set_space_quotas(
+    sid: str, body: SpaceQuotasIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Replace the monthly quotas of a space. Null clears a ceiling."""
+    sid = _canonical_id(sid, "space id")
+    if repo.get_space(sid) is None:
+        raise HTTPException(status_code=404, detail="space not found")
+    repo.set_space_quotas(
+        sid, body.storage_bytes, body.egress_bytes_monthly, principal["id"]
+    )
+    audit_event("admin.space.quotas", principal["id"], "success", {
+        "space_id": sid,
+        "storage_bytes": body.storage_bytes,
+        "egress_bytes_monthly": body.egress_bytes_monthly,
+    })
+    return {"space_id": sid, **_space_quota(sid)}
+
+
 @app.post("/api/v1/admin/spaces/{sid}/buckets")
 def create_space_bucket(
     sid: str, body: BucketIn,
@@ -2785,15 +3001,22 @@ def update_bucket(
     return _bucket_public(repo.get_bucket(bid))
 
 
-@app.post("/api/v1/admin/identities")
-def create_identity(body: IdentityIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
-    space = repo.get_space(body.space_id)
+def _create_service_identity(
+    principal: dict, space_id: str, name: str, scopes_in: list[str],
+    ttl_seconds: int | None,
+) -> dict:
+    """Validate and persist a data-plane identity; returns its one-time token.
+
+    Shared by the identity route and the partner-site route so both enforce the
+    same rules (active space, known scopes, service scopes only).
+    """
+    space = repo.get_space(space_id)
     if space is None:
         raise HTTPException(status_code=404, detail="space not found")
     if space.get("status") not in (None, "active"):
         # No new identity may be minted for a disabled space (#M04).
         raise HTTPException(status_code=409, detail="space is not active")
-    scopes = set(body.scopes)
+    scopes = set(scopes_in)
     unknown = scopes - ALL_SCOPES
     if unknown:
         raise HTTPException(status_code=422, detail="unknown scopes requested")
@@ -2804,22 +3027,31 @@ def create_identity(body: IdentityIn, principal: dict = Depends(authorize(ADMIN_
         raise HTTPException(
             status_code=422, detail="scopes not allowed for service identities"
         )
+    if not scopes:
+        raise HTTPException(status_code=422, detail="at least one scope is required")
     identity_id = repo.new_id()
     secret = new_secret()
-    expires_at = int(time.time()) + body.ttl_seconds if body.ttl_seconds else None
+    expires_at = int(time.time()) + ttl_seconds if ttl_seconds else None
     repo.create_identity(
-        identity_id, space["application_id"], body.space_id, body.name,
+        identity_id, space["application_id"], space_id, name,
         fingerprint(secret), ",".join(sorted(scopes)), expires_at,
     )
-    token = format_token(identity_id, secret)
     audit_event("admin.identity.create", principal["id"], "success",
-                {"identity_id": identity_id, "space_id": body.space_id})
-    # The token is returned exactly once; it is never logged or stored in clear.
+                {"identity_id": identity_id, "space_id": space_id})
     return {
-        "id": identity_id, "name": body.name, "space_id": body.space_id,
+        "id": identity_id, "name": name, "space_id": space_id,
         "application_id": space["application_id"], "scopes": sorted(scopes),
-        "expires_at": expires_at, "token": token,
+        "expires_at": expires_at,
+        # The token is returned exactly once; it is never logged or stored in clear.
+        "token": format_token(identity_id, secret),
     }
+
+
+@app.post("/api/v1/admin/identities")
+def create_identity(body: IdentityIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
+    return _create_service_identity(
+        principal, body.space_id, body.name, body.scopes, body.ttl_seconds
+    )
 
 
 @app.get("/api/v1/admin/identities")
@@ -2838,6 +3070,134 @@ def list_identities(space_id: str | None = None,
             "rotated_at": i.get("rotated_at"),
         })
     return {"items": items}
+
+
+def _partner_public(row: dict) -> dict:
+    """Site metadata plus the live state of its identity (never the secret)."""
+    return {
+        "id": row["id"], "name": row["name"], "site_url": row["site_url"],
+        "space_id": row["space_id"], "identity_id": row["identity_id"],
+        "default_ttl_seconds": row.get("default_ttl_seconds"),
+        "notes": row.get("notes") or "",
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+        "identity": {
+            "name": row.get("identity_name"),
+            "scopes": sorted(
+                s for s in (row.get("identity_scopes") or "").split(",") if s
+            ),
+            "expires_at": row.get("identity_expires_at"),
+            "last_used_at": row.get("identity_last_used_at"),
+            "revoked_at": row.get("identity_revoked_at"),
+            "rotated_at": row.get("identity_rotated_at"),
+        },
+    }
+
+
+@app.get("/api/v1/admin/partner-sites")
+def list_partner_sites(principal: dict = Depends(authorize(ADMIN_READ))):
+    """Partner integrations with the state of their service identity."""
+    return {"items": [_partner_public(r) for r in repo.list_partner_sites()]}
+
+
+@app.post("/api/v1/admin/partner-sites")
+def create_partner_site(
+    body: PartnerSiteIn, principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Create the site metadata and its dedicated identity in one step.
+
+    The identity token is returned exactly once, like the identity route. A
+    failed metadata insert revokes the fresh identity so no orphan credential
+    keeps working without a visible owner.
+    """
+    for existing in repo.list_partner_sites():
+        if (
+            existing["space_id"] == body.space_id
+            and existing["name"].casefold() == body.name.casefold()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="a partner site with this name already exists in the space",
+            )
+    identity = _create_service_identity(
+        principal, body.space_id, body.name, body.scopes, body.ttl_seconds
+    )
+    pid = repo.new_id()
+    try:
+        repo.create_partner_site(
+            pid, body.space_id, identity["id"], body.name, body.site_url,
+            body.default_ttl_seconds, body.notes, principal["id"],
+        )
+    except Exception:
+        repo.revoke_identity(identity["id"])
+        raise
+    audit_event("admin.partner.create", principal["id"], "success", {
+        "partner_id": pid, "space_id": body.space_id,
+        "identity_id": identity["id"],
+    })
+    return {**_partner_public(repo.get_partner_site(pid)), "token": identity["token"]}
+
+
+@app.patch("/api/v1/admin/partner-sites/{pid}")
+def update_partner_site(
+    pid: str, body: PartnerSitePatchIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Edit metadata only. Moving the trust to another space means a new key."""
+    pid = _canonical_id(pid, "partner id")
+    row = repo.get_partner_site(pid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="partner site not found")
+    fields = body.model_fields_set
+    name = body.name if "name" in fields and body.name is not None else row["name"]
+    site_url = (
+        body.site_url if "site_url" in fields and body.site_url is not None
+        else row["site_url"]
+    )
+    ttl = (
+        body.default_ttl_seconds if "default_ttl_seconds" in fields
+        else row.get("default_ttl_seconds")
+    )
+    notes = body.notes if "notes" in fields and body.notes is not None else row.get("notes") or ""
+    if name.casefold() != row["name"].casefold():
+        for existing in repo.list_partner_sites():
+            if (
+                existing["id"] != pid
+                and existing["space_id"] == row["space_id"]
+                and existing["name"].casefold() == name.casefold()
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="a partner site with this name already exists in the space",
+                )
+    repo.update_partner_site(pid, name, site_url, ttl, notes)
+    audit_event("admin.partner.update", principal["id"], "success", {
+        "partner_id": pid, "space_id": row["space_id"],
+    })
+    return _partner_public(repo.get_partner_site(pid))
+
+
+@app.delete("/api/v1/admin/partner-sites/{pid}")
+def delete_partner_site(
+    pid: str, principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Remove an integration and revoke its key in one step.
+
+    Revocation comes first so a failure to delete the metadata can never leave a
+    working credential without a visible owner. The identity row is kept
+    (revoked) so the audit trail still resolves; only the site metadata is
+    deleted.
+    """
+    pid = _canonical_id(pid, "partner id")
+    row = repo.get_partner_site(pid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="partner site not found")
+    repo.revoke_identity(row["identity_id"])
+    repo.delete_partner_site(pid)
+    audit_event("admin.partner.delete", principal["id"], "success", {
+        "partner_id": pid, "space_id": row["space_id"],
+        "identity_id": row["identity_id"],
+    })
+    return {"id": pid, "deleted": True, "identity_revoked": True}
 
 
 @app.post("/api/v1/admin/identities/{iid}/rotate")

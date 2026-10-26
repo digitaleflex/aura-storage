@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0005_object_revisions"
+SCHEMA_VERSION = "0007_space_metering"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -58,7 +58,7 @@ ADDED_COLUMNS = {
         # Transfer engine (M03): declared size is kept distinct from the verified
         # ``size_bytes`` (which stays -1 until commit), and an optional opaque
         # client idempotency key dedupes accidental double submits.
-        ("expected_size_bytes", "INTEGER"),
+        ("expected_size_bytes", "BIGINT"),
         ("idempotency_key", "TEXT"),
         # Multipart session (#72): backend upload id while parts are being
         # sent (cleared once completed) and the server-chosen part size.
@@ -268,6 +268,67 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
         "purged_at INTEGER, "
         "UNIQUE (object_id, revision_number))"
     )
+    # Partner integrations: metadata only, the credential stays the service
+    # identity. Created here for upgraded catalogues (schema.sql runs only on a
+    # fresh database).
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS partner_sites ("
+        "id TEXT PRIMARY KEY, "
+        "space_id TEXT NOT NULL REFERENCES spaces(id), "
+        "identity_id TEXT NOT NULL REFERENCES service_identities(id), "
+        "name TEXT NOT NULL, "
+        "site_url TEXT NOT NULL, "
+        "default_ttl_seconds INTEGER, "
+        "notes TEXT NOT NULL DEFAULT '', "
+        "created_by TEXT, "
+        "created_at INTEGER NOT NULL, "
+        "updated_at INTEGER NOT NULL, "
+        "UNIQUE (space_id, name))"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_partner_sites_space "
+        "ON partner_sites(space_id)"
+    )
+    # Monthly quotas and usage per space: created here for upgraded catalogues.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS space_quotas ("
+        "space_id TEXT PRIMARY KEY REFERENCES spaces(id), "
+        "storage_bytes INTEGER, "
+        "egress_bytes_monthly INTEGER, "
+        "updated_at INTEGER NOT NULL, "
+        "updated_by TEXT)"
+    )
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS space_usage_monthly ("
+        "space_id TEXT NOT NULL REFERENCES spaces(id), "
+        "period TEXT NOT NULL, "
+        "egress_bytes INTEGER NOT NULL DEFAULT 0, "
+        "download_intents INTEGER NOT NULL DEFAULT 0, "
+        "preview_intents INTEGER NOT NULL DEFAULT 0, "
+        "share_redemptions INTEGER NOT NULL DEFAULT 0, "
+        "updated_at INTEGER NOT NULL, "
+        "PRIMARY KEY (space_id, period))"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_space_usage_period "
+        "ON space_usage_monthly(period)"
+    )
+    # Byte counts must be 64-bit: a 5 GiB object already overflows PostgreSQL's
+    # INTEGER (2 147 483 647), and quotas are set in TiB. SQLite INTEGER is
+    # already 64-bit, so only PostgreSQL needs the cast. Idempotent: casting a
+    # BIGINT column to BIGINT is a no-op.
+    if runner.dialect == "postgres":
+        for table, column in (
+            ("objects", "size_bytes"),
+            ("objects", "expected_size_bytes"),
+            ("space_quotas", "storage_bytes"),
+            ("space_quotas", "egress_bytes_monthly"),
+            ("space_usage_monthly", "egress_bytes"),
+        ):
+            if column in runner.columns(table):
+                runner.exec(
+                    f"ALTER TABLE {table} ALTER COLUMN {column} TYPE BIGINT"
+                )
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_revisions_object "
         "ON object_revisions(object_id, revision_number)"

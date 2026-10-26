@@ -32,6 +32,10 @@ const KNOWN_DETAILS: Record<string, string> = {
   "expires_in exceeds the maximum share lifetime":
     "La durée demandée dépasse la durée maximale autorisée pour un lien.",
   "share not found": "Ce lien n'existe plus ou a déjà été révoqué.",
+  "storage quota exceeded":
+    "Le quota de stockage de cet espace est atteint : supprimez des objets ou augmentez le quota.",
+  "monthly egress quota exceeded":
+    "Le quota de trafic mensuel de cet espace est atteint : attendez le mois suivant ou augmentez le quota.",
   "invalid credentials": "Identifiant ou mot de passe incorrect.",
   "too many login attempts": "Trop de tentatives de connexion. Patientez une minute.",
   "master mode required": "Activez le mode maître pour cette action.",

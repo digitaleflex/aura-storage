@@ -7,7 +7,9 @@ import type {
   AuditQuery,
   BucketListedItem,
   IdentityItem,
+  PartnerSite,
   SpaceItem,
+  SpaceQuota,
 } from "../lib/api";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
@@ -36,6 +38,58 @@ function identityState(item: IdentityItem): { label: string; className: string }
     return { label: "Expirée", className: "chip chip-warn" };
   }
   return { label: "Active", className: "chip chip-ok" };
+}
+
+/**
+ * State of a partner integration, derived from its identity: the site itself
+ * has no lifecycle, the key does.
+ */
+function partnerState(site: PartnerSite): { label: string; className: string } {
+  if (site.identity.revoked_at) {
+    return { label: "Clé révoquée", className: "chip chip-muted" };
+  }
+  if (site.identity.expires_at && site.identity.expires_at * 1000 < Date.now()) {
+    return { label: "Clé expirée", className: "chip chip-warn" };
+  }
+  return { label: "Clé active", className: "chip chip-ok" };
+}
+
+const GIB = 1024 ** 3;
+
+/** Percentage of a quota used, or null when no quota is configured. */
+function quotaPct(used: number, limit: number | null): number | null {
+  if (limit === null || limit <= 0) return null;
+  return Math.min(999, Math.round((used / limit) * 100));
+}
+
+/** Chip class for a quota: warn at 80 %, danger at 100 %. */
+function quotaChip(pct: number | null): { label: string; className: string } | null {
+  if (pct === null) return null;
+  if (pct >= 100) return { label: `${pct} % · dépassé`, className: "chip chip-warn" };
+  if (pct >= 80) return { label: `${pct} % · proche`, className: "chip chip-warn" };
+  return { label: `${pct} %`, className: "chip chip-muted" };
+}
+
+function gibToBytes(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * GIB);
+}
+
+function bytesToGib(value: number | null): string {
+  if (value === null || value <= 0) return "";
+  const n = value / GIB;
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
+/** Seconds -> a short human duration for the media-TTL recommendation. */
+function formatTtl(seconds: number | null): string {
+  if (!seconds) return "—";
+  if (seconds % 3600 === 0) return `${seconds / 3600} h`;
+  if (seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds} s`;
 }
 
 /** Active/disabled chip shared by applications and spaces. */
@@ -83,6 +137,7 @@ const ADMIN_TABS = [
   { id: "apps", label: "Applications et espaces" },
   { id: "buckets", label: "Buckets" },
   { id: "identities", label: "Identités de service" },
+  { id: "partners", label: "Intégrations" },
 ] as const;
 
 type AdminTab = (typeof ADMIN_TABS)[number]["id"];
@@ -231,6 +286,191 @@ function EditSpaceDialog({
   );
 }
 
+/** Edit the trust metadata of a partner site. The key and the space are fixed. */
+function EditPartnerDialog({
+  site,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  site: PartnerSite;
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (patch: {
+    name: string;
+    site_url: string;
+    default_ttl_seconds: number | null;
+    notes: string;
+  }) => void;
+}) {
+  const [name, setName] = useState(site.name);
+  const [siteUrl, setSiteUrl] = useState(site.site_url);
+  const [ttl, setTtl] = useState(
+    site.default_ttl_seconds === null ? "" : String(site.default_ttl_seconds),
+  );
+  const [notes, setNotes] = useState(site.notes);
+  const trimmedName = name.trim();
+  const trimmedUrl = siteUrl.trim();
+  const parsedTtl = Number.parseInt(ttl, 10);
+  const ttlInvalid = ttl.trim() !== "" && (!Number.isFinite(parsedTtl) || parsedTtl < 60);
+  const invalid =
+    trimmedName.length === 0 || trimmedName.length > 63 || trimmedUrl.length < 8;
+  return (
+    <Dialog open title={`Modifier ${site.name}`} onClose={onClose}>
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (invalid || ttlInvalid) return;
+          onSubmit({
+            name: trimmedName,
+            site_url: trimmedUrl,
+            default_ttl_seconds: ttl.trim() === "" ? null : parsedTtl,
+            notes: notes.trim(),
+          });
+        }}
+      >
+        <label className="field">
+          <span>Nom du site</span>
+          <input
+            type="text"
+            value={name}
+            maxLength={63}
+            required
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Origine (https)</span>
+          <input
+            type="url"
+            value={siteUrl}
+            required
+            onChange={(e) => setSiteUrl(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>TTL média conseillé (secondes, vide = aucun)</span>
+          <input
+            type="number"
+            min="60"
+            max="604800"
+            value={ttl}
+            onChange={(e) => setTtl(e.target.value)}
+            aria-invalid={ttlInvalid ? "true" : undefined}
+          />
+        </label>
+        <label className="field">
+          <span>Notes</span>
+          <textarea
+            rows={3}
+            value={notes}
+            maxLength={2000}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </label>
+        <p className="muted">
+          Espace et clé non modifiables : pour changer d'espace, créez une
+          nouvelle intégration et révoquez l'ancienne.
+        </p>
+        <div className="dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>
+            Annuler
+          </button>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={invalid || ttlInvalid || pending}
+          >
+            {pending ? "Enregistrement…" : "Enregistrer"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+/** Monthly storage/egress ceilings for one space. Empty means "no quota". */
+function SpaceQuotasDialog({
+  space,
+  quota,
+  storedBytes,
+  egressBytes,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  space: SpaceItem;
+  quota: SpaceQuota;
+  storedBytes: number;
+  egressBytes: number;
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (input: {
+    storage_bytes: number | null;
+    egress_bytes_monthly: number | null;
+  }) => void;
+}) {
+  const [storage, setStorage] = useState(bytesToGib(quota.storage_bytes));
+  const [egress, setEgress] = useState(bytesToGib(quota.egress_bytes_monthly));
+  const invalid =
+    (storage.trim() !== "" && gibToBytes(storage) === null) ||
+    (egress.trim() !== "" && gibToBytes(egress) === null);
+  return (
+    <Dialog open title={`Quotas — ${space.name}`} onClose={onClose}>
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (invalid) return;
+          onSubmit({
+            storage_bytes: gibToBytes(storage),
+            egress_bytes_monthly: gibToBytes(egress),
+          });
+        }}
+      >
+        <p className="muted">
+          Usage actuel : {formatBytes(storedBytes)} stockés et{" "}
+          {formatBytes(egressBytes)} de trafic estimé ce mois. Le stockage est
+          refusé au-delà de son quota ; le trafic est estimé à partir des
+          intentions émises.
+        </p>
+        <label className="field">
+          <span>Quota de stockage (Go, vide = aucun)</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={storage}
+            onChange={(e) => setStorage(e.target.value)}
+            aria-invalid={storage.trim() !== "" && gibToBytes(storage) === null}
+          />
+        </label>
+        <label className="field">
+          <span>Quota de trafic mensuel (Go, vide = aucun)</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={egress}
+            onChange={(e) => setEgress(e.target.value)}
+            aria-invalid={egress.trim() !== "" && gibToBytes(egress) === null}
+          />
+        </label>
+        <div className="dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>
+            Annuler
+          </button>
+          <button type="submit" className="btn btn-primary" disabled={invalid || pending}>
+            {pending ? "Enregistrement…" : "Enregistrer"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 /** Administration console: registries plus `admin:write` mutations. */
 export function AdminPage() {
   const { csrf } = useAuth();
@@ -250,6 +490,7 @@ export function AdminPage() {
   const [oneTimeToken, setOneTimeToken] = useState<string | null>(null);
   const [editingApp, setEditingApp] = useState<ApplicationItem | null>(null);
   const [editingSpace, setEditingSpace] = useState<SpaceItem | null>(null);
+  const [editingQuotas, setEditingQuotas] = useState<SpaceItem | null>(null);
 
   // Create-application form
   const [appName, setAppName] = useState("");
@@ -263,6 +504,16 @@ export function AdminPage() {
   const [idSpace, setIdSpace] = useState("");
   const [idScopes, setIdScopes] = useState<string[]>(["objects:read"]);
   const [idTtlDays, setIdTtlDays] = useState("");
+  // Create-partner form (site metadata + its dedicated identity)
+  const [partnerName, setPartnerName] = useState("");
+  const [partnerUrl, setPartnerUrl] = useState("");
+  const [partnerSpace, setPartnerSpace] = useState("");
+  const [partnerScopes, setPartnerScopes] = useState<string[]>(["objects:read"]);
+  const [partnerTtlDays, setPartnerTtlDays] = useState("");
+  const [partnerMediaTtl, setPartnerMediaTtl] = useState("900");
+  const [partnerNotes, setPartnerNotes] = useState("");
+  const [editingPartner, setEditingPartner] = useState<PartnerSite | null>(null);
+  const [copiedPartnerId, setCopiedPartnerId] = useState<string | null>(null);
   // Register-bucket form
   const [bucketSpace, setBucketSpace] = useState("");
   const [bucketName, setBucketName] = useState("");
@@ -296,6 +547,12 @@ export function AdminPage() {
   const identities = useQuery({
     queryKey: ["admin", "identities"],
     queryFn: () => api.listIdentities(),
+    enabled: canAdmin,
+    retry: false,
+  });
+  const partnerSites = useQuery({
+    queryKey: ["admin", "partner-sites"],
+    queryFn: () => api.listPartnerSites(),
     enabled: canAdmin,
     retry: false,
   });
@@ -472,6 +729,24 @@ export function AdminPage() {
     onError: (err) => fail(err, "Modification de l'espace impossible."),
   });
 
+  const setSpaceQuotas = useMutation({
+    mutationFn: (input: {
+      id: string;
+      storage_bytes: number | null;
+      egress_bytes_monthly: number | null;
+    }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      const { id, ...quotas } = input;
+      return api.setSpaceQuotas(id, quotas, csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      setEditingQuotas(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Enregistrement des quotas impossible."),
+  });
+
   const setSpaceStatus = useMutation({
     mutationFn: (input: { id: string; status: string }) => {
       if (!csrf) throw new Error("Session expirée.");
@@ -529,6 +804,75 @@ export function AdminPage() {
       refreshAdmin();
     },
     onError: (err) => fail(err, "Création d'identité impossible."),
+  });
+
+  const createPartner = useMutation({
+    mutationFn: () => {
+      if (!csrf) throw new Error("Session expirée.");
+      const body = {
+        name: partnerName.trim(),
+        site_url: partnerUrl.trim(),
+        space_id: partnerSpace,
+        scopes: partnerScopes,
+        notes: partnerNotes.trim(),
+      } as {
+        name: string;
+        site_url: string;
+        space_id: string;
+        scopes: string[];
+        notes: string;
+        ttl_seconds?: number;
+        default_ttl_seconds?: number;
+      };
+      const days = Number.parseInt(partnerTtlDays, 10);
+      if (Number.isFinite(days) && days > 0) body.ttl_seconds = days * 86400;
+      const media = Number.parseInt(partnerMediaTtl, 10);
+      if (Number.isFinite(media) && media >= 60) body.default_ttl_seconds = media;
+      return api.createPartnerSite(body, csrf);
+    },
+    onSuccess: (data) => {
+      setError(null);
+      setPartnerName("");
+      setPartnerUrl("");
+      setPartnerNotes("");
+      setPartnerTtlDays("");
+      setPartnerMediaTtl("900");
+      setOneTimeToken(data.token);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Création du site partenaire impossible."),
+  });
+
+  const updatePartner = useMutation({
+    mutationFn: (input: {
+      id: string;
+      name: string;
+      site_url: string;
+      default_ttl_seconds: number | null;
+      notes: string;
+    }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      const { id, ...patch } = input;
+      return api.updatePartnerSite(id, patch, csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      setEditingPartner(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Mise à jour du site partenaire impossible."),
+  });
+
+  const deletePartner = useMutation({
+    mutationFn: (id: string) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.deletePartnerSite(id, csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Suppression du site partenaire impossible."),
   });
 
   const rotate = useMutation({
@@ -738,9 +1082,11 @@ export function AdminPage() {
           <h2 id="admin-usage-title">Consommation</h2>
         </div>
         <p className="muted">
-          Valeurs réelles du catalogue, mesurées à l'instant indiqué. Les
-          octets comptent les objets vérifiés uniquement ; aucune mesure de
-          bande passante ni de capacité totale n'existe hors ligne.
+          Stockage réel du catalogue (objets vérifiés). Le trafic est une
+          <strong> estimation</strong> : AURA ne proxifie pas les octets, donc
+          chaque intention de téléchargement/aperçu et chaque ouverture de
+          partage compte la taille de l'objet une fois. Les quotas sont
+          mensuels (UTC) ; vide = aucun quota.
         </p>
         {usage.isError ? (
           <LoadError
@@ -765,6 +1111,10 @@ export function AdminPage() {
               <div className="stat">
                 <div className="value">{formatBytes(usage.data.limits.max_object_bytes)}</div>
                 <div className="label">Plafond par objet</div>
+              </div>
+              <div className="stat">
+                <div className="value">{formatBytes(usage.data.totals.egress_bytes_month)}</div>
+                <div className="label">Trafic estimé ({usage.data.period})</div>
               </div>
               <div className="stat">
                 <div className="value">{usage.data.limits.max_pending_intents}</div>
@@ -803,24 +1153,63 @@ export function AdminPage() {
                   <tr>
                     <th>Espace</th>
                     <th>Application</th>
-                    <th>Octets vérifiés</th>
-                    <th>Disponibles</th>
+                    <th>Stockage / quota</th>
+                    <th>Trafic du mois / quota</th>
+                    <th>Objets dispo.</th>
                     <th>En attente</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {usage.data.spaces.map((entry) => (
-                    <tr key={entry.space_id}>
-                      <td>
-                        {entry.space_name}{" "}
-                        <span className="muted">({entry.environment})</span>
-                      </td>
-                      <td>{entry.application_name ?? "—"}</td>
-                      <td className="num">{formatBytes(entry.stored_bytes)}</td>
-                      <td className="num">{entry.available_count}</td>
-                      <td className="num">{entry.pending_count}</td>
-                    </tr>
-                  ))}
+                  {usage.data.spaces.map((entry) => {
+                    const storageChip = quotaChip(
+                      quotaPct(entry.stored_bytes, entry.quota.storage_bytes),
+                    );
+                    const egressChip = quotaChip(
+                      quotaPct(
+                        entry.month.egress_bytes,
+                        entry.quota.egress_bytes_monthly,
+                      ),
+                    );
+                    return (
+                      <tr key={entry.space_id}>
+                        <td>
+                          {entry.space_name}{" "}
+                          <span className="muted">({entry.environment})</span>
+                        </td>
+                        <td>{entry.application_name ?? "—"}</td>
+                        <td className="num">
+                          {formatBytes(entry.stored_bytes)}
+                          {entry.quota.storage_bytes !== null ? (
+                            <span className="table-sub muted">
+                              quota {formatBytes(entry.quota.storage_bytes)}{" "}
+                              {storageChip ? (
+                                <span className={storageChip.className}>
+                                  {storageChip.label}
+                                </span>
+                              ) : null}
+                            </span>
+                          ) : (
+                            <span className="table-sub muted">sans quota</span>
+                          )}
+                        </td>
+                        <td className="num">
+                          {formatBytes(entry.month.egress_bytes)}
+                          <span className="table-sub muted">
+                            {entry.quota.egress_bytes_monthly !== null
+                              ? `quota ${formatBytes(entry.quota.egress_bytes_monthly)} `
+                              : "sans quota · "}
+                            {egressChip ? (
+                              <span className={egressChip.className}>
+                                {egressChip.label}
+                              </span>
+                            ) : null}
+                          </span>
+                        </td>
+                        <td className="num">{entry.available_count}</td>
+                        <td className="num">{entry.pending_count}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             ) : (
@@ -1557,6 +1946,13 @@ export function AdminPage() {
                           >
                             Modifier
                           </button>
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            onClick={() => setEditingQuotas(s)}
+                          >
+                            Quotas
+                          </button>
                           <ConfirmAction
                             label={disabled ? "Activer" : "Désactiver"}
                             title={disabled ? "Activer" : "Désactiver"}
@@ -1904,6 +2300,289 @@ export function AdminPage() {
         )}
       </section>
 
+      <section
+        className="panel"
+        aria-labelledby="admin-partners-title"
+        hidden={tab !== "partners"}
+      >
+        <h2 id="admin-partners-title">Intégrations partenaires</h2>
+        <p className="muted">
+          Un site partenaire consomme un espace avec sa propre clé de service.
+          L'URL permanente reste chez le partenaire
+          (<span className="mono">https://son-site/media/&lt;oid&gt;</span>) ; AURA
+          ne fournit que la clé et la durée de signature conseillée. La clé n'est
+          affichée qu'une fois, à la création ou à la rotation.
+        </p>
+        {canWrite ? (
+          <form
+            className="form form-inline"
+            onSubmit={(e) => {
+              e.preventDefault();
+              createPartner.mutate();
+            }}
+          >
+            <label className="field">
+              <span>Nom du site</span>
+              <input
+                type="text"
+                value={partnerName}
+                onChange={(e) => setPartnerName(e.target.value)}
+                placeholder="Cours Next.js"
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Origine (https)</span>
+              <input
+                type="url"
+                value={partnerUrl}
+                onChange={(e) => setPartnerUrl(e.target.value)}
+                placeholder="https://cours.example.com"
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Espace</span>
+              <select
+                value={partnerSpace}
+                onChange={(e) => setPartnerSpace(e.target.value)}
+                required
+              >
+                <option value="">— choisir —</option>
+                {spaceItems.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.environment})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <fieldset className="field scopes-field">
+              <legend>Portées</legend>
+              {SERVICE_SCOPES.map((scope) => (
+                <label key={scope} className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={partnerScopes.includes(scope)}
+                    onChange={(e) =>
+                      setPartnerScopes((current) =>
+                        e.target.checked
+                          ? [...current, scope]
+                          : current.filter((s) => s !== scope),
+                      )
+                    }
+                  />
+                  {scope}
+                </label>
+              ))}
+            </fieldset>
+            <label className="field">
+              <span>Expiration de la clé (jours, optionnel)</span>
+              <input
+                type="number"
+                min="1"
+                value={partnerTtlDays}
+                onChange={(e) => setPartnerTtlDays(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>TTL média conseillé (secondes)</span>
+              <input
+                type="number"
+                min="60"
+                max="604800"
+                value={partnerMediaTtl}
+                onChange={(e) => setPartnerMediaTtl(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Notes (optionnel)</span>
+              <input
+                type="text"
+                value={partnerNotes}
+                onChange={(e) => setPartnerNotes(e.target.value)}
+                placeholder="Contrat, contact, périmètre…"
+              />
+            </label>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={
+                createPartner.isPending ||
+                spaceItems.length === 0 ||
+                partnerScopes.length === 0
+              }
+            >
+              Créer le site partenaire
+            </button>
+          </form>
+        ) : null}
+        {partnerSites.isError ? (
+          <LoadError
+            message="Intégrations indisponibles."
+            error={partnerSites.error}
+            retrying={partnerSites.isFetching}
+            onRetry={() => void partnerSites.refetch()}
+          />
+        ) : partnerSites.isPending ? (
+          <Loading label="Chargement des intégrations" />
+        ) : (partnerSites.data?.items.length ?? 0) === 0 ? (
+          <p className="empty">
+            Aucun site partenaire. Créez-en un pour obtenir une clé dédiée et sa
+            durée de signature conseillée.
+          </p>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Site</th>
+                  <th scope="col">Espace</th>
+                  <th scope="col">Clé</th>
+                  <th scope="col">TTL média</th>
+                  <th scope="col">Dernier appel</th>
+                  {canWrite ? (
+                    <th scope="col">
+                      <span className="visually-hidden">Actions</span>
+                    </th>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody>
+                {partnerSites.data?.items.map((site) => {
+                  const state = partnerState(site);
+                  const revoked = Boolean(site.identity.revoked_at);
+                  return (
+                    <tr key={site.id}>
+                      <td className="name">
+                        {site.name}
+                        <span className="muted mono table-sub">
+                          {site.site_url}/media/&lt;oid&gt;
+                        </span>
+                        {site.notes ? (
+                          <span className="muted table-sub">{site.notes}</span>
+                        ) : null}
+                      </td>
+                      <td className="muted">
+                        {spaceNames.get(site.space_id) ?? site.space_id}
+                      </td>
+                      <td>
+                        <span className={state.className}>{state.label}</span>
+                        <span className="muted table-sub">
+                          {site.identity.scopes.join(", ") || "—"}
+                          {site.identity.expires_at
+                            ? ` · expire ${formatTs(site.identity.expires_at)}`
+                            : ""}
+                        </span>
+                      </td>
+                      <td className="num muted">
+                        {formatTtl(site.default_ttl_seconds)}
+                      </td>
+                      <td className="num muted">
+                        {formatTs(site.identity.last_used_at)}
+                      </td>
+                      {canWrite ? (
+                        <td className="row-actions">
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            onClick={() => {
+                              void navigator.clipboard
+                                .writeText(`${site.site_url}/media/`)
+                                .then(() => {
+                                  setError(null);
+                                  setCopiedPartnerId(site.id);
+                                })
+                                .catch(() =>
+                                  setError(
+                                    "Copie impossible dans ce navigateur.",
+                                  ),
+                                );
+                            }}
+                          >
+                            {copiedPartnerId === site.id
+                              ? "Préfixe copié"
+                              : "Copier l'URL"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            onClick={() => setEditingPartner(site)}
+                          >
+                            Modifier
+                          </button>
+                          <ConfirmAction
+                            label="Rotation"
+                            title="Faire tourner la clé"
+                            message={
+                              <>
+                                Générer une nouvelle clé pour{" "}
+                                <strong>{site.name}</strong> ? L'ancienne cesse
+                                immédiatement de fonctionner ; le site devra être
+                                redéployé avec la nouvelle.
+                              </>
+                            }
+                            confirmLabel="Rotation"
+                            className="btn btn-small"
+                            pending={rotate.isPending}
+                            disabled={revoked}
+                            onConfirm={() => rotate.mutate(site.identity_id)}
+                          />
+                          <ConfirmAction
+                            label="Révoquer"
+                            title="Révoquer la clé"
+                            message={
+                              <>
+                                Révoquer l'accès de <strong>{site.name}</strong> ?
+                                Toute requête avec cette clé échouera
+                                immédiatement.
+                              </>
+                            }
+                            confirmLabel="Révoquer"
+                            danger
+                            className="btn btn-small"
+                            pending={revoke.isPending}
+                            disabled={revoked}
+                            onConfirm={() => revoke.mutate(site.identity_id)}
+                          />
+                          <ConfirmAction
+                            label="Supprimer"
+                            title="Supprimer l'intégration"
+                            message={
+                              <>
+                                Supprimer <strong>{site.name}</strong> ? Sa clé
+                                sera révoquée immédiatement et l'entrée
+                                disparaîtra de la console. L'historique d'audit
+                                est conservé.
+                              </>
+                            }
+                            confirmLabel="Supprimer"
+                            danger
+                            className="btn btn-small"
+                            pending={deletePartner.isPending}
+                            onConfirm={() => deletePartner.mutate(site.id)}
+                          />
+                        </td>
+                      ) : null}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {editingPartner ? (
+        <EditPartnerDialog
+          site={editingPartner}
+          pending={updatePartner.isPending}
+          onClose={() => setEditingPartner(null)}
+          onSubmit={(patch) =>
+            updatePartner.mutate({ id: editingPartner.id, ...patch })
+          }
+        />
+      ) : null}
+
       {editingApp ? (
         <EditApplicationDialog
           application={editingApp}
@@ -1912,6 +2591,32 @@ export function AdminPage() {
           onSubmit={(name) => updateApp.mutate({ id: editingApp.id, name })}
         />
       ) : null}
+
+      {editingQuotas ? (() => {
+        const entry = usage.data?.spaces.find(
+          (e) => e.space_id === editingQuotas.id,
+        );
+        return (
+          <SpaceQuotasDialog
+            space={editingQuotas}
+            quota={
+              entry?.quota ?? {
+                storage_bytes: null,
+                egress_bytes_monthly: null,
+                updated_at: null,
+                updated_by: null,
+              }
+            }
+            storedBytes={entry?.stored_bytes ?? 0}
+            egressBytes={entry?.month.egress_bytes ?? 0}
+            pending={setSpaceQuotas.isPending}
+            onClose={() => setEditingQuotas(null)}
+            onSubmit={(input) =>
+              setSpaceQuotas.mutate({ id: editingQuotas.id, ...input })
+            }
+          />
+        );
+      })() : null}
 
       {editingSpace ? (
         <EditSpaceDialog

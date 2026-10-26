@@ -402,6 +402,55 @@ class Repository:
         )
         self.conn.commit()
 
+    # -- partner integrations -------------------------------------------
+    _PARTNER_SELECT = (
+        "SELECT p.*, i.name AS identity_name, i.scopes AS identity_scopes, "
+        "i.expires_at AS identity_expires_at, i.last_used_at AS identity_last_used_at, "
+        "i.revoked_at AS identity_revoked_at, i.rotated_at AS identity_rotated_at "
+        "FROM partner_sites p JOIN service_identities i ON i.id = p.identity_id "
+    )
+
+    def create_partner_site(
+        self, pid: str, space_id: str, identity_id: str, name: str, site_url: str,
+        default_ttl_seconds: Optional[int], notes: str, created_by: Optional[str],
+    ) -> str:
+        now = self.now()
+        self.conn.execute(
+            "INSERT INTO partner_sites (id, space_id, identity_id, name, site_url, "
+            "default_ttl_seconds, notes, created_by, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (pid, space_id, identity_id, name, site_url, default_ttl_seconds,
+             notes, created_by, now, now),
+        )
+        self.conn.commit()
+        return pid
+
+    def list_partner_sites(self) -> list:
+        rows = self.conn.execute(
+            self._PARTNER_SELECT + "ORDER BY p.created_at"
+        ).fetchall()
+        return [_as_dict(r) for r in rows]
+
+    def get_partner_site(self, pid: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            self._PARTNER_SELECT + "WHERE p.id = ?", (pid,)
+        ).fetchone())
+
+    def update_partner_site(
+        self, pid: str, name: str, site_url: str,
+        default_ttl_seconds: Optional[int], notes: str,
+    ) -> None:
+        self.conn.execute(
+            "UPDATE partner_sites SET name = ?, site_url = ?, "
+            "default_ttl_seconds = ?, notes = ?, updated_at = ? WHERE id = ?",
+            (name, site_url, default_ttl_seconds, notes, self.now(), pid),
+        )
+        self.conn.commit()
+
+    def delete_partner_site(self, pid: str) -> None:
+        self.conn.execute("DELETE FROM partner_sites WHERE id = ?", (pid,))
+        self.conn.commit()
+
     def touch_identity(self, iid: str, ts: int) -> None:
         self.conn.execute(
             "UPDATE service_identities SET last_used_at = ? WHERE id = ?", (ts, iid)
@@ -1074,6 +1123,59 @@ class Repository:
             "stored_bytes": int(row["bytes"]),
             "pending_count": pending,
         }
+
+    def get_space_quotas(self, sid: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM space_quotas WHERE space_id = ?", (sid,)
+        ).fetchone())
+
+    def set_space_quotas(
+        self, sid: str, storage_bytes: Optional[int],
+        egress_bytes_monthly: Optional[int], updated_by: Optional[str],
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO space_quotas (space_id, storage_bytes, "
+            "egress_bytes_monthly, updated_at, updated_by) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(space_id) DO UPDATE SET "
+            "storage_bytes = excluded.storage_bytes, "
+            "egress_bytes_monthly = excluded.egress_bytes_monthly, "
+            "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+            (sid, storage_bytes, egress_bytes_monthly, self.now(), updated_by),
+        )
+        self.conn.commit()
+
+    def get_space_usage_monthly(self, sid: str, period: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM space_usage_monthly WHERE space_id = ? AND period = ?",
+            (sid, period),
+        ).fetchone())
+
+    def record_space_egress(
+        self, sid: str, period: str, kind: str, size_bytes: int,
+    ) -> None:
+        """Add one transfer to the month. ``kind`` selects the counter column.
+
+        Called only after a successful intent/redemption. The object size is the
+        estimate of bytes transferred: AURA never proxies the bytes, so this is
+        a planning figure, not an edge measurement.
+        """
+        column = {
+            "download": "download_intents",
+            "preview": "preview_intents",
+            "share": "share_redemptions",
+        }[kind]
+        self.conn.execute(
+            "INSERT INTO space_usage_monthly (space_id, period, egress_bytes, "
+            f"{column}, updated_at) VALUES (?, ?, ?, 1, ?) "
+            "ON CONFLICT(space_id, period) DO UPDATE SET "
+            # Qualify the target: PostgreSQL reads a bare RHS `egress_bytes` as
+            # ambiguous between the target row and `excluded`.
+            "egress_bytes = space_usage_monthly.egress_bytes + excluded.egress_bytes, "
+            f"{column} = space_usage_monthly.{column} + 1, "
+            "updated_at = excluded.updated_at",
+            (sid, period, max(0, int(size_bytes)), self.now()),
+        )
+        self.conn.commit()
 
     def stats(self) -> dict:
         objects = {

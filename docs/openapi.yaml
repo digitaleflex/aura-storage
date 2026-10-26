@@ -1454,6 +1454,113 @@ paths:
         "404": { description: Space not found }
         "409": { description: Bucket name already in use }
         "422": { description: Invalid bucket name }
+  /api/v1/admin/spaces/{sid}/quotas:
+    put:
+      summary: Set the monthly quotas of a space (admin:write)
+      tags: [platform]
+      description: >-
+        Storage is enforced at upload intent (`429 storage quota exceeded`).
+        Egress is an estimate derived from issued intents and share redemptions
+        (AURA never proxies object bytes), enforced before issuing a new intent
+        or redeeming a share (`429 monthly egress quota exceeded`). An explicit
+        null clears that quota; zero or absent never blocks anything.
+      parameters:
+        - $ref: "#/components/parameters/SpaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                storage_bytes: { type: integer, minimum: 0, nullable: true }
+                egress_bytes_monthly: { type: integer, minimum: 0, nullable: true }
+      responses:
+        "200": { description: Quotas stored and returned }
+        "401": { description: Authentication required }
+        "404": { description: Space not found }
+        "422": { description: Negative quota }
+  /api/v1/admin/partner-sites:
+    post:
+      summary: Create a partner integration and its service identity (admin:write)
+      tags: [identities]
+      description: >-
+        Creates the site metadata and a dedicated data-plane identity in one
+        step. The identity token is returned exactly once; creation and
+        revocation stay human-only. A failed metadata insert revokes the fresh
+        identity so no orphan credential keeps working.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, site_url, space_id]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 63 }
+                site_url: { type: string, description: Normalized to an https origin without credentials, query or fragment }
+                space_id: { $ref: "#/components/schemas/Uuid4" }
+                scopes:
+                  type: array
+                  items: { type: string, enum: [objects:read, objects:write, objects:delete] }
+                ttl_seconds: { type: integer, minimum: 60, nullable: true }
+                default_ttl_seconds: { type: integer, minimum: 60, maximum: 604800, nullable: true, description: Recommended media signature TTL for the partner's stable redirect }
+                notes: { type: string, maxLength: 2000 }
+      responses:
+        "200": { description: Site created; response contains the one-time identity token }
+        "401": { description: Authentication required }
+        "404": { description: Space not found }
+        "409": { description: "Duplicate site name in the space, or inactive space" }
+        "422": { description: "Invalid https origin, unknown/admin scope, or no scope" }
+    get:
+      summary: List partner integrations with identity state (admin:read)
+      tags: [identities]
+      responses:
+        "200": { description: Sites and their identity state; never a secret }
+        "401": { description: Authentication required }
+  /api/v1/admin/partner-sites/{pid}:
+    patch:
+      summary: Edit partner-site metadata (admin:write)
+      tags: [identities]
+      description: Identity and space are immutable; move a site by creating a new integration and revoking the old key.
+      parameters:
+        - name: pid
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 63, nullable: true }
+                site_url: { type: string, nullable: true }
+                default_ttl_seconds: { type: integer, minimum: 60, maximum: 604800, nullable: true }
+                notes: { type: string, maxLength: 2000, nullable: true }
+      responses:
+        "200": { description: Updated site metadata }
+        "401": { description: Authentication required }
+        "404": { description: Partner site not found }
+        "409": { description: Duplicate site name in the space }
+        "422": { description: Invalid https origin or TTL }
+    delete:
+      summary: Delete a partner integration and revoke its key (admin:write)
+      tags: [identities]
+      description: Revocation happens first; the identity row is kept (revoked) so audit entries still resolve.
+      parameters:
+        - name: pid
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+      responses:
+        "200": { description: Metadata deleted and identity revoked }
+        "401": { description: Authentication required }
+        "404": { description: Partner site not found }
   /api/v1/admin/buckets:
     get:
       summary: List every bucket with its space/application attachment (admin:read)

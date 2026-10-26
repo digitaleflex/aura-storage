@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS objects (
   object_key TEXT NOT NULL,
   display_name TEXT NOT NULL,
   content_type TEXT NOT NULL,
-  size_bytes INTEGER NOT NULL DEFAULT -1,
+  size_bytes BIGINT NOT NULL DEFAULT -1,
   checksum_sha256 TEXT NOT NULL DEFAULT '',
   folder_id TEXT REFERENCES folders(id),
   owner_id TEXT REFERENCES users(id),
@@ -115,6 +115,49 @@ CREATE TABLE IF NOT EXISTS object_shares (
   last_used_at INTEGER,
   created_at INTEGER NOT NULL
 );
+-- Partner integrations (admin console "Intégrations"). One row per external
+-- site (course platform, intranet, ...) that consumes one space through its own
+-- service identity. The identity remains the credential: rotation/revocation
+-- still happen on `service_identities`, so this table only carries the trust
+-- metadata an operator needs (site origin, default media TTL, notes). Deleting
+-- the identity leaves the row as history; it is never used for authentication.
+CREATE TABLE IF NOT EXISTS partner_sites (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL REFERENCES spaces(id),
+  identity_id TEXT NOT NULL REFERENCES service_identities(id),
+  name TEXT NOT NULL,
+  site_url TEXT NOT NULL,
+  default_ttl_seconds INTEGER,
+  notes TEXT NOT NULL DEFAULT '',
+  created_by TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (space_id, name)
+);
+-- Per-space monthly quotas (admin "Consommation"). Null means "no quota", not
+-- zero: zero would block every upload. Storage is enforced at upload intent;
+-- egress is an estimate derived from issued intents and share redemptions,
+-- because AURA never proxies object bytes.
+CREATE TABLE IF NOT EXISTS space_quotas (
+  space_id TEXT PRIMARY KEY REFERENCES spaces(id),
+  storage_bytes BIGINT,
+  egress_bytes_monthly BIGINT,
+  updated_at INTEGER NOT NULL,
+  updated_by TEXT
+);
+-- Monthly usage per space. Egress is counted when an intent is issued or a
+-- share is redeemed (`size_bytes` of the object), so it is a planning estimate,
+-- not an edge measurement. Rows are additive and never rewritten negatively.
+CREATE TABLE IF NOT EXISTS space_usage_monthly (
+  space_id TEXT NOT NULL REFERENCES spaces(id),
+  period TEXT NOT NULL,
+  egress_bytes BIGINT NOT NULL DEFAULT 0,
+  download_intents INTEGER NOT NULL DEFAULT 0,
+  preview_intents INTEGER NOT NULL DEFAULT 0,
+  share_redemptions INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (space_id, period)
+);
 -- Content revisions (docs/CONTENT-REVISIONS.md). One row per archived version of
 -- an object; the live bytes stay on `objects.object_key` and each revision owns
 -- its own `storage_key`. Bytes are copied by the application, never by S3 native
@@ -148,6 +191,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 CREATE INDEX IF NOT EXISTS idx_objects_owner ON objects(owner_id, status);
 CREATE INDEX IF NOT EXISTS idx_identities_space ON service_identities(space_id);
+CREATE INDEX IF NOT EXISTS idx_partner_sites_space ON partner_sites(space_id);
+CREATE INDEX IF NOT EXISTS idx_space_usage_period ON space_usage_monthly(period);
 CREATE INDEX IF NOT EXISTS idx_shares_object ON object_shares(object_id);
 -- Revision indexes: list one object's history, find the bytes behind a revision
 -- during orphan/reconcile scans (must NOT be mistaken for storage orphans), and
