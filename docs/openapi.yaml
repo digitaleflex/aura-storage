@@ -726,7 +726,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: "Presigned GET URL bound to Content-Disposition inline and the object content type, plus display_name, content_type and size_bytes; the client falls back to a download when the type is not renderable" }
+        "200": { description: "Presigned GET URL bound to Content-Disposition inline and the object content type, plus display_name, content_type and size_bytes; renderable types are images (except SVG), PDF, audio and video (mp4/webm/ogg, streamed with HTTP Range by the browser); the client falls back to a download when the type is not renderable" }
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }

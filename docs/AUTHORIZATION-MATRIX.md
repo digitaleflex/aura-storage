@@ -62,7 +62,7 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/objects/{oid}/commit` | `objects:write` | streaming SHA-256, idempotent; **202 `verifying`** for large objects, hashed by the verification worker (N5) |
 | POST | `/api/v1/objects/{oid}/abort` | `objects:write` | cancel a pending intent (best-effort delete); idempotent; refused on available/deleted |
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
-| POST | `/api/v1/objects/{oid}/preview-intent` | `objects:read` | presigned GET bound to `Content-Disposition: inline` (PDF/image/audio preview); same 404/409 as download-intent, plus **415** for types outside the inline allow-list (images except SVG, PDF, audio: never HTML/SVG/XML); scoped |
+| POST | `/api/v1/objects/{oid}/preview-intent` | `objects:read` | presigned GET bound to `Content-Disposition: inline` (PDF/image/audio/video preview); same 404/409 as download-intent, plus **415** for types outside the inline allow-list (images except SVG, PDF, audio, video/mp4, video/webm, video/ogg: never HTML/SVG/XML); scoped |
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |
 | POST | `/api/v1/me/master-mode` | `objects:purge`, **human only** + password re-entry | enter master mode for `AURA_MASTER_MODE_SECONDS` (900 s) on this session; failures count against the login rate limit; audited |
 | DELETE | `/api/v1/me/master-mode` | authenticated **human** | leave master mode |
