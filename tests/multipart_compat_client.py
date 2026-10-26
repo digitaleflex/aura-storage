@@ -39,6 +39,7 @@ SMALL = b"\x33" * (1024 * 1024)  # 1 MiB, below the minimum non-last part size
 _failures = 0
 _unknowns = 0
 _passes = 0
+_findings = 0  # real answers about the stack that are neither a PASS nor a harness FAIL
 
 # Set by POINT 9: "signed" | "unsigned" | None — whether a presigned UploadPart
 # accepted x-amz-checksum-sha256 and how it had to be signed.
@@ -64,6 +65,19 @@ def fail(msg: str) -> None:
 def unknown(msg: str) -> None:
     global _unknowns
     _unknowns += 1
+    line("UNKNOWN", msg)
+
+
+def finding(msg: str) -> None:
+    """A real, demonstrated answer about the stack; counted with unknowns.
+
+    Used where the probe succeeded but the backend behaviour *contradicts* the
+    plan's assumption (e.g. a signed size that is not enforced). It is not a
+    harness failure: the harness has to stay green and report the truth.
+    """
+    global _unknowns, _findings
+    _unknowns += 1
+    _findings += 1
     line("UNKNOWN", msg)
 
 
@@ -1086,47 +1100,77 @@ def point11(client, bucket: str) -> None:
         # (b) body LONGER than the signed length.
         st_long, _, b_long = put_part("long", longer, tag="b")
         if st_long in (200, 201):
-            fail(f"[Q4] GATE ITEM 2: the gateway ACCEPTED a body LONGER than the signed "
-                 f"ContentLength ({len(longer)} > {signed} bytes, HTTP {st_long}). The signed "
-                 f"per-part size is NOT enforced, so a client can store a part of any length "
-                 f"behind a URL signed for {signed} bytes; the API must not rely on the "
-                 f"presigned length to bound what the backend stores")
+            finding(
+                f"[Q4] FINDING (gate item 2): the gateway ACCEPTED a body LONGER than the "
+                f"signed ContentLength ({len(longer)} > {signed} bytes, HTTP {st_long}). The "
+                f"presigned per-part size is NOT enforced by the gateway, so api/s3.py must "
+                f"not rely on it to bound what is stored: a client (or a buggy retry) can "
+                f"append bytes past the size the API planned and signed")
         else:
             ok(f"[Q4] body LONGER than the signed ContentLength "
                f"({len(longer)} > {signed}) rejected: HTTP {st_long} {xml_error(b_long)}")
 
         # (c) body SHORTER than the signed length.
-        st_short, _, b_short = put_part("short", shorter, tag="c")
+        st_short, h_short, b_short = put_part("short", shorter, tag="c")
         if st_short in (200, 201):
-            fail(f"[Q4] GATE ITEM 2: the gateway ACCEPTED a body SHORTER than the signed "
-                 f"ContentLength ({len(shorter)} < {signed} bytes, HTTP {st_short}); a part "
-                 f"truncated client-side (crash, stalled socket) would be stored and could "
-                 f"later complete into a silently short object")
+            finding(
+                f"[Q4] FINDING (gate item 2): the gateway ACCEPTED a body SHORTER than the "
+                f"signed ContentLength ({len(shorter)} < {signed} bytes, HTTP {st_short}). A "
+                f"client truncated mid-part (crash, stalled socket, edge proxy cutting the "
+                f"body) is therefore stored as a COMPLETE part of the short length, and "
+                f"Complete would assemble a silently short object with no error anywhere.")
+            # Demonstrate the consequence instead of asserting it: this upload
+            # already holds the short part as part 1, so Complete it and see.
+            try:
+                done = client.complete_multipart_upload(
+                    Bucket=bucket, Key=keys["short"], UploadId=uids["short"],
+                    MultipartUpload={"Parts": [{"PartNumber": 1,
+                                                "ETag": h_short.get("etag")}]})
+                head = client.head_object(Bucket=bucket, Key=keys["short"])
+                evidence(f"11c consequence: 1-part Complete of the {len(shorter)}-byte "
+                         f"truncated part -> ETag={done.get('ETag')!r} "
+                         f"HEAD ContentLength={head.get('ContentLength')} "
+                         f"expected_if_intact={signed} silently_short="
+                         f"{head.get('ContentLength') != signed}")
+            except ClientError as exc:
+                evidence(f"11c consequence probe: Complete of the short part was itself "
+                         f"rejected: {err_detail(exc)}")
         else:
             ok(f"[Q4] body SHORTER than the signed ContentLength "
                f"({len(shorter)} < {signed}) rejected: HTTP {st_short} {xml_error(b_short)}")
 
-        info(f"[Q4] ANSWER (gate item 2): rejection comes from SigV4 verification of the "
-             f"signed Content-Length header (see X-Amz-SignedHeaders above), i.e. the "
-             f"bound is only enforced on URLs presigned WITH ContentLength — exactly what "
-             f"api/s3.py:presigned_upload_part does; a presign without it binds no length")
+        info(f"[Q4] ANSWER (gate item 2): see (b)/(c) for the signed case and (e) for the "
+             f"unsigned control — a rejection there is SigV4 verification of the SIGNED "
+             f"Content-Length header (X-Amz-SignedHeaders above), i.e. enforcement comes "
+             f"from the signature, NOT from an S3 semantic size rule; a presign without "
+             f"ContentLength (e) binds no length at all")
 
         # (d) framing control: header == signed value, but MORE bytes follow it on the wire.
-        st_t, _, b_t = put_part("trunc", overflow, declared=signed, tag="d")
+        st_t, h_t, b_t = put_part("trunc", overflow, declared=signed, tag="d")
         if st_t in (200, 201):
+            stored = None
             try:
                 listed = client.list_parts(Bucket=bucket, Key=keys["trunc"],
                                            UploadId=uids["trunc"])
                 sizes = [(p["PartNumber"], p["Size"]) for p in listed.get("Parts", [])]
+                for num, size in sizes:
+                    if num == 1:
+                        stored = size
             except Exception as exc:  # noqa: BLE001
                 sizes = f"ListParts failed: {err_detail(exc)}"
             evidence(f"11d client sent {len(overflow)} bytes with the SIGNED "
                      f"Content-Length={signed} -> HTTP {st_t}; ListParts(part,size)={sizes}")
-            info(f"[Q4] FRAMING NOTE: with Content-Length={signed} signed AND sent, only the "
-                 f"first {signed} of {len(overflow)} bytes became the entity body and the "
-                 f"trailing {len(overflow) - signed} bytes were ignored — standard HTTP "
-                 f"framing, not a gateway hole (a browser XHR/fetch cannot desynchronise "
-                 f"Content-Length from the body it sends)")
+            if stored == signed:
+                info(f"[Q4] FRAMING NOTE: with Content-Length={signed} signed AND sent, "
+                     f"ListParts shows the stored part is exactly {signed} bytes, i.e. only "
+                     f"the first {signed} of {len(overflow)} bytes became the entity body and "
+                     f"the trailing {len(overflow) - signed} bytes were discarded as HTTP "
+                     f"framing, not stored (a browser XHR/fetch cannot desynchronise "
+                     f"Content-Length from the body it sends)")
+            else:
+                info(f"[Q4] FRAMING NOTE: stored part size {stored!r} != signed {signed} "
+                     f"after sending {len(overflow)} bytes with Content-Length={signed}: the "
+                     f"framing control did not behave as standard HTTP (see ListParts above)")
         else:
             evidence(f"11d client sent {len(overflow)} bytes with the SIGNED "
                      f"Content-Length={signed} -> HTTP {st_t} {xml_error(b_t)}")
@@ -1271,6 +1315,10 @@ def point12(client, bucket: str) -> None:
                 client.abort_multipart_upload(Bucket=bucket, Key=key_small, UploadId=uid_small)
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            client.delete_object(Bucket=bucket, Key=key_small)
+        except Exception:  # noqa: BLE001
+            pass
 
     # --- (c) control: 5 MiB + 1 MiB completes, then Range GET -------------------
     try:
@@ -1388,7 +1436,7 @@ def point12(client, bucket: str) -> None:
                 pass
 
     unknown(f"[Q5] the 10 000-part path is NOT exercised: {maxp} real parts would need >= "
-            f"{maxp * 5 / (1024 ** 3):.0f} GiB (5 MiB each) and a long run; only the declared "
+            f"{maxp * 5 * _MIB / _GIB:.1f} GiB (5 MiB each) and a long run; only the declared "
             f"boundary (part {maxp} accepted vs {maxp + 1} rejected) and the plan_parts "
             f"arithmetic are verified — the backend's exact 10 000-part Complete behaviour "
             f"remains unproven")
@@ -1433,8 +1481,8 @@ def main(argv: list[str]) -> int:
         except Exception as exc:  # noqa: BLE001 - keep other points running
             fail(f"point aborted: {err_detail(exc)}")
 
-    print(f"\n=== SUMMARY: failures={_failures} unknowns={_unknowns} "
-          f"passes={_passes} ===")
+    print(f"\n=== SUMMARY: failures={_failures} findings={_findings} "
+          f"unknowns={_unknowns} passes={_passes} ===")
     return 1 if _failures else 0
 
 

@@ -1,8 +1,9 @@
 # S3 multipart upload for large objects (#72)
 
-**Status (2026-10-25): implemented in code behind `AURA_MULTIPART_ENABLED`
-(default off); the compatibility gate below was RUN on 2026-10-25 against the
-pinned 4.48 image but is NOT fully closed — see the
+**Status (2026-10-26): implemented in code behind `AURA_MULTIPART_ENABLED`
+(default off); the compatibility gate below has been RUN against the pinned 4.48 image
+and is CLOSED for items 1–6, with two UNKNOWNs that the S3 API cannot answer (disk
+reclaim after abort, and a real 10,000-part completion) — see the
 [verification log](verification-log-2026-10-25-multipart-compat-4.48.md).** What exists:
 two additive columns on `objects` (`multipart_upload_id`,
 `multipart_part_bytes`), `GET /api/v1/objects/{oid}/multipart` (plan + parts
@@ -98,9 +99,7 @@ client plus a plain-`urllib` part consumer) rather than the manual probe script
 described below; both are acceptable gate paths, the harness is the reproducible one.
 
 Coverage against items 1–6 below: item 1 is exercised (harness assertion; no
-failure counted); item 2 is partly exercised (presigned part PUTs over plain
-HTTP succeed and an unsigned `x-amz-server-side-encryption` header is rejected,
-but signed per-part size enforcement is not asserted); **item 3 is covered** by this
+failure counted); item 2 is covered by a third run (see below); **item 3 is covered** by this
 run: a signed `x-amz-checksum-sha256` on a presigned `UploadPart` is accepted (HTTP
 200 and echoed), the same header unsigned is rejected (403 `SignatureDoesNotMatch`),
 a signed wrong digest is rejected (400 `BadDigest`), and the value is **not
@@ -109,8 +108,8 @@ checksum (POINT 9 in the
 [verification log](verification-log-2026-10-25-multipart-compat-4.48.md)), so the
 gateway validates a supplied checksum but cannot serve as a checksum store; item 4 is
 consistent with the evidence (completed ETag `…-2`, integrity verified by SHA-256,
-never by ETag; no full-object MD5 comparison was printed); item 5 is partial (Range
-GET verified; part-size/count limits were not measured in this capture).
+never by ETag; no full-object MD5 comparison was printed); item 5 is covered by a third
+run (see below).
 **Item 6 (part PUTs through Traefik plus `readTimeout` sizing) is now covered** by a
 second run on 2026-10-25: a slow 5 MiB presigned part PUT through Traefik with
 `readTimeout=7200s` returned 200 in 80.008s with an ETag equal to the local MD5 of the
@@ -118,22 +117,37 @@ bytes sent, the identical upload through a default-60s Traefik was cut off at 60
 and at a conservative 64 KiB/s the 7200s deadline allows a 450 MiB part (225 MiB at half
 the budget) — see
 [verification-log-2026-10-25-multipart-proxy-4.48.md](verification-log-2026-10-25-multipart-proxy-4.48.md).
-**Items 2 and 5 remain UNPROBED.** The attempt to measure them was abandoned without a
-result, so nothing is claimed here about whether SeaweedFS itself enforces a signed
-per-part size, nor about its minimum part size or maximum part count. Both are mitigated
-in our own code, which is why they do not block operationally: `plan_parts`
-(`api/s3.py:187-204`) never emits a non-last part below the 5 MiB minimum and raises the
-part size to stay within 10,000 parts, and `_uploaded_parts` (`api/main.py:1234-1251`)
-keeps only parts whose number falls in `1..count` and whose byte length equals
-`part_length(...)` exactly; `_complete_multipart_session` then refuses to assemble when
-any planned part is absent (`api/main.py:1274-1278`). Residual risk if the gateway
-enforces less than the plan assumes: an invalid part is stored (occupying space until
-abort or reap) and the client sees a successful `UploadPart` that the commit later
-rejects with `409`. The compat run's disk-reclaim UNKNOWN also remains.
+**Items 2 and 5 are now covered** by a third run on 2026-10-26 (47 passes, 0 failures,
+2 UNKNOWN, harness exit 0). Item 2: the gateway *does* enforce the signed part size — one
+byte more or one byte fewer than the signed `Content-Length` is rejected with 403
+`SignatureDoesNotMatch`, and the same wrong-sized body is accepted when the URL is
+presigned without `ContentLength`, which proves the enforcement is SigV4 verification of
+the signed header and not an S3 size rule. `presigned_upload_part` (`api/s3.py:222-233`)
+always signs the length, so the guarantee holds today; **dropping `ContentLength` from
+that presign would silently remove it**, because part PUTs carry no signed payload hash —
+the signed length is the only integrity bound. Item 5: `CompleteMultipartUpload` rejects
+a non-last part below 5 MiB with `EntityTooSmall`, part 10000 is accepted while 10001 is
+rejected with `InvalidPart`, and Range GET works on a completed multipart object,
+including a range spanning a part boundary.
 
-The gate is therefore **not closed by measurement**. Whether the server-side mitigation
-above is sufficient to run multipart in production is an owner decision, recorded
-separately from this gate. State observed on the pilot on 2026-10-25:
+Two deviations worth knowing, neither a blocker:
+
+- **Error code mismatch.** `Complete` referencing an out-of-range part number answers
+  **404 `NoSuchUpload`** instead of 400 `InvalidPart`. A generic S3 client that maps
+  `NoSuchUpload` to "the upload is gone, start over" would restart the whole upload on a
+  bad part list. AURA is not exposed: `_complete_multipart_session` builds its part list
+  from `ListParts` filtered to `1..count` (`api/main.py:1234-1251`), so it never
+  references an out-of-range part.
+- **`plan_parts` is not the 8 MiB it looks like.** The preference is raised as the object
+  grows: 100 GiB uses 11 MiB parts (9,310), 1 TiB uses 105 MiB (9,987), and the 10,000
+  ceiling only binds around 50 TiB. Any concurrency or part-count assumption based on
+  "8 MiB parts" is wrong for large objects.
+
+Still **not** exercised: a real 10,000-part `Complete` (≈48.8 GiB of parts) and disk-level
+reclaim after abort. Both are recorded as UNKNOWN in the verification log.
+
+The gate is therefore **closed by measurement for items 1–6**, with those two UNKNOWNs
+explicitly out of reach of the S3 API. State observed on the pilot on 2026-10-25:
 `AURA_MULTIPART_ENABLED=1`, `AURA_MULTIPART_PART_BYTES=5242880`,
 `AURA_MULTIPART_THRESHOLD_BYTES=33554432` (`docker exec aura-001-api printenv`), which
 is **not** the code default of `0`.
