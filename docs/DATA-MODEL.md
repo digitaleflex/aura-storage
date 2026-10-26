@@ -68,6 +68,25 @@ so the format is enforced in code, not in DDL.
 - Machine-to-machine identity. Only the secret fingerprint is stored; the token is
   shown once at creation/rotation. There is no clear-text secret column.
 
+### PartnerSite (implemented, admin "Intégrations")
+- `id`, `space_id`, `identity_id` (FK to `service_identities`), `name` (unique per
+  space), `site_url` (normalized https origin), `default_ttl_seconds` (media-TTL
+  recommendation for the partner's stable redirect), `notes`, `created_by`,
+  `created_at`, `updated_at`.
+- Metadata only: **the credential remains the service identity**, so rotation and
+  revocation keep using the identity routes and every audit entry names an
+  identity. The row is never used for authentication.
+
+### SpaceQuota / SpaceUsageMonthly (implemented)
+- `space_quotas`: `space_id` (PK), `storage_bytes` (nullable), `egress_bytes_monthly`
+  (nullable), `updated_at`, `updated_by`. `null` means no quota, never zero.
+- `space_usage_monthly`: `space_id` + `period` (`YYYY-MM`, UTC) primary key,
+  `egress_bytes`, `download_intents`, `preview_intents`, `share_redemptions`,
+  `updated_at`. Additive counters, never rewritten downwards.
+- Egress is an **estimate**: one issued intent or share redemption adds the
+  object's full size once, because AURA never proxies the bytes. Storage is
+  measured live from `objects`; the quota is checked at upload intent.
+
 ### User (implemented; extended by #35)
 - `id`, `username` (unique), `pass_hash`, `created_at`, plus `role`
   (`user`/`operator`/`admin`), `application_id`, `space_id`.

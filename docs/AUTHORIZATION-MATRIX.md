@@ -87,7 +87,7 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | GET | `/api/v1/admin/integrity` | `admin:read` | periodic scrub results: counts per result and objects whose bytes no longer match (`mismatch`) or are gone (`missing`); read-only |
 | POST | `/api/v1/admin/integrity/scrub` | `admin:write` | run one bounded scrub pass now (same byte budget as the periodic pass) |
 | GET | `/api/v1/admin/orphans` | `admin:read` | read-only orphan candidates (available rows missing at storage); never deletes (M07/#87) | (default 90); timestamp-less lines kept (M07) |
-| GET | `/api/v1/admin/usage` | `admin:read` | real per-space consumption (verified available bytes + counts) with `measured_at` and configured limits; optional `space_id` filter (M07) |
+| GET | `/api/v1/admin/usage` | `admin:read` | real per-space consumption (verified available bytes + counts) with `measured_at`, configured limits, monthly egress estimate and quotas; optional `space_id` filter (M07) |
 | GET | `/api/v1/admin/health` | `admin:read` | supervision snapshot (api/database/storage/disk + recent errors); always 200, top-level `degraded` on dependency failure (M07) |
 | POST/GET | `/api/v1/admin/applications` | `admin:write` / `admin:read` | platform registry |
 | GET | `/api/v1/admin/applications/{aid}` | `admin:read` | detail + stable id + space count |
@@ -96,11 +96,15 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | GET | `/api/v1/admin/spaces/{sid}` | `admin:read` | detail + buckets + counts |
 | PATCH | `/api/v1/admin/spaces/{sid}` | `admin:write` | rename / re-environment / soft activate-disable; `application_id` immutable |
 | POST | `/api/v1/admin/spaces/{sid}/buckets` | `admin:write` | register an extra (non-default) bucket for a space |
+| PUT | `/api/v1/admin/spaces/{sid}/quotas` | `admin:write` | monthly storage and egress ceilings; explicit null clears a quota |
 | GET | `/api/v1/admin/buckets` | `admin:read` | every bucket with its space/application attachment |
 | PATCH | `/api/v1/admin/buckets/{bid}` | `admin:write` | set/clear the default flag (one default per space) |
 | POST/GET | `/api/v1/admin/identities` | `admin:write` / `admin:read` | M2M identities (refused for a disabled space) |
 | POST | `/api/v1/admin/identities/{iid}/rotate` | `admin:write` | returns a new token once |
 | POST | `/api/v1/admin/identities/{iid}/revoke` | `admin:write` | immediate revocation |
+| POST/GET | `/api/v1/admin/partner-sites` | `admin:write` / `admin:read` | partner integration metadata + its dedicated identity; creation returns the token once |
+| PATCH | `/api/v1/admin/partner-sites/{pid}` | `admin:write` | name, https origin, media-TTL recommendation, notes (identity/space fixed) |
+| DELETE | `/api/v1/admin/partner-sites/{pid}` | `admin:write` | revokes the key first, then removes the metadata; identity row kept for audit |
 
 A route that is not classified here is **closed**: `tests/test_security_isolation.py`
 asserts that every `/api/v1` route rejects anonymous callers with 401 or 403 (a 422
@@ -188,8 +192,10 @@ Never place a token in logs, tickets, chat, the frontend bundle, or this reposit
   (`/var/lib/aura/audit/aura-audit.jsonl` in the Compose stack) on the
   persistent `api-audit` volume, so it survives container recreation.
 - Usage (`GET /api/v1/admin/usage`, `admin:read`) reports live catalogue
-  values only — verified available bytes, counts, configured ceilings — with
-  `measured_at` as the freshness marker. See `docs/OBSERVABILITY.md` for the
+  values — verified available bytes, counts, configured ceilings — with
+  `measured_at` as the freshness marker, plus a monthly egress **estimate**
+  derived from issued intents and share redemptions (AURA never proxies the
+  bytes) and the space's quotas. See `docs/OBSERVABILITY.md` for the
   unavailable metrics and the validations that need real infrastructure.
 - Exceptions by design: a successful `login` is emitted before any
   `authorize` call, so its audit event carries `user_id` but no tenant

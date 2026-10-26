@@ -52,12 +52,24 @@ unknown space) returns:
   marker, there is no cache.
 - `limits` — configured technical ceilings (`max_object_bytes`,
   `max_pending_intents`, `intent_ttl`, `allow_empty_objects`).
+- `period` — UTC month (`YYYY-MM`) the counters below belong to.
 - `totals` + per-space entries — verified **available** bytes
   (`SUM(size_bytes)` over `available` rows; pending intents carry no
   committed bytes), available/pending counts, objects by status.
+- `month` per space — `egress_bytes`, `download_intents`, `preview_intents`,
+  `share_redemptions`. **Estimate, not an edge measurement:** AURA never
+  proxies object bytes, so one issued intent or share redemption counts the
+  object's full size once. Range/multipart transfers are not decomposed.
+- `quota` per space — monthly `storage_bytes` and `egress_bytes_monthly`
+  (`null` = no quota). Storage is enforced at upload intent (`429 storage
+  quota exceeded`); egress is enforced before issuing an intent or redeeming a
+  share (`429 monthly egress quota exceeded`, or the uniform 404 on the public
+  share route). Quotas are set with
+  `PUT /api/v1/admin/spaces/{sid}/quotas` and audited as
+  `admin.space.quotas`.
 
-AURA enforces no per-application byte quota and no transfer-rate quota
-(server-side ceilings only), so none is displayed.
+There is still no per-application quota and no transfer-rate quota beyond the
+existing server-side ceilings and edge rate limit.
 
 ## Politique retry côté serveur (#86, partielle)
 

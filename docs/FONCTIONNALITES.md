@@ -139,9 +139,13 @@ active-désactive, on ne supprime jamais via l'API.
 | `POST /api/v1/admin/spaces/{sid}/buckets` | `admin:write` | Enregistre un bucket additionnel (non défaut), nom S3 validé |
 | `GET /api/v1/admin/buckets` | `admin:read` | Tous les buckets avec leur rattachement espace/application ; jamais de credential S3 |
 | `PATCH /api/v1/admin/buckets/{bid}` | `admin:write` | Bascule le flag défaut (un seul défaut par espace) |
+| `PUT /api/v1/admin/spaces/{sid}/quotas` | `admin:write` | Quotas mensuels stockage + trafic ; `null` supprime le quota ; audit `admin.space.quotas` |
 | `POST`/`GET /api/v1/admin/identities` | `admin:write` / `admin:read` | Identités M2M ; refusées pour un espace `disabled` |
 | `POST /api/v1/admin/identities/{iid}/rotate` | `admin:write` | Nouveau jeton renvoyé une fois ; l'ancien secret cesse immédiatement |
 | `POST /api/v1/admin/identities/{iid}/revoke` | `admin:write` | Révocation immédiate |
+| `POST`/`GET /api/v1/admin/partner-sites` | `admin:write` / `admin:read` | Intégrations partenaires : métadonnées + identité dédiée créée dans la même transaction ; jeton renvoyé une fois |
+| `PATCH /api/v1/admin/partner-sites/{pid}` | `admin:write` | Nom, origine https, TTL média conseillé, notes ; identité et espace immuables |
+| `DELETE /api/v1/admin/partner-sites/{pid}` | `admin:write` | Révoque la clé puis supprime les métadonnées (l'identité révoquée reste pour l'audit) |
 
 Règles vérifiées : désactiver un espace refuse les nouveaux uploads (403) et les
 nouvelles identités (409) tout en gardant les objets lisibles ; un espace ne peut pas
