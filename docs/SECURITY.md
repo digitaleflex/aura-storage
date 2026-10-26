@@ -59,9 +59,10 @@
   string** (`--accesslog.fields.queryparameters.defaultmode=drop`), so
   `X-Amz-Signature`/`X-Amz-Credential` never reach `docker logs`.
 - Downloads are always served as `Content-Disposition: attachment`. Only
-  `preview-intent` may serve inline, and only for an allow-list (images, PDF, audio,
-  video) that excludes HTML, SVG and XML, so an uploaded file cannot execute on the
-  storage origin.
+  `preview-intent` (session-scoped) and `inline` share links (public, revocable)
+  may serve inline, and only for an allow-list (images, PDF, plain text, audio,
+  video) that excludes HTML, SVG and XML, so an uploaded file cannot execute on
+  the storage origin.
 - The S3 root landing page now receives its configuration from
   `landing/nginx.conf` (CSP, `X-Frame-Options`, `nosniff`, `Referrer-Policy`).
 

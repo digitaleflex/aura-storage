@@ -44,8 +44,9 @@ file is.
 - **Dialog** (`web/src/components/ShareDialog.tsx`): duration (1 h, 24 h, 7 d,
   30 d), maximum uses (unlimited, 1, 5, 25) and opening mode. "Afficher dans le
   navigateur" is offered only for the server's safe inline types (PDF, JPEG,
-  PNG, WebP, GIF, plain text); audio, video, HTML and SVG are shared as
-  downloads, mirroring `SAFE_INLINE_TYPES` in `api/shares.py`.
+  PNG, WebP, GIF, plain text, audio and video); HTML, SVG, XHTML and unknown
+  types are shared as downloads, mirroring `SAFE_INLINE_TYPES` in
+  `api/shares.py`.
 - **One-time link**: the token is returned once, so the freshly created URL is
   displayed in a read-only field with a copy button and a warning that it will
   not be shown again. The API's relative `/s/<token>` is resolved against the
