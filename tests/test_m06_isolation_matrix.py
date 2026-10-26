@@ -108,7 +108,8 @@ def _make_available(c, headers, **intent):
     return oid
 
 
-FULL = ["objects:read", "objects:write", "objects:delete", "objects:purge"]
+# Machine identities are data-plane only: objects:purge is human (operator/admin).
+FULL = ["objects:read", "objects:write", "objects:delete"]
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +170,6 @@ def test_m06_other_space_and_application_are_isolated():
         ("post", f"/api/v1/objects/{oid}/abort", {}),
         ("post", f"/api/v1/objects/{oid}/download-intent", {}),
         ("post", f"/api/v1/objects/{oid}/preview-intent", {}),
-        ("post", f"/api/v1/objects/{oid}/purge", {}),
         ("get", f"/api/v1/objects/{oid}/multipart", {}),
         ("post", f"/api/v1/objects/{oid}/multipart/parts", {"json": {"part_numbers": [1]}}),
         ("post", f"/api/v1/objects/{oid}/restore", {}),
@@ -177,6 +177,9 @@ def test_m06_other_space_and_application_are_isolated():
     ]:
         r = c.request(method, path, headers=hb, **kwargs)
         assert r.status_code == 404, (method, path, r.status_code)
+
+    # Purge is a human capability: a machine token cannot even attempt it.
+    assert c.post(f"/api/v1/objects/{oid}/purge", headers=hb).status_code == 403
 
     # Generic 404: no existence oracle, no storage coordinates.
     r = c.get(f"/api/v1/objects/{oid}", headers=hb)
@@ -390,19 +393,18 @@ def test_m06_errors_and_payloads_do_not_leak():
 # ---------------------------------------------------------------------------
 def test_m06_purge_storage_failure_keeps_reference(monkeypatch):
     c, headers = _admin()
-    _, space, _ = _make_app_space(c, headers)
-    token = _make_identity(c, headers, space, FULL)["token"]
-    oid = _make_available(c, _svc(token))
+    # Purge is human-only: the object belongs to the admin's own space/session.
+    oid = _make_available(c, headers)
 
     class BrokenS3:
         def delete_object(self, Bucket, Key):
             raise RuntimeError("storage outage")
 
     monkeypatch.setattr(main, "s3ops", BrokenS3())
-    r = c.post(f"/api/v1/objects/{oid}/purge", headers=_svc(token))
+    r = c.post(f"/api/v1/objects/{oid}/purge", headers=headers)
     assert r.status_code == 502, r.text
     # The catalogue reference survives the failed backend delete.
-    kept = c.get(f"/api/v1/objects/{oid}", headers=_svc(token))
+    kept = c.get(f"/api/v1/objects/{oid}", headers=headers)
     assert kept.status_code == 200
     assert kept.json()["status"] == "available"
 
@@ -482,3 +484,112 @@ def test_m06_no_default_bucket_refuses_implicit_upload():
                      "size_bytes": 1},
                headers=_svc(token))
     assert r.status_code == 200, r.text
+
+
+# ---------------------------------------------------------------------------
+# Audit 2026-10-24 regressions: machine purge, admin-wide governance,
+# forced attachment, and the suspect exit path.
+# ---------------------------------------------------------------------------
+def test_m06_service_identity_cannot_be_granted_purge():
+    c, headers = _admin()
+    _, space, _ = _make_app_space(c, headers)
+    r = c.post("/api/v1/admin/identities", json={
+        "space_id": space, "name": f"purge-{uuid.uuid4().hex[:6]}",
+        "scopes": ["objects:read", "objects:purge"],
+    }, headers=headers)
+    assert r.status_code == 422, r.text
+
+
+def test_m06_admin_can_govern_machine_owned_objects():
+    """owner_id IS NULL rows must stay visible to a human (retention)."""
+    c, headers = _admin()
+    app_id, space_id = main.repo.default_scope()
+    token = _make_identity(c, headers, space_id, FULL)["token"]
+    oid = _make_available(c, _svc(token))
+
+    # The admin session is in the same space and must see the service-owned row
+    # (owner_id NULL) instead of losing it forever.
+    listed = c.get("/api/v1/objects", headers=headers)
+    assert listed.status_code == 200, listed.text
+    assert oid in {o["id"] for o in listed.json()["items"]}
+    assert c.get(f"/api/v1/objects/{oid}", headers=headers).status_code == 200
+    # ... and can purge it.
+    monkeypatch_target = main.s3ops
+    class _Ok:
+        def delete_object(self, Bucket, Key):
+            return {}
+    main.s3ops = _Ok()
+    try:
+        assert c.post(f"/api/v1/objects/{oid}/purge", headers=headers).status_code == 200
+    finally:
+        main.s3ops = monkeypatch_target
+
+
+def test_m06_download_intent_forces_attachment(monkeypatch):
+    c, headers = _admin()
+    oid = _make_available(c, headers, display_name="page.html",
+                          content_type="text/html")
+    main.repo.mark_available(
+        oid, 1, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
+    captured = {}
+
+    def _fake_presign(client, bucket, key, expires, content_disposition=None,
+                      content_type=None):
+        captured["disposition"] = content_disposition
+        return "https://example.invalid/object"
+
+    monkeypatch.setattr(main, "presigned_get", _fake_presign)
+    class _Head:
+        def head_object(self, **kwargs):
+            return {"ContentLength": 1, "ServerSideEncryption": "AES256"}
+        def get_object(self, **kwargs):
+            return {"Body": None}
+    monkeypatch.setattr(main, "s3ops", _Head())
+    r = c.post(f"/api/v1/objects/{oid}/download-intent", headers=headers)
+    assert r.status_code == 200, r.text
+    assert captured["disposition"].startswith("attachment;")
+    assert "page.html" in captured["disposition"]
+
+
+def _fake_storage(data: bytes):
+    class _Body:
+        def iter_chunks(self, chunk_size=1024):
+            yield data
+    class _Storage:
+        def head_object(self, **kwargs):
+            return {"ContentLength": len(data)}
+        def get_object(self, **kwargs):
+            return {"Body": _Body()}
+    return _Storage()
+
+
+def test_m06_reverify_recovers_suspect_object(monkeypatch):
+    import hashlib
+    c, headers = _admin()
+    oid = c.post("/api/v1/objects/upload-intents",
+                 json={"display_name": "rev.bin", "size_bytes": 3},
+                 headers=headers).json()["id"]
+    main.repo.mark_available(oid, 3, hashlib.sha256(b"abc").hexdigest())
+    main.repo.set_status(oid, "suspect")
+
+    monkeypatch.setattr(main, "s3ops", _fake_storage(b"abc"))
+    r = c.post(f"/api/v1/admin/objects/{oid}/reverify", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "available"
+    assert c.get(f"/api/v1/objects/{oid}", headers=headers).json()["status"] == "available"
+
+
+def test_m06_reverify_keeps_suspect_on_mismatch(monkeypatch):
+    import hashlib
+    c, headers = _admin()
+    oid = c.post("/api/v1/objects/upload-intents",
+                 json={"display_name": "rev2.bin", "size_bytes": 3},
+                 headers=headers).json()["id"]
+    main.repo.mark_available(oid, 3, hashlib.sha256(b"abc").hexdigest())
+    main.repo.set_status(oid, "suspect")
+
+    monkeypatch.setattr(main, "s3ops", _fake_storage(b"abd"))
+    r = c.post(f"/api/v1/admin/objects/{oid}/reverify", headers=headers)
+    assert r.status_code == 409, r.text
+    assert r.json()["status"] == "suspect"

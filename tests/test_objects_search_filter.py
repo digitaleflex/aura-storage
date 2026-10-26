@@ -184,12 +184,21 @@ def test_filter_by_content_type_is_case_insensitive():
     c, headers = _admin()
     tag = uuid.uuid4().hex[:8]
     pdf = _upload(c, headers, f"doc-{tag}", content_type="application/pdf")
-    _upload(c, headers, f"txt-{tag}", content_type="text/plain")
+    txt = _upload(c, headers, f"txt-{tag}", content_type="text/plain")
 
     r = c.get(
         "/api/v1/objects", params={"content_type": "APPLICATION/PDF"}, headers=headers
     )
-    assert _ids(r.json()) == {pdf}
+    # Admins are space-wide (governance of machine-owned objects), so the space
+    # may legitimately contain other PDFs created by earlier tests. What must
+    # hold: the filter is case-insensitive, the PDF is in, the text file is out.
+    items = r.json()["items"]
+    ids = {o["id"] for o in items}
+    assert pdf in ids and txt not in ids
+    assert all(
+        o["content_type"].split(";")[0].strip().lower() == "application/pdf"
+        for o in items
+    )
 
 
 def test_filter_by_size_uses_committed_size():
@@ -330,8 +339,8 @@ def test_query_vocabulary_matches_the_repository():
     # api/transfer.py, so both must carry it. Comparing against the route Literal
     # itself (not a hard-coded set) makes a route↔builder divergence actually fail.
     assert set(OBJECT_STATUSES) == {
-        "pending", "verifying", "available", "deleted", "expired", "failed", "aborted",
-        "purging",
+        "pending", "verifying", "available", "suspect", "deleted", "expired", "failed",
+        "aborted", "purging",
     }
     assert set(OBJECT_STATUSES) == set(main.ObjectStatus.__args__)
     assert set(SORT_COLUMNS) == {"created_at", "display_name", "size_bytes"}

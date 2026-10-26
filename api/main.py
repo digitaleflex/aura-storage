@@ -84,6 +84,9 @@ app = FastAPI(title="AURA Management API", version="0.2.0")
 _RESP_CACHE: dict = {}
 _RESP_CACHE_TTL = 300
 _RESP_CACHE_MAX = 1000
+# FastAPI runs sync routes in a threadpool: get/set must not iterate and mutate
+# the dict concurrently (RuntimeError: dictionary changed size during iteration).
+_RESP_CACHE_LOCK = threading.Lock()
 
 # Simple per-space daily quota (D3). 0 disables.
 _QUOTA: dict = {}
@@ -118,6 +121,25 @@ def _charge_quota(space_id: str, size_bytes: int) -> None:
 # lastResort handler (WARNING). Route through the logger uvicorn configures so
 # commit timings are visible in `docker logs`.
 log = logging.getLogger("uvicorn.error")
+
+
+@app.on_event("startup")
+def _enforce_session_ttl() -> None:
+    """Sign out sessions minted under a longer TTL than the current policy.
+
+    Shortening AURA_SESSION_TTL must actually shorten live sessions; otherwise
+    a stolen 90-day cookie survives the fix until its original expiry.
+    """
+    try:
+        revoked = repo.revoke_sessions_beyond(int(time.time()) + settings.session_ttl)
+        if revoked:
+            logging.getLogger("uvicorn.error").warning(
+                "revoked %d session(s) longer than AURA_SESSION_TTL=%ss",
+                revoked, settings.session_ttl,
+            )
+    except Exception:
+        # Never prevent the API from starting because of a session cleanup.
+        pass
 
 
 @app.on_event("startup")
@@ -189,6 +211,26 @@ async def request_context(request: Request, call_next):
 # Only *failed* attempts are counted, so a burst of legitimate logins cannot
 # lock out everyone sharing a proxy/NAT address.
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+# A distributed brute force (or spoofed X-Forwarded-For) must not grow the
+# table without bound. Only enforced above this size to keep the common path
+# free of work.
+_RATE_LIMIT_MAX_ENTRIES = 10_000
+
+
+def _prune_attempt_table(table: dict[str, list[float]], window: float,
+                         now: float | None = None) -> None:
+    """Drop stale and, if still too large, arbitrary entries (memory bound)."""
+    if len(table) < _RATE_LIMIT_MAX_ENTRIES:
+        return
+    now = time.time() if now is None else now
+    for client in list(table):
+        fresh = [t for t in table[client] if now - t < window]
+        if fresh:
+            table[client] = fresh
+        else:
+            table.pop(client, None)
+    while len(table) >= _RATE_LIMIT_MAX_ENTRIES:
+        table.pop(next(iter(table)), None)
 
 
 def _client_ip(request: Request) -> str:
@@ -210,6 +252,7 @@ def _login_blocked(client_ip: str, now: float | None = None) -> bool:
 
 def _login_record_failure(client_ip: str) -> None:
     _LOGIN_ATTEMPTS.setdefault(client_ip, []).append(time.time())
+    _prune_attempt_table(_LOGIN_ATTEMPTS, settings.login_rate_window)
 
 
 def _login_clear(client_ip: str) -> None:
@@ -232,14 +275,31 @@ s3probe = make_probe_client(
 
 
 def _ensure_bootstrap_admin() -> None:
-    """Create, or promote, the single bootstrap administrator (hashed password)."""
+    """Create, or promote, the single bootstrap administrator (hashed password).
+
+    A weak bootstrap password is accepted for existing deployments (changing it
+    silently would lock the operator out) but logged loudly, and any implicit
+    promotion of an existing account is audited in the process log.
+    """
+    logger = logging.getLogger("uvicorn.error")
     row = repo.get_user_by_name(settings.admin_user)
     if row is None:
+        if len(settings.admin_password) < 12:
+            logger.warning(
+                "bootstrap admin password is shorter than 12 characters; "
+                "rotate AURA_API_ADMIN_PASSWORD"
+            )
         repo.create_user(
             settings.admin_user, hash_password(settings.admin_password), role="admin"
         )
-    else:
-        repo.ensure_admin(row["id"])
+        return
+    if row["role"] != "admin":
+        logger.warning(
+            "bootstrap user %r already existed: promoting it to admin (no password "
+            "rotation; AURA_API_ADMIN_PASSWORD is only used at creation)",
+            settings.admin_user,
+        )
+    repo.ensure_admin(row["id"])
 
 
 _ensure_bootstrap_admin()
@@ -280,19 +340,25 @@ Uuid4 = Annotated[str, AfterValidator(_canonical_uuid)]
 # Object list query vocabulary (M02). Literals make FastAPI return 422 for any
 # unsupported value and let the OpenAPI document describe the accepted set.
 ObjectStatus = Literal[
-    "pending", "verifying", "available", "deleted", "expired", "failed", "aborted",
-    "purging",
+    "pending", "verifying", "available", "suspect", "deleted", "expired", "failed",
+    "aborted", "purging",
 ]
 ObjectSort = Literal["created_at", "display_name", "size_bytes"]
 SortOrder = Literal["asc", "desc"]
 
 
 def _object_scope(principal: dict) -> dict:
-    """Catalogue filter for the caller: space always, owner for human users."""
-    return {
-        "space_id": principal["space_id"],
-        "owner_id": principal["id"] if principal["kind"] == "user" else None,
-    }
+    """Catalogue filter for the caller: space always, owner for plain users.
+
+    Operators and administrators are space-wide on purpose: objects created by
+    a machine identity have ``owner_id = NULL`` and would otherwise be invisible
+    (and unpurgeable) to every human once the machine token is revoked, which is
+    a retention/governance dead end. A plain user still only sees their own.
+    """
+    owner_id = principal["id"] if principal["kind"] == "user" else None
+    if principal["kind"] == "user" and effective_scopes(principal) & {ADMIN_READ, ADMIN_WRITE}:
+        owner_id = None
+    return {"space_id": principal["space_id"], "owner_id": owner_id}
 
 
 # Folders (#61) are logical catalogue entities owned by a human user. Names are
@@ -378,8 +444,10 @@ def _object_public(row) -> dict:
 
 class LoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    username: str
-    password: str
+    # Bounded so a failed attempt can never inject megabytes into the audit
+    # trail (the username is recorded on every failure).
+    username: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=1024)
 
 
 class UploadIntentIn(BaseModel):
@@ -541,13 +609,28 @@ def live():
     return {"status": "live"}
 
 
+# Readiness probes are unauthenticated and may be polled aggressively: a
+# list_buckets() per request is a free amplification vector against S3 and an
+# existence oracle. Cache the verdict for a few seconds.
+_READY_CACHE = {"at": 0.0, "ready": False}
+_READY_TTL_S = 5
+_READY_LOCK = threading.Lock()
+
+
 @app.get("/health/ready")
 def ready():
-    try:
-        s3ops.list_buckets()
-        return {"status": "ready"}
-    except Exception:  # never leak backend details
+    now = time.time()
+    with _READY_LOCK:
+        if now - _READY_CACHE["at"] >= _READY_TTL_S:
+            try:
+                s3ops.list_buckets()
+                _READY_CACHE.update(at=now, ready=True)
+            except Exception:
+                _READY_CACHE.update(at=now, ready=False)
+        ok = _READY_CACHE["ready"]
+    if not ok:  # never leak backend details
         return JSONResponse(status_code=503, content={"status": "not ready"})
+    return {"status": "ready"}
 
 
 # ---------------------------------------------------------------------------
@@ -794,6 +877,9 @@ def master_mode_on(
         _login_record_failure(client_ip)
         audit_event("master-mode", principal["id"], "failure")
         raise HTTPException(status_code=403, detail="password does not match")
+    # A successful step-up clears the shared failure budget, like /login;
+    # otherwise ten later successes cannot happen until the window expires.
+    _login_clear(client_ip)
     until = int(time.time()) + settings.master_mode_ttl
     repo.set_session_master(principal["session_id"], until)
     audit_event("master-mode", principal["id"], "on", {"until": until})
@@ -853,13 +939,16 @@ def bulk_purge(body: BulkIdsIn, principal: dict = Depends(authorize(OBJECTS_PURG
 def empty_trash(principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
     """Master mode: purge the caller's trash (at most master_bulk_max per call)."""
     _require_master(principal)
+    # Deliberately owner-scoped even for an operator/admin: "empty my trash"
+    # must never silently destroy every user's deleted objects in the space.
+    scope = {"space_id": principal["space_id"], "owner_id": principal["id"]}
     rows = repo.list_objects(
-        **_object_scope(principal), status=DELETED, limit=settings.master_bulk_max,
+        **scope, status=DELETED, limit=settings.master_bulk_max,
     )
     ids = [_as_dict(r)["id"] for r in rows]
     out = _bulk_purge(ids, principal)
     # More than one call's worth: the client simply calls again.
-    out["more"] = bool(repo.list_objects(**_object_scope(principal), status=DELETED, limit=1))
+    out["more"] = bool(repo.list_objects(**scope, status=DELETED, limit=1))
     return out
 
 
@@ -993,11 +1082,24 @@ def upload_intent(
     # Only live intents count: an expired row (whose bytes the sweep has not
     # deleted yet) must not block a resume after a session loss.
     live_since = int(time.time()) - settings.intent_grace_s
-    if repo.count_pending(
-        **_object_scope(principal), min_expires_at=live_since
-    ) >= settings.max_pending_intents:
-        raise HTTPException(status_code=429, detail="too many pending uploads")
-    _check_capacity(body.size_bytes)
+    owner_id = principal["id"] if principal["kind"] == "user" else None
+    # Admission is a check-then-insert sequence; hold the repository lock so
+    # concurrent intents cannot all pass the same capacity check. (The lock is
+    # process-local, which matches the single-worker deployment; a pool would
+    # need a DB-side reservation.)
+    with repo._lock:
+        if repo.count_pending(
+            **_object_scope(principal), min_expires_at=live_since
+        ) >= settings.max_pending_intents:
+            raise HTTPException(status_code=429, detail="too many pending uploads")
+        if settings.max_pending_bytes_per_owner > 0:
+            reserved = repo.reserved_bytes_for(space_id=space_id, owner_id=owner_id)
+            if reserved + body.size_bytes > settings.max_pending_bytes_per_owner:
+                audit_event("upload-intent", principal["id"], "reservation_cap", {
+                    "size_bytes": body.size_bytes, "reserved_bytes": reserved,
+                })
+                raise HTTPException(status_code=429, detail="too many pending bytes")
+        _check_capacity(body.size_bytes)
 
     if body.folder_id is not None:
         # A client-supplied folder must exist and be owned by the caller (#61).
@@ -1009,7 +1111,6 @@ def upload_intent(
 
     _charge_quota(space_id, body.size_bytes)
 
-    owner_id = principal["id"] if principal["kind"] == "user" else None
     key = f"aura/{space_id}/{principal['id']}/{ids.new_id()}"
     multipart = (
         settings.multipart_enabled
@@ -1256,26 +1357,28 @@ def _cache_key(route: str, oid: str, idem: str | None, principal_id: str = "") -
 def _cache_get(key: str | None):
     if key is None:
         return None
-    entry = _RESP_CACHE.get(key)
-    if entry is None:
-        return None
-    if time.time() - entry[0] > _RESP_CACHE_TTL:
-        _RESP_CACHE.pop(key, None)
-        return None
-    return entry[1], entry[2]
+    with _RESP_CACHE_LOCK:
+        entry = _RESP_CACHE.get(key)
+        if entry is None:
+            return None
+        if time.time() - entry[0] > _RESP_CACHE_TTL:
+            _RESP_CACHE.pop(key, None)
+            return None
+        return entry[1], entry[2]
 
 
 def _cache_set(key: str | None, status: int, body):
     if key is None:
         return
     now = time.time()
-    if len(_RESP_CACHE) >= _RESP_CACHE_MAX:
-        # Bounded: drop expired entries, then the oldest ones.
-        for k in [k for k, v in _RESP_CACHE.items() if now - v[0] > _RESP_CACHE_TTL]:
-            _RESP_CACHE.pop(k, None)
-        while len(_RESP_CACHE) >= _RESP_CACHE_MAX:
-            _RESP_CACHE.pop(next(iter(_RESP_CACHE)), None)
-    _RESP_CACHE[key] = (now, status, body)
+    with _RESP_CACHE_LOCK:
+        if len(_RESP_CACHE) >= _RESP_CACHE_MAX:
+            # Bounded: drop expired entries, then the oldest ones.
+            for k in [k for k, v in _RESP_CACHE.items() if now - v[0] > _RESP_CACHE_TTL]:
+                _RESP_CACHE.pop(k, None)
+            while len(_RESP_CACHE) >= _RESP_CACHE_MAX:
+                _RESP_CACHE.pop(next(iter(_RESP_CACHE)), None)
+        _RESP_CACHE[key] = (now, status, body)
 
 
 def _defer_slow_commit(oid, size, head, principal):
@@ -1789,21 +1892,16 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
     row = _as_dict(row)
     if row["status"] != "available":
         raise HTTPException(status_code=409, detail="object not available")
-    # Lazy integrity check (G1 / invariant S10): a published row must still
-    # match the bytes behind it. A divergence blocks the download until re-verified.
-    try:
-        head = s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
-        if int(head.get("ContentLength", -1)) != int(row["size_bytes"]) or (
-            settings.require_sse and head.get("ServerSideEncryption") != SSE_ALGORITHM
-        ):
-            repo.set_status(oid, "suspect")
-            raise HTTPException(status_code=409, detail="object integrity suspect")
-    except HTTPException:
-        raise
-    except Exception:
-        # Storage unreachable: do not block on a transient failure.
-        pass
-    url = presigned_get(s3, row["bucket"], row["object_key"], settings.intent_ttl)
+    _assert_bytes_intact(oid, row)
+    # Downloads are always an attachment: a user-uploaded HTML/SVG file must
+    # never render (and execute) on the storage origin. Preview-intent is the
+    # only route allowed to serve inline, and only for its allow-list.
+    url = presigned_get(
+        s3, row["bucket"], row["object_key"], settings.intent_ttl,
+        content_disposition=shares.content_disposition_header(
+            "attachment", row["display_name"]
+        ),
+    )
     audit_event("download-intent", principal["id"], "success", {"object_id": oid})
     return {
         "id": oid, "download_url": url, "method": "GET",
@@ -1834,6 +1932,27 @@ def is_previewable(content_type: str) -> bool:
     return (content_type or "").split(";", 1)[0].strip().lower() in PREVIEWABLE_CONTENT_TYPES
 
 
+def _assert_bytes_intact(oid: str, row: dict) -> None:
+    """Invariant S10: published bytes must still match the catalogue.
+
+    A divergence marks the object ``suspect`` and blocks reading until an
+    operator re-verifies it (``POST /api/v1/admin/objects/{oid}/reverify``).
+    An unreachable backend is *not* treated as corruption: availability wins
+    over a transient HEAD failure, as before.
+    """
+    try:
+        head = s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
+        if int(head.get("ContentLength", -1)) != int(row["size_bytes"]) or (
+            settings.require_sse and head.get("ServerSideEncryption") != SSE_ALGORITHM
+        ):
+            repo.set_status(oid, "suspect")
+            raise HTTPException(status_code=409, detail="object integrity suspect")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+
 @app.post("/api/v1/objects/{oid}/preview-intent")
 def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
     # Mirror of download-intent: same scope, same 404 (foreign/unknown id is not
@@ -1850,6 +1969,9 @@ def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)))
     row = _as_dict(row)
     if row["status"] != "available":
         raise HTTPException(status_code=409, detail="object not available")
+    # Same integrity gate as download-intent: a suspect/corrupted object must
+    # not be previewable either (the two routes are documented as mirrors).
+    _assert_bytes_intact(oid, row)
     if not is_previewable(row["content_type"]):
         raise HTTPException(status_code=415, detail="preview not supported for this content type")
     url = presigned_get(
@@ -2042,10 +2164,12 @@ def reconcile(limit: int = 500,
     # backlog cannot monopolize the API; repeat until expired is 0.
     limit = max(1, min(limit, 5000))
     # Derive the staleness window from the same settings that govern intent
-    # death (commit is accepted until intent_ttl + intent_grace_s), instead of
-    # relying on reconcile_pending's own default: an intent must never be swept
-    # while its grace window could still accept a legitimate commit.
-    expire_after_s = settings.intent_ttl + settings.intent_grace_s
+    # death (commit is accepted until intent_ttl + intent_grace_s), plus the
+    # same safety margin as the automatic sweep. Without the extra margin a
+    # commit starting at the last second could be deleted under itself.
+    expire_after_s = (
+        settings.intent_ttl + settings.intent_grace_s + settings.reconcile_extra_grace_s
+    )
     out = reconcile_pending(
         repo, s3ops, expire_after_s=expire_after_s, limit=limit,
         multipart_expired_before=int(time.time()) - settings.intent_grace_s,
@@ -2100,6 +2224,53 @@ def integrity_scrub_now(principal: dict = Depends(authorize(ADMIN_WRITE))):
     out = scrub_run(repo, s3ops, settings, audit=audit_event)
     audit_event("admin.scrub", principal["id"], "success", out)
     return out
+
+
+@app.post("/api/v1/admin/objects/{oid}/reverify")
+def reverify_object(oid: str, principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Re-hash one published object and leave ``suspect``/``failed`` if it matches.
+
+    A single divergent HEAD used to freeze an object forever: no route could
+    restore it. The operator re-reads the bytes from storage (never trusting a
+    cached copy), compares the SHA-256 with the catalogue and either publishes
+    it again or leaves it ``suspect`` with an explicit 409.
+    """
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] not in ("available", "suspect", "failed"):
+        raise HTTPException(status_code=409, detail="object is not published")
+    max_bytes = settings.max_object_bytes
+    if row.get("multipart_part_bytes"):
+        max_bytes = max(max_bytes, settings.multipart_max_object_bytes)
+    try:
+        head = s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
+        body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
+        total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes)
+    except ObjectTooLarge:
+        raise HTTPException(status_code=413, detail="object exceeds the configured cap")
+    except Exception:
+        audit_event("admin.reverify", principal["id"], "storage_failure",
+                    {"object_id": oid})
+        raise HTTPException(status_code=502, detail="storage unavailable")
+
+    expected = (row.get("checksum_sha256") or "").lower()
+    size_ok = int(head.get("ContentLength", -1)) == total
+    if not size_ok or (expected and digest != expected):
+        repo.set_status(oid, "suspect", allowed_from=("available", "suspect", "failed"))
+        audit_event("admin.reverify", principal["id"], "mismatch", {
+            "object_id": oid, "size_bytes": total,
+        })
+        return JSONResponse(status_code=409, content={
+            "id": oid, "status": "suspect", "reason": "checksum_mismatch",
+            "size_bytes": total, "checksum_sha256": digest,
+        })
+    repo.mark_reverified(oid, total, digest)
+    audit_event("admin.reverify", principal["id"], "success", {"object_id": oid})
+    return {"id": oid, "status": "available", "size_bytes": total,
+            "checksum_sha256": digest}
 
 
 @app.get("/api/v1/admin/orphans")

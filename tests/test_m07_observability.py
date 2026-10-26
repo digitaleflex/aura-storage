@@ -110,7 +110,8 @@ def _audit_log_lines():
     return entries
 
 
-FULL = ["objects:read", "objects:write", "objects:delete", "objects:purge"]
+# Machine identities are data-plane only: objects:purge is human (operator/admin).
+FULL = ["objects:read", "objects:write", "objects:delete"]
 
 
 # ---------------------------------------------------------------------------
@@ -649,7 +650,11 @@ def test_m07_reconcile_uses_the_derived_intent_window(monkeypatch):
     monkeypatch.setattr(main, "reconcile_pending", _spy)
     r = c.post("/api/v1/admin/reconcile", headers=headers)
     assert r.status_code == 200, r.text
+    # The manual sweep keeps the same extra safety margin as the automatic one:
+    # a slow commit accepted at the edge of the grace window is never swept.
     assert captured["expire_after_s"] == (
-        main.settings.intent_ttl + main.settings.intent_grace_s
+        main.settings.intent_ttl
+        + main.settings.intent_grace_s
+        + main.settings.reconcile_extra_grace_s
     )
     assert captured["multipart_expired_before"] <= int(time.time()) - main.settings.intent_grace_s

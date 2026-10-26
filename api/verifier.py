@@ -129,7 +129,14 @@ def verify_one(repo, s3ops, settings, *, now=time.time, audit=None) -> str | Non
             return fail("av_infected")
         if verdict == TIMEOUT:
             return retry()
-    repo.mark_available(oid, total, digest)
+    updated = repo.mark_available(oid, total, digest)
+    if not updated:
+        # The row was purged or moved out of pending/verifying while we were
+        # hashing: the bytes are gone, so this is not a success. Auditing a
+        # success here would make the integrity trail lie.
+        if audit:
+            audit("verify", "system", "superseded", {"object_id": oid})
+        return "superseded"
     if audit:
         audit("verify", "system", "success", {"object_id": oid, "size_bytes": total})
     return "available"

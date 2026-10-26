@@ -206,10 +206,12 @@ def test_space_creation_rejects_invalid_bucket_name():
 
 
 def test_scope_capabilities_are_partitioned():
-    # Every capability is either a data-plane (service) capability or an admin
-    # one, so the service allow-list can never silently under-cover a new scope.
+    # Every capability is either a data-plane (service) capability, an admin one,
+    # or the human-only permanent-delete capability. Purge is deliberately not
+    # grantable to machine identities, so it is neither service nor admin.
     assert authz.SERVICE_SCOPES & authz.ADMIN_SCOPES == frozenset()
-    assert authz.SERVICE_SCOPES | authz.ADMIN_SCOPES == authz.ALL_SCOPES
+    assert authz.OBJECTS_PURGE not in authz.SERVICE_SCOPES
+    assert authz.SERVICE_SCOPES | authz.ADMIN_SCOPES | {authz.OBJECTS_PURGE} == authz.ALL_SCOPES
 
 
 def test_service_identity_cannot_be_granted_admin_scopes():

@@ -167,6 +167,19 @@ def purge_object(repo, s3ops, oid: str, *, space_id: str,
     if previous != PURGING:
         repo.set_status(oid, PURGING)
     try:
+        # An in-flight multipart upload has no assembled object: abort the
+        # session first, otherwise its parts linger until the session TTL and
+        # no sweep can see them (the catalogue row is about to disappear).
+        if row.get("multipart_upload_id"):
+            try:
+                s3ops.abort_multipart_upload(
+                    Bucket=row["bucket"], Key=row["object_key"],
+                    UploadId=row["multipart_upload_id"],
+                )
+            except Exception as exc:
+                if not is_no_such_upload(exc):
+                    raise
+            repo.set_multipart(oid, None, row.get("multipart_part_bytes"))
         s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
     except Exception as exc:
         if previous != PURGING:

@@ -138,6 +138,12 @@ class Repository:
             (session_key(token), self.now()),
         )
 
+    def revoke_sessions_beyond(self, max_expires_at: int) -> int:
+        """PostgreSQL twin of ``SqliteRepository.revoke_sessions_beyond``."""
+        return self._run(
+            "DELETE FROM sessions WHERE expires_at > %s", (max_expires_at,)
+        )
+
     def delete_session(self, sid: str) -> None:
         """Delete by stored row id (``session["id"]``, i.e. the digest)."""
         self._run("DELETE FROM sessions WHERE id = %s", (sid,))
@@ -491,6 +497,22 @@ class Repository:
         row = self._one(sql, tuple(params))
         return int(row["n"])
 
+    def reserved_bytes_for(self, *, space_id: str,
+                           owner_id: Optional[str] = None) -> int:
+        """PostgreSQL twin of ``SqliteRepository.reserved_bytes_for``."""
+        sql = (
+            "SELECT COALESCE(SUM(expected_size_bytes), 0) AS n FROM objects "
+            "WHERE status = 'pending' AND space_id = %s"
+        )
+        params: list = [space_id]
+        if owner_id is not None:
+            sql += " AND owner_id = %s"
+            params.append(owner_id)
+        else:
+            sql += " AND owner_id IS NULL"
+        row = self._one(sql, tuple(params))
+        return int(row["n"])
+
     def get_pending_by_idempotency(
         self, *, actor_id: str, idempotency_key: str, space_id: str,
     ):
@@ -686,6 +708,17 @@ class Repository:
             (limit,),
         )
 
+    def mark_reverified(self, oid: str, size_bytes: int,
+                        checksum_sha256: str) -> int:
+        """PostgreSQL twin of ``SqliteRepository.mark_reverified``."""
+        return self._run(
+            "UPDATE objects SET status = 'available', size_bytes = %s, "
+            "checksum_sha256 = %s, version = version + 1, updated_at = %s, "
+            "scrubbed_at = %s, scrub_result = 'ok' "
+            "WHERE id = %s AND status IN ('available', 'suspect', 'failed')",
+            (size_bytes, checksum_sha256, self.now(), self.now(), oid),
+        )
+
     def set_status(self, oid: str, status: str, *,
                    expected_version=None, allowed_from=None) -> int:
         clauses = ["status = %s", "version = version + 1", "updated_at = %s"]
@@ -693,7 +726,7 @@ class Repository:
         where = ["id = %s"]
         params2 = [oid]
         if allowed_from:
-            where.append("status IN (%s)" % ",".join("%%s" for _ in allowed_from))
+            where.append("status IN (%s)" % ",".join(["%s"] * len(allowed_from)))
             params2.extend(allowed_from)
         if expected_version is not None:
             where.append("version = %s")

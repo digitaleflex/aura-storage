@@ -266,11 +266,12 @@ def prune_audit_log(*, retention_days: int) -> dict:
                 kept_lines.append(raw)
         tmp_path = f"{path}.prune.tmp"
         try:
-            # Best-effort exclusive advisory lock across the rewrite. The real
-            # guarantee is the in-process _AUDIT_LOCK (the API runs a single
-            # worker); a multi-worker deployment must serialize prune calls
-            # externally, e.g. one operator at a time.
-            with open(path, "a", encoding="utf-8") as lock_fh:
+            # Best-effort exclusive advisory lock across the rewrite. Lock a
+            # *sidecar* file, never the journal itself: os.replace() swaps the
+            # inode, and a concurrent appender that opened the new journal would
+            # otherwise take a different lock and write to an unlinked inode.
+            lock_path = f"{path}.lock"
+            with open(lock_path, "a", encoding="utf-8") as lock_fh:
                 if fcntl is not None:
                     fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
                 with open(tmp_path, "w", encoding="utf-8") as fh:

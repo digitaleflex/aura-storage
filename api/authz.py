@@ -42,7 +42,10 @@ ADMIN_SCOPES = frozenset({ADMIN_READ, ADMIN_WRITE})
 # token must not be able to mint spaces/identities. Enforced twice: on creation
 # (``api/main.py`` refuses admin scopes) and here, so a row that somehow carries
 # an admin scope (legacy data) is never *effective*.
-SERVICE_SCOPES = frozenset({OBJECTS_READ, OBJECTS_WRITE, OBJECTS_DELETE, OBJECTS_PURGE})
+# ``objects:purge`` is deliberately absent: permanent deletion is a human,
+# audited operation (operator/admin). A leaked machine token must not be able to
+# erase an entire space without a session, CSRF token and explicit confirmation.
+SERVICE_SCOPES = frozenset({OBJECTS_READ, OBJECTS_WRITE, OBJECTS_DELETE})
 
 # Default-deny role -> capability map (documented in docs/AUTHORIZATION-MATRIX.md).
 ROLE_SCOPES = {
@@ -57,6 +60,23 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 # Machine-to-machine authentication failure rate limiter: {client_ip: [ts, ...]}.
 _M2M_ATTEMPTS: dict[str, list[float]] = {}
+# Bound the table: a distributed/spoofed-IP attack must not exhaust memory.
+_M2M_MAX_ENTRIES = 10_000
+
+
+def _prune_m2m(now: float | None = None) -> None:
+    if len(_M2M_ATTEMPTS) < _M2M_MAX_ENTRIES:
+        return
+    now = time.time() if now is None else now
+    window = settings.m2m_rate_window
+    for client in list(_M2M_ATTEMPTS):
+        fresh = [t for t in _M2M_ATTEMPTS[client] if now - t < window]
+        if fresh:
+            _M2M_ATTEMPTS[client] = fresh
+        else:
+            _M2M_ATTEMPTS.pop(client, None)
+    while len(_M2M_ATTEMPTS) >= _M2M_MAX_ENTRIES:
+        _M2M_ATTEMPTS.pop(next(iter(_M2M_ATTEMPTS)), None)
 
 
 def reset_m2m_attempts() -> None:
@@ -84,6 +104,7 @@ def _m2m_blocked(client_ip: str, now: float | None = None) -> bool:
 
 def _m2m_record_failure(client_ip: str) -> None:
     _M2M_ATTEMPTS.setdefault(client_ip, []).append(time.time())
+    _prune_m2m()
 
 
 def _bearer_token(request: Request) -> str | None:

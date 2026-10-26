@@ -133,6 +133,18 @@ class Repository:
             (session_key(token), self.now()),
         ).fetchone()
 
+    def revoke_sessions_beyond(self, max_expires_at: int) -> int:
+        """Delete sessions whose expiry exceeds the current policy.
+
+        Used at boot after AURA_SESSION_TTL is shortened: rows created under the
+        old 90-day policy must not outlive the new 8-hour one.
+        """
+        cur = self.conn.execute(
+            "DELETE FROM sessions WHERE expires_at > ?", (max_expires_at,)
+        )
+        self.conn.commit()
+        return cur.rowcount
+
     def delete_session(self, sid: str) -> None:
         """Delete by stored row id (``session["id"]``, i.e. the digest)."""
         self.conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
@@ -539,6 +551,21 @@ class Repository:
             params.append(min_expires_at)
         return int(self.conn.execute(sql, params).fetchone()["n"])
 
+    def reserved_bytes_for(self, *, space_id: str,
+                           owner_id: Optional[str] = None) -> int:
+        """Declared bytes of live uploads reserved by one owner (or services)."""
+        sql = (
+            "SELECT COALESCE(SUM(expected_size_bytes), 0) AS n FROM objects "
+            "WHERE status = 'pending' AND space_id = ?"
+        )
+        params: list = [space_id]
+        if owner_id is not None:
+            sql += " AND owner_id = ?"
+            params.append(owner_id)
+        else:
+            sql += " AND owner_id IS NULL"
+        return int(self.conn.execute(sql, params).fetchone()["n"])
+
     def get_pending_by_idempotency(
         self, *, actor_id: str, idempotency_key: str, space_id: str,
     ):
@@ -768,6 +795,23 @@ class Repository:
             "ORDER BY updated_at ASC LIMIT ?",
             (limit,),
         ).fetchall()
+
+    def mark_reverified(self, oid: str, size_bytes: int,
+                        checksum_sha256: str) -> int:
+        """Publish an object after an operator re-hash (exit from ``suspect``).
+
+        Unlike :meth:`mark_available`, this accepts an already-published row:
+        the whole point is to rehabilitate an object whose bytes now match.
+        """
+        cur = self.conn.execute(
+            "UPDATE objects SET status = 'available', size_bytes = ?, "
+            "checksum_sha256 = ?, version = version + 1, updated_at = ?, "
+            "scrubbed_at = ?, scrub_result = 'ok' "
+            "WHERE id = ? AND status IN ('available', 'suspect', 'failed')",
+            (size_bytes, checksum_sha256, self.now(), self.now(), oid),
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     def set_status(self, oid: str, status: str, *,
                    expected_version=None, allowed_from=None) -> int:

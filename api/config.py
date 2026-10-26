@@ -184,6 +184,13 @@ class Settings:
         "AURA_COMMIT_DEADLINE_S", _int("AURA_COMMIT_DEADLINE_SECONDS", 300)
     )
     max_pending_intents: int = _int("AURA_MAX_PENDING_INTENTS", 100)
+    # Per-owner ceiling on *declared* pending bytes. Without it a single account
+    # can reserve the whole capacity with 100 huge intents and never send a
+    # byte (multipart raises the per-intent ceiling to 1 TiB for 7 days).
+    # 0 disables the per-owner cap (the global capacity guard still applies).
+    max_pending_bytes_per_owner: int = _int(
+        "AURA_MAX_PENDING_BYTES_PER_OWNER", 100 * 1024 ** 3
+    )
     # Zero-byte objects are refused by default: an empty upload is usually a
     # client bug rather than intent. Enable only when a caller legitimately needs
     # empty placeholders (the commit path verifies the empty SHA-256 either way).
