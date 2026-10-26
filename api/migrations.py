@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0004_transfer_cas"
+SCHEMA_VERSION = "0005_object_revisions"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -81,6 +81,14 @@ ADDED_COLUMNS = {
         # automatic cleanup of terminal statuses.
         ("version", "INTEGER NOT NULL DEFAULT 1"),
         ("terminal_since", "INTEGER"),
+        # Content revisions (docs/CONTENT-REVISIONS.md, phase 1 — schema only).
+        # `revision_count` is a denormalised count for listing, `current_revision_id`
+        # points at the latest archived generation and `replaced_at` records when the
+        # head was last replaced, which is what the crash-recovery invariant keys on.
+        # Nothing writes these yet.
+        ("revision_count", "INTEGER DEFAULT 0"),
+        ("current_revision_id", "TEXT"),
+        ("replaced_at", "INTEGER"),
     ],
     # Master mode: a session-bound, short-lived elevation for bulk destructive
     # actions, granted only after re-entering the password (step-up).
@@ -239,6 +247,42 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_objects_inflight ON objects(status, created_at) "
         "WHERE status IN ('pending', 'verifying')"
+    )
+    # `schema.sql` only runs when the database is created, so an upgraded
+    # catalogue needs the revisions table created here. Kept byte-identical to
+    # schema.sql: `tests/test_migrations.py` compares the two.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS object_revisions ("
+        "id TEXT PRIMARY KEY, "
+        "object_id TEXT NOT NULL REFERENCES objects(id) ON DELETE RESTRICT, "
+        "revision_number INTEGER NOT NULL, "
+        "bucket TEXT NOT NULL, "
+        "storage_key TEXT NOT NULL, "
+        "size_bytes INTEGER NOT NULL, "
+        "checksum_sha256 TEXT NOT NULL DEFAULT '', "
+        "content_type TEXT NOT NULL DEFAULT 'application/octet-stream', "
+        "created_at INTEGER NOT NULL, "
+        "created_by_id TEXT, "
+        "created_by_kind TEXT, "
+        "keep_forever INTEGER NOT NULL DEFAULT 0, "
+        "purged_at INTEGER, "
+        "UNIQUE (object_id, revision_number))"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_revisions_object "
+        "ON object_revisions(object_id, revision_number)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_revisions_storage "
+        "ON object_revisions(bucket, storage_key)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_revisions_keep "
+        "ON object_revisions(keep_forever) WHERE keep_forever = 1"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_revisions_purge "
+        "ON object_revisions(purged_at, created_at) WHERE purged_at IS NULL"
     )
     runner.commit()
     _canonicalize_legacy_ids(runner)

@@ -444,6 +444,69 @@ class Repository:
         ).fetchall()
         return [_as_dict(r) for r in rows]
 
+    # -- content revisions (docs/CONTENT-REVISIONS.md, phase 1) ---------------
+    # Schema and persistence only: nothing in the API creates, reads or purges a
+    # revision yet. Bytes of a revision live under its own `storage_key`, never
+    # under `objects.object_key`, so the "one live key per object" invariant the
+    # reconciler and orphan sweeps rely on is untouched.
+    def create_revision(
+        self, object_id: str, revision_number: int, bucket: str,
+        storage_key: str, size_bytes: int, checksum_sha256: str,
+        content_type: str, created_by_id: Optional[str] = None,
+        created_by_kind: Optional[str] = None, keep_forever: bool = False,
+    ) -> str:
+        rid = self.new_id()
+        self.conn.execute(
+            "INSERT INTO object_revisions (id, object_id, revision_number, bucket, "
+            "storage_key, size_bytes, checksum_sha256, content_type, created_at, "
+            "created_by_id, created_by_kind, keep_forever) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (rid, object_id, revision_number, bucket, storage_key, size_bytes,
+             checksum_sha256, content_type, self.now(), created_by_id,
+             created_by_kind, 1 if keep_forever else 0),
+        )
+        self.conn.commit()
+        return rid
+
+    def list_revisions(self, object_id: str) -> list:
+        rows = self.conn.execute(
+            "SELECT * FROM object_revisions WHERE object_id = ? "
+            "ORDER BY revision_number DESC",
+            (object_id,),
+        ).fetchall()
+        return [_as_dict(r) for r in rows]
+
+    def get_revision(self, object_id: str, revision_id: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM object_revisions WHERE object_id = ? AND id = ?",
+            (object_id, revision_id),
+        ).fetchone())
+
+    def delete_revision(self, revision_id: str) -> int:
+        cur = self.conn.execute(
+            "DELETE FROM object_revisions WHERE id = ?", (revision_id,)
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def set_revision_keep_forever(self, revision_id: str, keep: bool) -> int:
+        cur = self.conn.execute(
+            "UPDATE object_revisions SET keep_forever = ? WHERE id = ?",
+            (1 if keep else 0, revision_id),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def count_keep_forever(self, owner_id: str) -> int:
+        """Revisions pinned by one owner, across all their objects (per-user cap)."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM object_revisions r "
+            "JOIN objects o ON o.id = r.object_id "
+            "WHERE o.owner_id = ? AND r.keep_forever = 1",
+            (owner_id,),
+        ).fetchone()
+        return int(row[0]) if row else 0
+
     def consume_share(self, sid: str, now: int) -> bool:
         """Redeem one use atomically. False when revoked, expired or exhausted.
 

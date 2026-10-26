@@ -397,6 +397,59 @@ class Repository:
             (object_id,),
         )
 
+    # -- content revisions (docs/CONTENT-REVISIONS.md, phase 1) ---------------
+    # PostgreSQL twin of the SqliteRepository methods: identical signatures and
+    # identical results. Persistence only — nothing calls these from the API yet.
+    def create_revision(
+        self, object_id: str, revision_number: int, bucket: str,
+        storage_key: str, size_bytes: int, checksum_sha256: str,
+        content_type: str, created_by_id: Optional[str] = None,
+        created_by_kind: Optional[str] = None, keep_forever: bool = False,
+    ) -> str:
+        rid = self.new_id()
+        self._run(
+            "INSERT INTO object_revisions (id, object_id, revision_number, bucket, "
+            "storage_key, size_bytes, checksum_sha256, content_type, created_at, "
+            "created_by_id, created_by_kind, keep_forever) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (rid, object_id, revision_number, bucket, storage_key, size_bytes,
+             checksum_sha256, content_type, self.now(), created_by_id,
+             created_by_kind, 1 if keep_forever else 0),
+        )
+        return rid
+
+    def list_revisions(self, object_id: str) -> list:
+        return self._all(
+            "SELECT * FROM object_revisions WHERE object_id = %s "
+            "ORDER BY revision_number DESC",
+            (object_id,),
+        )
+
+    def get_revision(self, object_id: str, revision_id: str) -> Optional[dict]:
+        return self._one(
+            "SELECT * FROM object_revisions WHERE object_id = %s AND id = %s",
+            (object_id, revision_id),
+        )
+
+    def delete_revision(self, revision_id: str) -> int:
+        return self._run("DELETE FROM object_revisions WHERE id = %s", (revision_id,))
+
+    def set_revision_keep_forever(self, revision_id: str, keep: bool) -> int:
+        return self._run(
+            "UPDATE object_revisions SET keep_forever = %s WHERE id = %s",
+            (1 if keep else 0, revision_id),
+        )
+
+    def count_keep_forever(self, owner_id: str) -> int:
+        """Revisions pinned by one owner, across all their objects (per-user cap)."""
+        row = self._one(
+            "SELECT COUNT(*) AS n FROM object_revisions r "
+            "JOIN objects o ON o.id = r.object_id "
+            "WHERE o.owner_id = %s AND r.keep_forever = 1",
+            (owner_id,),
+        )
+        return int(row["n"]) if row else 0
+
     def consume_share(self, sid: str, now: int) -> bool:
         # See api/db.py: the guard is part of the UPDATE so a last use cannot be
         # redeemed twice by concurrent requests.

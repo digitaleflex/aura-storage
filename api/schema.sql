@@ -115,6 +115,33 @@ CREATE TABLE IF NOT EXISTS object_shares (
   last_used_at INTEGER,
   created_at INTEGER NOT NULL
 );
+-- Content revisions (docs/CONTENT-REVISIONS.md). One row per archived version of
+-- an object; the live bytes stay on `objects.object_key` and each revision owns
+-- its own `storage_key`. Bytes are copied by the application, never by S3 native
+-- bucket versioning: the reconciliation model assumes exactly one live key per
+-- object, so S3-managed old versions would be misread as storage orphans.
+--
+-- `ON DELETE RESTRICT` on object_id is deliberate and is the reason phase 2 must
+-- change the purge path: deleting an object row while its revisions still exist
+-- has to be an explicit, ordered operation, never a cascade that could drop the
+-- row and leave the bytes unaccounted. Nothing writes this table yet (phase 1 is
+-- schema only).
+CREATE TABLE IF NOT EXISTS object_revisions (
+  id TEXT PRIMARY KEY,
+  object_id TEXT NOT NULL REFERENCES objects(id) ON DELETE RESTRICT,
+  revision_number INTEGER NOT NULL,
+  bucket TEXT NOT NULL,
+  storage_key TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  checksum_sha256 TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+  created_at INTEGER NOT NULL,
+  created_by_id TEXT,
+  created_by_kind TEXT,
+  keep_forever INTEGER NOT NULL DEFAULT 0,
+  purged_at INTEGER,
+  UNIQUE (object_id, revision_number)
+);
 CREATE TABLE IF NOT EXISTS schema_migrations (
   id TEXT PRIMARY KEY,
   applied_at INTEGER NOT NULL
@@ -122,5 +149,12 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE INDEX IF NOT EXISTS idx_objects_owner ON objects(owner_id, status);
 CREATE INDEX IF NOT EXISTS idx_identities_space ON service_identities(space_id);
 CREATE INDEX IF NOT EXISTS idx_shares_object ON object_shares(object_id);
+-- Revision indexes: list one object's history, find the bytes behind a revision
+-- during orphan/reconcile scans (must NOT be mistaken for storage orphans), and
+-- let the retention sweep find candidates without scanning the table.
+CREATE INDEX IF NOT EXISTS idx_revisions_object ON object_revisions(object_id, revision_number);
+CREATE INDEX IF NOT EXISTS idx_revisions_storage ON object_revisions(bucket, storage_key);
+CREATE INDEX IF NOT EXISTS idx_revisions_keep ON object_revisions(keep_forever) WHERE keep_forever = 1;
+CREATE INDEX IF NOT EXISTS idx_revisions_purge ON object_revisions(purged_at, created_at) WHERE purged_at IS NULL;
 -- idx_objects_space is created by api/migrations.py, after the additive
 -- `space_id` column exists on upgraded catalogues.

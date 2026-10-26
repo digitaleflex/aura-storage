@@ -99,9 +99,43 @@ def test_postgres_repository_parity():
         # Counts the folder-delete guard relies on.
         assert repo.folder_child_count(root, owner_id=uid) == 1
         assert repo.folder_object_count(root, owner_id=uid) == 0
+
+        # Content revisions (docs/CONTENT-REVISIONS.md, phase 1): the PostgreSQL
+        # twin must behave exactly like SQLite. Nothing in the API uses these yet.
+        rid = repo.create_revision(
+            object_id=second, revision_number=1, bucket=bucket,
+            storage_key=f"aura/{space_id}/{uid}/rev/1", size_bytes=2048,
+            checksum_sha256="b" * 64, content_type="application/pdf",
+            created_by_id=uid, created_by_kind="human",
+        )
+        rev = repo.get_revision(second, rid)
+        assert rev["object_id"] == second and rev["revision_number"] == 1
+        assert rev["keep_forever"] == 0 and rev["purged_at"] is None
+        assert [r["revision_number"] for r in repo.list_revisions(second)] == [1]
+        assert repo.get_revision(oid, rid) is None  # scoped to its own object
+        assert repo.count_keep_forever(uid) == 0
+        assert repo.set_revision_keep_forever(rid, True) == 1
+        assert repo.count_keep_forever(uid) == 1
+        assert repo.set_revision_keep_forever(rid, False) == 1
+        assert repo.count_keep_forever(uid) == 0
+        # The generation is unique per object: the replace flow depends on it.
+        with pytest.raises(Exception):
+            repo.create_revision(
+                object_id=second, revision_number=1, bucket=bucket,
+                storage_key=f"aura/{space_id}/{uid}/rev/dup", size_bytes=1,
+                checksum_sha256="", content_type="application/pdf",
+            )
+        assert repo.delete_revision(rid) == 1
+        assert repo.get_revision(second, rid) is None
     finally:
         # Remove only what this test created; the database is disposable.
         with repo.conn.cursor() as cur:
+            # Revisions first: object_id is ON DELETE RESTRICT by design, so the
+            # object cleanup below would otherwise be refused.
+            cur.execute(
+                "DELETE FROM object_revisions WHERE object_id IN "
+                "(SELECT id FROM objects WHERE owner_id = %s)", (uid,)
+            )
             cur.execute("DELETE FROM objects WHERE owner_id = %s", (uid,))
             cur.execute("DELETE FROM folders WHERE owner_id = %s", (uid,))
             cur.execute("DELETE FROM users WHERE id = %s", (uid,))
