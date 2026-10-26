@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { VaultMark } from "./VaultMark";
 import { StorageUsage } from "./StorageUsage";
 import { useTransfers } from "../lib/transferContext";
+import { readStorage, writeStorage } from "../lib/safeStorage";
 
 /** Local copy of formatBytes to avoid circular import with ObjectsPage. */
 function formatBytes(size: number): string {
@@ -85,16 +86,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   // Densité d'affichage (compact/confortable)
   const [density, setDensity] = React.useState<"comfortable" | "compact">(() => {
-    return (localStorage.getItem("aura-density") as "comfortable" | "compact") || "comfortable";
+    return (readStorage("aura-density") as "comfortable" | "compact") || "comfortable";
   });
   React.useEffect(() => {
     document.body.classList.toggle("density-compact", density === "compact");
-    localStorage.setItem("aura-density", density);
+    writeStorage("aura-density", density);
   }, [density]);
 
   // Theme manuel (override prefers-color-scheme)
   const [theme, setTheme] = React.useState<"light" | "dark" | "auto">(() => {
-    return (localStorage.getItem("aura-theme") as "light" | "dark" | "auto") || "auto";
+    return (readStorage("aura-theme") as "light" | "dark" | "auto") || "auto";
   });
   React.useEffect(() => {
     const root = document.documentElement;
@@ -103,7 +104,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     } else {
       root.setAttribute("data-theme", theme);
     }
-    localStorage.setItem("aura-theme", theme);
+    writeStorage("aura-theme", theme);
   }, [theme]);
   const hamburgerRef = React.useRef<HTMLButtonElement | null>(null);
   const drawerRef = React.useRef<HTMLDivElement | null>(null);
@@ -196,8 +197,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
   };
 
   async function handleLogout() {
-    await logout();
-    await navigate({ to: "/login" });
+    // logout() is best-effort and never rejects: local state is always cleared.
+    try {
+      await logout();
+    } finally {
+      await navigate({ to: "/login" });
+    }
   }
 
   // Détermine si on est sur la page "Fichiers" (indexRoute exacte)
