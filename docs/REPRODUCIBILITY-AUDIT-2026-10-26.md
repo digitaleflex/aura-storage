@@ -147,3 +147,30 @@ Ordered; each item marked **[commit]**, **[.env]**, or **[verify]**. Nothing her
 - **No network clone was made.** The clone state was modelled with `git diff origin/main` and `git rev-parse` against the local remote-tracking ref; `origin/main` may have moved since the last fetch.
 - **Not verified:** actually-served HTTP headers (HSTS, dashboard 401, docs BasicAuth), `web/dist` byte-for-byte reproducibility, Postgres data/migrations, SeaweedFS volume contents, ACME/TLS state, DNS and firewall, backup/restore, image digests vs a fresh `docker compose build`.
 - **Not audited:** the four modified test files' coverage, and whether the 11 untracked files are complete (e.g. `web/src/lib/csv.test.ts` exists but the runner wiring was not inspected).
+
+---
+
+## 7. Outcome — remediation applied the same day
+
+The two gaps this audit opened with are now closed for code and configuration.
+
+- The working tree was committed as seven logical commits and `main` was pushed:
+  `origin/main` moved from `fdaaac7` to `b59d44c` (27 commits). The "clone is behind"
+  gap no longer exists.
+- `docker-compose.yml` is committed, so `HEAD` and the file the host runs are the same.
+  A rebuild therefore gets container hardening, the scoped `aura-api` S3 identity, the
+  8-hour session TTL and the explicit proxy subnets instead of the older defaults.
+- CI on `main` (`Validate storage configuration`, run `40255875462`) finished **success**
+  in 1m20s.
+
+What still stands, and is by design rather than debt:
+
+- **`.env` is not in the repository** and never should be. Provisioning it remains a
+  manual step; §5 lists the keys the rebuild needs. The audit's §6 caveat still applies:
+  this document could not read it.
+- **The image on the host predates the last commit.** `aura-api:local` was built before
+  the content-revisions schema (phase 1) was committed. The difference is schema-only and
+  has no effect on the running API, but the next `docker compose build api` is what makes
+  the deployed artefact correspond exactly to `b59d44c`.
+- Everything in §5 that is a *verification* rather than a commit — the post-boot checks —
+  was not executed here and still requires a deliberate deploy.
