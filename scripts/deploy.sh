@@ -38,6 +38,26 @@ fi
 # defined on app) are missing until the next Docker event. Restarting it after
 # the stack is healthy makes the routing configuration deterministic.
 docker compose restart traefik
+# Traefik reloads its routers asynchronously. Probing the domain immediately
+# after the restart raced the reload and failed an otherwise healthy deploy
+# (observed 2026-10-26: CSP postflight aborted with no header while Traefik was
+# still "health: starting"). Wait for its healthcheck before probing.
+TRAEFIK_ID="$(docker compose ps -q traefik)"
+TRAEFIK_STATUS=""
+for _ in $(seq 1 60); do
+  TRAEFIK_STATUS="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${TRAEFIK_ID}" 2>/dev/null || true)"
+  case "${TRAEFIK_STATUS}" in
+    healthy|none) break ;;
+  esac
+  sleep 1
+done
+case "${TRAEFIK_STATUS}" in
+  healthy|none) : ;;
+  *)
+    echo "ERROR: traefik did not become healthy after restart (status: ${TRAEFIK_STATUS:-unknown})" >&2
+    exit 1
+    ;;
+esac
 echo "${CURRENT_NGINX_HASH}" > "${NGINX_HASH_FILE}"
 docker compose ps
 
@@ -52,7 +72,14 @@ if [[ -n "${EXPECTED_CSP}" ]]; then
     echo "ERROR: APP_DOMAIN is missing from .env; cannot verify the served CSP" >&2
     exit 1
   fi
-  SERVED_CSP="$(curl -sI --resolve "${APP_DOMAIN_VALUE}:443:127.0.0.1" "https://${APP_DOMAIN_VALUE}/" 2>/dev/null | grep -i 'content-security-policy' || true)"
+  SERVED_CSP=""
+  # Even once Traefik is healthy, the router needs a moment to appear. Retry
+  # briefly instead of failing on the first 404/503.
+  for _ in $(seq 1 10); do
+    SERVED_CSP="$(curl -sI --resolve "${APP_DOMAIN_VALUE}:443:127.0.0.1" "https://${APP_DOMAIN_VALUE}/" 2>/dev/null | grep -i 'content-security-policy' || true)"
+    [[ -n "${SERVED_CSP}" ]] && break
+    sleep 2
+  done
   if [[ -z "${SERVED_CSP}" ]]; then
     echo "ERROR: no Content-Security-Policy header served after deploy (${APP_DOMAIN_VALUE})" >&2
     exit 1
