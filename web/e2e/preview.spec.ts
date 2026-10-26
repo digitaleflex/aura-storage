@@ -18,6 +18,7 @@ const ITEMS = [
   item("img-1", "plan.png", "image/png"),
   item("pdf-1", "contrat.pdf", "application/pdf"),
   item("html-1", "page.html", "text/html"),
+  item("vid-1", "clip.mp4", "video/mp4"),
   item("bad-1", "forcee.png", "image/png"),
 ];
 
@@ -26,9 +27,14 @@ async function setup(page: Page) {
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
     "base64",
   );
-  await page.route("**/fake-s3/**", (route) =>
-    route.fulfill({ status: 200, contentType: "image/png", body: PNG }),
-  );
+  await page.route("**/fake-s3/**", (route) => {
+    if (route.request().url().endsWith("/vid-1")) {
+      // Minimal ftyp box: enough for the element to receive a video/mp4 body.
+      const MP4 = Buffer.from("00000018667479706d703432000000006d703432", "hex");
+      return route.fulfill({ status: 200, contentType: "video/mp4", body: MP4 });
+    }
+    return route.fulfill({ status: 200, contentType: "image/png", body: PNG });
+  });
   await page.route("**/api/v1/**", async (route: Route) => {
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
@@ -93,6 +99,18 @@ test("a PDF opens in a iframe pointing at the preview URL", async ({ page }) => 
   await page.getByRole("menuitem", { name: "Aperçu" }).click();
   const dialog = page.getByRole("dialog", { name: /Aperçu — contrat\.pdf/ });
   await expect(dialog.locator("iframe.preview-frame")).toHaveAttribute("src", "/fake-s3/pdf-1");
+});
+
+test("a video opens in the preview as a <video>", async ({ page }) => {
+  await setup(page);
+  await openMenu(page, "clip.mp4");
+  await page.getByRole("menuitem", { name: "Aperçu" }).click();
+  const dialog = page.getByRole("dialog", { name: /Aperçu — clip\.mp4/ });
+  const video = dialog.locator("video.preview-video");
+  await expect(video).toHaveAttribute("src", "/fake-s3/vid-1");
+  await expect(video).toHaveAttribute("controls", "");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
 });
 
 test("a type outside the allow-list has no Aperçu entry", async ({ page }) => {

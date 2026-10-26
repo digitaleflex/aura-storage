@@ -645,9 +645,29 @@ def test_is_previewable_ignores_parameters_and_case():
     assert main.is_previewable("Application/PDF")
     assert main.is_previewable("image/png; charset=binary")
     assert main.is_previewable("audio/mpeg")
+    assert main.is_previewable("video/mp4")
+    assert main.is_previewable("video/webm; codecs=avc1")
     assert not main.is_previewable("image/svg+xml")
     assert not main.is_previewable("text/html")
     assert not main.is_previewable("")
+
+
+def test_preview_intent_serves_video_inline(monkeypatch):
+    # Video is streamed by the browser from the presigned URL with Range
+    # requests; the API still binds the object's own type and disposes inline.
+    data = b"\x00\x00\x00\x18ftypmp42preview-bytes"
+    monkeypatch.setattr(main, "s3ops", DummyS3(data))
+    c, headers = _admin()
+    oid = _intent(c, headers, name="clip.mp4", size_bytes=len(data),
+                  content_type="video/mp4").json()["id"]
+    c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
+    r = c.post(f"/api/v1/objects/{oid}/preview-intent", headers=headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["content_type"] == "video/mp4"
+    assert body["size_bytes"] == len(data)
+    assert "response-content-disposition=inline" in body["preview_url"]
+    assert "response-content-type=video%2Fmp4" in body["preview_url"]
 
 
 def test_preview_intent_matches_download_scoping(monkeypatch):

@@ -19,9 +19,12 @@ const PREVIEWABLE = new Set([
   "audio/mp4",
   "audio/aac",
   "audio/flac",
+  "video/mp4",
+  "video/webm",
+  "video/ogg",
 ]);
 
-export type PreviewKind = "image" | "audio" | "pdf";
+export type PreviewKind = "image" | "audio" | "video" | "pdf";
 
 function baseType(contentType: string | undefined): string {
   return (contentType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
@@ -36,5 +39,6 @@ export function previewKind(contentType: string | undefined): PreviewKind | null
   if (!PREVIEWABLE.has(type)) return null;
   if (type.startsWith("image/")) return "image";
   if (type.startsWith("audio/")) return "audio";
+  if (type.startsWith("video/")) return "video";
   return "pdf";
 }

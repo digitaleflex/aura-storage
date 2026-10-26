@@ -4,7 +4,11 @@ import { describeError } from "../lib/errors";
 import type { ObjectItem, PreviewIntentResponse } from "../lib/api";
 import { previewKind } from "../lib/preview";
 
-/** Above this size the browser does real work; warn instead of pulling it silently. */
+/**
+ * Above this size the browser does real work on images/PDF/audio; warn instead
+ * of pulling it silently. Video is excluded: the browser streams it with HTTP
+ * Range requests, so only the played part is transferred.
+ */
 const PREVIEW_WARN_BYTES = 50 * 1024 * 1024;
 
 type Status = "loading" | "ready" | "error";
@@ -115,7 +119,7 @@ export function PreviewModal({
 
         {status === "ready" && item && intent && kind ? (
           <>
-            {size > PREVIEW_WARN_BYTES ? (
+            {kind !== "video" && size > PREVIEW_WARN_BYTES ? (
               <p role="status" className="alert preview-warn">
                 Fichier volumineux : l'aperçu peut solliciter fortement le navigateur.
               </p>
@@ -130,6 +134,17 @@ export function PreviewModal({
               <audio className="preview-audio" src={intent.preview_url} controls preload="metadata">
                 Votre navigateur ne peut pas lire cet audio.
               </audio>
+            ) : kind === "video" ? (
+              <video
+                className="preview-video"
+                src={intent.preview_url}
+                controls
+                preload="metadata"
+                playsInline
+                aria-label={`Vidéo ${item.display_name}`}
+              >
+                Votre navigateur ne peut pas lire cette vidéo.
+              </video>
             ) : (
               <iframe
                 className="preview-frame"

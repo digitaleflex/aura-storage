@@ -1924,6 +1924,9 @@ PREVIEWABLE_CONTENT_TYPES = frozenset({
     "application/pdf",
     "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg",
     "audio/webm", "audio/mp4", "audio/aac", "audio/flac",
+    # Video is served untouched, inline, from the S3 origin: the browser streams
+    # it with HTTP Range requests and there is no transcoding nor thumbnail.
+    "video/mp4", "video/webm", "video/ogg",
 })
 
 

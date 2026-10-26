@@ -1,7 +1,7 @@
 """Content-Security-Policy of the app shell (app/nginx.conf).
 
 Offline: reads the nginx template. The policy must let the inline preview work
-(PDF frame, audio, images all from the S3 host only) without loosening anything
+(PDF frame, audio, video, images all from the S3 host only) without loosening anything
 that matters: scripts stay same-origin, no 'unsafe-eval', the app cannot be
 framed, and nothing is allowed from arbitrary hosts.
 """

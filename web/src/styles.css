@@ -3005,12 +3005,121 @@ p .chip {
   width: 100%;
 }
 
+.preview-video {
+  width: 100%;
+  max-height: 70vh;
+  border-radius: var(--radius);
+  background: #000;
+}
+
 .preview-frame {
   width: 100%;
   height: 70vh;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #fff;
+}
+
+/* -- Share dialog: one-time link, link list, inline revocation --------------- */
+.share-created {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: var(--bw) solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--steel-2);
+}
+
+.share-created-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.share-created-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  border: var(--bw) solid var(--field-line);
+  border-radius: var(--radius);
+  padding: var(--field-pad-y) var(--field-pad-x);
+  background: var(--steel-1);
+  color: var(--ink);
+}
+
+.share-created p {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.share-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.share-hint {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.share-links {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.share-links h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.share-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Long histories are common on a frequently shared file: keep the dialog
+     usable instead of pushing the form and actions off screen. */
+  max-height: 240px;
+  overflow: auto;
+}
+
+.share-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: var(--bw) solid var(--line);
+  border-radius: var(--radius-small);
+}
+
+.share-item-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.share-revoke-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+@media (max-width: 560px) {
+  .share-fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 .preview-fallback {
