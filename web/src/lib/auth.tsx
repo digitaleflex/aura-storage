@@ -55,20 +55,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
-    if (csrf) {
-      try {
+    try {
+      if (csrf) {
         await api.logout(csrf);
-      } catch (err) {
-        // Session may already be gone; still clear local state.
-        if (!(err instanceof ApiError && err.status === 401)) {
-          throw err;
-        }
       }
+    } catch {
+      // Best effort: the session may already be gone (401) or the network may
+      // be down. Local state must still be wiped, otherwise the previous
+      // account's cached objects/folders flash into the next session.
+    } finally {
+      setCsrf(null);
+      clearFilesView();
+      // Drop every tenant-scoped cache, not just ["session"].
+      queryClient.clear();
     }
-    setCsrf(null);
-    clearFilesView();
-    await queryClient.invalidateQueries({ queryKey: ["session"] });
   }, [csrf, queryClient]);
+
+  // Global session expiry: any 401 from the API lands here, so a request does
+  // not have to remember to invalidate the session itself.
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setCsrf(null);
+      void queryClient.invalidateQueries({ queryKey: ["session"] });
+    };
+    window.addEventListener("aura:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("aura:unauthorized", onUnauthorized);
+  }, [queryClient]);
 
   const value = useMemo(() => ({ csrf, login, logout }), [csrf, login, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -107,17 +119,32 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   // Keep the page the user was on: after logging back in, the login page
   // returns there instead of dumping everyone on the root folder. Stored in
   // sessionStorage rather than a query string (subpath-safe, no open redirect).
+  const status = sessionQuery.error instanceof ApiError ? sessionQuery.error.status : null;
+  // Only an authentication refusal means "logged out". A 500, a proxy error or
+  // a network blip must not destroy the page and send the user to /login.
+  const unauthorized = status === 401 || status === 403;
+
   useEffect(() => {
-    if (!sessionQuery.isError) return;
+    if (!unauthorized) return;
     rememberLoginRedirect(location.href);
     void navigate({ to: "/login", replace: true });
-  }, [sessionQuery.isError, location.href, navigate]);
+  }, [unauthorized, location.href, navigate]);
 
   if (sessionQuery.isPending) {
     return <p className="muted">Vérification de la session…</p>;
   }
   if (sessionQuery.isError) {
-    return <p className="muted">Redirection vers la connexion…</p>;
+    if (unauthorized) {
+      return <p className="muted">Redirection vers la connexion…</p>;
+    }
+    return (
+      <div className="muted" role="alert">
+        <p>Impossible de vérifier la session.</p>
+        <button type="button" onClick={() => void sessionQuery.refetch()}>
+          Réessayer
+        </button>
+      </div>
+    );
   }
   return <>{children}</>;
 }

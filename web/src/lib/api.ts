@@ -529,6 +529,10 @@ interface RequestOptions {
   body?: unknown;
   csrf?: string | null;
   headers?: Record<string, string>;
+  /** Cancellation from TanStack Query (or a component unmount). */
+  signal?: AbortSignal;
+  /** Hard deadline for the request; default: no client-side timeout. */
+  timeoutMs?: number;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -541,12 +545,41 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (options.csrf) {
     headers["x-csrf-token"] = options.csrf;
   }
-  const res = await fetch(path, {
-    method: options.method ?? "GET",
-    headers,
-    body,
-    credentials: "include",
-  });
+  // Compose the caller's signal with an optional deadline. Without this a
+  // hung request (or a cancelled query) never settles.
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener("abort", onAbort, { once: true });
+  }
+  if (options.timeoutMs && options.timeoutMs > 0) {
+    timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  }
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method: options.method ?? "GET",
+      headers,
+      body,
+      credentials: "include",
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (controller.signal.aborted && !options.signal?.aborted) {
+      throw new ApiError(0, "Délai dépassé.");
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onAbort);
+  }
+  if (res.status === 401 && typeof window !== "undefined") {
+    // Global session-expiry signal, handled by AuthProvider: no request has to
+    // remember to invalidate ["session"] itself.
+    window.dispatchEvent(new Event("aura:unauthorized"));
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -1015,6 +1048,8 @@ export interface PutOptions {
   /** Real byte progress, available because XHR exposes upload progress. */
   onProgress?: (loaded: number, total: number) => void;
   signal?: AbortSignal;
+  /** Idle-transfer deadline; a silent server must not pin a concurrency slot. */
+  timeoutMs?: number;
 }
 
 /**
@@ -1048,12 +1083,16 @@ export function putToPresignedUrl(
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let settled = false;
-    const fail = (err: Error) => {
-      if (!settled) {
-        settled = true;
-        reject(err);
-      }
+    const cleanup = () => {
+      options.signal?.removeEventListener("abort", onAbort);
     };
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const fail = (err: Error) => settle(() => reject(err));
 
     const onAbort = () => {
       xhr.abort();
@@ -1068,6 +1107,9 @@ export function putToPresignedUrl(
     }
 
     xhr.open("PUT", url, true);
+    // A presigned PUT that never answers used to hold its concurrency slot
+    // forever (ontimeout was wired but no timeout was ever armed).
+    xhr.timeout = options.timeoutMs ?? 120_000;
     for (const [name, value] of Object.entries(options.headers ?? {})) {
       xhr.setRequestHeader(name, value);
     }
@@ -1078,10 +1120,7 @@ export function putToPresignedUrl(
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         options.onProgress?.(file.size, file.size);
-        if (!settled) {
-          settled = true;
-          resolve();
-        }
+        settle(() => resolve());
         return;
       }
       // 403 on a presigned PUT classically means the signature/URL expired.
