@@ -43,6 +43,12 @@ SAFE_INLINE_TYPES = frozenset({
     "image/webp",
     "image/gif",
     "text/plain",
+    # Audio and video cannot execute script either: inline lets a partner site
+    # embed them in <audio>/<video> (the browser streams with Range requests).
+    # They stay served from the storage host, never proxied by the API.
+    "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg",
+    "audio/webm", "audio/mp4", "audio/aac", "audio/flac",
+    "video/mp4", "video/webm", "video/ogg",
 })
 
 DISPOSITIONS = ("attachment", "inline")

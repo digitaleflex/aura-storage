@@ -245,11 +245,19 @@ def test_inline_is_refused_for_active_content():
                   json={"content_disposition": "inline"},
                   headers=headers).status_code == 422
 
-    # A renderable, non-scriptable type is allowed inline.
+    # Renderable, non-scriptable types are allowed inline: PDF and the media
+    # families a partner site embeds with <img>/<audio>/<video>.
     pdf = _object(c, headers)
     assert _share(c, headers, pdf, content_disposition="inline")[
         "content_disposition"
     ] == "inline"
+    for name, ctype in (("clip.mp4", "video/mp4"),
+                        ("clip.webm", "video/webm"),
+                        ("track.mp3", "audio/mpeg")):
+        oid = _object(c, headers, name=name, content_type=ctype)
+        assert _share(c, headers, oid, content_disposition="inline")[
+            "content_disposition"
+        ] == "inline", ctype
 
 
 def test_expires_in_above_the_ceiling_is_refused():
@@ -332,6 +340,8 @@ def test_helpers_refuse_bad_tokens_and_sanitize_the_filename():
     # Only non-executable types may render inline; parameters are ignored.
     assert shares.inline_allowed("application/pdf")
     assert shares.inline_allowed("IMAGE/PNG; charset=binary")
+    assert shares.inline_allowed("video/mp4")
+    assert shares.inline_allowed("Audio/MPEG; charset=binary")
     assert not shares.inline_allowed("text/html")
     assert not shares.inline_allowed("image/svg+xml")
     assert not shares.inline_allowed("application/xhtml+xml")
