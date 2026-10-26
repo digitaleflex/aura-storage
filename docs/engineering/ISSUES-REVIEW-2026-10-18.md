@@ -2,8 +2,10 @@
 
 Revue des 36 issues ouvertes de `digitaleflex/aura-storage` comparées au code de
 `main` (`43f44c2`) et au travail des branches préparées le même jour. Rien n'a
-été modifié sur GitHub : ce document propose, `scripts/apply-issues-review.sh`
-applique (à lancer par un mainteneur, après relecture).
+été modifié sur GitHub : ce document propose. Le script `apply-issues-review.sh`
+qui appliquait ces propositions via `gh` a été **retiré du dépôt le 2026-10-26** :
+c'était une action ponctuelle, déjà exécutée, et le garder dans un dépôt déployable
+exposait à un `--apply` accidentel qui ferme des issues.
 
 ## 1. Constat général
 

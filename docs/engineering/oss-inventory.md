@@ -113,21 +113,17 @@ Chemins indicatifs, à confirmer au moment du clone : les dépôts bougent.
 ## 6. Procédure de clone
 
 Les dépôts se clonent **hors du dépôt AURA**, dans un répertoire de travail jetable, en
-superficiel. Script fourni : `scripts/oss-clone.sh`.
+superficiel. Le script `scripts/oss-clone.sh` a été **retiré du dépôt le 2026-10-26**
+(c'est une pratique de recherche, pas une opération de service) ; les commandes
+équivalentes :
 
 ```bash
-# Tout ce qui est en P0
-bash scripts/oss-clone.sh
-
-# Un seul projet
-bash scripts/oss-clone.sh s3-tests
-
-# Répertoire personnalisé
-OSS_DIR=/tmp/opencode/oss bash scripts/oss-clone.sh
+mkdir -p /tmp/opencode/oss && cd /tmp/opencode/oss
+git clone --depth 1 <url-du-depot>
 ```
 
-Le script refuse de cloner dans le dépôt AURA, ne supprime rien et ne fait aucun `pull`
-destructif : si un répertoire existe déjà, il l'ignore.
+`--depth 1` suffit pour lire le code, ignore les répertoires déjà présents, ne supprime
+rien et ne fait aucun `pull` destructif.
 
 ---
 
@@ -148,7 +144,7 @@ et c'est ce qu'on continue d'écrire.
 
 ## 8. Prochaines actions
 
-1. `bash scripts/oss-clone.sh` puis brancher le sous-ensemble `s3-tests` sur un bucket jetable (gate #84).
+1. Cloner le sous-ensemble `s3-tests` dans `/tmp/opencode/oss` (voir §6) puis le brancher sur un bucket jetable (gate #84).
 2. ClamAV en sidecar + test EICAR : un fichier infecté ne doit jamais atteindre `available`.
 3. restic vers une destination S3 séparée + restauration réelle avec vérification de hash.
 4. `schemathesis` contre `docs/openapi.yaml` en CI.

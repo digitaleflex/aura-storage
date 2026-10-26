@@ -93,9 +93,9 @@ the 16 MiB code default is 256.0s (3.56% of the deadline).
 `unknowns=1`), harness exit code 0, one UNKNOWN (disk-level reclaim after abort is not
 provable from volume stats; only the S3 API guarantee is verified). Full evidence:
 [verification-log-2026-10-25-multipart-compat-4.48.md](verification-log-2026-10-25-multipart-compat-4.48.md).
-The run used the dedicated harness (`tests/multipart-compat-4.48.sh`, boto3 client
-plus a plain-`urllib` part consumer), not the probe script named below, and did
-not exercise a separate candidate client library.
+The run used the dedicated isolated harness (`tests/multipart-compat-4.48.sh`, boto3
+client plus a plain-`urllib` part consumer) rather than the manual probe script
+described below; both are acceptable gate paths, the harness is the reproducible one.
 
 Coverage against items 1–6 below: item 1 is exercised (harness assertion; no
 failure counted); item 2 is partly exercised (presigned part PUTs over plain
@@ -138,9 +138,15 @@ separately from this gate. State observed on the pilot on 2026-10-25:
 `AURA_MULTIPART_THRESHOLD_BYTES=33554432` (`docker exec aura-001-api printenv`), which
 is **not** the code default of `0`.
 
-Run `scripts/seaweedfs-compat-probe.py` against a **disposable** bucket on the
-exact pinned `chrislusf/seaweedfs:4.48`, then against a candidate client library.
-Record the image tag and results. Confirm specifically:
+The gate can be measured two ways, both against the exact pinned
+`chrislusf/seaweedfs:4.48` and never against the pilot: the dedicated isolated harness
+(`tests/multipart-compat-4.48.sh`, the path taken on 2026-10-25) or
+`scripts/seaweedfs-compat-probe.py` against a **disposable** bucket, which is the only
+one of the two that can also point at a real endpoint. The "candidate client library"
+check from the original wording is obsolete: the client here is the AURA browser
+transfer engine (`web/src/lib/transfer.ts`), not a third-party SDK, and it is exercised
+by `web/e2e/transfer-engine.spec.ts`. Record the image tag and results. Confirm
+specifically:
 
 1. `CreateMultipartUpload` / `UploadPart` / `CompleteMultipartUpload` /
    `AbortMultipartUpload` / `ListParts` succeed.
