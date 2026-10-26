@@ -7,7 +7,7 @@ PR honnête sur ses limites vaut mieux qu'une PR complète en apparence.
 
 Rappels : « implémenté » ≠ « validé sur le VPS ». Ne présentez jamais un test CI
 ou `docker compose config` comme une preuve de production. Voir aussi
-`docs/verification-log-template.md` et `AGENTS.md`.
+`docs/verification-log-template.md` et `docs/QA-01-CHECKLIST.md`.
 
 ## Titre
 

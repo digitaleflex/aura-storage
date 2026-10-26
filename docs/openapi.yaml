@@ -1602,6 +1602,24 @@ paths:
         "200": { description: "Pass counters" }
         "401": { description: "Authentication required" }
         "403": { description: "Not authorised" }
+  /api/v1/admin/objects/{oid}/reverify:
+    post:
+      summary: "Re-hash one published object and leave suspect/failed if it matches (admin:write)"
+      tags: [administration]
+      description: >-
+        Exit path from the ``suspect`` state: re-reads the bytes from storage,
+        compares the SHA-256 with the catalogue, and republishes the object on a
+        match. A mismatch keeps it ``suspect`` and answers 409.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: "Object re-verified and available" }
+        "401": { description: "Authentication required" }
+        "403": { description: "Not authorised" }
+        "404": { description: "Object not found or not visible" }
+        "409": { description: "Bytes still diverge from the catalogue" }
+        "413": { description: "Object exceeds the configured cap" }
+        "502": { description: "Storage unavailable" }
   /api/v1/admin/reconcile-reverse:
     post:
       summary: "Find catalogue objects missing at the storage (reverse reconciliation) (admin:write)"

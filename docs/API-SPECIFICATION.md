@@ -16,7 +16,7 @@ The management API provides a stable control interface for AURA's catalogue and 
 
 `/api/v1`
 
-As implemented, the API is reached **same-origin through the app proxy**: the `app` nginx container proxies `/api/` to the API service, so clients call `https://<APP_DOMAIN>/api/v1/...`. The API has no Traefik route and no host ports of its own (`docs/ARCHITECTURE.md`, `docs/openapi.yaml`). Evolving to a distinct hostname (for example `api-storage.example.com`) once demand requires it remains possible; either way, do not point this route at SeaweedFS directly.
+As implemented, the API is reached **same-origin through the app proxy**: the `app` nginx container proxies `/api/` to the API service, so clients call `https://<APP_DOMAIN>/api/v1/...`. It has **no host ports**. There is also a Traefik route on the docs host (`aura-swagger-api`, `PathPrefix('/api/')`) for the Swagger "Try it" UI; it is gated by an IP allow-list, BasicAuth and a rate limit (`docker-compose.yml`). Evolving to a distinct hostname (for example `api-storage.example.com`) once demand requires it remains possible; either way, do not point this route at SeaweedFS directly.
 
 ## Core resources
 

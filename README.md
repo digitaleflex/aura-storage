@@ -2,7 +2,7 @@
 
 **AURA** is an independently operated storage service for private files. The initial deployment target is one Ubuntu Server LTS VPS with Docker Compose, Traefik, and SeaweedFS exposing an S3-compatible endpoint.
 
-> **Status:** the AURA stack is deployed on the real pilot VPS with dated, partial verification evidence ([2026-10-15 canonical-ids](docs/verification-log-2026-10-15-canonical-ids.md), [2026-10-16 S16 deploy](docs/verification-log-2026-10-16-s16-deploy.md): bootstrap OK, live PostgreSQL migration, SSE-S3 smoke PASS). It is **not accepted** for production: external HTTPS validation, non-publication of internal ports, persistence across a host reboot and an independent backup/restore test remain open gates. Host details are in [Server Profile](docs/SERVER-PROFILE.md) and [Host Bootstrap Checklist](docs/HOST-BOOTSTRAP-CHECKLIST.md).
+> **Status:** the AURA stack is deployed on the real pilot VPS with dated, partial verification evidence ([2026-10-15 canonical-ids](docs/verification-log-2026-10-15-canonical-ids.md), [2026-10-16 S16 deploy](docs/verification-log-2026-10-16-s16-deploy.md), [2026-10-24 audit](docs/AUDIT-COMPLET-2026-10-24.md): bootstrap OK, live PostgreSQL migration, SSE-S3 smoke PASS). External HTTPS (valid Let's Encrypt chain) and non-publication of internal ports (only 80/443 listen) are **validated**. It is **not accepted** for production: SSH key-only login and the host firewall are still unconfirmed, persistence across a host reboot has not been re-proven, and an independent backup/restore test remains open. Host details are in [Server Profile](docs/SERVER-PROFILE.md) and [Host Bootstrap Checklist](docs/HOST-BOOTSTRAP-CHECKLIST.md).
 
 ## Architecture and documentation
 
@@ -39,7 +39,7 @@
 - [Decision: defer Better Auth + Google OAuth](docs/DECISION-BETTER-AUTH.md)
 - [Decision: defer independent backup](docs/DECISION-BACKUP-DEFERRED.md)
 - [Decision: advanced transfer features deferred](docs/DECISION-ADVANCED-TRANSFER-FEATURES.md)
-- [Padding audit report](docs/DESIGN-PADDING-AUDIT.md)
+- [Audit complet du site (2026-10-24)](docs/AUDIT-COMPLET-2026-10-24.md)
 
 ## Intended topology
 
@@ -47,7 +47,7 @@
 - **SeaweedFS master, volume and filer/S3 gateway** run as separate containers on a private storage network.
 - Traefik routes the S3 hostname, the app hostname (`APP_DOMAIN`), the dashboard (`DASHBOARD_DOMAIN`, behind BasicAuth) and the S3 root landing page. SeaweedFS administrative endpoints are not published on host ports.
 - Persistent data is mounted from the host filesystem.
-- **AURA Management API + PostgreSQL catalogue** are implemented, included in the Compose stack (the API is reachable only through the app proxy, with no host ports) and running on the pilot with partial dated evidence; they have not passed acceptance on the pilot VPS.
+- **AURA Management API + PostgreSQL catalogue** are implemented, included in the Compose stack (no host ports; reachable same-origin through the app proxy and, for `/api/*` only, through the authenticated docs host) and running on the pilot with partial dated evidence; they have not passed acceptance on the pilot VPS.
 - **Authorization and machine-to-machine identities** are enforced server-side; see [Authorization matrix](docs/AUTHORIZATION-MATRIX.md).
 - Independent backups and a successful restore test are mandatory before production imports.
 
@@ -60,7 +60,7 @@ Environment-specific settings are centralized in the local `.env`; see [Environm
 Typical setup:
 
 ```bash
-git clone --branch feat/secure-storage-pilot https://github.com/digitaleflex/aura-storage.git
+git clone --branch main https://github.com/digitaleflex/aura-storage.git
 cd aura-storage
 cp .env.example .env
 chmod 600 .env

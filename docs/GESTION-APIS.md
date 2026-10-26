@@ -197,8 +197,10 @@ Principes :
   **KrakenD 2.10** — à confirmer sur les canaux officiels au moment de la décision
   (aucune vérification réseau effectuée pour ce document).
 - Compatibilité des middlewares Traefik avec la **version épinglée** du déploiement
-  (`TRAEFIK_IMAGE` ; voir `docs/RUNBOOK.md` sur le minimum ≥ 3.7 pour Docker Engine 29+).
-- Redaction effective des access logs pour les URLs présignées.
+  (`TRAEFIK_IMAGE` ; voir `config/traefik/README.md` sur le minimum ≥ 3.7 pour Docker
+  Engine 29+).
+- ~~Redaction effective des access logs pour les URLs présignées.~~ Corrigé le
+  2026-10-24 : `--accesslog.fields.queryparameters.defaultmode=drop` dans le Compose.
 
 ## Références
 

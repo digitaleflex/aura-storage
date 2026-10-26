@@ -20,7 +20,7 @@
 - [ ] HTTPS + CSP servie (postflight deploy.sh).
 
 ## Performance
-- [ ] Benchmarks reproductibles (scripts/bench_transfer.py).
+- [ ] Benchmarks reproductibles (tests/commit_latency_bench.py).
 - [ ] Pas de création non bornée de tâches.
 
 ## Release gate

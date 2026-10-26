@@ -28,7 +28,7 @@ AURA is an independently operated storage service. Its initial deployment is a s
 
 ## Initial topology
 
-One VPS, Docker Engine, Docker Compose, Traefik and SeaweedFS. Public ingress is HTTPS through Traefik. SeaweedFS internal/admin ports stay on a private Docker network and are not published publicly. The S3 hostname is exposed only as needed for clients to use HTTPS presigned URLs. The management API is a separate component; it is not publicly routed and is reachable only through the app proxy, with authentication, authorization, audit logs and a defined data model.
+One VPS, Docker Engine, Docker Compose, Traefik and SeaweedFS. Public ingress is HTTPS through Traefik. SeaweedFS internal/admin ports stay on a private Docker network and are not published publicly. The S3 hostname is exposed only as needed for clients to use HTTPS presigned URLs. The management API is a separate component with no host ports; it is reachable same-origin through the app proxy (and, for `/api/*` only, through the authenticated docs host), with authentication, authorization, audit logs and a defined data model.
 
 A single VPS is not high availability. Independent backup and a tested restore are mandatory before importing important production data.
 

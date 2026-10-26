@@ -1,10 +1,10 @@
 # AURA Operations Playbook
 
-> Référence d'exploitation détaillée : [RUNBOOK.md](RUNBOOK.md) (démarrage/arrêt,
-> mise à jour/retour arrière, rotation des secrets, seuils de capacité, findings du
-> pilote, risques résiduels — dossier préparé pour l'issue #11). Ce playbook reste
-> l'aide-mémoire synthétique ; en cas de divergence, le RUNBOOK prévaut et l'écart doit
-> être signalé puis corrigé.
+> Référence d'exploitation détaillée : [DEPLOYMENT.md](DEPLOYMENT.md) (démarrage/arrêt,
+> mise à jour/retour arrière, rotation des secrets, seuils de capacité) et
+> [REPRODUCIBLE-SETUP.md](REPRODUCIBLE-SETUP.md) (reconstruction de l'hôte). Ce playbook
+> reste l'aide-mémoire synthétique ; en cas de divergence, ces documents prévalent et
+> l'écart doit être signalé puis corrigé.
 
 ## Before first start
 

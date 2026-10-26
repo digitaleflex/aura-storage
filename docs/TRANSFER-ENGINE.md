@@ -117,7 +117,8 @@ Limits, stated plainly:
 - **Size**: `0 ≤ size ≤ AURA_MAX_OBJECT_BYTES`. The declared size is signed into
   the presigned PUT as `Content-Length`, and commit re-checks the actual stored
   size (defence in depth). `AURA_MAX_OBJECT_BYTES` must stay at or below the
-  backend single-PUT limit until multipart is implemented.
+  backend single-PUT limit while multipart is disabled; when it is enabled,
+  `AURA_MULTIPART_MAX_OBJECT_BYTES` governs the multipart path.
 - **Empty objects**: refused by default; `AURA_ALLOW_EMPTY_OBJECTS=1` enables
   them (commit still verifies `sha256("")`).
 
@@ -169,9 +170,11 @@ three.
 
 ## Large files and multipart: analysis, gaps, proposal
 
-**Decision: multipart is NOT implemented. No resumable/multipart behaviour is
-simulated.** The mission explicitly requires examining the contract and the
-pinned backend before implementing it, and forbids faking resume.
+**Status (2026-10-24): implemented behind `AURA_MULTIPART_ENABLED` (default off)
+and not yet validated against the pinned SeaweedFS 4.48.** The analysis and the
+original decision below are kept for context. The mission explicitly requires
+examining the contract and the pinned backend before enabling it, and forbids
+faking resume.
 
 ### What the contract and the pinned release allow
 

@@ -1,5 +1,11 @@
 # Rapport final — Mission globale AURA VPS & Storage
 
+> **⚠️ SUPERSEDED — 2026-10-24.** Ce rapport décrit l'état du 2026-10-14 (« aucun
+> composant déployé »). La stack est depuis déployée sur le pilote (voir les logs
+> `verification-log-2026-10-15` à `2026-10-21`) et un audit complet à jour se
+> trouve dans [`AUDIT-COMPLET-2026-10-24.md`](AUDIT-COMPLET-2026-10-24.md).
+> Conserver ce document comme archive historique, pas comme état courant.
+
 > Date : 2026-10-14. Périmètre : VPS InterServer AURA + dépôt `digitaleflex/aura-storage`.
 > Méthode : inventaire lecture seule, corrections locales autorisées uniquement, aucun
 > changement hôte. Ce document ne contient aucun secret (ni clé privée, ni jeton,

@@ -7,14 +7,14 @@ Audit probant de l'implémentation actuelle (`api/main.py`, `api/lifecycle.py`, 
 
 | Capacité | Statut | Preuve |
 |---|---|---|
-| Upload simple (single PUT) | Implémenté, testé localement | `tests/test_transfer_basic.py` |
+| Upload simple (single PUT) | Implémenté, testé localement | `tests/test_transfer_engine.py` |
 | Upload multipart (part-level resume) | Implémenté derrière `AURA_MULTIPART_ENABLED` | `tests/test_multipart_*` |
 | Commit idempotent | Implémenté | `tests/test_two_phase_purge.py` |
 | Réconciliation pending/terminal | Implémenté | `api/lifecycle.py` |
 | Purge deux phases | Implémenté, testé | `tests/test_two_phase_purge.py` (5/5) |
 | Download reprenable (Range) | Implémenté | `api/main.py` download-intent |
 | Retry/backoff | Implémenté côté client | `web/src/lib/transfer` |
-| Benchmarks | Harness présent | `scripts/bench_transfer.py` |
+| Benchmarks | Harness présent | `tests/commit_latency_bench.py` |
 | PostgreSQL parity réelle | Non exécuté (besoin `AURA_TEST_PG_DSN`) | — |
 | E2E crypto (AES-GCM) | Planifié (ENG-07) | — |
 | CDC déduplication | Planifié (ENG-07) | — |

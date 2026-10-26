@@ -9,8 +9,11 @@ sur `api/main.py`, `api/authz.py`,
 Ce document distingue strictement deux états :
 
 - **Implémenté** — présent dans le code, couvert par les tests hors-ligne de `tests/`.
-  Implémenté ne veut **pas** dire validé sur le pilote : aucun essai de bout en bout
-  n'a eu lieu sur le VPS réel (voir `AGENTS.md`).
+  Implémenté ne veut **pas** dire *accepté* sur le pilote : quelques essais de bout en
+  bout datés existent (upload/download authentifié et session admin réelle, voir
+  `verification-log-2026-10-15-canonical-ids.md` et
+  `verification-log-2026-10-20-csp-frame-src-deploy.md`), mais aucune acceptance
+  complète n'a eu lieu.
 - **Spécifié seulement** — décrit dans une spécification mais **absent** du code.
 
 Les écarts constatés entre documentation et code sont listés en fin de document

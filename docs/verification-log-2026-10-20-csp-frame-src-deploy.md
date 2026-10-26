@@ -1,5 +1,10 @@
 # Verification log — CSP `frame-src` redeploy on the pilot VPS (2026-10-20)
 
+> **Note (2026-10-24)** : deux constats de ce log sont périmés. `scripts/deploy.sh`
+> sait désormais recréer `app` quand `app/nginx.conf` change, et la taille
+> annoncée d'`openapi.yaml` n'est plus celle du fichier courant. Voir
+> [`AUDIT-COMPLET-2026-10-24.md`](AUDIT-COMPLET-2026-10-24.md), section 8.
+
 Partial redeploy of the running pilot stack to serve the CSP fix that unblocks
 PDF framing from the S3 host. **Not** a full acceptance run: this log records only
 what was executed and observed, and marks the rest as not covered.
