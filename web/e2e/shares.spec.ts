@@ -142,15 +142,27 @@ test("a link can be revoked after an explicit confirmation", async ({ page }) =>
   await expect(dialog.getByRole("button", { name: "Révoquer" })).toHaveCount(0);
 });
 
-test("a non-inline type is shared as a download only", async ({ page }) => {
-  // text/plain is inline-allowed; use a mocked video object to assert the
-  // option is absent (the server refuses inline for it).
+test("an active document is shared as a download only", async ({ page }) => {
+  // HTML cannot render inline on a share (it could execute on the storage
+  // origin), so the browser-render option must not be offered.
+  const shares: MockShare[] = [];
+  await setup(page, shares, [item("html-1", "page.html", "text/html")]);
+  await page.getByRole("button", { name: "Actions pour page.html" }).click();
+  await page.getByRole("menuitem", { name: "Partager" }).click();
+  const dialog = page.getByRole("dialog", { name: /Partager — page\.html/ });
+  const mode = dialog.getByLabel("À l'ouverture");
+  await expect(mode.locator("option")).toHaveCount(1);
+  await expect(mode).toHaveValue("attachment");
+});
+
+test("a video offers inline playback for embedding", async ({ page }) => {
   const shares: MockShare[] = [];
   await setup(page, shares, [item("vid-1", "clip.mp4", "video/mp4")]);
   await page.getByRole("button", { name: "Actions pour clip.mp4" }).click();
   await page.getByRole("menuitem", { name: "Partager" }).click();
   const dialog = page.getByRole("dialog", { name: /Partager — clip\.mp4/ });
   const mode = dialog.getByLabel("À l'ouverture");
-  await expect(mode.locator("option")).toHaveCount(1);
-  await expect(mode).toHaveValue("attachment");
+  await expect(mode.locator("option")).toHaveCount(2);
+  await mode.selectOption("inline");
+  await expect(mode).toHaveValue("inline");
 });

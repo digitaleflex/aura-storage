@@ -27,11 +27,16 @@ describe("canShareInline", () => {
     expect(canShareInline("text/plain; charset=utf-8")).toBe(true);
   });
 
-  it("keeps active documents and media download-only", () => {
+  it("allows embeddable media inline", () => {
+    expect(canShareInline("video/mp4")).toBe(true);
+    expect(canShareInline("audio/mpeg")).toBe(true);
+    expect(canShareInline("video/webm; codecs=vp9")).toBe(true);
+  });
+
+  it("keeps active documents download-only", () => {
     expect(canShareInline("text/html")).toBe(false);
     expect(canShareInline("image/svg+xml")).toBe(false);
-    expect(canShareInline("video/mp4")).toBe(false);
-    expect(canShareInline("audio/mpeg")).toBe(false);
+    expect(canShareInline("application/octet-stream")).toBe(false);
   });
 });
 

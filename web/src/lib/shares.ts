@@ -2,8 +2,8 @@ import type { ObjectShare } from "./api";
 
 /**
  * Content types the API allows with `Content-Disposition: inline` on a share
- * link (mirror of SAFE_INLINE_TYPES in api/shares.py). Everything else -- HTML,
- * SVG, XHTML, audio, video -- is download-only on a share. The server stays
+ * link (mirror of SAFE_INLINE_TYPES in api/shares.py). Active documents (HTML,
+ * SVG, XHTML) and unknown types are download-only on a share. The server stays
  * authoritative and answers 422 when the client gets this wrong.
  */
 const SHARE_INLINE = new Set([
