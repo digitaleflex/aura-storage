@@ -1,0 +1,11 @@
+# AURA Vault — private storage console.
+# The application itself is behind authentication: only the entry pages are
+# crawlable, and API/share endpoints must never be indexed.
+User-agent: *
+Allow: /$
+Allow: /login
+Disallow: /api/
+Disallow: /s/
+Disallow: /admin
+Disallow: /transfers
+Disallow: /diagnostic

@@ -1723,10 +1723,23 @@ export function ObjectsPage() {
       return;
     }
     setDownloadingId(item.id);
+    // Open the tab inside the user gesture: after the await, popup blockers
+    // (Firefox/Safari) refuse it even though the toast claimed success.
+    const pendingWindow = window.open("about:blank", "_blank");
     try {
       const intent = await api.createDownloadIntent(item.id, csrf);
       // The browser performs the direct S3 GET; it manages its own progress.
-      window.open(intent.download_url, "_blank", "noopener");
+      if (pendingWindow) {
+        pendingWindow.opener = null;
+        pendingWindow.location.replace(intent.download_url);
+      } else {
+        const link = document.createElement("a");
+        link.href = intent.download_url;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.download = intent.display_name;
+        link.click();
+      }
       notify(
         "ok",
         `Téléchargement de « ${intent.display_name} » lancé (${formatBytes(
@@ -1734,6 +1747,7 @@ export function ObjectsPage() {
         )}).`,
       );
     } catch (err) {
+      pendingWindow?.close();
       setActionError(`Téléchargement impossible. ${describeError(err, "")}`.trim());
     } finally {
       setDownloadingId(null);

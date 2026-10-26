@@ -251,10 +251,10 @@ export function TransferList({
       data-testid="transfer-list"
       data-virtualized={virtual ? "true" : "false"}
     >
-      <table className="transfers-table" aria-rowcount={items.length}>
+      <table className="transfers-table" aria-rowcount={items.length + 1}>
         <caption className="visually-hidden">Liste des transferts de la session</caption>
         <thead>
-          <tr>
+          <tr aria-rowindex={1}>
             <th scope="col" className="transfers-col-select">
               <input
                 type="checkbox"
@@ -304,7 +304,7 @@ export function TransferList({
           {shown.map((item, index) => (
             <TransferRow
               key={item.id}
-              rowIndex={virtual ? range.start + index + 1 : undefined}
+              rowIndex={virtual ? range.start + index + 2 : undefined}
               item={item}
               selected={selected.has(item.id)}
               rate={itemRates.get(item.id) ?? 0}
@@ -432,6 +432,8 @@ function TransferRow({
             </span>
             <span className="transfers-file-meta">
               {CATEGORY_LABEL[category]}
+              {item.sizeBytes < 10 * 1024 * 1024 ? " · Léger" : ""}
+              {item.sizeBytes > 100 * 1024 * 1024 ? " · Lourd" : ""}
               {item.state.verifyMode ? ` · vérification ${item.state.verifyMode === "background" ? "en tâche de fond" : "en ligne"}` : ""}
               {addedAtMs !== null
                 ? ` · Ajouté à ${formatClock(addedAtMs)}`
@@ -457,7 +459,7 @@ function TransferRow({
             aria-label={`Progression de ${item.fileName}`}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-valuenow={verifying ? undefined : percent}
+            aria-valuenow={percent}
             aria-valuetext={verifying ? "Vérification d'intégrité en cours" : `${percent} %`}
           >
             <span
@@ -468,6 +470,36 @@ function TransferRow({
           <span className="transfers-progress-bytes">
             {formatBytes(item.state.transferredBytes)} / {formatBytes(item.sizeBytes)}
           </span>
+          {item.state.multipart && item.state.multipart.partCount > 0 ? (
+            <span className="transfers-progress-bytes">
+              {`${item.state.heldParts ?? 0}/${item.state.multipart.partCount} parts • ${
+                item.state.missingParts ?? 0
+              } ${(item.state.missingParts ?? 0) === 1 ? "manquante" : "manquantes"}`}
+              {item.state.resumed ? " • repris" : ""}
+              {item.state.attempts > 0 ? ` • tentative ${item.state.attempts}` : ""}
+            </span>
+          ) : null}
+          {item.state.multipart && item.state.multipart.partCount > 0 ? (
+            <span
+              style={{ display: "flex", gap: 2, marginTop: 2 }}
+              title={`${item.state.heldParts ?? 0}/${item.state.multipart.partCount} parts reçues`}
+              aria-hidden="true"
+            >
+              {Array.from({ length: item.state.multipart.partCount }, (_, i) => (
+                <i
+                  key={i}
+                  style={{
+                    width: 8,
+                    height: 6,
+                    borderRadius: 2,
+                    background: i < (item.state.heldParts ?? 0) ? "currentColor" : "transparent",
+                    border: "1px solid currentColor",
+                    opacity: i < (item.state.heldParts ?? 0) ? 1 : 0.45,
+                  }}
+                />
+              ))}
+            </span>
+          ) : null}
         </td>
         <td className="transfers-status-cell" data-label="Statut">
           <span className={`transfer-badge transfer-badge--${tone}`}>

@@ -136,6 +136,9 @@ export function PreviewModal({
                 src={intent.preview_url}
                 title={`Aperçu PDF de ${item.display_name}`}
                 referrerPolicy="no-referrer"
+                // Cross-origin PDF from the storage host: no scripts, no
+                // top-navigation, no forms. The built-in PDF viewer still works.
+                sandbox="allow-same-origin allow-popups"
               />
             )}
           </>

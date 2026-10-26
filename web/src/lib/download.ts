@@ -46,6 +46,12 @@ export async function downloadResumable(opts: DownloadOptions): Promise<Download
     opts.onProgress?.(loaded, total);
   }
 
+  // A truncated stream used to return integrityOk: true when no hash was
+  // supplied. Completeness is a hard requirement regardless.
+  if (loaded !== total) {
+    throw new Error(`download truncated: ${loaded}/${total} bytes`);
+  }
+
   const out = new Uint8Array(loaded);
   let off = 0;
   for (const c of chunks) { out.set(c, off); off += c.length; }
@@ -57,6 +63,7 @@ export async function downloadResumable(opts: DownloadOptions): Promise<Download
 
 async function probeSize(url: string, signal?: AbortSignal): Promise<number> {
   const res = await fetch(url, { method: "HEAD", signal });
+  if (!res.ok) throw new Error(`probe failed: ${res.status}`);
   const len = res.headers.get("content-length");
   if (!len) throw new Error("missing content-length");
   return Number(len);

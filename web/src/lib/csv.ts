@@ -7,9 +7,16 @@
  */
 export type CsvValue = string | number | null | undefined;
 
+// Leading characters Excel/LibreOffice interpret as a formula. A display name
+// such as `=HYPERLINK("http://evil")` must stay inert when the CSV is opened.
+const FORMULA_PREFIX = /^[=+\-@\t\r]/;
+
 export function escapeCsv(value: CsvValue): string {
-  const text = value === null || value === undefined ? "" : String(value);
-  if (/[;"\r\n]/.test(text)) {
+  const raw = value === null || value === undefined ? "" : String(value);
+  // Prefix with an apostrophe (the spreadsheet "treat as text" marker) BEFORE
+  // quoting, so the payload never starts a formula.
+  const text = FORMULA_PREFIX.test(raw) ? `'${raw}` : raw;
+  if (/[;"\r\n\t]/.test(text)) {
     return `"${text.replace(/"/g, '""')}"`;
   }
   return text;
