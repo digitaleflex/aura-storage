@@ -38,26 +38,11 @@ fi
 # defined on app) are missing until the next Docker event. Restarting it after
 # the stack is healthy makes the routing configuration deterministic.
 docker compose restart traefik
-# Traefik reloads its routers asynchronously. Probing the domain immediately
-# after the restart raced the reload and failed an otherwise healthy deploy
-# (observed 2026-10-26: CSP postflight aborted with no header while Traefik was
-# still "health: starting"). Wait for its healthcheck before probing.
-TRAEFIK_ID="$(docker compose ps -q traefik)"
-TRAEFIK_STATUS=""
-for _ in $(seq 1 60); do
-  TRAEFIK_STATUS="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${TRAEFIK_ID}" 2>/dev/null || true)"
-  case "${TRAEFIK_STATUS}" in
-    healthy|none) break ;;
-  esac
-  sleep 1
-done
-case "${TRAEFIK_STATUS}" in
-  healthy|none) : ;;
-  *)
-    echo "ERROR: traefik did not become healthy after restart (status: ${TRAEFIK_STATUS:-unknown})" >&2
-    exit 1
-    ;;
-esac
+# Traefik reloads its routers asynchronously, and its container healthcheck
+# (30 s interval) is not a readiness signal for the router: it can be "healthy"
+# while the app router still answers the fallback. The CSP probe below therefore
+# retries on the real URL. Two deploys failed here on 2026-10-26 because the
+# probe raced the reload; do not shorten that window without re-testing.
 echo "${CURRENT_NGINX_HASH}" > "${NGINX_HASH_FILE}"
 docker compose ps
 
@@ -73,9 +58,10 @@ if [[ -n "${EXPECTED_CSP}" ]]; then
     exit 1
   fi
   SERVED_CSP=""
-  # Even once Traefik is healthy, the router needs a moment to appear. Retry
-  # briefly instead of failing on the first 404/503.
-  for _ in $(seq 1 10); do
+  # The router needs tens of seconds after a Traefik restart (observed >20 s on
+  # 2026-10-26). Poll the real URL for up to 2 minutes instead of trusting
+  # container health, which does not track router readiness.
+  for _ in $(seq 1 60); do
     SERVED_CSP="$(curl -sI --resolve "${APP_DOMAIN_VALUE}:443:127.0.0.1" "https://${APP_DOMAIN_VALUE}/" 2>/dev/null | grep -i 'content-security-policy' || true)"
     [[ -n "${SERVED_CSP}" ]] && break
     sleep 2
