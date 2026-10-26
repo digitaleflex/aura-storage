@@ -27,6 +27,11 @@ const KNOWN_DETAILS: Record<string, string> = {
   "folder is not empty": "Ce dossier n'est pas vide : supprimez d'abord son contenu.",
   "folder not found": "Ce dossier n'existe plus.",
   "preview not supported for this content type": "Ce type de fichier ne peut pas être affiché dans le navigateur.",
+  "inline is not allowed for this content type; use attachment":
+    "Ce type de fichier ne peut pas s'afficher dans le navigateur : partagez-le en téléchargement.",
+  "expires_in exceeds the maximum share lifetime":
+    "La durée demandée dépasse la durée maximale autorisée pour un lien.",
+  "share not found": "Ce lien n'existe plus ou a déjà été révoqué.",
   "invalid credentials": "Identifiant ou mot de passe incorrect.",
   "too many login attempts": "Trop de tentatives de connexion. Patientez une minute.",
   "master mode required": "Activez le mode maître pour cette action.",

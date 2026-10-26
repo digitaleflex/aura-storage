@@ -393,6 +393,53 @@ export interface DownloadIntentResponse {
   checksum_algorithm?: string;
 }
 
+/**
+ * A public, read-only share link for one object. The token is never returned
+ * by the list route: only the SHA-256 fingerprint is stored, so a listed share
+ * can be revoked but not re-displayed.
+ */
+export interface ObjectShare {
+  id: string;
+  object_id: string;
+  created_by: string;
+  created_by_kind: string;
+  content_disposition: "attachment" | "inline";
+  created_at: number;
+  expires_at: number;
+  max_uses: number | null;
+  use_count: number;
+  last_used_at: number | null;
+  revoked_at: number | null;
+  /** Computed by the server (expiry, exhaustion, revocation). */
+  active: boolean;
+}
+
+export interface SharesListResponse {
+  items: ObjectShare[];
+}
+
+/** Body of POST /objects/{id}/share. Expiry is always bounded by the server. */
+export interface ShareCreateInput {
+  expires_in?: number;
+  max_uses?: number | null;
+  content_disposition?: "attachment" | "inline";
+}
+
+/**
+ * Creation response. `url` is absolute when AURA_SHARE_BASE_URL is configured
+ * and relative (`/s/<token>`) otherwise; `token` is shown exactly once.
+ */
+export interface ShareCreateResponse {
+  id: string;
+  object_id: string;
+  url: string;
+  token: string;
+  expires_in: number;
+  expires_at: number;
+  max_uses: number | null;
+  content_disposition: "attachment" | "inline";
+}
+
 /** Principal metadata returned by GET /api/v1/me. */
 export interface SessionInfo {
   id: string;
@@ -693,11 +740,43 @@ export const api = {
     );
   },
 
-  /** Short-lived inline GET for images, audio and PDF (415 for other types). */
+  /** Short-lived inline GET for images, audio, video and PDF (415 otherwise). */
   createPreviewIntent(id: string, csrf: string): Promise<PreviewIntentResponse> {
     return request<PreviewIntentResponse>(
       `/api/v1/objects/${encodeURIComponent(id)}/preview-intent`,
       { method: "POST", csrf },
+    );
+  },
+
+  // --- Public share links (mint/revoke are human-only) ---
+  /** Mint one read-only link. The token is returned once and never listed. */
+  createShare(
+    id: string,
+    input: ShareCreateInput,
+    csrf: string,
+  ): Promise<ShareCreateResponse> {
+    return request<ShareCreateResponse>(
+      `/api/v1/objects/${encodeURIComponent(id)}/share`,
+      { method: "POST", body: input, csrf },
+    );
+  },
+
+  /** Links created for one object, without their tokens. */
+  listShares(id: string): Promise<SharesListResponse> {
+    return request<SharesListResponse>(
+      `/api/v1/objects/${encodeURIComponent(id)}/shares`,
+    );
+  },
+
+  /** Revoke immediately; idempotent on the server. */
+  revokeShare(
+    id: string,
+    shareId: string,
+    csrf: string,
+  ): Promise<{ id: string; revoked: boolean; revoked_at: number }> {
+    return request<{ id: string; revoked: boolean; revoked_at: number }>(
+      `/api/v1/objects/${encodeURIComponent(id)}/shares/${encodeURIComponent(shareId)}`,
+      { method: "DELETE", csrf },
     );
   },
 

@@ -48,6 +48,7 @@ import { FolderMark } from "../components/FolderMark";
 import { RowMenu } from "../components/RowMenu";
 import { describeError } from "../lib/errors";
 import { PreviewModal } from "../components/PreviewModal";
+import { ShareDialog } from "../components/ShareDialog";
 import {
   MasterModeBanner,
   MasterModeDialog,
@@ -418,6 +419,7 @@ export function ObjectsPage() {
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
   const [details, setDetails] = useState<ObjectItem | null>(null);
   const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
+  const [shareTarget, setShareTarget] = useState<ObjectItem | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // The import panel opens on demand (header button) and stays open while it
@@ -591,6 +593,10 @@ export function ObjectsPage() {
     session.data?.kind === "user" &&
     hasScope(session.data?.scopes, "objects:delete") &&
     hasScope(session.data?.scopes, "objects:write");
+  // Minting and revoking public links is human-only server-side (a leaked
+  // machine token must not create links that outlive its revocation).
+  const canShare =
+    session.data?.kind === "user" && hasScope(session.data?.scopes, "objects:read");
 
   // Storage usage is only ever the real admin figure (`GET /admin/usage`,
   // `admin:read`): no fabricated capacity is displayed for anyone else.
@@ -3032,6 +3038,9 @@ export function ObjectsPage() {
                             item.status !== "available" || downloadingId !== null,
                           onSelect: () => void handleDownload(item),
                         },
+                        ...(canShare && item.status === "available"
+                          ? [{ label: "Partager", onSelect: () => setShareTarget(item) }]
+                          : []),
                         {
                           label: "Copier la référence",
                           onSelect: () => void handleCopyReference(item),
@@ -3225,6 +3234,15 @@ export function ObjectsPage() {
             >
               {downloadingId === details.id ? "…" : "Télécharger"}
             </button>
+            {canShare && details.status === "available" ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setShareTarget(details)}
+              >
+                Partager
+              </button>
+            ) : null}
             {isRestorable(details) ? (
               <button
                 type="button"
@@ -3710,6 +3728,12 @@ export function ObjectsPage() {
           setPreviewTarget(null);
           void handleDownload(item);
         }}
+      />
+      <ShareDialog
+        item={shareTarget}
+        csrf={csrf}
+        onClose={() => setShareTarget(null)}
+        onNotify={notify}
       />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
