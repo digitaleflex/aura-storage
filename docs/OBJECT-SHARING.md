@@ -1,8 +1,10 @@
 # Object sharing (public links)
 
-Status: **implemented in the API, tested offline, not deployed.**
+Status: **implemented in the API and in the web UI, deployed and verified live on the pilot (2026-10-26).** Creation/revocation require a human session.
 Code: `api/shares.py`, routes in `api/main.py`, table `object_shares`
-(`api/schema.sql`), tests in `tests/test_object_shares.py`.
+(`api/schema.sql`), UI in `web/src/components/ShareDialog.tsx` (+ helpers in
+`web/src/lib/shares.ts`), tests in `tests/test_object_shares.py` and
+`web/e2e/shares.spec.ts`.
 
 ## What it is
 
@@ -30,6 +32,47 @@ curl -X POST https://app.<domain>/api/v1/objects/$OID/share \
 # 2. the recipient just opens the url; every redemption is audited
 curl -sI https://app.<domain>/s/<token> | grep -i '^location'
 ```
+
+## Web UI
+
+No new navigation tab: sharing is an action on a file, so it lives where the
+file is.
+
+- **Entry points**: `Partager` in the row menu and in the details drawer, for
+  an `available` object and a human session only (the server refuses machine
+  identities). Service accounts never see it.
+- **Dialog** (`web/src/components/ShareDialog.tsx`): duration (1 h, 24 h, 7 d,
+  30 d), maximum uses (unlimited, 1, 5, 25) and opening mode. "Afficher dans le
+  navigateur" is offered only for the server's safe inline types (PDF, JPEG,
+  PNG, WebP, GIF, plain text); audio, video, HTML and SVG are shared as
+  downloads, mirroring `SAFE_INLINE_TYPES` in `api/shares.py`.
+- **One-time link**: the token is returned once, so the freshly created URL is
+  displayed in a read-only field with a copy button and a warning that it will
+  not be shown again. The API's relative `/s/<token>` is resolved against the
+  app origin when `AURA_SHARE_BASE_URL` is unset.
+- **Revocation**: "Liens créés" lists every link for that object (state, uses,
+  expiry) and revokes an active one after an explicit confirmation. Listed
+  links never carry their token, so they cannot be re-displayed — only revoked.
+- **Routing**: `aura-share` (Traefik, priority 200) sends `/s/*` straight to the
+  API; `app/nginx.conf` keeps a `/s/` proxy as a fallback so a dropped router
+  cannot turn links into `index.html`.
+
+## Live verification — 2026-10-26 (pilot)
+
+Run with the deployed UI/API, a human admin session and one temporary link on an
+existing object. No token, presigned URL or credential was printed.
+
+| Step | Result |
+| --- | --- |
+| Mint (`expires_in` 3600, `max_uses` 1, `attachment`) | `200` |
+| `GET /s/<token>` without following the redirect | `302` to the S3 host |
+| `GET /objects/{oid}/shares` | `use_count=1`, `active=false` (exhausted) |
+| `DELETE /objects/{oid}/shares/{sid}` | `200` |
+| `GET /s/<token>` after revocation | `404` |
+| Served web bundle | deploy postflight hash match with `web/dist` |
+
+The temporary share row remains in the catalogue as revoked/exhausted (its
+history is never rewritten); the object's bytes were only read.
 
 ## What it is not
 
