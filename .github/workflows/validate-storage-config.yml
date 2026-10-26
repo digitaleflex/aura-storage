@@ -29,11 +29,13 @@ jobs:
           bash -n tests/test-landing-routing.sh
           bash -n scripts/backup-lib.sh scripts/backup.sh scripts/restore-check.sh scripts/restore.sh
           bash -n tests/test-backup-scripts.sh
+          bash -n scripts/upload-health.sh tests/test-upload-health.sh
           bash -n scripts/host-preflight.sh scripts/install-admin-key.sh tests/test-landing-routing.sh
       - name: Run offline regression tests
         run: |
           bash tests/test-s3-smoke-validation.sh
           bash tests/test-landing-routing.sh
+          bash tests/test-upload-health.sh
       - name: Run offline backup script checks
         run: bash tests/test-backup-scripts.sh
       - name: Check sample backup configuration is ignored
