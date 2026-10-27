@@ -754,7 +754,28 @@ export function TransfersPage() {
         </div>
       ) : null}
 
-      {resumable.length > 0 && !queue.finished ? (
+      {queue.items.length === 0 && resumable.length > 0 ? (
+        <div className="transfers-resume" role="status">
+          <span className="transfers-resume-icon" aria-hidden="true">
+            <TransferIcon name="upload" size={20} />
+          </span>
+          <div className="transfers-resume-copy">
+            <strong>Import interrompu</strong>
+            <p>
+              {resumable.length} fichier{resumable.length > 1 ? "s" : ""} (
+              {formatBytes(
+                resumable.reduce((sum, entry) => sum + entry.size, 0),
+              )}
+              ) récupérable{resumable.length > 1 ? "s" : ""}. Sélectionnez les
+              mêmes fichiers pour reprendre : ceux déjà confirmés ne seront pas
+              renvoyés.
+            </p>
+          </div>
+          <button type="button" className="btn btn-primary" onClick={handleResumeImport}>
+            Reprendre l'import
+          </button>
+        </div>
+      ) : resumable.length > 0 ? (
         <div className="transfers-resume" role="status">
           <span className="transfers-resume-icon" aria-hidden="true">
             <TransferIcon name="upload" size={20} />
@@ -939,6 +960,8 @@ export function TransfersPage() {
           onCancel={handleRowCancel}
           onRetry={handleRetry}
           onDetails={setDetailId}
+          onCopyError={handleCopyError}
+          onDownloadDiagnostic={handleDownloadDiagnostic}
           onShowMore={() => setVisible((value) => value + PAGE_SIZE)}
         />
       )}

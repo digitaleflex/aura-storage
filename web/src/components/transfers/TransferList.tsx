@@ -97,6 +97,8 @@ export function TransferList({
   onCancel,
   onRetry,
   onDetails,
+  onCopyError,
+  onDownloadDiagnostic,
   onShowMore,
 }: {
   items: QueueItem[];
@@ -116,6 +118,8 @@ export function TransferList({
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
   onDetails: (id: string) => void;
+  onCopyError: (item: QueueItem) => void;
+  onDownloadDiagnostic: (item: QueueItem) => void;
   onShowMore: () => void;
 }) {
   const virtual = items.length > VIRTUALIZE_THRESHOLD;
@@ -313,6 +317,8 @@ export function TransferList({
               onCancel={onCancel}
               onRetry={onRetry}
               onDetails={onDetails}
+              onCopyError={onCopyError}
+              onDownloadDiagnostic={onDownloadDiagnostic}
             />
           ))}
           {bottomSpacer > 0 ? (
@@ -350,6 +356,8 @@ function TransferRow({
   onCancel,
   onRetry,
   onDetails,
+  onCopyError,
+  onDownloadDiagnostic,
 }: {
   item: QueueItem;
   rowIndex?: number;
@@ -364,6 +372,8 @@ function TransferRow({
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
   onDetails: (id: string) => void;
+  onCopyError: (item: QueueItem) => void;
+  onDownloadDiagnostic: (item: QueueItem) => void;
 }) {
   const status: DisplayStatus = displayStatus(item);
   const tone = STATUS_TONE[status];
@@ -522,6 +532,25 @@ function TransferRow({
               </span>
               <div className="transfers-error-copy">
                 <p className="transfers-error-title">{failureTitle(item)}</p>
+                <p className="transfers-error-text">
+                  {item.state.error ??
+                    "Le fichier n'a pas été publié. Vous pouvez demander une nouvelle tentative."}
+                </p>
+                {item.state.failureKind === "fatal" ? (
+                  <p className="transfers-error-note">
+                    Réessayer sans corriger la cause produira le même refus.
+                  </p>
+                ) : null}
+              </div>
+              <div className="transfers-error-actions">
+                <button
+                  type="button"
+                  className="btn btn-small btn-primary"
+                  onClick={() => onRetry(item.id)}
+                >
+                  <TransferIcon name="retry" size={15} />
+                  Nouvelle tentative
+                </button>
                 <button
                   type="button"
                   className="btn btn-small"
@@ -530,13 +559,21 @@ function TransferRow({
                   <TransferIcon name="eye" size={15} />
                   Voir l'erreur
                 </button>
+                {item.state.error ? (
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={() => onCopyError(item)}
+                  >
+                    Copier l'erreur
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  className="btn btn-small btn-primary"
-                  onClick={() => onRetry(item.id)}
+                  className="btn btn-small"
+                  onClick={() => onDownloadDiagnostic(item)}
                 >
-                  <TransferIcon name="retry" size={15} />
-                  Réessayer
+                  Télécharger le diagnostic
                 </button>
               </div>
             </div>

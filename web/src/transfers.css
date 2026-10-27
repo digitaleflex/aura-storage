@@ -1149,6 +1149,32 @@
   overflow-wrap: anywhere;
 }
 
+.transfers-global-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 14px;
+  border: 1px solid var(--aura-danger);
+  border-radius: 14px;
+  background: var(--aura-danger-bg);
+  color: var(--aura-text);
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.transfers-global-error-icon {
+  display: flex;
+  color: var(--aura-danger);
+  flex: none;
+  margin-top: 2px;
+}
+
+.transfers-global-error-copy {
+  flex: 1;
+}
+
 .transfers-error-note {
   margin: 6px 0 0;
   font-size: 12px;
