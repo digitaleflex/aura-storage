@@ -730,6 +730,74 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
+  /api/v1/objects/{oid}/thumbnail:
+    get:
+      summary: Redirect to the generated thumbnail or poster (objects:read)
+      tags: [objects]
+      description: >-
+        302 to a short-lived presigned image, or 404 when no thumbnail exists
+        (unsupported type, ffmpeg unavailable, or generation still failing).
+        Generated lazily on the first request for images and videos.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "302": { description: Presigned thumbnail image }
+        "401": { description: Authentication required }
+        "404": { description: "Object not found, not available, or no thumbnail" }
+  /api/v1/objects/{oid}/publication:
+    put:
+      summary: Publish or unpublish an object under a stable slug (human only)
+      tags: [objects]
+      description: >-
+        The slug is the permanent capability: it survives content replacement,
+        so an embedded course URL never changes. Unpublishing keeps the slug
+        reserved but makes `/m/<slug>` answer 404. Slugs are 2-63 lowercase
+        letters, digits and dashes, unique across the catalogue.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                slug: { type: string, minLength: 2, maxLength: 63, nullable: true }
+                published: { type: boolean, default: true }
+      responses:
+        "200": { description: Object publication metadata }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+        "409": { description: "Object not available, or slug already in use" }
+        "422": { description: "Invalid slug, or publishing without a slug" }
+  /api/v1/objects/{oid}/replace:
+    post:
+      summary: Replace an object's bytes with another object's, keeping its URL (human only)
+      tags: [objects]
+      description: >-
+        Upload the new version normally, then point the stable object at it.
+        The target keeps its id, slug, display name and folder; the source row
+        is removed and the previous bytes are deleted. A published source is
+        refused so no other public URL is silently broken.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source_object_id]
+              properties:
+                source_object_id: { $ref: "#/components/schemas/Uuid4" }
+      responses:
+        "200": { description: Target object now points at the new bytes }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+        "409": { description: "Object not available, or source is published" }
+        "422": { description: Source equals target }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)

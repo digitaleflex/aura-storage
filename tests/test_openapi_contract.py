@@ -68,8 +68,10 @@ def test_every_documented_operation_is_described():
                 continue
             assert operation.get("summary"), f"{method.upper()} {path} has no summary"
             responses = operation.get("responses") or {}
-            assert any(str(code).startswith("2") for code in responses), (
-                f"{method.upper()} {path} documents no 2xx response"
+            # A 3xx is a successful outcome for redirect-only operations
+            # (thumbnail, public media); anything else needs a 2xx.
+            assert any(str(code)[:1] in ("2", "3") for code in responses), (
+                f"{method.upper()} {path} documents no 2xx/3xx response"
             )
 
 

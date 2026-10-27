@@ -548,6 +548,45 @@ class Repository:
             params.append(owner_id)
         return self._one(sql, tuple(params))
 
+    def get_object_by_slug(self, slug: str):
+        return self._one(
+            "SELECT * FROM objects WHERE public_slug = %s", (slug,)
+        )
+
+    def set_object_publication(
+        self, oid: str, slug: Optional[str], published_at: Optional[int],
+    ) -> None:
+        self._run(
+            "UPDATE objects SET public_slug = %s, published_at = %s, "
+            "version = version + 1, updated_at = %s WHERE id = %s",
+            (slug, published_at, self.now(), oid),
+        )
+
+    def set_object_thumbnail(
+        self, oid: str, thumbnail_key: Optional[str],
+        duration_seconds: Optional[float],
+    ) -> None:
+        self._run(
+            "UPDATE objects SET thumbnail_key = %s, duration_seconds = %s WHERE id = %s",
+            (thumbnail_key, duration_seconds, oid),
+        )
+
+    def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
+        with self.conn.transaction():
+            self._run("DELETE FROM objects WHERE id = %s", (source_id,))
+            self._run(
+                "UPDATE objects SET bucket = %s, object_key = %s, size_bytes = %s, "
+                "checksum_sha256 = %s, content_type = %s, expected_size_bytes = %s, "
+                "content_encoding = %s, thumbnail_key = %s, duration_seconds = %s, "
+                "scrubbed_at = %s, scrub_result = 'ok', version = version + 1, "
+                "updated_at = %s WHERE id = %s",
+                (source["bucket"], source["object_key"], source["size_bytes"],
+                 source["checksum_sha256"], source["content_type"],
+                 source.get("expected_size_bytes"), source.get("content_encoding"),
+                 source.get("thumbnail_key"), source.get("duration_seconds"),
+                 self.now(), self.now(), target_id),
+            )
+
     def list_objects(
         self, *, space_id: str, owner_id: Optional[str] = None,
         folder_id: Optional[str] = None, q: Optional[str] = None,

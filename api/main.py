@@ -6,9 +6,12 @@ token in the response body and never puts S3 credentials in the frontend.
 """
 import logging
 import os
+import re
 import shutil
+import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -514,7 +517,46 @@ def _object_public(row) -> dict:
         "status": row["status"],
         "folder_id": row["folder_id"],
         "created_at": row["created_at"], "updated_at": row["updated_at"],
+        # Publication and generated preview metadata. The storage key of the
+        # thumbnail is never exposed, only whether one exists.
+        "public_slug": row.get("public_slug"),
+        "published_at": row.get("published_at"),
+        "thumbnail": bool(row.get("thumbnail_key")),
+        "duration_seconds": row.get("duration_seconds"),
     }
+
+
+_PUBLIC_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,62}")
+
+
+def _normalize_slug(value: str) -> str:
+    slug = value.strip().lower()
+    if not _PUBLIC_SLUG_RE.fullmatch(slug):
+        raise ValueError(
+            "slug must be 2-63 characters: lowercase letters, digits and dashes"
+        )
+    return slug
+
+
+class PublicationIn(BaseModel):
+    """Publish or unpublish an object under a stable public slug.
+
+    The slug is the permanent capability: it survives a content replacement, so
+    course sites never have to be edited when a file is updated.
+    """
+    model_config = ConfigDict(extra="forbid")
+    slug: str | None = Field(default=None, max_length=63)
+    published: bool = True
+
+    @field_validator("slug")
+    @classmethod
+    def valid_slug(cls, value: str | None) -> str | None:
+        return None if value is None else _normalize_slug(value)
+
+
+class ReplaceObjectIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_object_id: Uuid4
 
 
 class LoginIn(BaseModel):
@@ -1739,6 +1781,11 @@ def commit_object(
             }
         raise HTTPException(status_code=409, detail="concurrent commit conflict")
     audit_event("commit", principal["id"], "success", {"object_id": oid, "size_bytes": size})
+    # Poster/thumbnail in the background: a commit never waits for ffmpeg.
+    try:
+        _THUMBNAIL_POOL.submit(_safe_generate_thumbnail, dict(row))
+    except Exception:
+        pass
     total_s = time.perf_counter() - started
     head_ms = head_s * 1000.0
     hash_ms = hash_s * 1000.0
@@ -2175,6 +2222,249 @@ def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)))
         "display_name": row["display_name"], "content_type": row["content_type"],
         "size_bytes": row["size_bytes"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Generated previews: video poster / image thumbnail + duration.
+# ---------------------------------------------------------------------------
+_THUMBNAIL_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="aura-thumb")
+_THUMBNAIL_LOCKS: dict[str, threading.Lock] = {}
+_THUMBNAIL_LOCKS_LOCK = threading.Lock()
+
+
+def _thumbnail_supported(content_type: str) -> bool:
+    value = (content_type or "").split(";", 1)[0].strip().lower()
+    if value == "image/svg+xml":
+        return False
+    return value.startswith("image/") or value.startswith("video/")
+
+
+def _run_ffmpeg(args: list[str], timeout: int = 45) -> bytes:
+    result = subprocess.run(
+        args, capture_output=True, timeout=timeout, check=False,
+    )
+    if result.returncode != 0 or not result.stdout:
+        raise RuntimeError(
+            (result.stderr or b"").decode("utf-8", "replace")[:300]
+        )
+    return result.stdout
+
+
+def _probe_duration(url: str) -> float | None:
+    if not shutil.which("ffprobe"):
+        return None
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", url],
+            capture_output=True, timeout=20, check=False,
+        )
+        return round(float(out.stdout.strip()), 2) if out.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _generate_thumbnail(row: dict) -> str | None:
+    """Best-effort poster/thumbnail stored next to the object.
+
+    Runs ffmpeg against a short-lived presigned GET (Range-capable), so the API
+    never streams the whole file through Python. Returns the new S3 key, or
+    None when ffmpeg is unavailable or the media cannot be decoded.
+    """
+    if not _thumbnail_supported(row.get("content_type") or ""):
+        return None
+    if not shutil.which("ffmpeg"):
+        return None
+    is_video = (row.get("content_type") or "").startswith("video/")
+    # Sign against the internal endpoint: ffmpeg runs inside the API container,
+    # which cannot resolve the public S3 hostname (and should not depend on it).
+    url = presigned_get(
+        s3ops, row["bucket"], row["object_key"], 300,
+        content_disposition="inline", content_type=row.get("content_type"),
+    )
+    args = ["ffmpeg", "-v", "error"]
+    if is_video:
+        # A frame around 10 % of the video, bounded so short clips still work.
+        duration = _probe_duration(url) or 0
+        seek = min(max(duration * 0.1, 0), 10) if duration else 1
+        args += ["-ss", f"{seek:.2f}"]
+    args += ["-i", url, "-frames:v", "1", "-vf", "scale=480:-2",
+             "-f", "mjpeg", "-q:v", "4", "pipe:1"]
+    jpg = _run_ffmpeg(args)
+    duration = _probe_duration(url) if is_video else None
+    key = f"{row['object_key']}.thumb.jpg"
+    s3ops.put_object(
+        Bucket=row["bucket"], Key=key, Body=jpg, ContentType="image/jpeg",
+        **({"ServerSideEncryption": SSE_ALGORITHM} if settings.require_sse else {}),
+    )
+    repo.set_object_thumbnail(row["id"], key, duration)
+    return key
+
+
+def _safe_generate_thumbnail(row: dict) -> None:
+    lock = None
+    with _THUMBNAIL_LOCKS_LOCK:
+        lock = _THUMBNAIL_LOCKS.setdefault(row["id"], threading.Lock())
+    try:
+        with lock:
+            fresh = repo.get_object(row["id"], space_id=row["space_id"])
+            fresh = _as_dict(fresh) if fresh is not None else None
+            if fresh and not fresh.get("thumbnail_key") and fresh["status"] == AVAILABLE:
+                _generate_thumbnail(fresh)
+    except Exception as exc:  # never fail a commit because a poster failed
+        log.info("thumbnail generation failed oid=%s: %s", row["id"], exc)
+    finally:
+        with _THUMBNAIL_LOCKS_LOCK:
+            _THUMBNAIL_LOCKS.pop(row["id"], None)
+
+
+@app.get("/api/v1/objects/{oid}/thumbnail")
+def object_thumbnail(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    """Redirect to a generated thumbnail/poster, or 404 when none exists.
+
+    The browser loads this directly in an `<img>` (same-origin cookies), so a
+    302 is enough and the API still never proxies object bytes.
+    """
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != AVAILABLE:
+        raise HTTPException(status_code=404, detail="thumbnail not found")
+    if not row.get("thumbnail_key") and _thumbnail_supported(row["content_type"]):
+        # Lazy first generation (large asynchronous commits have no poster yet).
+        _safe_generate_thumbnail(row)
+        fresh = repo.get_object(oid, **_object_scope(principal))
+        row = _as_dict(fresh) if fresh is not None else row
+    key = row.get("thumbnail_key")
+    if not key:
+        raise HTTPException(status_code=404, detail="thumbnail not found")
+    url = presigned_get(
+        s3, row["bucket"], key, 300,
+        content_disposition="inline", content_type="image/jpeg",
+    )
+    return RedirectResponse(url, status_code=302, headers={
+        "Cache-Control": "private, max-age=300",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+@app.put("/api/v1/objects/{oid}/publication")
+def set_object_publication(
+    oid: str, body: PublicationIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
+):
+    """Publish/unpublish an object under a stable slug (human only).
+
+    Unpublishing keeps the slug reserved so the same URL can be re-enabled;
+    the public route requires `published_at`, so it answers 404 meanwhile.
+    """
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != AVAILABLE:
+        raise HTTPException(status_code=409, detail="object not available")
+    if body.published and not body.slug:
+        raise HTTPException(status_code=422, detail="slug is required to publish")
+    if body.slug:
+        existing = repo.get_object_by_slug(body.slug)
+        if existing is not None and existing["id"] != oid:
+            raise HTTPException(status_code=409, detail="slug already in use")
+    published_at = int(time.time()) if body.published else None
+    repo.set_object_publication(oid, body.slug, published_at)
+    audit_event("object.publish" if body.published else "object.unpublish",
+                principal["id"], "success",
+                {"object_id": oid, "slug": body.slug})
+    return _object_public(repo.get_object(oid, **_object_scope(principal)))
+
+
+@app.post("/api/v1/objects/{oid}/replace")
+def replace_object_content(
+    oid: str, body: ReplaceObjectIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
+):
+    """Point an object at another object's bytes, keeping id, slug and URL.
+
+    This is how a published course file is updated without touching the sites:
+    upload the new version normally, then replace. The source row is removed and
+    the target's previous bytes are deleted (no automatic rollback yet).
+    """
+    oid = _canonical_id(oid, "object id")
+    source_id = _canonical_id(body.source_object_id, "source object id")
+    if source_id == oid:
+        raise HTTPException(status_code=422, detail="source must be another object")
+    target = repo.get_object(oid, **_object_scope(principal))
+    source = repo.get_object(source_id, **_object_scope(principal))
+    if target is None or source is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    target = _as_dict(target)
+    source = _as_dict(source)
+    if target["status"] != AVAILABLE or source["status"] != AVAILABLE:
+        raise HTTPException(status_code=409, detail="both objects must be available")
+    if source.get("public_slug"):
+        # Deleting a published source would silently kill another public URL.
+        raise HTTPException(status_code=409, detail="source object is published")
+    old_bucket, old_key = target["bucket"], target["object_key"]
+    old_thumb = target.get("thumbnail_key")
+    repo.replace_object_content(oid, source_id, source)
+    try:
+        s3ops.delete_object(Bucket=old_bucket, Key=old_key)
+    except Exception:
+        pass
+    if old_thumb and old_thumb != source.get("thumbnail_key"):
+        try:
+            s3ops.delete_object(Bucket=old_bucket, Key=old_thumb)
+        except Exception:
+            pass
+    audit_event("object.replace", principal["id"], "success", {
+        "object_id": oid, "source_object_id": source_id,
+        "size_bytes": source["size_bytes"],
+    })
+    updated = _as_dict(repo.get_object(oid, **_object_scope(principal)))
+    if not updated.get("thumbnail_key"):
+        try:
+            _THUMBNAIL_POOL.submit(_safe_generate_thumbnail, updated)
+        except Exception:
+            pass
+    return _object_public(updated)
+
+
+@app.get("/m/{slug}")
+def public_media(slug: str):
+    """Permanent published URL: 302 to a short-lived presigned GET, or 404.
+
+    Only an object with `published_at` resolves. The slug survives content
+    replacement, so course sites embed one stable URL. Bytes still come from
+    the storage host; the API never proxies them.
+    """
+    if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
+        raise HTTPException(status_code=404, detail="not found")
+    row = repo.get_object_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    row = _as_dict(row)
+    if row["status"] != AVAILABLE or not row.get("published_at"):
+        raise HTTPException(status_code=404, detail="not found")
+    set_request_principal(row["space_id"], None)
+    inline = is_previewable(row["content_type"])
+    url = presigned_get(
+        s3, row["bucket"], row["object_key"], settings.intent_ttl,
+        content_disposition=shares.content_disposition_header(
+            "inline" if inline else "attachment", row["display_name"]
+        ),
+        content_type=row["content_type"],
+    )
+    audit_event("public-access", None, "success",
+                {"object_id": row["id"], "slug": slug})
+    return RedirectResponse(url, status_code=302, headers={
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow",
+        "X-Content-Type-Options": "nosniff",
+    })
 
 
 # ---------------------------------------------------------------------------

@@ -619,6 +619,53 @@ class Repository:
             params.append(owner_id)
         return self.conn.execute(sql, params).fetchone()
 
+    def get_object_by_slug(self, slug: str):
+        return self.conn.execute(
+            "SELECT * FROM objects WHERE public_slug = ?", (slug,)
+        ).fetchone()
+
+    def set_object_publication(
+        self, oid: str, slug: Optional[str], published_at: Optional[int],
+    ) -> None:
+        self.conn.execute(
+            "UPDATE objects SET public_slug = ?, published_at = ?, "
+            "version = version + 1, updated_at = ? WHERE id = ?",
+            (slug, published_at, self.now(), oid),
+        )
+        self.conn.commit()
+
+    def set_object_thumbnail(
+        self, oid: str, thumbnail_key: Optional[str],
+        duration_seconds: Optional[float],
+    ) -> None:
+        self.conn.execute(
+            "UPDATE objects SET thumbnail_key = ?, duration_seconds = ? WHERE id = ?",
+            (thumbnail_key, duration_seconds, oid),
+        )
+        self.conn.commit()
+
+    def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
+        """Point ``target_id`` at ``source_id``'s bytes, keeping id and slug.
+
+        The source row is deleted first: ``(bucket, object_key)`` is unique, so
+        updating the target before removing the source would collide. Both
+        statements share one transaction.
+        """
+        self.conn.execute("DELETE FROM objects WHERE id = ?", (source_id,))
+        self.conn.execute(
+            "UPDATE objects SET bucket = ?, object_key = ?, size_bytes = ?, "
+            "checksum_sha256 = ?, content_type = ?, expected_size_bytes = ?, "
+            "content_encoding = ?, thumbnail_key = ?, duration_seconds = ?, "
+            "scrubbed_at = ?, scrub_result = 'ok', version = version + 1, "
+            "updated_at = ? WHERE id = ?",
+            (source["bucket"], source["object_key"], source["size_bytes"],
+             source["checksum_sha256"], source["content_type"],
+             source.get("expected_size_bytes"), source.get("content_encoding"),
+             source.get("thumbnail_key"), source.get("duration_seconds"),
+             self.now(), self.now(), target_id),
+        )
+        self.conn.commit()
+
     def list_objects(
         self, *, space_id: str, owner_id: Optional[str] = None,
         folder_id: Optional[str] = None, q: Optional[str] = None,

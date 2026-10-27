@@ -110,6 +110,10 @@ so the format is enforced in code, not in DDL.
 - `folder_id`: nullable foreign key to logical folder.
 - `owner_id` (nullable) / `actor_id` + `actor_kind` / `space_id` / `application_id` /
   `environment`: ownership and isolation boundary.
+- `public_slug` / `published_at`: stable public URL (`/m/<slug>`) and its
+  publication time. The slug survives a content replacement.
+- `thumbnail_key` / `duration_seconds`: generated poster/thumbnail (stored in
+  the same bucket) and measured media duration.
 - `visibility` (private by default), `status`
   (`pending`/`available`/`failed`/`expired`/`aborted`/`deleted`), `intent_expires_at`,
   `created_at`, `updated_at`. `aborted` is the terminal state of a client-cancelled

@@ -377,7 +377,8 @@ def test_m06_errors_and_payloads_do_not_leak():
     assert set(item) <= {"id", "display_name", "content_type", "size_bytes",
                          "expected_size_bytes", "checksum_sha256",
                          "checksum_algorithm", "status", "folder_id",
-                         "created_at", "updated_at"}
+                         "created_at", "updated_at", "public_slug",
+                         "published_at", "thumbnail", "duration_seconds"}
 
     listed = c.get("/api/v1/admin/identities", headers=headers).text
     assert "secret_hash" not in listed and tok_a not in listed

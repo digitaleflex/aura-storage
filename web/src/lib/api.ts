@@ -42,6 +42,14 @@ export interface ObjectItem {
   created_at: number;
   /** Catalogue last-update time, epoch seconds. */
   updated_at: number;
+  /** Stable public slug, or null when the object was never published. */
+  public_slug?: string | null;
+  /** Publication time (epoch seconds); null when unpublished. */
+  published_at?: number | null;
+  /** True when a generated thumbnail/poster exists. */
+  thumbnail?: boolean;
+  /** Video/audio duration in seconds when ffprobe measured it. */
+  duration_seconds?: number | null;
 }
 
 export interface ObjectsListResponse {
@@ -850,6 +858,30 @@ export const api = {
     return request<{ id: string; revoked: boolean; revoked_at: number }>(
       `/api/v1/objects/${encodeURIComponent(id)}/shares/${encodeURIComponent(shareId)}`,
       { method: "DELETE", csrf },
+    );
+  },
+
+  /** Publish/unpublish under a stable slug; the slug survives replacement. */
+  setObjectPublication(
+    id: string,
+    input: { slug: string | null; published: boolean },
+    csrf: string,
+  ): Promise<ObjectItem> {
+    return request<ObjectItem>(
+      `/api/v1/objects/${encodeURIComponent(id)}/publication`,
+      { method: "PUT", body: input, csrf },
+    );
+  },
+
+  /** Point an object at another object's bytes, keeping its id and slug. */
+  replaceObjectContent(
+    id: string,
+    sourceObjectId: string,
+    csrf: string,
+  ): Promise<ObjectItem> {
+    return request<ObjectItem>(
+      `/api/v1/objects/${encodeURIComponent(id)}/replace`,
+      { method: "POST", body: { source_object_id: sourceObjectId }, csrf },
     );
   },
 

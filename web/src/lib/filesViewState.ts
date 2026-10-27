@@ -18,6 +18,8 @@ export interface FilesViewState {
   toDate: string;
   sortField: "created_at" | "display_name" | "size_bytes";
   sortOrder: "asc" | "desc";
+  /** Ledger (dense) or grid (thumbnails). */
+  viewMode: "list" | "grid";
   /** Number of 50-object pages that were loaded. */
   pages: number;
   /** Vertical scroll offset, in CSS pixels. */
@@ -37,6 +39,7 @@ const DEFAULT: FilesViewState = {
   toDate: "",
   sortField: "created_at",
   sortOrder: "desc",
+  viewMode: "list",
   pages: 0,
   scrollY: 0,
 };
@@ -63,6 +66,7 @@ export function loadFilesView(): FilesViewState | null {
         : 0,
       sortField: isSortField(parsed.sortField) ? parsed.sortField : "created_at",
       sortOrder: parsed.sortOrder === "asc" ? "asc" : "desc",
+      viewMode: parsed.viewMode === "grid" ? "grid" : "list",
     };
   } catch {
     return null;

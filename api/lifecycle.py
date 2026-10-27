@@ -5,6 +5,17 @@ from .s3 import is_no_such_upload
 from .transfer import PURGING
 
 
+def _delete_thumbnail(s3ops, row: dict) -> None:
+    """Best-effort thumbnail cleanup; the object delete must not depend on it."""
+    key = row.get("thumbnail_key")
+    if not key:
+        return
+    try:
+        s3ops.delete_object(Bucket=row["bucket"], Key=key)
+    except Exception:
+        pass
+
+
 class StorageDeleteError(RuntimeError):
     """Raised when the storage backend refuses a delete (M06).
 
@@ -47,6 +58,7 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
                     if not is_no_such_upload(exc):
                         raise
             s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+            _delete_thumbnail(s3ops, row)
         except Exception:
             # Keep the pending reference so the next sweep retries; never
             # declare a failed cleanup as expired.
@@ -83,6 +95,7 @@ def reconcile_terminal(repo, s3ops, *, statuses=("failed", "aborted", "deleted")
                 continue
             try:
                 s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+                _delete_thumbnail(s3ops, row)
             except Exception:
                 storage_failures += 1
                 continue
@@ -181,6 +194,7 @@ def purge_object(repo, s3ops, oid: str, *, space_id: str,
                     raise
             repo.set_multipart(oid, None, row.get("multipart_part_bytes"))
         s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        _delete_thumbnail(s3ops, row)
     except Exception as exc:
         if previous != PURGING:
             repo.set_status(oid, previous)

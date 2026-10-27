@@ -46,6 +46,13 @@ CREATE TABLE IF NOT EXISTS objects (
   status TEXT NOT NULL DEFAULT 'pending',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  -- Publication (admin Publish panel): a stable slug the operator can keep
+  -- across content replacements, and its publication timestamp.
+  public_slug TEXT,
+  published_at INTEGER,
+  -- Generated preview metadata (video poster / image thumbnail, duration).
+  thumbnail_key TEXT,
+  duration_seconds REAL,
   UNIQUE (bucket, object_key)
 );
 CREATE TABLE IF NOT EXISTS applications (

@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0007_space_metering"
+SCHEMA_VERSION = "0008_publication_thumbnails"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -59,6 +59,12 @@ ADDED_COLUMNS = {
         # ``size_bytes`` (which stays -1 until commit), and an optional opaque
         # client idempotency key dedupes accidental double submits.
         ("expected_size_bytes", "BIGINT"),
+        # Stable publication slug (kept across content replacement) and the
+        # generated preview metadata.
+        ("public_slug", "TEXT"),
+        ("published_at", "INTEGER"),
+        ("thumbnail_key", "TEXT"),
+        ("duration_seconds", "REAL"),
         ("idempotency_key", "TEXT"),
         # Multipart session (#72): backend upload id while parts are being
         # sent (cleared once completed) and the server-chosen part size.
@@ -236,6 +242,12 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
                 runner.exec(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
     runner.commit()
     runner.exec("CREATE INDEX IF NOT EXISTS idx_objects_space ON objects(space_id, status)")
+    # Partial unique index: a slug is unique when set, and any number of rows
+    # may have no slug. Supported by both SQLite and PostgreSQL.
+    runner.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_slug "
+        "ON objects(public_slug) WHERE public_slug IS NOT NULL"
+    )
     # Every upload intent looks up its Idempotency-Key; without this index that
     # is a scan of the whole catalogue (14.8 ms at 100k rows, growing linearly).
     runner.exec(

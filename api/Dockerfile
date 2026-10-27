@@ -8,6 +8,12 @@ WORKDIR /srv/api
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ffmpeg/ffprobe generate video posters and durations. They run only in the
+# background worker (or the lazy thumbnail route), never in a commit request.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY . ./api
 
 EXPOSE 8000

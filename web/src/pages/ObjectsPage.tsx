@@ -49,6 +49,7 @@ import { RowMenu } from "../components/RowMenu";
 import { describeError } from "../lib/errors";
 import { PreviewModal } from "../components/PreviewModal";
 import { ShareDialog } from "../components/ShareDialog";
+import { PublishDialog } from "../components/PublishDialog";
 import {
   MasterModeBanner,
   MasterModeDialog,
@@ -130,6 +131,18 @@ function formatBytes(size: number): string {
   const index = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
   const value = size / 1024 ** index;
   return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+/** Seconds -> "m:ss" / "h:mm:ss" for media duration badges. */
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "—";
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
 }
 
 const DATE_FORMAT = new Intl.DateTimeFormat("fr-FR", {
@@ -331,6 +344,9 @@ export function ObjectsPage() {
   // The folder, filters and position the user had before a lost session. Read
   // once: after this render the component owns the state and writes it back.
   const [restoredView] = useState<FilesViewState | null>(() => loadFilesView());
+  const [viewMode, setViewMode] = useState<"list" | "grid">(
+    () => restoredView?.viewMode ?? "list",
+  );
 
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(
     () => restoredView?.folderId ?? null,
@@ -420,6 +436,7 @@ export function ObjectsPage() {
   const [details, setDetails] = useState<ObjectItem | null>(null);
   const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
   const [shareTarget, setShareTarget] = useState<ObjectItem | null>(null);
+  const [publishTarget, setPublishTarget] = useState<ObjectItem | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // The import panel opens on demand (header button) and stays open while it
@@ -888,6 +905,7 @@ export function ObjectsPage() {
         toDate,
         sortField,
         sortOrder,
+        viewMode,
       });
     }, 200);
     return () => clearTimeout(timer);
@@ -902,6 +920,7 @@ export function ObjectsPage() {
     toDate,
     sortField,
     sortOrder,
+    viewMode,
   ]);
 
   // Scroll offset and page depth are written together: a scroll position is
@@ -2651,6 +2670,24 @@ export function ObjectsPage() {
             {items.length} fichier{items.length > 1 ? "s" : ""} affiché
             {items.length > 1 ? "s" : ""}
           </span>
+          <div className="view-toggle" role="group" aria-label="Affichage">
+            <button
+              type="button"
+              className={viewMode === "list" ? "btn btn-small btn-primary" : "btn btn-small"}
+              aria-pressed={viewMode === "list"}
+              onClick={() => setViewMode("list")}
+            >
+              Liste
+            </button>
+            <button
+              type="button"
+              className={viewMode === "grid" ? "btn btn-small btn-primary" : "btn btn-small"}
+              aria-pressed={viewMode === "grid"}
+              onClick={() => setViewMode("grid")}
+            >
+              Grille
+            </button>
+          </div>
         </div>
 
         <form
@@ -2899,7 +2936,59 @@ export function ObjectsPage() {
                 ) : null}
               </p>
             ) : null}
-            <div className="ledger" role="list">
+            {viewMode === "grid" ? (
+              <div className="object-grid" role="list">
+                {items.map((item) => (
+                  <div className="object-card" key={item.id} role="listitem">
+                    <input
+                      type="checkbox"
+                      className="object-card-check"
+                      aria-label={`Sélectionner ${item.display_name}`}
+                      checked={selectedIds.has(item.id)}
+                      onChange={(e) =>
+                        setSelectedIds((current) => {
+                          const next = new Set(current);
+                          if (e.target.checked) next.add(item.id);
+                          else next.delete(item.id);
+                          return next;
+                        })
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="object-card-open"
+                      onClick={() => setDetails(item)}
+                      aria-label={`Détails de ${item.display_name}`}
+                    >
+                      <span className={`object-card-media file-tile-${fileKind(item.content_type)}`}>
+                        <FileTypeIcon contentType={item.content_type} />
+                        {item.thumbnail ? (
+                          <img
+                            src={`/api/v1/objects/${item.id}/thumbnail`}
+                            alt=""
+                            loading="lazy"
+                            onError={(e) => {
+                              e.currentTarget.style.display = "none";
+                            }}
+                          />
+                        ) : null}
+                        {item.duration_seconds ? (
+                          <span className="object-card-duration">
+                            {formatDuration(item.duration_seconds)}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="object-card-name">{item.display_name}</span>
+                      <span className="muted object-card-meta">
+                        {typeLabel(item.content_type)} ·{" "}
+                        {formatBytes(item.size_bytes)}
+                      </span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="ledger" role="list" hidden={viewMode === "grid"}>
             <div className="ledger-head" role="listitem">
               <span>
                 <input
@@ -3040,6 +3129,9 @@ export function ObjectsPage() {
                         },
                         ...(canShare && item.status === "available"
                           ? [{ label: "Partager", onSelect: () => setShareTarget(item) }]
+                          : []),
+                        ...(canShare && item.status === "available"
+                          ? [{ label: "Publier", onSelect: () => setPublishTarget(item) }]
                           : []),
                         {
                           label: "Copier la référence",
@@ -3235,13 +3327,22 @@ export function ObjectsPage() {
               {downloadingId === details.id ? "…" : "Télécharger"}
             </button>
             {canShare && details.status === "available" ? (
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setShareTarget(details)}
-              >
-                Partager
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setShareTarget(details)}
+                >
+                  Partager
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setPublishTarget(details)}
+                >
+                  Publier
+                </button>
+              </>
             ) : null}
             {isRestorable(details) ? (
               <button
@@ -3733,6 +3834,17 @@ export function ObjectsPage() {
         item={shareTarget}
         csrf={csrf}
         onClose={() => setShareTarget(null)}
+        onNotify={notify}
+      />
+      <PublishDialog
+        item={publishTarget}
+        objects={items}
+        csrf={csrf}
+        onClose={() => setPublishTarget(null)}
+        onChanged={() => {
+          void queryClient.invalidateQueries({ queryKey: ["objects"] });
+          void objectsQuery.refetch();
+        }}
         onNotify={notify}
       />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
