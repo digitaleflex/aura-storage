@@ -13,7 +13,7 @@
   --aura-border: #243140;
   --aura-text: #f3f6fa;
   --aura-text-secondary: #a7b5c8;
-  --aura-text-muted: #748399;
+  --aura-text-muted: #9fb0c4;
   --aura-primary: #c5f441;
   --aura-primary-hover: #d5ff5a;
   --aura-success: #35e59a;
@@ -481,7 +481,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 9px;
+  gap: 12px;
   padding: 12px;
   background: var(--aura-surface);
   border: 1px solid var(--aura-border);
@@ -491,7 +491,10 @@
 .transfers-toolbar .btn {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px 14px;
 }
 
 .transfers-toolbar-primary {
@@ -589,7 +592,7 @@
 
 .transfers-search input {
   width: 100%;
-  padding: 9px 34px;
+  padding: 9px 44px 9px 34px;
   border-radius: 10px;
   border: 1px solid var(--aura-border);
   background: var(--aura-bg);
@@ -612,14 +615,21 @@
 
 .transfers-search-clear {
   position: absolute;
-  right: 5px;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
-  padding: 5px;
+  align-items: center;
+  justify-content: center;
+  /* 44×44 invisible target around a 14px glyph, no layout growth. */
+  width: 44px;
+  height: 44px;
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--aura-text-muted);
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .transfers-search-clear:hover {
@@ -797,6 +807,31 @@
   animation: transfers-flash-danger 900ms var(--ease-out) both;
 }
 
+/* Cancelled files stay visible but recede: they no longer belong to the
+   import, so the row is tinted and its content muted (the badge keeps the
+   "Annulé" label on the muted tone). */
+.transfers-row[data-status="cancelled"]:not(.is-selected) {
+  background: color-mix(in srgb, var(--aura-bg) 55%, transparent);
+}
+
+.transfers-table .transfers-row[data-status="cancelled"] .transfers-file-name {
+  color: var(--aura-text-secondary);
+}
+
+.transfers-table .transfers-row[data-status="cancelled"] .transfers-size,
+.transfers-table .transfers-row[data-status="cancelled"] .transfers-progress-percent,
+.transfers-table .transfers-row[data-status="cancelled"] .transfers-progress-bytes {
+  color: var(--aura-text-muted);
+}
+
+.transfers-table .transfers-row[data-status="cancelled"] .transfers-file-icon {
+  opacity: 0.6;
+}
+
+.transfers-table .transfers-row[data-status="cancelled"] .transfers-bar-fill {
+  opacity: 0.5;
+}
+
 @keyframes transfers-flash-success {
   0% {
     background: color-mix(in srgb, var(--aura-success) 18%, transparent);
@@ -864,6 +899,10 @@
 
 .transfers-file-icon--warning {
   color: var(--aura-warning);
+}
+
+.transfers-file-icon--verify {
+  color: var(--aura-primary);
 }
 
 .transfers-file-copy {
@@ -953,9 +992,16 @@
   background: var(--aura-text-muted);
 }
 
+.transfers-bar--info .transfers-bar-fill {
+  background: var(--aura-info);
+}
+
+.transfers-bar--verify .transfers-bar-fill {
+  background: var(--aura-primary);
+}
+
 .transfers-bar.is-indeterminate .transfers-bar-fill {
   width: 35%;
-  background: var(--aura-info);
   animation: transfers-indeterminate 1.2s var(--ease-std) infinite;
 }
 
@@ -1010,6 +1056,13 @@
   background: color-mix(in srgb, var(--aura-warning) 12%, transparent);
 }
 
+/* Integrity check: brand lime, distinct from the blue "uploading" badge. */
+.transfer-badge--verify {
+  color: var(--aura-primary);
+  border-color: color-mix(in srgb, var(--aura-primary) 38%, transparent);
+  background: color-mix(in srgb, var(--aura-primary) 12%, transparent);
+}
+
 .transfer-badge--danger {
   color: var(--aura-danger);
   border-color: color-mix(in srgb, var(--aura-danger) 40%, transparent);
@@ -1026,6 +1079,16 @@
   white-space: nowrap;
   color: var(--aura-text-secondary);
   font-variant-numeric: tabular-nums;
+}
+
+.transfers-menu-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+.transfers-col-actions .transfers-menu-wrap {
+  width: 100%;
+  justify-content: flex-end;
 }
 
 .transfers-col-actions .menu {
@@ -1467,6 +1530,30 @@
 .shell-transfers .menu-trigger:hover {
   background: var(--aura-surface-raised);
   color: var(--aura-text);
+}
+
+/* Icon-only triggers reach 44×44 without visibly growing dense rows: the
+   row control keeps its glyph size and gets an invisible centred hit area. */
+.shell-transfers .transfers-col-actions .menu-trigger {
+  position: relative;
+}
+
+.shell-transfers .transfers-col-actions .menu-trigger::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+.shell-transfers .transfers-toolbar-actions .menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
 }
 
 .shell-transfers .menu-panel {

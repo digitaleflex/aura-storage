@@ -11,6 +11,8 @@ import {
   queuePositionLabel,
   scopeBytes,
   sortItems,
+  STATUS_LABEL,
+  STATUS_TONE,
 } from "./model";
 import type { QueueItem, QueueState } from "../../lib/transfer";
 
@@ -77,6 +79,25 @@ describe("countTransfers", () => {
     expect(counts.completed).toBe(1);
     expect(counts.cancelled).toBe(1);
     expect(counts.denominator).toBe(1);
+  });
+});
+
+describe("STATUS_TONE", () => {
+  it("gives verifying its own tone instead of the uploading one", () => {
+    expect(STATUS_TONE.verifying).toBe("verify");
+    expect(STATUS_TONE.uploading).toBe("info");
+    expect(STATUS_TONE.verifying).not.toBe(STATUS_TONE.uploading);
+  });
+
+  it("keeps a muted tone and label for cancelled files", () => {
+    expect(STATUS_TONE.cancelled).toBe("muted");
+    expect(STATUS_LABEL.cancelled).toBe("Annulé");
+  });
+
+  it("assigns a tone and a label to every display status", () => {
+    for (const status of Object.keys(STATUS_LABEL)) {
+      expect(STATUS_TONE[status as keyof typeof STATUS_TONE]).toBeTruthy();
+    }
   });
 });
 

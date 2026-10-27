@@ -56,6 +56,9 @@ export function TransfersToolbar({
           className="btn btn-primary transfers-toolbar-primary"
           onClick={onPauseAll}
           disabled={!canPause}
+          title={
+            canPause ? undefined : "Aucun transfert en attente à suspendre."
+          }
         >
           <TransferIcon name="pause" size={16} />
           Pause tous les transferts
@@ -65,6 +68,11 @@ export function TransfersToolbar({
           className="btn"
           onClick={onResumeAll}
           disabled={!canResume}
+          title={
+            canResume
+              ? undefined
+              : "Aucun transfert en pause ou suspendu à reprendre."
+          }
         >
           <TransferIcon name="play" size={16} />
           Reprendre
@@ -78,51 +86,61 @@ export function TransfersToolbar({
           className="btn btn-danger transfers-toolbar-cancel"
           onClick={onCancelAll}
           disabled={!canCancel}
+          title={
+            canCancel
+              ? undefined
+              : "Aucun transfert en cours ou en attente à annuler."
+          }
         >
           <TransferIcon name="close" size={16} />
           Annuler tout
         </button>
-        <RowMenu
-          label="Plus d'actions sur les transferts"
-          items={[
-            {
-              label: `Relancer les échecs${failedCount > 0 ? ` (${failedCount})` : ""}`,
-              onSelect: onRetryFailed,
-              disabled: failedCount === 0,
-            },
-            {
-              label: `Sélectionner les échecs (${failedCount})`,
-              onSelect: onSelectFailed,
-              disabled: failedCount === 0,
-            },
-            {
-              label: `Sélectionner les actifs (${activeCount})`,
-              onSelect: onSelectActive,
-              disabled: activeCount === 0,
-            },
-            {
-              label: `Sélectionner les fichiers en attente (${queuedCount})`,
-              onSelect: onSelectQueued,
-              disabled: queuedCount === 0,
-            },
-            {
-              label: `Exporter la vue (${exportCount})`,
-              onSelect: onExport,
-              disabled: exportCount === 0,
-            },
-            {
-              label: "Télécharger le diagnostic de session",
-              onSelect: onDownloadSessionDiagnostic,
-              disabled: exportCount === 0,
-            },
-            {
-              label: "Effacer la file terminée",
-              onSelect: onClear,
-              disabled: !canClear,
-            },
-            { label: "Réinitialiser les filtres", onSelect: onResetFilters },
-          ]}
-        />
+        <span
+          className="transfers-menu-wrap"
+          title="Plus d'actions sur les transferts"
+        >
+          <RowMenu
+            label="Plus d'actions sur les transferts"
+            items={[
+              {
+                label: `Relancer les échecs${failedCount > 0 ? ` (${failedCount})` : ""}`,
+                onSelect: onRetryFailed,
+                disabled: failedCount === 0,
+              },
+              {
+                label: `Sélectionner les échecs (${failedCount})`,
+                onSelect: onSelectFailed,
+                disabled: failedCount === 0,
+              },
+              {
+                label: `Sélectionner les actifs (${activeCount})`,
+                onSelect: onSelectActive,
+                disabled: activeCount === 0,
+              },
+              {
+                label: `Sélectionner les fichiers en attente (${queuedCount})`,
+                onSelect: onSelectQueued,
+                disabled: queuedCount === 0,
+              },
+              {
+                label: `Exporter la vue (${exportCount})`,
+                onSelect: onExport,
+                disabled: exportCount === 0,
+              },
+              {
+                label: "Télécharger le diagnostic de session",
+                onSelect: onDownloadSessionDiagnostic,
+                disabled: exportCount === 0,
+              },
+              {
+                label: "Effacer la file terminée",
+                onSelect: onClear,
+                disabled: !canClear,
+              },
+              { label: "Réinitialiser les filtres", onSelect: onResetFilters },
+            ]}
+          />
+        </span>
       </div>
       {activeCount > 0 && canPause ? (
         <p className="transfers-toolbar-hint">

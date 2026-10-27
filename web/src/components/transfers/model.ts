@@ -53,15 +53,24 @@ export const STATUS_LABEL: Record<DisplayStatus, string> = {
   cancelled: "Annulé",
 };
 
-/** Semantic tone used by badges and progress bars. */
-export type StatusTone = "info" | "success" | "warning" | "danger" | "muted";
+/**
+ * Semantic tone used by badges and progress bars. `verify` is its own tone so
+ * the integrity check is never mistaken for an upload in progress.
+ */
+export type StatusTone =
+  | "info"
+  | "verify"
+  | "success"
+  | "warning"
+  | "danger"
+  | "muted";
 
 export const STATUS_TONE: Record<DisplayStatus, StatusTone> = {
   queued: "warning",
   paused: "warning",
   initializing: "info",
   uploading: "info",
-  verifying: "info",
+  verifying: "verify",
   completed: "success",
   failed: "danger",
   cancelled: "muted",

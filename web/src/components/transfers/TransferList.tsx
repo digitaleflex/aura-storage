@@ -503,7 +503,11 @@ function TransferRow({
         </td>
         <td className="transfers-status-cell" data-label="Statut">
           <span className={`transfer-badge transfer-badge--${tone}`}>
-            <span className="transfer-badge-dot" aria-hidden="true" />
+            {verifying ? (
+              <TransferIcon name="shield" size={12} />
+            ) : (
+              <span className="transfer-badge-dot" aria-hidden="true" />
+            )}
             {STATUS_LABEL[status]}
           </span>
         </td>
@@ -511,7 +515,12 @@ function TransferRow({
           {status === "uploading" && rate > 0 ? formatRate(rate) : "—"}
         </td>
         <td className="transfers-col-actions" data-label="Actions">
-          <RowMenu label={`Actions pour ${item.fileName}`} items={actions} />
+          <span
+            className="transfers-menu-wrap"
+            title={`Actions pour ${item.fileName}`}
+          >
+            <RowMenu label={`Actions pour ${item.fileName}`} items={actions} />
+          </span>
         </td>
       </tr>
       {status === "failed" ? (

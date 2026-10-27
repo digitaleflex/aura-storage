@@ -61,9 +61,17 @@ export function TransferDetailsDialog({
     >
       {item ? (
         <div className="transfer-details" data-testid="transfer-details">
+          <p className="dialog-text">
+            Fiche technique du transfert : état, progression, empreinte SHA-256
+            et journal des étapes.
+          </p>
           <div className="transfer-details-head">
             <span className={`transfer-badge transfer-badge--${STATUS_TONE[status]}`}>
-              <span className="transfer-badge-dot" aria-hidden="true" />
+              {status === "verifying" ? (
+                <TransferIcon name="shield" size={12} />
+              ) : (
+                <span className="transfer-badge-dot" aria-hidden="true" />
+              )}
               {STATUS_LABEL[status]}
             </span>
             <span className="muted">

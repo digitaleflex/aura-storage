@@ -113,6 +113,7 @@ export function TransfersFilters({
                 type="button"
                 className="transfers-search-clear"
                 aria-label="Effacer la recherche"
+                title="Effacer la recherche"
                 onClick={() => onSearch("")}
               >
                 <TransferIcon name="close" size={14} />

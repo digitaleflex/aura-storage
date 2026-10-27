@@ -12,6 +12,7 @@ import {
   TransferDetailsDialog,
 } from "../components/transfers/TransferDialogs";
 import { TransferIcon } from "../components/transfers/TransferIcon";
+import { useOnlineStatus } from "../components/transfers/useOnlineStatus";
 import {
   canCancelItem,
   canPauseItem,
@@ -111,6 +112,7 @@ export function TransfersPage() {
   const location = useLocation();
   const session = useSession();
   const owner = session.data?.id ?? null;
+  const online = useOnlineStatus();
 
   // Filters live in the URL: shareable, back/forward friendly, no duplicated
   // state. Only the search text is debounced locally for typing comfort.
@@ -490,6 +492,10 @@ export function TransfersPage() {
       notify("error", "Toujours hors-ligne : la file reste suspendue.");
       return;
     }
+    if (queue.items.length === 0) {
+      notify("ok", "Connexion rétablie.");
+      return;
+    }
     handleResumeAll();
   }
 
@@ -730,7 +736,7 @@ export function TransfersPage() {
         now={clock}
       />
 
-      {!transfers.isOnline && queue.items.length > 0 && !queue.finished ? (
+      {!online ? (
         <div className="transfers-offline" role="status">
           <span className="transfers-offline-icon" aria-hidden="true">
             <TransferIcon name="alert" size={20} />
@@ -738,8 +744,8 @@ export function TransfersPage() {
           <div className="transfers-offline-copy">
             <strong>Connexion perdue</strong>
             <p>
-              La file est suspendue. La reprise est automatique dès que le
-              réseau revient ; les fichiers déjà commencés ne sont pas perdus.
+              La file est suspendue : la reprise est automatique dès le retour
+              du réseau. Les fichiers déjà commencés ne sont pas perdus.
             </p>
           </div>
           <button type="button" className="btn btn-small" onClick={handleRetryConnection}>
@@ -769,7 +775,44 @@ export function TransfersPage() {
             Reprendre l'import
           </button>
         </div>
+      ) : resumable.length > 0 ? (
+        <div className="transfers-resume" role="status">
+          <span className="transfers-resume-icon" aria-hidden="true">
+            <TransferIcon name="upload" size={20} />
+          </span>
+          <div className="transfers-resume-copy">
+            <strong>Import interrompu</strong>
+            <p>
+              {resumable.length} fichier{resumable.length > 1 ? "s" : ""} (
+              {formatBytes(
+                resumable.reduce((sum, entry) => sum + entry.size, 0),
+              )}
+              ) récupérable{resumable.length > 1 ? "s" : ""}. Sélectionnez les
+              mêmes fichiers pour reprendre : ceux déjà confirmés ne seront pas
+              renvoyés.
+            </p>
+          </div>
+          <button type="button" className="btn btn-primary" onClick={handleResumeImport}>
+            Reprendre l'import
+          </button>
+        </div>
       ) : null}
+
+      {counts.failed > 0 && (
+        <div className="transfers-global-error" role="alert">
+          <span className="transfers-global-error-icon" aria-hidden="true">
+            <TransferIcon name="alert" size={20} />
+          </span>
+          <div className="transfers-global-error-copy">
+            <strong>
+              {counts.failed} transfert{counts.failed > 1 ? "s" : ""} en échec
+            </strong>
+            <p>
+              Cliquez sur un fichier pour voir le détail et réessayer.
+            </p>
+          </div>
+        </div>
+      )}
 
       <TransfersToolbar
         canPause={canPause}
@@ -825,6 +868,11 @@ export function TransfersPage() {
               type="button"
               className="btn btn-small"
               disabled={pauseableSelection.length === 0}
+              title={
+                pauseableSelection.length === 0
+                  ? "Aucun transfert sélectionné n'est en attente."
+                  : undefined
+              }
               onClick={handleBulkPause}
             >
               Mettre en pause
@@ -833,6 +881,11 @@ export function TransfersPage() {
               type="button"
               className="btn btn-small"
               disabled={resumeableSelection.length === 0}
+              title={
+                resumeableSelection.length === 0
+                  ? "Aucun transfert sélectionné n'est en pause."
+                  : undefined
+              }
               onClick={handleBulkResume}
             >
               Reprendre
@@ -841,6 +894,11 @@ export function TransfersPage() {
               type="button"
               className="btn btn-small btn-danger"
               disabled={cancelableSelection.length === 0}
+              title={
+                cancelableSelection.length === 0
+                  ? "Aucun transfert sélectionné n'est encore actif."
+                  : undefined
+              }
               onClick={requestCancelSelection}
             >
               Annuler
