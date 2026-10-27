@@ -730,6 +730,19 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
+  /api/v1/objects/{oid}/analytics:
+    get:
+      summary: Per-object views, downloads, shares and egress (objects:read)
+      tags: [objects]
+      description: >-
+        Monthly counters for the current UTC month plus lifetime totals. Egress
+        is an estimate: one issued intent/opening counts the object's full size.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Monthly and lifetime counters }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
   /api/v1/objects/{oid}/thumbnail:
     get:
       summary: Redirect to the generated thumbnail or poster (objects:read)

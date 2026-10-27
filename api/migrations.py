@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0009_tags_packs"
+SCHEMA_VERSION = "0010_object_analytics"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -326,6 +326,19 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_collection_items_pos "
         "ON collection_items(collection_id, position)"
+    )
+    # Per-object monthly analytics (Sprint 3).
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS object_usage_monthly ("
+        "object_id TEXT NOT NULL, period TEXT NOT NULL, "
+        "views INTEGER NOT NULL DEFAULT 0, downloads INTEGER NOT NULL DEFAULT 0, "
+        "share_opens INTEGER NOT NULL DEFAULT 0, "
+        "egress_bytes BIGINT NOT NULL DEFAULT 0, last_access_at INTEGER, "
+        "PRIMARY KEY (object_id, period))"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_object_usage_period "
+        "ON object_usage_monthly(period)"
     )
     # Monthly quotas and usage per space: created here for upgraded catalogues.
     runner.exec(

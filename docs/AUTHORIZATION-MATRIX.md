@@ -62,6 +62,7 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/objects/{oid}/commit` | `objects:write` | streaming SHA-256, idempotent; **202 `verifying`** for large objects, hashed by the verification worker (N5) |
 | POST | `/api/v1/objects/{oid}/abort` | `objects:write` | cancel a pending intent (best-effort delete); idempotent; refused on available/deleted |
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
+| GET | `/api/v1/objects/{oid}/analytics` | `objects:read` | monthly views/downloads/share opens/egress + lifetime totals |
 | GET | `/api/v1/objects/{oid}/thumbnail` | `objects:read` | 302 to a generated thumbnail/poster, 404 when none |
 | PUT | `/api/v1/objects/{oid}/publication` | `objects:write`, **human only** | stable public slug; `/m/<slug>` is the permanent URL |
 | PUT | `/api/v1/objects/{oid}/tags` | `objects:write`, **human only** | normalized tags (max 20) |

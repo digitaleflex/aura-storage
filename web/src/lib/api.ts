@@ -70,6 +70,14 @@ export interface CollectionDetail extends CollectionItem {
   items: ObjectItem[];
 }
 
+export interface ObjectAnalytics {
+  object_id: string;
+  period: string;
+  month: { views: number; downloads: number; share_opens: number; egress_bytes: number };
+  totals: { views: number; downloads: number; share_opens: number; egress_bytes: number };
+  last_access_at: number | null;
+}
+
 export interface ObjectsListResponse {
   items: ObjectItem[];
 }
@@ -902,6 +910,12 @@ export const api = {
     return request<ObjectItem>(
       `/api/v1/objects/${encodeURIComponent(id)}/replace`,
       { method: "POST", body: { source_object_id: sourceObjectId }, csrf },
+    );
+  },
+
+  objectAnalytics(id: string): Promise<ObjectAnalytics> {
+    return request<ObjectAnalytics>(
+      `/api/v1/objects/${encodeURIComponent(id)}/analytics`,
     );
   },
 

@@ -94,6 +94,11 @@ so the format is enforced in code, not in DDL.
   manifest is `/p/<slug>.json` and only exposes each item's `/m/<slug>` URL when
   that object is itself published.
 
+### ObjectUsageMonthly (implemented, Sprint 3)
+- `object_id` + `period` (YYYY-MM) PK, `views`, `downloads`, `share_opens`,
+  `egress_bytes` (BIGINT estimate), `last_access_at`. One intent/opening counts
+  the object's full size once; AURA never proxies bytes.
+
 ### User (implemented; extended by #35)
 - `id`, `username` (unique), `pass_hash`, `created_at`, plus `role`
   (`user`/`operator`/`admin`), `application_id`, `space_id`.

@@ -194,6 +194,15 @@ def _record_egress(space_id: str, size_bytes: int, kind: str) -> None:
     except Exception:
         # Metering must never turn a successful download into a 500.
         log.warning("egress metering failed for space %s (%s)", space_id, kind)
+
+
+def _record_object_event(object_id: str, size_bytes: int, kind: str) -> None:
+    try:
+        repo.record_object_event(
+            object_id, _usage_period(), kind, size_bytes, int(time.time())
+        )
+    except Exception:
+        log.warning("object metering failed for %s (%s)", object_id, kind)
 # uvicorn installs handlers on its own loggers only and leaves the root logger
 # handler-free, so an INFO record from "api.main" is dropped by logging's
 # lastResort handler (WARNING). Route through the logger uvicorn configures so
@@ -1060,6 +1069,7 @@ def redeem_share(token: str):
         content_type=obj["content_type"],
     )
     _record_egress(row["space_id"], int(obj["size_bytes"]), "share")
+    _record_object_event(obj["id"], int(obj["size_bytes"]), "share")
     audit_event("share-access", None, "success", {
         "share_id": row["id"], "object_id": obj["id"],
         "use_count": int(row["use_count"]) + 1,
@@ -1970,6 +1980,33 @@ def get_object(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
     return _object_public(row, repo.get_object_tags(oid))
 
 
+@app.get("/api/v1/objects/{oid}/analytics")
+def object_analytics(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    """This month's views/downloads/share opens and lifetime totals."""
+    oid = _canonical_id(oid, "object id")
+    if repo.get_object(oid, **_object_scope(principal)) is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    period = _usage_period()
+    month = repo.get_object_usage(oid, period) or {}
+    totals = repo.get_object_usage_totals(oid)
+    return {
+        "object_id": oid, "period": period,
+        "month": {
+            "views": int(month.get("views") or 0),
+            "downloads": int(month.get("downloads") or 0),
+            "share_opens": int(month.get("share_opens") or 0),
+            "egress_bytes": int(month.get("egress_bytes") or 0),
+        },
+        "totals": {
+            "views": int(totals.get("views") or 0),
+            "downloads": int(totals.get("downloads") or 0),
+            "share_opens": int(totals.get("share_opens") or 0),
+            "egress_bytes": int(totals.get("egress_bytes") or 0),
+        },
+        "last_access_at": totals.get("last_access_at"),
+    }
+
+
 @app.delete("/api/v1/objects/{oid}")
 def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
     oid = _canonical_id(oid, "object id")
@@ -2203,6 +2240,7 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
         ),
     )
     _record_egress(row["space_id"], int(row["size_bytes"]), "download")
+    _record_object_event(oid, int(row["size_bytes"]), "download")
     audit_event("download-intent", principal["id"], "success", {"object_id": oid})
     return {
         "id": oid, "download_url": url, "method": "GET",
@@ -2284,6 +2322,7 @@ def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)))
         content_disposition="inline", content_type=row["content_type"],
     )
     _record_egress(row["space_id"], int(row["size_bytes"]), "preview")
+    _record_object_event(oid, int(row["size_bytes"]), "view")
     audit_event("preview-intent", principal["id"], "success", {"object_id": oid})
     return {
         "id": oid, "preview_url": url, "method": "GET",
@@ -2527,6 +2566,7 @@ def public_media(slug: str):
         ),
         content_type=row["content_type"],
     )
+    _record_object_event(row["id"], int(row["size_bytes"]), "view")
     audit_event("public-access", None, "success",
                 {"object_id": row["id"], "slug": slug})
     return RedirectResponse(url, status_code=302, headers={

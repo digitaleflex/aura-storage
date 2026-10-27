@@ -238,3 +238,17 @@ CREATE TABLE IF NOT EXISTS collection_items (
 );
 CREATE INDEX IF NOT EXISTS idx_object_tags_tag ON object_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_collection_items_pos ON collection_items(collection_id, position);
+-- Per-object monthly usage: views (preview/public), downloads, share opens and
+-- estimated egress. Same estimate caveat as space counters: one intent counts
+-- the object's full size once.
+CREATE TABLE IF NOT EXISTS object_usage_monthly (
+  object_id TEXT NOT NULL,
+  period TEXT NOT NULL,
+  views INTEGER NOT NULL DEFAULT 0,
+  downloads INTEGER NOT NULL DEFAULT 0,
+  share_opens INTEGER NOT NULL DEFAULT 0,
+  egress_bytes BIGINT NOT NULL DEFAULT 0,
+  last_access_at INTEGER,
+  PRIMARY KEY (object_id, period)
+);
+CREATE INDEX IF NOT EXISTS idx_object_usage_period ON object_usage_monthly(period);

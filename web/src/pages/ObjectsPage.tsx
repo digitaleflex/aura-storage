@@ -52,6 +52,7 @@ import { ShareDialog } from "../components/ShareDialog";
 import { PublishDialog } from "../components/PublishDialog";
 import { PacksDialog } from "../components/PacksDialog";
 import { TagsEditor } from "../components/TagsEditor";
+import { ObjectAnalytics } from "../components/ObjectAnalytics";
 import {
   MasterModeBanner,
   MasterModeDialog,
@@ -3377,6 +3378,7 @@ export function ObjectsPage() {
               Déplacer
             </button>
           </div>
+          <ObjectAnalytics objectId={details.id} />
           <TagsEditor
             item={details}
             csrf={csrf}

@@ -1172,6 +1172,43 @@ class Repository:
             self._run("DELETE FROM collection_items WHERE collection_id = %s", (cid,))
             self._run("DELETE FROM collections WHERE id = %s", (cid,))
 
+
+    # -- per-object analytics -------------------------------------------
+    def record_object_event(self, oid: str, period: str, kind: str,
+                            size_bytes: int, now: int) -> None:
+        column = {"view": "views", "download": "downloads",
+                  "share": "share_opens"}[kind]
+        self._run(
+            "INSERT INTO object_usage_monthly (object_id, period, views, downloads, "
+            "share_opens, egress_bytes, last_access_at) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT(object_id, period) DO UPDATE SET "
+            f"{column} = object_usage_monthly.{column} + 1, "
+            "egress_bytes = object_usage_monthly.egress_bytes + excluded.egress_bytes, "
+            "last_access_at = excluded.last_access_at",
+            (oid, period,
+             1 if kind == "view" else 0,
+             1 if kind == "download" else 0,
+             1 if kind == "share" else 0,
+             max(0, int(size_bytes)), now),
+        )
+
+    def get_object_usage(self, oid: str, period: str):
+        return self._one(
+            "SELECT * FROM object_usage_monthly WHERE object_id = %s AND period = %s",
+            (oid, period),
+        )
+
+    def get_object_usage_totals(self, oid: str) -> dict:
+        row = self._one(
+            "SELECT COALESCE(SUM(views),0) AS views, "
+            "COALESCE(SUM(downloads),0) AS downloads, "
+            "COALESCE(SUM(share_opens),0) AS share_opens, "
+            "COALESCE(SUM(egress_bytes),0) AS egress_bytes, "
+            "MAX(last_access_at) AS last_access_at "
+            "FROM object_usage_monthly WHERE object_id = %s", (oid,),
+        )
+        return row or {}
+
     def stats(self) -> dict:
         objects = {
             row["status"]: row["n"]
