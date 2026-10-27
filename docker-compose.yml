@@ -356,7 +356,7 @@ services:
       # This is the ONLY unauthenticated API surface; the token is the
       # credential, so the guard here is the edge rate limit rather than a
       # second factor. No CORS: a share link is navigated, not fetched.
-      - traefik.http.routers.aura-share.rule=Host(`${APP_DOMAIN:?Set APP_DOMAIN in .env}`) && (PathPrefix(`/s/`) || PathPrefix(`/m/`))
+      - traefik.http.routers.aura-share.rule=Host(`${APP_DOMAIN:?Set APP_DOMAIN in .env}`) && (PathPrefix(`/s/`) || PathPrefix(`/m/`) || PathPrefix(`/p/`))
       - traefik.http.routers.aura-share.priority=200
       - traefik.http.routers.aura-share.entrypoints=websecure
       - traefik.http.routers.aura-share.tls=true

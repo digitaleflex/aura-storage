@@ -87,6 +87,13 @@ so the format is enforced in code, not in DDL.
   object's full size once, because AURA never proxies the bytes. Storage is
   measured live from `objects`; the quota is checked at upload intent.
 
+### ObjectTag / Collection (implemented, Sprint 2)
+- `object_tags(object_id, tag)`: normalized lowercase tags, PK (object, tag).
+- `collections`: ordered course pack (`slug` globally unique, title, description,
+  `published_at`, owner/space). `collection_items` keeps `position`; the public
+  manifest is `/p/<slug>.json` and only exposes each item's `/m/<slug>` URL when
+  that object is itself published.
+
 ### User (implemented; extended by #35)
 - `id`, `username` (unique), `pass_hash`, `created_at`, plus `role`
   (`user`/`operator`/`admin`), `application_id`, `space_id`.

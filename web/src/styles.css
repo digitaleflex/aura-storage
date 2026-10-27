@@ -4071,3 +4071,34 @@ html {
   margin: 0;
   font-size: 13px;
 }
+
+/* -- Packs: ordered manifest items ----------------------------------------- */
+.pack-items {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pack-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.pack-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.tags-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}

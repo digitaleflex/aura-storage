@@ -50,6 +50,24 @@ export interface ObjectItem {
   thumbnail?: boolean;
   /** Video/audio duration in seconds when ffprobe measured it. */
   duration_seconds?: number | null;
+  /** Normalized tags (lowercase, no duplicates). */
+  tags?: string[];
+}
+
+export interface CollectionItem {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  published_at: number | null;
+  published: boolean;
+  item_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CollectionDetail extends CollectionItem {
+  items: ObjectItem[];
 }
 
 export interface ObjectsListResponse {
@@ -70,6 +88,8 @@ export interface ObjectQuery {
   status?: string;
   /** Exact media type (compared case-insensitively by the API). */
   contentType?: string;
+  /** Exact normalized tag. */
+  tag?: string;
   minSize?: number;
   maxSize?: number;
   /** Inclusive epoch-second bounds on creation time. */
@@ -882,6 +902,66 @@ export const api = {
     return request<ObjectItem>(
       `/api/v1/objects/${encodeURIComponent(id)}/replace`,
       { method: "POST", body: { source_object_id: sourceObjectId }, csrf },
+    );
+  },
+
+  /** Replace an object's tags (human only). */
+  setObjectTags(id: string, tags: string[], csrf: string): Promise<ObjectItem> {
+    return request<ObjectItem>(
+      `/api/v1/objects/${encodeURIComponent(id)}/tags`,
+      { method: "PUT", body: { tags }, csrf },
+    );
+  },
+
+  // --- Packs (human only) ---
+  listCollections(): Promise<ListResponse<CollectionItem>> {
+    return request<ListResponse<CollectionItem>>("/api/v1/collections");
+  },
+
+  getCollection(id: string): Promise<CollectionDetail> {
+    return request<CollectionDetail>(
+      `/api/v1/collections/${encodeURIComponent(id)}`,
+    );
+  },
+
+  createCollection(
+    input: { slug: string; title: string; description?: string },
+    csrf: string,
+  ): Promise<CollectionItem> {
+    return request<CollectionItem>("/api/v1/collections", {
+      method: "POST", body: input, csrf,
+    });
+  },
+
+  updateCollection(
+    id: string,
+    input: { title?: string; description?: string; published?: boolean },
+    csrf: string,
+  ): Promise<CollectionItem> {
+    return request<CollectionItem>(
+      `/api/v1/collections/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: input, csrf },
+    );
+  },
+
+  setCollectionItems(
+    id: string,
+    objectIds: string[],
+    csrf: string,
+  ): Promise<CollectionItem> {
+    return request<CollectionItem>(
+      `/api/v1/collections/${encodeURIComponent(id)}/items`,
+      { method: "PUT", body: { object_ids: objectIds }, csrf },
+    );
+  },
+
+  deleteCollection(
+    id: string,
+    csrf: string,
+  ): Promise<{ id: string; deleted: boolean }> {
+    return request<{ id: string; deleted: boolean }>(
+      `/api/v1/collections/${encodeURIComponent(id)}`,
+      { method: "DELETE", csrf },
     );
   },
 

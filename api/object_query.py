@@ -50,6 +50,7 @@ def build_object_where(
     status: Optional[str] = None,
     hide_deleted: bool = False,
     content_type: Optional[str] = None,
+    tag: Optional[str] = None,
     min_size: Optional[int] = None,
     max_size: Optional[int] = None,
     created_after: Optional[int] = None,
@@ -73,6 +74,12 @@ def build_object_where(
         else:
             clauses.append(f"folder_id = {ph}")
             params.append(folder_id)
+    if tag:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM object_tags t "
+            f"WHERE t.object_id = objects.id AND t.tag = {ph})"
+        )
+        params.append(tag)
     if q:
         clauses.append(
             f"LOWER(display_name) LIKE LOWER({ph}) {_ESCAPE_SQL}"

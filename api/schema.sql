@@ -210,3 +210,31 @@ CREATE INDEX IF NOT EXISTS idx_revisions_keep ON object_revisions(keep_forever) 
 CREATE INDEX IF NOT EXISTS idx_revisions_purge ON object_revisions(purged_at, created_at) WHERE purged_at IS NULL;
 -- idx_objects_space is created by api/migrations.py, after the additive
 -- `space_id` column exists on upgraded catalogues.
+-- Object tags (free-form, normalized) and ordered course packs. No foreign keys
+-- on object_id on purpose: an object purge must never be blocked by metadata;
+-- lifecycle deletes these rows explicitly before removing the object.
+CREATE TABLE IF NOT EXISTS object_tags (
+  object_id TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  PRIMARY KEY (object_id, tag)
+);
+CREATE TABLE IF NOT EXISTS collections (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  owner_id TEXT,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  published_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (slug)
+);
+CREATE TABLE IF NOT EXISTS collection_items (
+  collection_id TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  PRIMARY KEY (collection_id, object_id)
+);
+CREATE INDEX IF NOT EXISTS idx_object_tags_tag ON object_tags(tag);
+CREATE INDEX IF NOT EXISTS idx_collection_items_pos ON collection_items(collection_id, position);

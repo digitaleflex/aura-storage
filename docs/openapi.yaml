@@ -798,6 +798,138 @@ paths:
         "404": { description: Object not found or not visible }
         "409": { description: "Object not available, or source is published" }
         "422": { description: Source equals target }
+  /api/v1/objects/{oid}/tags:
+    put:
+      summary: Replace an object's tags (human only)
+      tags: [objects]
+      description: >-
+        Normalized to lowercase, deduplicated, limited to 20 tags of 1-32
+        characters (letters, digits, dashes). Tags are filterable with
+        `GET /objects?tag=`.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                tags:
+                  type: array
+                  maxItems: 20
+                  items: { type: string, minLength: 1, maxLength: 32 }
+      responses:
+        "200": { description: Object with its normalized tags }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+        "422": { description: Invalid tag }
+  /api/v1/collections:
+    get:
+      summary: List the caller's ordered packs (human only)
+      tags: [objects]
+      responses:
+        "200": { description: Packs with item counts }
+        "401": { description: Authentication required }
+    post:
+      summary: Create an ordered pack (human only)
+      tags: [objects]
+      description: A pack groups objects in a fixed order; its JSON manifest is served at `/p/<slug>.json` once published.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [slug, title]
+              properties:
+                slug: { type: string, minLength: 2, maxLength: 63 }
+                title: { type: string, minLength: 1, maxLength: 120 }
+                description: { type: string, maxLength: 2000 }
+      responses:
+        "200": { description: Pack created }
+        "401": { description: Authentication required }
+        "409": { description: Slug already in use }
+        "422": { description: Invalid slug or title }
+  /api/v1/collections/{cid}:
+    get:
+      summary: Pack detail with its ordered objects (human only)
+      tags: [objects]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+      responses:
+        "200": { description: Pack and ordered items }
+        "401": { description: Authentication required }
+        "404": { description: Pack not found }
+    patch:
+      summary: Edit or publish/unpublish a pack (human only)
+      tags: [objects]
+      description: Publishing requires at least one item; unpublishing makes `/p/<slug>.json` answer 404 while keeping the slug.
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                title: { type: string, minLength: 1, maxLength: 120, nullable: true }
+                description: { type: string, maxLength: 2000, nullable: true }
+                published: { type: boolean, nullable: true }
+      responses:
+        "200": { description: Updated pack }
+        "401": { description: Authentication required }
+        "404": { description: Pack not found }
+        "422": { description: Publishing an empty pack }
+    delete:
+      summary: Delete a pack (human only)
+      tags: [objects]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+      responses:
+        "200": { description: Pack deleted }
+        "401": { description: Authentication required }
+        "404": { description: Pack not found }
+  /api/v1/collections/{cid}/items:
+    put:
+      summary: Replace a pack's ordered items (human only)
+      tags: [objects]
+      description: Object ids are deduplicated and kept in the given order. Only the caller's available objects are accepted.
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [object_ids]
+              properties:
+                object_ids:
+                  type: array
+                  maxItems: 500
+                  items: { $ref: "#/components/schemas/Uuid4" }
+      responses:
+        "200": { description: Pack with its new item count }
+        "401": { description: Authentication required }
+        "404": { description: Pack or object not found/available }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)

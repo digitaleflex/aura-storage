@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0008_publication_thumbnails"
+SCHEMA_VERSION = "0009_tags_packs"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -300,6 +300,32 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_partner_sites_space "
         "ON partner_sites(space_id)"
+    )
+    # Tags and ordered packs (Sprint 2). Additive tables for upgraded catalogues.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS object_tags ("
+        "object_id TEXT NOT NULL, tag TEXT NOT NULL, "
+        "PRIMARY KEY (object_id, tag))"
+    )
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS collections ("
+        "id TEXT PRIMARY KEY, space_id TEXT NOT NULL, owner_id TEXT, "
+        "slug TEXT NOT NULL, title TEXT NOT NULL, "
+        "description TEXT NOT NULL DEFAULT '', published_at INTEGER, "
+        "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, "
+        "UNIQUE (slug))"
+    )
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS collection_items ("
+        "collection_id TEXT NOT NULL, object_id TEXT NOT NULL, "
+        "position INTEGER NOT NULL, PRIMARY KEY (collection_id, object_id))"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_object_tags_tag ON object_tags(tag)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_collection_items_pos "
+        "ON collection_items(collection_id, position)"
     )
     # Monthly quotas and usage per space: created here for upgraded catalogues.
     runner.exec(

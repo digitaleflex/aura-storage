@@ -670,7 +670,7 @@ class Repository:
         self, *, space_id: str, owner_id: Optional[str] = None,
         folder_id: Optional[str] = None, q: Optional[str] = None,
         status: Optional[str] = None, hide_deleted: bool = False,
-        content_type: Optional[str] = None,
+        content_type: Optional[str] = None, tag: Optional[str] = None,
         min_size: Optional[int] = None, max_size: Optional[int] = None,
         created_after: Optional[int] = None, created_before: Optional[int] = None,
         sort: str = "created_at", order: str = "desc",
@@ -683,7 +683,7 @@ class Repository:
         where, params = build_object_where(
             space_id=space_id, owner_id=owner_id, folder_id=folder_id, q=q,
             status=status, hide_deleted=hide_deleted,
-            content_type=content_type, min_size=min_size,
+            content_type=content_type, tag=tag, min_size=min_size,
             max_size=max_size, created_after=created_after,
             created_before=created_before,
         )
@@ -1222,6 +1222,105 @@ class Repository:
             "updated_at = excluded.updated_at",
             (sid, period, max(0, int(size_bytes)), self.now()),
         )
+        self.conn.commit()
+
+
+    # -- tags and packs (Sprint 2) --------------------------------------
+    def set_object_tags(self, oid: str, tags: list) -> None:
+        self.conn.execute("DELETE FROM object_tags WHERE object_id = ?", (oid,))
+        self.conn.executemany(
+            "INSERT INTO object_tags (object_id, tag) VALUES (?, ?)",
+            [(oid, tag) for tag in tags],
+        )
+        self.conn.commit()
+
+    def get_object_tags(self, oid: str) -> list:
+        return [r["tag"] for r in self.conn.execute(
+            "SELECT tag FROM object_tags WHERE object_id = ? ORDER BY tag", (oid,)
+        ).fetchall()]
+
+    def list_tags_for_objects(self, ids: list) -> dict:
+        if not ids:
+            return {}
+        marks = ",".join("?" for _ in ids)
+        rows = self.conn.execute(
+            f"SELECT object_id, tag FROM object_tags WHERE object_id IN ({marks}) "
+            "ORDER BY tag", tuple(ids),
+        ).fetchall()
+        out: dict = {}
+        for row in rows:
+            out.setdefault(row["object_id"], []).append(row["tag"])
+        return out
+
+    def create_collection(
+        self, cid: str, space_id: str, owner_id: Optional[str], slug: str,
+        title: str, description: str,
+    ) -> str:
+        now = self.now()
+        self.conn.execute(
+            "INSERT INTO collections (id, space_id, owner_id, slug, title, "
+            "description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (cid, space_id, owner_id, slug, title, description, now, now),
+        )
+        self.conn.commit()
+        return cid
+
+    def list_collections(self, space_id: str, owner_id: Optional[str] = None) -> list:
+        sql = (
+            "SELECT c.*, (SELECT COUNT(*) FROM collection_items i "
+            "WHERE i.collection_id = c.id) AS item_count "
+            "FROM collections c WHERE c.space_id = ?"
+        )
+        params = [space_id]
+        if owner_id is not None:
+            sql += " AND c.owner_id = ?"
+            params.append(owner_id)
+        sql += " ORDER BY c.created_at DESC"
+        return [_as_dict(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    def get_collection(self, cid: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM collections WHERE id = ?", (cid,)
+        ).fetchone())
+
+    def get_collection_by_slug(self, slug: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM collections WHERE slug = ?", (slug,)
+        ).fetchone())
+
+    def update_collection(
+        self, cid: str, title: str, description: str,
+        published_at: Optional[int],
+    ) -> None:
+        self.conn.execute(
+            "UPDATE collections SET title = ?, description = ?, published_at = ?, "
+            "updated_at = ? WHERE id = ?",
+            (title, description, published_at, self.now(), cid),
+        )
+        self.conn.commit()
+
+    def replace_collection_items(self, cid: str, object_ids: list) -> None:
+        self.conn.execute("DELETE FROM collection_items WHERE collection_id = ?", (cid,))
+        self.conn.executemany(
+            "INSERT INTO collection_items (collection_id, object_id, position) "
+            "VALUES (?, ?, ?)",
+            [(cid, oid, pos) for pos, oid in enumerate(object_ids)],
+        )
+        self.conn.execute(
+            "UPDATE collections SET updated_at = ? WHERE id = ?", (self.now(), cid)
+        )
+        self.conn.commit()
+
+    def get_collection_items(self, cid: str) -> list:
+        return [_as_dict(r) for r in self.conn.execute(
+            "SELECT o.*, i.position FROM collection_items i "
+            "JOIN objects o ON o.id = i.object_id "
+            "WHERE i.collection_id = ? ORDER BY i.position", (cid,)
+        ).fetchall()]
+
+    def delete_collection(self, cid: str) -> None:
+        self.conn.execute("DELETE FROM collection_items WHERE collection_id = ?", (cid,))
+        self.conn.execute("DELETE FROM collections WHERE id = ?", (cid,))
         self.conn.commit()
 
     def stats(self) -> dict:

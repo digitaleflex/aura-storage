@@ -50,6 +50,8 @@ import { describeError } from "../lib/errors";
 import { PreviewModal } from "../components/PreviewModal";
 import { ShareDialog } from "../components/ShareDialog";
 import { PublishDialog } from "../components/PublishDialog";
+import { PacksDialog } from "../components/PacksDialog";
+import { TagsEditor } from "../components/TagsEditor";
 import {
   MasterModeBanner,
   MasterModeDialog,
@@ -437,6 +439,8 @@ export function ObjectsPage() {
   const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
   const [shareTarget, setShareTarget] = useState<ObjectItem | null>(null);
   const [publishTarget, setPublishTarget] = useState<ObjectItem | null>(null);
+  const [packsOpen, setPacksOpen] = useState(false);
+  const [tagFilter, setTagFilter] = useState("");
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // The import panel opens on demand (header button) and stays open while it
@@ -557,6 +561,7 @@ export function ObjectsPage() {
     const before = dateToEpoch(toDate, true);
     if (after !== undefined) query.createdAfter = after;
     if (before !== undefined) query.createdBefore = before;
+    if (tagFilter.trim()) query.tag = tagFilter.trim().toLowerCase();
     query.sort = sortField;
     query.order = sortOrder;
     return query;
@@ -571,6 +576,7 @@ export function ObjectsPage() {
     toDate,
     sortField,
     sortOrder,
+    tagFilter,
   ]);
 
   const hasActiveFilters =
@@ -595,6 +601,7 @@ export function ObjectsPage() {
     setMaxSize("");
     setFromDate("");
     setToDate("");
+    setTagFilter("");
   }
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
@@ -2670,6 +2677,13 @@ export function ObjectsPage() {
             {items.length} fichier{items.length > 1 ? "s" : ""} affiché
             {items.length > 1 ? "s" : ""}
           </span>
+          <button
+            type="button"
+            className="btn btn-small"
+            onClick={() => setPacksOpen(true)}
+          >
+            Packs
+          </button>
           <div className="view-toggle" role="group" aria-label="Affichage">
             <button
               type="button"
@@ -3363,6 +3377,15 @@ export function ObjectsPage() {
               Déplacer
             </button>
           </div>
+          <TagsEditor
+            item={details}
+            csrf={csrf}
+            onSaved={() => {
+              void queryClient.invalidateQueries({ queryKey: ["objects"] });
+              void objectsQuery.refetch();
+            }}
+            onNotify={notify}
+          />
           <dl className="detail-list">
             <dt>Taille</dt>
             <dd>
@@ -3834,6 +3857,14 @@ export function ObjectsPage() {
         item={shareTarget}
         csrf={csrf}
         onClose={() => setShareTarget(null)}
+        onNotify={notify}
+      />
+      <PacksDialog
+        open={packsOpen}
+        csrf={csrf}
+        selectedIds={selectedIds}
+        objects={items}
+        onClose={() => setPacksOpen(false)}
         onNotify={notify}
       />
       <PublishDialog

@@ -64,6 +64,10 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/objects/{oid}/download-intent` | `objects:read` | presigned GET, scoped |
 | GET | `/api/v1/objects/{oid}/thumbnail` | `objects:read` | 302 to a generated thumbnail/poster, 404 when none |
 | PUT | `/api/v1/objects/{oid}/publication` | `objects:write`, **human only** | stable public slug; `/m/<slug>` is the permanent URL |
+| PUT | `/api/v1/objects/{oid}/tags` | `objects:write`, **human only** | normalized tags (max 20) |
+| GET/POST | `/api/v1/collections` | `objects:read` / `objects:write`, **human only** | ordered packs |
+| GET/PATCH/DELETE | `/api/v1/collections/{cid}` | human only | pack detail, edit/publish, delete |
+| PUT | `/api/v1/collections/{cid}/items` | `objects:write`, **human only** | replace ordered items |
 | POST | `/api/v1/objects/{oid}/replace` | `objects:write`, **human only** | point the stable object at another object's bytes (slug preserved) |
 | POST | `/api/v1/objects/{oid}/preview-intent` | `objects:read` | presigned GET bound to `Content-Disposition: inline` (PDF/image/audio/video preview); same 404/409 as download-intent, plus **415** for types outside the inline allow-list (images except SVG, PDF, audio, video/mp4, video/webm, video/ogg: never HTML/SVG/XML); scoped |
 | DELETE | `/api/v1/objects/{oid}` | `objects:delete` | soft delete |

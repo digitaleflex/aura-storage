@@ -55,6 +55,10 @@ class Repository:
             cur.execute(sql, params)
             return cur.rowcount
 
+    def _run_many(self, sql: str, params_seq) -> None:
+        with self.conn.cursor() as cur:
+            cur.executemany(sql, params_seq)
+
     # -- users ------------------------------------------------------------
     def get_user_by_name(self, username: str) -> Optional[dict]:
         return self._one("SELECT * FROM users WHERE username = %s", (username,))
@@ -591,7 +595,7 @@ class Repository:
         self, *, space_id: str, owner_id: Optional[str] = None,
         folder_id: Optional[str] = None, q: Optional[str] = None,
         status: Optional[str] = None, hide_deleted: bool = False,
-        content_type: Optional[str] = None,
+        content_type: Optional[str] = None, tag: Optional[str] = None,
         min_size: Optional[int] = None, max_size: Optional[int] = None,
         created_after: Optional[int] = None, created_before: Optional[int] = None,
         sort: str = "created_at", order: str = "desc",
@@ -602,7 +606,7 @@ class Repository:
         where, params = build_object_where(
             ph="%s", space_id=space_id, owner_id=owner_id, folder_id=folder_id,
             q=q, status=status, hide_deleted=hide_deleted,
-            content_type=content_type, min_size=min_size,
+            content_type=content_type, tag=tag, min_size=min_size,
             max_size=max_size, created_after=created_after,
             created_before=created_before,
         )
@@ -1077,6 +1081,96 @@ class Repository:
             "updated_at = excluded.updated_at",
             (sid, period, max(0, int(size_bytes)), self.now()),
         )
+
+
+    # -- tags and packs (Sprint 2) --------------------------------------
+    def set_object_tags(self, oid: str, tags: list) -> None:
+        self._run("DELETE FROM object_tags WHERE object_id = %s", (oid,))
+        self._run_many(
+            "INSERT INTO object_tags (object_id, tag) VALUES (%s, %s)",
+            [(oid, tag) for tag in tags],
+        )
+
+    def get_object_tags(self, oid: str) -> list:
+        return [r["tag"] for r in self._all(
+            "SELECT tag FROM object_tags WHERE object_id = %s ORDER BY tag", (oid,)
+        )]
+
+    def list_tags_for_objects(self, ids: list) -> dict:
+        if not ids:
+            return {}
+        marks = ",".join("%s" for _ in ids)
+        rows = self._all(
+            f"SELECT object_id, tag FROM object_tags WHERE object_id IN ({marks}) "
+            "ORDER BY tag", tuple(ids),
+        )
+        out: dict = {}
+        for row in rows:
+            out.setdefault(row["object_id"], []).append(row["tag"])
+        return out
+
+    def create_collection(
+        self, cid: str, space_id: str, owner_id, slug: str,
+        title: str, description: str,
+    ) -> str:
+        now = self.now()
+        self._run(
+            "INSERT INTO collections (id, space_id, owner_id, slug, title, "
+            "description, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (cid, space_id, owner_id, slug, title, description, now, now),
+        )
+        return cid
+
+    def list_collections(self, space_id: str, owner_id=None) -> list:
+        sql = (
+            "SELECT c.*, (SELECT COUNT(*) FROM collection_items i "
+            "WHERE i.collection_id = c.id) AS item_count "
+            "FROM collections c WHERE c.space_id = %s"
+        )
+        params = [space_id]
+        if owner_id is not None:
+            sql += " AND c.owner_id = %s"
+            params.append(owner_id)
+        sql += " ORDER BY c.created_at DESC"
+        return self._all(sql, tuple(params))
+
+    def get_collection(self, cid: str):
+        return self._one("SELECT * FROM collections WHERE id = %s", (cid,))
+
+    def get_collection_by_slug(self, slug: str):
+        return self._one("SELECT * FROM collections WHERE slug = %s", (slug,))
+
+    def update_collection(self, cid: str, title: str, description: str, published_at) -> None:
+        self._run(
+            "UPDATE collections SET title = %s, description = %s, published_at = %s, "
+            "updated_at = %s WHERE id = %s",
+            (title, description, published_at, self.now(), cid),
+        )
+
+    def replace_collection_items(self, cid: str, object_ids: list) -> None:
+        with self.conn.transaction():
+            self._run("DELETE FROM collection_items WHERE collection_id = %s", (cid,))
+            self._run_many(
+                "INSERT INTO collection_items (collection_id, object_id, position) "
+                "VALUES (%s, %s, %s)",
+                [(cid, oid, pos) for pos, oid in enumerate(object_ids)],
+            )
+            self._run(
+                "UPDATE collections SET updated_at = %s WHERE id = %s",
+                (self.now(), cid),
+            )
+
+    def get_collection_items(self, cid: str) -> list:
+        return self._all(
+            "SELECT o.*, i.position FROM collection_items i "
+            "JOIN objects o ON o.id = i.object_id "
+            "WHERE i.collection_id = %s ORDER BY i.position", (cid,)
+        )
+
+    def delete_collection(self, cid: str) -> None:
+        with self.conn.transaction():
+            self._run("DELETE FROM collection_items WHERE collection_id = %s", (cid,))
+            self._run("DELETE FROM collections WHERE id = %s", (cid,))
 
     def stats(self) -> dict:
         objects = {
