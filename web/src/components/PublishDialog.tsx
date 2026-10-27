@@ -60,6 +60,7 @@ export function PublishDialog({
   const [copied, setCopied] = useState<"url" | "snippet" | null>(null);
   const [sourceId, setSourceId] = useState("");
   const [confirmReplace, setConfirmReplace] = useState(false);
+  const [subtitleId, setSubtitleId] = useState("");
 
   useEffect(() => {
     setSlug(item?.public_slug ?? (item ? slugify(item.display_name) : ""));
@@ -82,6 +83,30 @@ export function PublishDialog({
       onChanged();
     },
     onError: (err) => setError(describeError(err, "Publication impossible.")),
+  });
+
+  const hls = useMutation({
+    mutationFn: () => {
+      if (!item || !csrf) throw new Error("Session expirée.");
+      return api.prepareHls(item.id, csrf);
+    },
+    onSuccess: () => {
+      onNotify("ok", "Encodage HLS en file d'attente.");
+      onChanged();
+    },
+    onError: (err) => setError(describeError(err, "Encodage HLS impossible.")),
+  });
+
+  const subtitle = useMutation({
+    mutationFn: () => {
+      if (!item || !csrf) throw new Error("Session expirée.");
+      return api.setSubtitle(item.id, subtitleId || null, csrf);
+    },
+    onSuccess: () => {
+      onNotify("ok", "Sous-titres mis à jour.");
+      onChanged();
+    },
+    onError: (err) => setError(describeError(err, "Sous-titres impossibles.")),
   });
 
   const replace = useMutation({
@@ -206,6 +231,71 @@ export function PublishDialog({
               </label>
               <button type="button" className="btn btn-small" onClick={() => void copy("snippet")}>
                 {copied === "snippet" ? "Snippet copié" : "Copier le snippet"}
+              </button>
+            </section>
+          ) : null}
+
+          {item.content_type.startsWith("video/") ? (
+            <section className="publish-block" aria-labelledby="publish-hls-title">
+              <h3 id="publish-hls-title">Vidéo HLS</h3>
+              <p className="muted">
+                État : <strong>{item.hls_status ?? "aucun"}</strong>. L'encodage
+                720p tourne en arrière-plan ; l'URL reste stable ensuite.
+              </p>
+              {published && item.hls_status === "ready" ? (
+                <div className="share-created-row">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`${origin}/hls/${item.public_slug}.m3u8`}
+                    aria-label="URL HLS"
+                    onFocus={(e) => e.currentTarget.select()}
+                  />
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() =>
+                      void navigator.clipboard.writeText(
+                        `${origin}/hls/${item.public_slug}.m3u8`,
+                      )
+                    }
+                  >
+                    Copier
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  disabled={hls.isPending}
+                  onClick={() => hls.mutate()}
+                >
+                  {hls.isPending ? "Mise en file…" : "Préparer HLS"}
+                </button>
+              )}
+              <label className="field">
+                <span>Sous-titres WebVTT liés</span>
+                <select
+                  value={subtitleId}
+                  onChange={(e) => setSubtitleId(e.target.value)}
+                >
+                  <option value="">— aucun —</option>
+                  {objects
+                    .filter((o) => o.display_name.toLowerCase().endsWith(".vtt"))
+                    .map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.display_name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btn btn-small"
+                disabled={subtitle.isPending}
+                onClick={() => subtitle.mutate()}
+              >
+                Enregistrer les sous-titres
               </button>
             </section>
           ) : null}

@@ -1361,6 +1361,69 @@ class Repository:
         ).fetchone()
         return _as_dict(row) or {}
 
+
+    # -- media jobs / HLS ------------------------------------------------
+    def get_object_global(self, oid: str):
+        return self.conn.execute("SELECT * FROM objects WHERE id = ?", (oid,)).fetchone()
+
+    def enqueue_media_job(self, jid: str, oid: str, kind: str) -> str:
+        row = self.conn.execute(
+            "SELECT id FROM media_jobs WHERE object_id = ? AND kind = ? "
+            "AND status IN ('queued', 'processing') ORDER BY created_at DESC LIMIT 1",
+            (oid, kind),
+        ).fetchone()
+        if row is not None:
+            return row["id"]
+        now = self.now()
+        self.conn.execute(
+            "INSERT INTO media_jobs (id, object_id, kind, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)", (jid, oid, kind, now, now),
+        )
+        self.conn.commit()
+        return jid
+
+    def claim_media_job(self, lease_until: int):
+        now = self.now()
+        row = self.conn.execute(
+            "SELECT * FROM media_jobs WHERE status = 'queued' "
+            "ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        cur = self.conn.execute(
+            "UPDATE media_jobs SET status = 'processing', attempts = attempts + 1, "
+            "lease_until = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+            (lease_until, now, row["id"]),
+        )
+        self.conn.commit()
+        return _as_dict(row) if cur.rowcount else None
+
+    def finish_media_job(self, jid: str, status: str, error: str | None = None) -> None:
+        self.conn.execute(
+            "UPDATE media_jobs SET status = ?, error = ?, lease_until = NULL, "
+            "updated_at = ? WHERE id = ?", (status, error, self.now(), jid),
+        )
+        self.conn.commit()
+
+    def get_media_job(self, oid: str, kind: str):
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM media_jobs WHERE object_id = ? AND kind = ? "
+            "ORDER BY created_at DESC LIMIT 1", (oid, kind),
+        ).fetchone())
+
+    def set_object_hls(self, oid: str, status: str, prefix: str | None) -> None:
+        self.conn.execute(
+            "UPDATE objects SET hls_status = ?, hls_prefix = ?, updated_at = ? "
+            "WHERE id = ?", (status, prefix, self.now(), oid),
+        )
+        self.conn.commit()
+
+    def set_object_subtitle(self, oid: str, subtitle_id: str | None) -> None:
+        self.conn.execute(
+            "UPDATE objects SET subtitle_object_id = ?, updated_at = ? WHERE id = ?",
+            (subtitle_id, self.now(), oid),
+        )
+        self.conn.commit()
     def stats(self) -> dict:
         objects = {
             row["status"]: row["n"]

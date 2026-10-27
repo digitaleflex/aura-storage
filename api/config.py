@@ -108,6 +108,9 @@ class Settings:
     # When on, files at or above the threshold are sent as independently
     # retried parts and may exceed ``max_object_bytes`` up to the multipart cap.
     multipart_enabled: bool = os.environ.get("AURA_MULTIPART_ENABLED", "0") == "1"
+    # In-process HLS worker (one job at a time, ffmpeg nice + 1 thread). Disable
+    # when running several API replicas until the lease/queue is externalised.
+    media_worker_enabled: bool = os.environ.get("AURA_MEDIA_WORKER", "1") == "1"
     multipart_threshold_bytes: int = _int("AURA_MULTIPART_THRESHOLD_BYTES", 100 * 1024 * 1024)
     # Each part is one request through the edge proxy: keep part / slowest
     # supported rate well under Traefik's readTimeout (see the plan).

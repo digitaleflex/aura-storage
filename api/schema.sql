@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS objects (
   -- Generated preview metadata (video poster / image thumbnail, duration).
   thumbnail_key TEXT,
   duration_seconds REAL,
+  -- HLS packaging state/prefix and optional linked WebVTT subtitle object.
+  hls_status TEXT,
+  hls_prefix TEXT,
+  subtitle_object_id TEXT,
   UNIQUE (bucket, object_key)
 );
 CREATE TABLE IF NOT EXISTS applications (
@@ -252,3 +256,18 @@ CREATE TABLE IF NOT EXISTS object_usage_monthly (
   PRIMARY KEY (object_id, period)
 );
 CREATE INDEX IF NOT EXISTS idx_object_usage_period ON object_usage_monthly(period);
+
+-- Media processing jobs (HLS). Claimed with a lease by the in-process worker so
+-- a crash or redeploy cannot leave a job stuck forever.
+CREATE TABLE IF NOT EXISTS media_jobs (
+  id TEXT PRIMARY KEY,
+  object_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  lease_until INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_jobs_status ON media_jobs(status, created_at);

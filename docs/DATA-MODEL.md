@@ -94,6 +94,14 @@ so the format is enforced in code, not in DDL.
   manifest is `/p/<slug>.json` and only exposes each item's `/m/<slug>` URL when
   that object is itself published.
 
+### MediaJob / HLS (implemented)
+- `media_jobs`: `{id, object_id, kind='hls', status, attempts, error, lease_until}`,
+  claimed with a lease by the in-process worker.
+- Objects carry `hls_status` (`none/queued/processing/ready/failed`),
+  `hls_prefix` (segments + playlist in the same bucket) and
+  `subtitle_object_id` (a `.vtt` object). Public URLs: `/hls/<slug>.m3u8` and
+  `/m/<slug>/subtitles.vtt`.
+
 ### ObjectUsageMonthly (implemented, Sprint 3)
 - `object_id` + `period` (YYYY-MM) PK, `views`, `downloads`, `share_opens`,
   `egress_bytes` (BIGINT estimate), `last_access_at`. One intent/opening counts

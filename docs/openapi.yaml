@@ -943,6 +943,66 @@ paths:
         "200": { description: Pack with its new item count }
         "401": { description: Authentication required }
         "404": { description: Pack or object not found/available }
+  /api/v1/objects/{oid}/hls:
+    post:
+      summary: Queue HLS packaging for a video (human only)
+      tags: [objects]
+      description: Enqueues one 720p HLS rendition (ffmpeg worker). Idempotent while queued/processing.
+      parameters: [{ $ref: "#/components/parameters/ObjectId" }]
+      responses:
+        "200": { description: Job queued }
+        "401": { description: Authentication required }
+        "404": { description: Object not found }
+        "409": { description: Object not available }
+        "422": { description: Not a video }
+  /api/v1/objects/{oid}/hls/status:
+    get:
+      summary: HLS status (objects:read)
+      tags: [objects]
+      parameters: [{ $ref: "#/components/parameters/ObjectId" }]
+      responses:
+        "200": { description: "status: none/queued/processing/ready/failed + last error" }
+        "401": { description: Authentication required }
+        "404": { description: Object not found }
+  /api/v1/objects/{oid}/hls/index.m3u8:
+    get:
+      summary: Authenticated HLS playlist (objects:read)
+      tags: [objects]
+      parameters: [{ $ref: "#/components/parameters/ObjectId" }]
+      responses:
+        "200": { description: Playlist with rewritten segment URLs }
+        "401": { description: Authentication required }
+        "404": { description: HLS not ready }
+  /api/v1/objects/{oid}/hls/{segment}:
+    get:
+      summary: Authenticated HLS segment redirect (objects:read)
+      tags: [objects]
+      parameters:
+        - { $ref: "#/components/parameters/ObjectId" }
+        - { name: segment, in: path, required: true, schema: { type: string } }
+      responses:
+        "302": { description: Presigned segment }
+        "401": { description: Authentication required }
+        "404": { description: Not found }
+  /api/v1/objects/{oid}/subtitle:
+    put:
+      summary: Link or clear a WebVTT subtitle object (human only)
+      tags: [objects]
+      parameters: [{ $ref: "#/components/parameters/ObjectId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                subtitle_object_id: { $ref: "#/components/schemas/Uuid4", nullable: true }
+      responses:
+        "200": { description: Object with subtitle flag }
+        "401": { description: Authentication required }
+        "404": { description: Object or subtitle not found }
+        "422": { description: Subtitle is not a .vtt file }
   /api/v1/objects/{oid}/purge:
     post:
       summary: Permanently delete an object (objects:purge, operator/admin)

@@ -1209,6 +1209,64 @@ class Repository:
         )
         return row or {}
 
+
+    # -- media jobs / HLS ------------------------------------------------
+    def get_object_global(self, oid: str):
+        return self._one("SELECT * FROM objects WHERE id = %s", (oid,))
+
+    def enqueue_media_job(self, jid: str, oid: str, kind: str) -> str:
+        row = self._one(
+            "SELECT id FROM media_jobs WHERE object_id = %s AND kind = %s "
+            "AND status IN ('queued', 'processing') ORDER BY created_at DESC LIMIT 1",
+            (oid, kind),
+        )
+        if row is not None:
+            return row["id"]
+        now = self.now()
+        self._run(
+            "INSERT INTO media_jobs (id, object_id, kind, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s)", (jid, oid, kind, now, now),
+        )
+        return jid
+
+    def claim_media_job(self, lease_until: int):
+        now = self.now()
+        row = self._one(
+            "SELECT * FROM media_jobs WHERE status = 'queued' "
+            "ORDER BY created_at LIMIT 1"
+        )
+        if row is None:
+            return None
+        changed = self._run(
+            "UPDATE media_jobs SET status = 'processing', attempts = attempts + 1, "
+            "lease_until = %s, updated_at = %s WHERE id = %s AND status = 'queued'",
+            (lease_until, now, row["id"]),
+        )
+        return row if changed else None
+
+    def finish_media_job(self, jid: str, status: str, error=None) -> None:
+        self._run(
+            "UPDATE media_jobs SET status = %s, error = %s, lease_until = NULL, "
+            "updated_at = %s WHERE id = %s", (status, error, self.now(), jid),
+        )
+
+    def get_media_job(self, oid: str, kind: str):
+        return self._one(
+            "SELECT * FROM media_jobs WHERE object_id = %s AND kind = %s "
+            "ORDER BY created_at DESC LIMIT 1", (oid, kind),
+        )
+
+    def set_object_hls(self, oid: str, status: str, prefix: str | None) -> None:
+        self._run(
+            "UPDATE objects SET hls_status = %s, hls_prefix = %s, updated_at = %s "
+            "WHERE id = %s", (status, prefix, self.now(), oid),
+        )
+
+    def set_object_subtitle(self, oid: str, subtitle_id: str | None) -> None:
+        self._run(
+            "UPDATE objects SET subtitle_object_id = %s, updated_at = %s WHERE id = %s",
+            (subtitle_id, self.now(), oid),
+        )
     def stats(self) -> dict:
         objects = {
             row["status"]: row["n"]

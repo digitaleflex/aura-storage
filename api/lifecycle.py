@@ -16,6 +16,19 @@ def _delete_thumbnail(s3ops, row: dict) -> None:
         pass
 
 
+def _delete_hls(s3ops, row: dict) -> None:
+    """Best-effort removal of a packaged HLS prefix (playlist + segments)."""
+    prefix = row.get("hls_prefix")
+    if not prefix:
+        return
+    try:
+        listing = s3ops.list_objects_v2(Bucket=row["bucket"], Prefix=f"{prefix}/")
+        for obj in listing.get("Contents", []) or []:
+            s3ops.delete_object(Bucket=row["bucket"], Key=obj["Key"])
+    except Exception:
+        pass
+
+
 class StorageDeleteError(RuntimeError):
     """Raised when the storage backend refuses a delete (M06).
 
@@ -59,6 +72,7 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
                         raise
             s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
             _delete_thumbnail(s3ops, row)
+            _delete_hls(s3ops, row)
         except Exception:
             # Keep the pending reference so the next sweep retries; never
             # declare a failed cleanup as expired.
@@ -96,6 +110,7 @@ def reconcile_terminal(repo, s3ops, *, statuses=("failed", "aborted", "deleted")
             try:
                 s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
                 _delete_thumbnail(s3ops, row)
+                _delete_hls(s3ops, row)
             except Exception:
                 storage_failures += 1
                 continue
@@ -195,6 +210,7 @@ def purge_object(repo, s3ops, oid: str, *, space_id: str,
             repo.set_multipart(oid, None, row.get("multipart_part_bytes"))
         s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
         _delete_thumbnail(s3ops, row)
+        _delete_hls(s3ops, row)
     except Exception as exc:
         if previous != PURGING:
             repo.set_status(oid, previous)

@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0010_object_analytics"
+SCHEMA_VERSION = "0011_hls_subtitles"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -65,6 +65,9 @@ ADDED_COLUMNS = {
         ("published_at", "INTEGER"),
         ("thumbnail_key", "TEXT"),
         ("duration_seconds", "REAL"),
+        ("hls_status", "TEXT"),
+        ("hls_prefix", "TEXT"),
+        ("subtitle_object_id", "TEXT"),
         ("idempotency_key", "TEXT"),
         # Multipart session (#72): backend upload id while parts are being
         # sent (cleared once completed) and the server-chosen part size.
@@ -326,6 +329,18 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_collection_items_pos "
         "ON collection_items(collection_id, position)"
+    )
+    # HLS jobs (Sprint 4).
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS media_jobs ("
+        "id TEXT PRIMARY KEY, object_id TEXT NOT NULL, kind TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, "
+        "error TEXT, lease_until INTEGER, created_at INTEGER NOT NULL, "
+        "updated_at INTEGER NOT NULL)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_media_jobs_status "
+        "ON media_jobs(status, created_at)"
     )
     # Per-object monthly analytics (Sprint 3).
     runner.exec(

@@ -52,6 +52,10 @@ export interface ObjectItem {
   duration_seconds?: number | null;
   /** Normalized tags (lowercase, no duplicates). */
   tags?: string[];
+  /** HLS packaging state: none/queued/processing/ready/failed. */
+  hls_status?: string | null;
+  /** True when a WebVTT subtitle is linked. */
+  subtitle?: boolean;
 }
 
 export interface CollectionItem {
@@ -910,6 +914,30 @@ export const api = {
     return request<ObjectItem>(
       `/api/v1/objects/${encodeURIComponent(id)}/replace`,
       { method: "POST", body: { source_object_id: sourceObjectId }, csrf },
+    );
+  },
+
+  prepareHls(id: string, csrf: string): Promise<{ id: string; hls_status: string }> {
+    return request<{ id: string; hls_status: string }>(
+      `/api/v1/objects/${encodeURIComponent(id)}/hls`,
+      { method: "POST", csrf },
+    );
+  },
+
+  hlsStatus(id: string): Promise<{ status: string; error: string | null }> {
+    return request<{ status: string; error: string | null }>(
+      `/api/v1/objects/${encodeURIComponent(id)}/hls/status`,
+    );
+  },
+
+  setSubtitle(
+    id: string,
+    subtitleObjectId: string | null,
+    csrf: string,
+  ): Promise<ObjectItem> {
+    return request<ObjectItem>(
+      `/api/v1/objects/${encodeURIComponent(id)}/subtitle`,
+      { method: "PUT", body: { subtitle_object_id: subtitleObjectId }, csrf },
     );
   },
 

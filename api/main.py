@@ -45,6 +45,7 @@ from .authz import (
     master_mode_active,
 )
 from .config import settings
+from . import media_worker
 from .identity import fingerprint, format_token, new_secret
 from .lifecycle import purge_object, reconcile_pending, reconcile_terminal, reconcile_reverse
 from .avscan import INFECTED as AV_INFECTED, TIMEOUT as AV_TIMEOUT, scan_object as av_scan_object
@@ -208,6 +209,11 @@ def _record_object_event(object_id: str, size_bytes: int, kind: str) -> None:
 # lastResort handler (WARNING). Route through the logger uvicorn configures so
 # commit timings are visible in `docker logs`.
 log = logging.getLogger("uvicorn.error")
+
+
+@app.on_event("startup")
+def _start_media_worker() -> None:
+    media_worker.start()
 
 
 @app.on_event("startup")
@@ -532,6 +538,8 @@ def _object_public(row, tags: list | None = None) -> dict:
         "published_at": row.get("published_at"),
         "thumbnail": bool(row.get("thumbnail_key")),
         "duration_seconds": row.get("duration_seconds"),
+        "hls_status": row.get("hls_status"),
+        "subtitle": bool(row.get("subtitle_object_id")),
         "tags": list(tags or []),
     }
 
@@ -597,6 +605,11 @@ class TagsIn(BaseModel):
     @classmethod
     def valid_tags(cls, value: list[str]) -> list[str]:
         return _normalize_tags(value)
+
+
+class SubtitleIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    subtitle_object_id: Uuid4 | None = None
 
 
 class CollectionIn(BaseModel):
@@ -2574,6 +2587,166 @@ def public_media(slug: str):
         "Referrer-Policy": "no-referrer",
         "X-Robots-Tag": "noindex, nofollow",
         "X-Content-Type-Options": "nosniff",
+    })
+
+
+_HLS_SEGMENT_RE = re.compile(r"seg_[0-9]{5}\.ts")
+
+
+def _hls_playlist(row: dict, base: str) -> str:
+    """Fetch the stored playlist and rewrite segment URIs to ``base``."""
+    if not row.get("hls_prefix"):
+        raise HTTPException(status_code=404, detail="hls not ready")
+    try:
+        body = s3ops.get_object(
+            Bucket=row["bucket"], Key=f"{row['hls_prefix']}/index.m3u8"
+        )["Body"].read().decode("utf-8")
+    except Exception:
+        raise HTTPException(status_code=404, detail="hls not ready")
+    lines = []
+    for line in body.splitlines():
+        if line and not line.startswith("#"):
+            lines.append(f"{base}/{line}")
+        else:
+            lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+@app.post("/api/v1/objects/{oid}/hls")
+def prepare_hls(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE, human=True))):
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != AVAILABLE:
+        raise HTTPException(status_code=409, detail="object not available")
+    if not (row["content_type"] or "").startswith("video/"):
+        raise HTTPException(status_code=422, detail="hls is only available for video")
+    repo.set_object_hls(oid, "queued", row.get("hls_prefix"))
+    repo.enqueue_media_job(ids.new_id(), oid, "hls")
+    audit_event("object.hls", principal["id"], "success", {"object_id": oid})
+    return {"id": oid, "hls_status": "queued"}
+
+
+@app.get("/api/v1/objects/{oid}/hls/status")
+def hls_status(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    job = repo.get_media_job(oid, "hls") or {}
+    return {
+        "object_id": oid, "status": row.get("hls_status") or "none",
+        "error": job.get("error"), "attempts": job.get("attempts") or 0,
+    }
+
+
+@app.get("/api/v1/objects/{oid}/hls/index.m3u8")
+def hls_playlist(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None or row["status"] != AVAILABLE:
+        raise HTTPException(status_code=404, detail="hls not ready")
+    text = _hls_playlist(_as_dict(row), f"/api/v1/objects/{oid}/hls")
+    return Response(content=text, media_type="application/vnd.apple.mpegurl",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/v1/objects/{oid}/hls/{segment}")
+def hls_segment(oid: str, segment: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    oid = _canonical_id(oid, "object id")
+    if not _HLS_SEGMENT_RE.fullmatch(segment):
+        raise HTTPException(status_code=404, detail="not found")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None or not row.get("hls_prefix"):
+        raise HTTPException(status_code=404, detail="not found")
+    url = presigned_get(
+        s3, row["bucket"], f"{row['hls_prefix']}/{segment}", 300,
+        content_type="video/mp2t",
+    )
+    return RedirectResponse(url, status_code=302)
+
+
+@app.put("/api/v1/objects/{oid}/subtitle")
+def set_subtitle(
+    oid: str, body: SubtitleIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
+):
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    if body.subtitle_object_id is not None:
+        sub = repo.get_object(body.subtitle_object_id, **_object_scope(principal))
+        if sub is None or sub["status"] != AVAILABLE:
+            raise HTTPException(status_code=404, detail="subtitle object not found")
+        sub = _as_dict(sub)
+        name = (sub["display_name"] or "").lower()
+        if not (name.endswith(".vtt") or sub["content_type"] == "text/vtt"):
+            raise HTTPException(status_code=422, detail="subtitle must be a .vtt file")
+    repo.set_object_subtitle(oid, body.subtitle_object_id)
+    audit_event("object.subtitle", principal["id"], "success",
+                {"object_id": oid, "subtitle_object_id": body.subtitle_object_id})
+    return _object_public(repo.get_object(oid, **_object_scope(principal)))
+
+
+@app.get("/hls/{slug}.m3u8")
+def public_hls_playlist(slug: str):
+    if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
+        raise HTTPException(status_code=404, detail="not found")
+    row = repo.get_object_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    row = _as_dict(row)
+    if row["status"] != AVAILABLE or not row.get("published_at") or not row.get("hls_prefix"):
+        raise HTTPException(status_code=404, detail="not found")
+    text = _hls_playlist(row, f"/hls/{slug}")
+    return Response(content=text, media_type="application/vnd.apple.mpegurl",
+                    headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+@app.get("/hls/{slug}/{segment}")
+def public_hls_segment(slug: str, segment: str):
+    if not _PUBLIC_SLUG_RE.fullmatch(slug or "") or not _HLS_SEGMENT_RE.fullmatch(segment):
+        raise HTTPException(status_code=404, detail="not found")
+    row = repo.get_object_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    row = _as_dict(row)
+    if row["status"] != AVAILABLE or not row.get("published_at") or not row.get("hls_prefix"):
+        raise HTTPException(status_code=404, detail="not found")
+    url = presigned_get(
+        s3, row["bucket"], f"{row['hls_prefix']}/{segment}", 300,
+        content_type="video/mp2t",
+    )
+    return RedirectResponse(url, status_code=302)
+
+
+@app.get("/m/{slug}/subtitles.vtt")
+def public_subtitle(slug: str):
+    if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
+        raise HTTPException(status_code=404, detail="not found")
+    row = repo.get_object_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    row = _as_dict(row)
+    if (
+        row["status"] != AVAILABLE or not row.get("published_at")
+        or not row.get("subtitle_object_id")
+    ):
+        raise HTTPException(status_code=404, detail="not found")
+    sub = repo.get_object_global(row["subtitle_object_id"])
+    if sub is None or sub["status"] != AVAILABLE:
+        raise HTTPException(status_code=404, detail="not found")
+    sub = _as_dict(sub)
+    url = presigned_get(
+        s3, sub["bucket"], sub["object_key"], 300,
+        content_disposition="inline", content_type="text/vtt",
+    )
+    return RedirectResponse(url, status_code=302, headers={
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
     })
 
 
