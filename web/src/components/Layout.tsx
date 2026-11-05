@@ -8,6 +8,7 @@ import { StorageUsage } from "./StorageUsage";
 import { useTransfers } from "../lib/transferContext";
 import { readStorage, writeStorage } from "../lib/safeStorage";
 import { hasSeenOnboarding } from "../lib/onboarding";
+import { SearchBar } from "./SearchBar";
 
 /** Local copy of formatBytes to avoid circular import with ObjectsPage. */
 function formatBytes(size: number): string {
@@ -488,6 +489,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
           formatBytes={formatBytes}
         />
       </aside>
+
+      {/* Barre de recherche globale — accessible depuis n'importe quelle page */}
+      <header className="search-header" aria-label="Recherche globale">
+        <SearchBar alwaysOpen={false} />
+      </header>
 
       {/* Mobile drawer overlay */}
       {mobileOpen ? (
