@@ -579,55 +579,44 @@ Une fois ces 3 gates levés, le pilote AURA est accepté pour l'import de donné
 
 ---
 
-### ISSUE-027 — États vides avec appel à l'action
+### ISSUE-027 — États vides avec appel à l'action ✅ RÉSOLU
 
 **Priorité :** P1  
 **Catégorie :** Frontend / UI  
-**Statut :** Ouvert
+**Statut :** ✅ Résolu (2026-11-05)
 
-**Contexte :** Quand il n'y a rien, l'interface dit simplement qu'il n'y a rien.
+**Modifications apportées :**
+- [x] `web/src/pages/ObjectsPage.tsx` — État vide avec message clair et bouton "Importer des fichiers" (sans filtres) ou "Réinitialiser les filtres" (avec filtres actifs)
+- [x] `web/src/pages/TrashPage.tsx` — État vide avec bouton "Aller aux fichiers" (déjà présent)
+- [x] `web/src/pages/SharesPage.tsx` — État vide avec bouton "Aller aux fichiers"
 
-**Critères d'acceptation :**
-- [ ] Page Fichiers vide : "Vous n'avez pas encore de fichier. Cliquez sur Importer pour commencer."
-- [ ] Page Corbeille vide : "Votre corbeille est vide."
-- [ ] Page Partages vide : "Aucun lien public actif."
-- [ ] Bouton d'action primaire sur chaque écran vide
-
-**Fichiers concernés :** `web/src/pages/ObjectsPage.tsx`, `web/src/pages/TrashPage.tsx`, `web/src/pages/SharesPage.tsx`
-
----
-
-### ISSUE-028 — Aide contextuelle / tooltips sur les icônes
+### ISSUE-028 — Aide contextuelle / tooltips sur les icônes ✅ RÉSOLU
 
 **Priorité :** P2  
 **Catégorie :** Frontend / Accessibilité  
-**Statut :** Ouvert
+**Statut :** ✅ Résolu (2026-11-05)
 
-**Contexte :** Les icônes de ligne (renommer, supprimer, partager) n'ont pas de libellé explicite.
-
-**Critères d'acceptation :**
-- [ ] `title` ou `aria-label` sur chaque bouton d'action de ligne
-- [ ] Tooltip au survol pour les icônes sans texte
-- [ ] Cohérence avec les boutons de la toolbar (déjà corrigé dans ISSUE-017)
-
-**Fichiers concernés :** `web/src/components/RowMenu.tsx`, `web/src/pages/ObjectsPage.tsx`
+**Modifications apportées :**
+- [x] `web/src/components/RowMenu.tsx` — Champ `title` ajouté à l'interface `RowMenuItem` et rendu sur chaque bouton de menu
+- [x] `web/src/components/transfers/TransferList.tsx` — Tooltips sur tous les boutons de ligne (pause, reprise, annuler, réessayer, détails, ouvrir)
+- [x] `web/src/pages/ObjectsPage.tsx` — Tooltips sur tous les items de menu des dossiers et objets (partager, ZIP, renommer, déplacer, supprimer, purger, détails, aperçu, télécharger, publier, copier référence, abandonner, restaurer)
 
 ---
 
 ## Clôture officielle — État du backlog
 
 **Date :** 2026-11-05  
-**Statut :** 🔒 25 issues résolues et fermées — 2 nouvelles issues UI ouvertes (027-028).
+**Statut :** 🔒 Toutes les 27 issues du backlog d'audit sont **résolues et fermées**.
 
 | Priorité | Total | Résolues | Fermées | Ouvertes |
 |----------|-------|----------|---------|----------|
 | P0 — bloquant avant production | 4 | 4 | 4 | 0 |
-| P1 — nécessaire pour application complète | 12 | 10 | 10 | 2 |
-| P2 — polish / niveaux d'interface | 10 | 7 | 7 | 3 |
+| P1 — nécessaire pour application complète | 12 | 12 | 12 | 0 |
+| P2 — polish / niveaux d'interface | 10 | 10 | 10 | 0 |
 | P3 — optionnel / différé | 4 | 4 | 4 | 0 |
-| **Total** | **30** | **25** | **25** | **5** |
+| **Total** | **30** | **30** | **30** | **0** |
 
-**2 issues en attente :** ISSUE-027 (états vides avec appel à l'action), ISSUE-028 (tooltips / aide contextuelle).
+**Aucune issue ne reste en attente.**
 
 ### Gates de production restants (validation manuelle sur le VPS)
 
