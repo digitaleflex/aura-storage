@@ -8,6 +8,8 @@ Régénéré le 2026-10-24. La parité avec `docs/openapi.yaml` est vérifiée a
 - `GET /health/live`
 - `GET /health/ready`
 - `GET /s/{token}`
+- `GET /f/{token}`
+- `GET /f/{token}/o/{oid}`
 
 ## Auth & session
 
@@ -37,14 +39,25 @@ Régénéré le 2026-10-24. La parité avec `docs/openapi.yaml` est vérifiée a
 - `POST /api/v1/objects/{oid}/purge`
 - `POST /api/v1/objects/{oid}/restore`
 - `POST /api/v1/objects/{oid}/share`
+- `POST /api/v1/objects/{oid}/purge`
+- `POST /api/v1/objects/{oid}/restore`
+
+## Import jobs
+
+- `POST /api/v1/import-jobs`
+- `GET /api/v1/import-jobs`
+- `POST /api/v1/import-jobs/{jid}/cancel`
 
 ## Dossiers
 
 - `DELETE /api/v1/folders/{fid}`
+- `DELETE /api/v1/folders/{fid}/shares/{sid}`
 - `GET /api/v1/folders`
 - `GET /api/v1/folders/{fid}`
+- `GET /api/v1/folders/{fid}/shares`
 - `PATCH /api/v1/folders/{fid}`
 - `POST /api/v1/folders`
+- `POST /api/v1/folders/{fid}/share`
 
 ## Diagnostic réseau
 

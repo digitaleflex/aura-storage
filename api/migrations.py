@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0011_hls_subtitles"
+SCHEMA_VERSION = "0013_import_jobs"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -304,6 +304,28 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
         "CREATE INDEX IF NOT EXISTS idx_partner_sites_space "
         "ON partner_sites(space_id)"
     )
+    # Public folder share links: additive table for upgraded catalogues. Kept
+    # byte-identical to schema.sql; no foreign key on folder_id so deleting a
+    # folder leaves an inert row that answers 404.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS folder_shares ("
+        "id TEXT PRIMARY KEY, "
+        "folder_id TEXT NOT NULL, "
+        "space_id TEXT NOT NULL, "
+        "created_by TEXT NOT NULL, "
+        "created_by_kind TEXT NOT NULL, "
+        "token_hash TEXT NOT NULL UNIQUE, "
+        "expires_at INTEGER NOT NULL, "
+        "max_uses INTEGER, "
+        "use_count INTEGER NOT NULL DEFAULT 0, "
+        "revoked_at INTEGER, "
+        "last_used_at INTEGER, "
+        "created_at INTEGER NOT NULL)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_folder_shares_folder "
+        "ON folder_shares(folder_id)"
+    )
     # Tags and ordered packs (Sprint 2). Additive tables for upgraded catalogues.
     runner.exec(
         "CREATE TABLE IF NOT EXISTS object_tags ("
@@ -378,6 +400,24 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_space_usage_period "
         "ON space_usage_monthly(period)"
+    )
+    # Import jobs: bulk import tracking for operators. Additive table for
+    # upgraded catalogues; byte-identical to schema.sql.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS import_jobs ("
+        "id TEXT PRIMARY KEY, space_id TEXT NOT NULL, "
+        "application_id TEXT NOT NULL, created_by TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'queued', total_items INTEGER NOT NULL DEFAULT 0, "
+        "processed_items INTEGER NOT NULL DEFAULT 0, failed_items INTEGER NOT NULL DEFAULT 0, "
+        "summary TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_import_jobs_space "
+        "ON import_jobs(space_id, created_at)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_import_jobs_status "
+        "ON import_jobs(status, created_at)"
     )
     # Byte counts must be 64-bit: a 5 GiB object already overflows PostgreSQL's
     # INTEGER (2 147 483 647), and quotas are set in TiB. SQLite INTEGER is

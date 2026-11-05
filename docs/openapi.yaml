@@ -71,6 +71,10 @@ tags:
     description: >-
       Operator and administrator reads — statistics, usage, audit search and
       retention, orphan inspection, stale-intent reconciliation.
+  - name: imports
+    description: >-
+      Bulk import jobs. Books a batch of items for later processing; a worker
+      (future work) executes each item and reports progress.
   - name: diagnostics
     description: >-
       Support measurements of the real path from the browser to Aura: bare
@@ -1688,6 +1692,52 @@ paths:
         "200": { description: Identity revoked }
         "401": { description: Authentication required }
         "404": { description: Identity not found }
+  /api/v1/import-jobs:
+    post:
+      summary: Create a bulk import job (objects:write)
+      tags: [imports]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportJobIn"
+      responses:
+        "200": { description: Import job created, $ref: "#/components/schemas/ImportJobOut" }
+        "401": { description: Authentication required }
+        "403": { description: Missing capability }
+        "422": { description: Invalid request body }
+    get:
+      summary: List import jobs for the caller's space (objects:read)
+      tags: [imports]
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [queued, running, done, failed, cancelled] }
+          description: Filter by import job status
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+          description: Maximum number of jobs to return
+      responses:
+        "200": { description: List of import jobs, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ImportJobOut" } } } } }
+        "401": { description: Authentication required }
+        "403": { description: Missing capability }
+  /api/v1/import-jobs/{jid}/cancel:
+    post:
+      summary: Cancel a queued or running import job (objects:write)
+      tags: [imports]
+      parameters:
+        - in: path
+          name: jid
+          required: true
+          schema: { type: string, description: Canonical UUID v4 import job id }
+      responses:
+        "200": { description: Import job cancelled, $ref: "#/components/schemas/ImportJobOut" }
+        "401": { description: Authentication required }
+        "403": { description: Missing capability }
+        "404": { description: Import job not found or not cancellable }
+        "422": { description: Identifier is not a canonical UUID v4 }
   /api/v1/admin/applications/{aid}:
     get:
       summary: Application detail with its stable id and space count (admin:read)
@@ -2356,6 +2406,30 @@ components:
         active:
           type: boolean
           description: Computed server-side from expiry, use count and revocation
+    ImportJobIn:
+      type: object
+      required: [total_items]
+      properties:
+        total_items:
+          type: integer
+          minimum: 1
+          maximum: 10000
+          description: Number of items in the import batch
+    ImportJobOut:
+      type: object
+      required: [id, space_id, application_id, created_by, status, total_items, processed_items, failed_items, created_at, updated_at]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        space_id: { $ref: "#/components/schemas/Uuid4" }
+        application_id: { type: string }
+        created_by: { $ref: "#/components/schemas/Uuid4" }
+        status: { type: string, enum: [queued, running, done, failed, cancelled] }
+        total_items: { type: integer, minimum: 0 }
+        processed_items: { type: integer, minimum: 0 }
+        failed_items: { type: integer, minimum: 0 }
+        summary: { type: [string, "null"], description: Sanitised job summary (no secrets/paths) }
+        created_at: { type: integer, description: Epoch seconds }
+        updated_at: { type: integer, description: Epoch seconds }
   parameters:
     ObjectId:
       in: path

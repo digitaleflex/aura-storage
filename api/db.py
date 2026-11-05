@@ -585,6 +585,63 @@ class Repository:
         )
         self.conn.commit()
 
+    # -- folder shares ----------------------------------------------------
+    # Same capability model as object shares, scoped to a folder subtree. The
+    # folder row is deliberately not a foreign key: deleting a folder must not
+    # be blocked by a link, and the share then answers 404.
+    def create_folder_share(
+        self, folder_id: str, space_id: str, created_by: str,
+        created_by_kind: str, token_hash: str, expires_at: int,
+        max_uses: Optional[int] = None,
+    ) -> str:
+        sid = self.new_id()
+        self.conn.execute(
+            "INSERT INTO folder_shares (id, folder_id, space_id, created_by, "
+            "created_by_kind, token_hash, expires_at, max_uses, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (sid, folder_id, space_id, created_by, created_by_kind, token_hash,
+             expires_at, max_uses, self.now()),
+        )
+        self.conn.commit()
+        return sid
+
+    def get_folder_share(self, sid: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM folder_shares WHERE id = ?", (sid,)
+        ).fetchone())
+
+    def get_folder_share_by_token_hash(self, token_hash: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM folder_shares WHERE token_hash = ?", (token_hash,)
+        ).fetchone())
+
+    def list_folder_shares(self, folder_id: str) -> list:
+        rows = self.conn.execute(
+            "SELECT * FROM folder_shares WHERE folder_id = ? "
+            "ORDER BY created_at DESC, id",
+            (folder_id,),
+        ).fetchall()
+        return [_as_dict(r) for r in rows]
+
+    def consume_folder_share(self, sid: str, now: int) -> bool:
+        """Redeem one download atomically (revocation, expiry and max_uses)."""
+        cur = self.conn.execute(
+            "UPDATE folder_shares SET use_count = use_count + 1, last_used_at = ? "
+            "WHERE id = ? AND revoked_at IS NULL AND expires_at > ? "
+            "AND (max_uses IS NULL OR use_count < max_uses)",
+            (now, sid, now),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def revoke_folder_share(self, sid: str, now: int) -> None:
+        self.conn.execute(
+            "UPDATE folder_shares SET revoked_at = ? "
+            "WHERE id = ? AND revoked_at IS NULL",
+            (now, sid),
+        )
+        self.conn.commit()
+
     # -- objects ----------------------------------------------------------
     def create_pending_object(
         self, *, space_id: str, application_id: Optional[str], environment: Optional[str],
@@ -1445,3 +1502,94 @@ class Repository:
                 "SELECT COUNT(*) AS n FROM service_identities WHERE revoked_at IS NULL"
             ).fetchone()["n"],
         }
+
+    # -- import jobs ------------------------------------------------------
+    def create_import_job(
+        self, jid: str, space_id: str, application_id: str, created_by: str,
+        total_items: int,
+    ) -> str:
+        now = self.now()
+        self.conn.execute(
+            "INSERT INTO import_jobs (id, space_id, application_id, created_by, "
+            "status, total_items, processed_items, failed_items, summary, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+            (jid, space_id, application_id or "", created_by, "queued",
+             total_items, 0, 0, now, now),
+        )
+        self.conn.commit()
+        return jid
+
+    def get_import_job(self, jid: str, *, space_id: str) -> Optional[dict]:
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM import_jobs WHERE id = ? AND space_id = ?",
+            (jid, space_id),
+        ).fetchone())
+
+    def list_import_jobs(
+        self, *, space_id: str, status: Optional[str] = None,
+        limit: int = 50,
+    ) -> list:
+        if status is None:
+            rows = self.conn.execute(
+                "SELECT * FROM import_jobs WHERE space_id = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (space_id, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM import_jobs WHERE space_id = ? AND status = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (space_id, status, limit),
+            ).fetchall()
+        return [_as_dict(r) for r in rows]
+
+    def update_import_job(
+        self, jid: str, *, status: Optional[str] = None,
+        processed_items: Optional[int] = None,
+        failed_items: Optional[int] = None,
+        summary: Optional[str] = None,
+    ) -> None:
+        fields = []
+        params: list = []
+        if status is not None:
+            fields.append("status = ?")
+            params.append(status)
+        if processed_items is not None:
+            fields.append("processed_items = ?")
+            params.append(processed_items)
+        if failed_items is not None:
+            fields.append("failed_items = ?")
+            params.append(failed_items)
+        if summary is not None:
+            fields.append("summary = ?")
+            params.append(summary)
+        if not fields:
+            return
+        fields.append("updated_at = ?")
+        params.append(self.now())
+        params.append(jid)
+        self.conn.execute(
+            f"UPDATE import_jobs SET {', '.join(fields)} WHERE id = ?",
+            tuple(params),
+        )
+        self.conn.commit()
+
+    def cancel_import_job(self, jid: str, *, space_id: str) -> bool:
+        """Mark a queued/running job as cancelled. Idempotent: returns True if
+        the job exists and is now cancelled (even if it already was)."""
+        row = self.conn.execute(
+            "SELECT status FROM import_jobs WHERE id = ? AND space_id = ?",
+            (jid, space_id),
+        ).fetchone()
+        if row is None:
+            return False
+        if row["status"] == "cancelled":
+            return True  # already cancelled: idempotent
+        cur = self.conn.execute(
+            "UPDATE import_jobs SET status = 'cancelled', updated_at = ? "
+            "WHERE id = ? AND space_id = ? AND status IN ('queued', 'running')",
+            (self.now(), jid, space_id),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
