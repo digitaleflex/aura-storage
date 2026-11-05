@@ -2224,7 +2224,8 @@ export function ObjectsPage() {
           aria-current={currentFolderId === null ? "page" : undefined}
           onClick={() => setCurrentFolderId(null)}
         >
-          Mes fichiers
+          <span className="crumb-icon">🏠</span>
+          <span className="crumb-label">Mes fichiers</span>
         </button>
         {breadcrumb.map((folder, index) => (
           <span key={folder.id} className="crumb-item">
@@ -2239,7 +2240,8 @@ export function ObjectsPage() {
               aria-current={index === breadcrumb.length - 1 ? "page" : undefined}
               onClick={() => setCurrentFolderId(folder.id)}
             >
-              {folder.name}
+              <span className="crumb-icon">📁</span>
+              <span className="crumb-label">{folder.name}</span>
             </button>
           </span>
         ))}
