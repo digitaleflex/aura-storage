@@ -126,6 +126,26 @@ CREATE TABLE IF NOT EXISTS object_shares (
   last_used_at INTEGER,
   created_at INTEGER NOT NULL
 );
+-- Public folder share links: the same capability model as `object_shares`, for a
+-- logical folder tree instead of one object. The token is stored only as a
+-- SHA-256 fingerprint, redemption is a redirect to short-lived presigned GETs
+-- and rows are never deleted (revocation is a timestamp), so audit entries keep
+-- resolving. No foreign key on folder_id on purpose: deleting a folder leaves a
+-- harmless dangling row that answers 404 instead of blocking the delete.
+CREATE TABLE IF NOT EXISTS folder_shares (
+  id TEXT PRIMARY KEY,
+  folder_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_by_kind TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at INTEGER NOT NULL,
+  max_uses INTEGER,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  revoked_at INTEGER,
+  last_used_at INTEGER,
+  created_at INTEGER NOT NULL
+);
 -- Partner integrations (admin console "Intégrations"). One row per external
 -- site (course platform, intranet, ...) that consumes one space through its own
 -- service identity. The identity remains the credential: rotation/revocation
@@ -205,6 +225,7 @@ CREATE INDEX IF NOT EXISTS idx_identities_space ON service_identities(space_id);
 CREATE INDEX IF NOT EXISTS idx_partner_sites_space ON partner_sites(space_id);
 CREATE INDEX IF NOT EXISTS idx_space_usage_period ON space_usage_monthly(period);
 CREATE INDEX IF NOT EXISTS idx_shares_object ON object_shares(object_id);
+CREATE INDEX IF NOT EXISTS idx_folder_shares_folder ON folder_shares(folder_id);
 -- Revision indexes: list one object's history, find the bytes behind a revision
 -- during orphan/reconcile scans (must NOT be mistaken for storage orphans), and
 -- let the retention sweep find candidates without scanning the table.
@@ -271,3 +292,21 @@ CREATE TABLE IF NOT EXISTS media_jobs (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_media_jobs_status ON media_jobs(status, created_at);
+
+-- Import jobs (bulk object import). Tracks a batch of items submitted by a
+-- human operator, with per-item status and a sanitised summary for UI polling.
+CREATE TABLE IF NOT EXISTS import_jobs (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  application_id TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',      -- queued | running | done | failed | cancelled
+  total_items INTEGER NOT NULL DEFAULT 0,
+  processed_items INTEGER NOT NULL DEFAULT 0,
+  failed_items INTEGER NOT NULL DEFAULT 0,
+  summary TEXT,                              -- JSON, sanitised (no secrets/paths)
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_import_jobs_space ON import_jobs(space_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_import_jobs_status ON import_jobs(status, created_at);

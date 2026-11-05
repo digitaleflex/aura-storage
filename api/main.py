@@ -16,10 +16,10 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, ids, netinfo, shares
+from . import authz, folder_shares, ids, netinfo, shares
 from .audit import (
     audit_event,
     audit_path,
@@ -682,6 +682,18 @@ class ShareIn(BaseModel):
     content_disposition: Literal["attachment", "inline"] = "attachment"
 
 
+class FolderShareIn(BaseModel):
+    """Create a public read-only link for a whole folder subtree.
+
+    Bounded like an object share: ``expires_in`` is optional but never above
+    ``AURA_SHARE_TTL_MAX``, and ``max_uses`` (when set) counts file downloads,
+    not page views. Subfolders are always included.
+    """
+    model_config = ConfigDict(extra="forbid")
+    expires_in: int | None = Field(default=None, ge=60)
+    max_uses: int | None = Field(default=None, ge=1, le=1_000_000)
+
+
 class ObjectPatchIn(BaseModel):
     # Object reassignment into a logical folder (#62). `model_fields_set`
     # distinguishes "not sent" from an explicit null (which unfiles the object
@@ -875,6 +887,30 @@ class PartnerSitePatchIn(BaseModel):
     @classmethod
     def clean_notes(cls, value: str | None) -> str | None:
         return None if value is None else value.strip()
+
+
+# --- Import jobs ----------------------------------------------------------
+
+class ImportJobIn(BaseModel):
+    """Create a bulk import job. The API records the job; a worker (future)
+    will process each item. The response omits secrets and storage paths."""
+    model_config = ConfigDict(extra="forbid")
+    total_items: int = Field(ge=1, le=10_000)
+
+
+class ImportJobOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    space_id: str
+    application_id: str
+    created_by: str
+    status: str
+    total_items: int
+    processed_items: int
+    failed_items: int
+    summary: str | None = None
+    created_at: int
+    updated_at: int
 
 
 class FolderIn(BaseModel):
@@ -1090,6 +1126,191 @@ def redeem_share(token: str):
     return RedirectResponse(url, status_code=302, headers={
         # The redirect target is a bearer URL: keep it out of caches, out of
         # Referer headers sent to the storage host, and out of search indexes.
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Public folder share links
+# ---------------------------------------------------------------------------
+# Same capability model as /s/<token>, but a folder is a tree: the link serves a
+# no-JavaScript listing and each file redirects to a short-lived presigned GET.
+# No object bytes ever pass through the API; every link stays relative to the
+# token path, so the page never needs the request Host header.
+def _public_page_headers() -> dict:
+    return {
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow",
+        "X-Content-Type-Options": "nosniff",
+        # The page has no scripts, no forms and no external assets. Everything it
+        # needs is inline CSS, so a share can never run code in the app's origin.
+        "Content-Security-Policy": (
+            "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; "
+            "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        ),
+    }
+
+
+def _resolve_folder_share(token: str):
+    """Return ``(share_row, folder_row, reason)``; reason None means usable.
+
+    The same shape check and fingerprint lookup as an object share, then the
+    owning folder. The folder lookup is owner-scoped through ``created_by``: the
+    creator is always the folder owner (folder routes are owner-scoped), and a
+    row that disagrees is treated as missing rather than trusted.
+    """
+    if not shares.is_well_formed(token):
+        return None, None, "unknown"
+    found = repo.get_folder_share_by_token_hash(shares.fingerprint(token))
+    if found is None:
+        return None, None, "unknown"
+    row = _as_dict(found)
+    if row.get("revoked_at"):
+        return row, None, "revoked"
+    if int(row["expires_at"]) <= int(time.time()):
+        return row, None, "expired"
+    max_uses = row["max_uses"]
+    if max_uses is not None and int(row["use_count"]) >= int(max_uses):
+        return row, None, "exhausted"
+    folder = repo.get_folder(row["folder_id"], owner_id=row["created_by"])
+    if folder is None:
+        return row, None, "folder_missing"
+    # Tenant attribution for the audit trail: redemption has no principal, but
+    # the event still belongs to the shared folder's space.
+    set_request_principal(row["space_id"], None)
+    return row, _as_dict(folder), None
+
+
+def _folder_share_denied(reason: str, row: dict | None = None) -> HTMLResponse:
+    """One indistinguishable 404 page for every folder-link failure mode."""
+    extra: dict = {"reason": reason}
+    if row is not None:
+        extra["folder_share_id"] = row["id"]
+        extra["folder_id"] = row["folder_id"]
+    audit_event("folder-share-access", None, "denied", extra)
+    return HTMLResponse(
+        folder_shares.render_not_found(),
+        status_code=404,
+        headers=_public_page_headers(),
+    )
+
+
+@app.get("/f/{token}")
+def view_folder_share(
+    token: str,
+    d: str | None = None,
+    page: int = Query(default=0, ge=0, le=1000),
+):
+    """Render the public listing for a folder link, or the uniform 404 page.
+
+    ``d`` navigates inside the subtree; any id that is not the shared folder or
+    one of its descendants answers 404, so the link cannot be used to crawl the
+    rest of the owner's tree.
+    """
+    row, folder, reason = _resolve_folder_share(token)
+    if row is None or folder is None:
+        return _folder_share_denied(reason or "unknown", row)
+
+    owner_id = folder["owner_id"]
+    root_id = folder["id"]
+    current_id = root_id
+    if d is not None:
+        canonical = ids.canonical(d)
+        if canonical is None or not folder_shares.folder_in_subtree(
+            repo, canonical, root_id, owner_id
+        ):
+            return _folder_share_denied("outside_share", row)
+        current_id = canonical
+
+    chain = folder_shares.folder_path(repo, current_id, root_id, owner_id)
+    if chain is None:
+        return _folder_share_denied("outside_share", row)
+
+    folders = [
+        _as_dict(f)
+        for f in repo.list_folders(owner_id=owner_id, parent_id=current_id)
+    ]
+    # One extra row tells us whether a next page exists without a COUNT.
+    rows = repo.list_objects(
+        space_id=row["space_id"], owner_id=owner_id, folder_id=current_id,
+        status=AVAILABLE, sort="display_name", order="asc",
+        limit=folder_shares.PAGE_SIZE + 1, offset=page * folder_shares.PAGE_SIZE,
+    )
+    objects = [_as_dict(o) for o in rows[: folder_shares.PAGE_SIZE]]
+    has_next = len(rows) > folder_shares.PAGE_SIZE
+
+    audit_event("folder-share-open", None, "success", {
+        "folder_share_id": row["id"], "folder_id": current_id,
+        "page": page, "folders": len(folders), "files": len(objects),
+    })
+    return HTMLResponse(
+        folder_shares.render_page(
+            token=token, folder=folder, chain=chain, folders=folders,
+            objects=objects, page=page, has_next=has_next,
+            expires_at=int(row["expires_at"]), now=int(time.time()),
+            inline_allowed=shares.inline_allowed,
+        ),
+        headers=_public_page_headers(),
+    )
+
+
+@app.get("/f/{token}/o/{oid}")
+def redeem_folder_share_object(token: str, oid: str, download: bool = False):
+    """Redirect one file of a folder share to a presigned GET, or 404.
+
+    The object must be ``available`` and filed inside the shared subtree. Every
+    download consumes one use of ``max_uses``; page views do not. ``download=1``
+    forces an attachment, otherwise safe types open inline (never HTML/SVG).
+    """
+    row, folder, reason = _resolve_folder_share(token)
+    if row is None or folder is None:
+        return _folder_share_denied(reason or "unknown", row)
+
+    canonical = ids.canonical(oid)
+    if canonical is None:
+        return _folder_share_denied("object_unavailable", row)
+    target = repo.get_object(
+        canonical, space_id=row["space_id"], owner_id=folder["owner_id"]
+    )
+    if target is None or target["status"] != AVAILABLE:
+        return _folder_share_denied("object_unavailable", row)
+    obj = _as_dict(target)
+    if not folder_shares.folder_in_subtree(
+        repo, obj["folder_id"], folder["id"], folder["owner_id"]
+    ):
+        # An object outside the shared tree must look exactly like a missing one.
+        return _folder_share_denied("outside_share", row)
+
+    try:
+        _check_egress_quota(row["space_id"], int(obj["size_bytes"]))
+    except HTTPException:
+        return _folder_share_denied("egress_quota", row)
+
+    now = int(time.time())
+    if not repo.consume_folder_share(row["id"], now):
+        return _folder_share_denied("exhausted", row)
+
+    inline = shares.inline_allowed(obj["content_type"])
+    disposition = "attachment" if download or not inline else "inline"
+    url = presigned_get(
+        s3, obj["bucket"], obj["object_key"], settings.share_presign_ttl,
+        content_disposition=shares.content_disposition_header(
+            disposition, obj["display_name"]
+        ),
+        content_type=obj["content_type"],
+    )
+    _record_egress(row["space_id"], int(obj["size_bytes"]), "share")
+    _record_object_event(obj["id"], int(obj["size_bytes"]), "share")
+    audit_event("folder-share-access", None, "success", {
+        "folder_share_id": row["id"], "folder_id": obj["folder_id"],
+        "object_id": obj["id"], "use_count": int(row["use_count"]) + 1,
+        "content_disposition": disposition,
+    })
+    return RedirectResponse(url, status_code=302, headers={
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
         "X-Robots-Tag": "noindex, nofollow",
@@ -3084,6 +3305,121 @@ def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, 
 
 
 # ---------------------------------------------------------------------------
+# Folder share links. Same human-only, expiring, revocable capability as an
+# object share, but scoped to a folder subtree (subfolders are always included).
+# The public routes live outside /api/v1 under /f/.
+# ---------------------------------------------------------------------------
+@app.post("/api/v1/folders/{fid}/share")
+def create_folder_share(
+    fid: str, body: FolderShareIn,
+    principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
+):
+    """Mint a public, read-only link for a folder and its subfolders.
+
+    Human-only for the same reason as object links: a leaked machine token must
+    not create links that outlive its own revocation. Expiry is bounded
+    server-side; the token is returned once and only its fingerprint is stored.
+    """
+    fid = _canonical_id(fid, "folder id")
+    if repo.get_folder(fid, owner_id=_folder_owner(principal)) is None:
+        raise HTTPException(status_code=404, detail="folder not found")
+    if not principal.get("space_id"):
+        # A folder only exists inside a human account, so this is a catalogue
+        # inconsistency rather than a client error: refuse instead of writing a
+        # share row that could never resolve an object.
+        raise HTTPException(status_code=409, detail="account has no space")
+
+    expires_in = (
+        settings.share_ttl_default if body.expires_in is None else body.expires_in
+    )
+    if expires_in > settings.share_ttl_max:
+        raise HTTPException(
+            status_code=422,
+            detail="expires_in exceeds the maximum share lifetime",
+        )
+
+    token = shares.new_token()
+    expires_at = int(time.time()) + expires_in
+    sid = repo.create_folder_share(
+        folder_id=fid,
+        space_id=principal["space_id"],
+        created_by=principal["id"],
+        created_by_kind=principal["kind"],
+        token_hash=shares.fingerprint(token),
+        expires_at=expires_at,
+        max_uses=body.max_uses,
+    )
+    audit_event("folder-share-create", principal["id"], "success", {
+        "folder_id": fid, "folder_share_id": sid, "expires_in": expires_in,
+        "max_uses": body.max_uses,
+    })
+    path = f"/f/{token}"
+    return {
+        "id": sid, "folder_id": fid,
+        "url": f"{settings.share_base_url}{path}" if settings.share_base_url else path,
+        # Returned exactly once: the catalogue only keeps the SHA-256 fingerprint.
+        "token": token,
+        "expires_in": expires_in, "expires_at": expires_at,
+        "max_uses": body.max_uses,
+    }
+
+
+@app.get("/api/v1/folders/{fid}/shares")
+def list_folder_shares(
+    fid: str, principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
+):
+    """List the links created for a folder (never the tokens themselves)."""
+    fid = _canonical_id(fid, "folder id")
+    if repo.get_folder(fid, owner_id=_folder_owner(principal)) is None:
+        raise HTTPException(status_code=404, detail="folder not found")
+    now = int(time.time())
+    items = []
+    for row in repo.list_folder_shares(fid):
+        row = _as_dict(row)
+        max_uses = row["max_uses"]
+        items.append({
+            "id": row["id"], "folder_id": row["folder_id"],
+            "created_by": row["created_by"], "created_by_kind": row["created_by_kind"],
+            "created_at": row["created_at"], "expires_at": row["expires_at"],
+            "max_uses": max_uses, "use_count": row["use_count"],
+            "last_used_at": row["last_used_at"], "revoked_at": row["revoked_at"],
+            # Computed server-side so a client never re-implements the rules.
+            "active": (
+                row["revoked_at"] is None
+                and int(row["expires_at"]) > now
+                and (max_uses is None or int(row["use_count"]) < int(max_uses))
+            ),
+        })
+    return {"items": items}
+
+
+@app.delete("/api/v1/folders/{fid}/shares/{sid}")
+def revoke_folder_share(
+    fid: str, sid: str,
+    principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
+):
+    """Revoke a folder link immediately. Idempotent, creator only."""
+    fid = _canonical_id(fid, "folder id")
+    sid = _canonical_id(sid, "share id")
+    if repo.get_folder(fid, owner_id=_folder_owner(principal)) is None:
+        raise HTTPException(status_code=404, detail="folder not found")
+    found = repo.get_folder_share(sid)
+    if found is None or found["folder_id"] != fid:
+        raise HTTPException(status_code=404, detail="share not found")
+    row = _as_dict(found)
+    if row["created_by"] != principal["id"]:
+        raise HTTPException(status_code=403, detail="forbidden")
+    if row["revoked_at"] is not None:
+        return {"id": sid, "revoked": True, "revoked_at": row["revoked_at"]}
+    now = int(time.time())
+    repo.revoke_folder_share(sid, now)
+    audit_event("folder-share-revoke", principal["id"], "success", {
+        "folder_id": fid, "folder_share_id": sid,
+    })
+    return {"id": sid, "revoked": True, "revoked_at": now}
+
+
+# ---------------------------------------------------------------------------
 # Administration (#35, #36, #38): require the admin:* capabilities.
 # ---------------------------------------------------------------------------
 @app.post("/api/v1/admin/reconcile")
@@ -3961,3 +4297,62 @@ def revoke_identity(iid: str, principal: dict = Depends(authorize(ADMIN_WRITE)))
     repo.revoke_identity(iid)
     audit_event("admin.identity.revoke", principal["id"], "success", {"identity_id": iid})
     return {"id": iid, "revoked": True}
+
+
+# --- Import jobs ----------------------------------------------------------
+
+@app.post("/api/v1/import-jobs")
+def create_import_job(
+    body: ImportJobIn, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Create a bulk import job for the caller's space.
+
+    The job is recorded in ``queued`` state. A background worker (future work)
+    will process each item; this endpoint only books the batch.
+    """
+    space_id = principal["space_id"]
+    application_id = principal.get("application_id")
+    jid = ids.new_id()
+    repo.create_import_job(
+        jid, space_id, application_id or "", principal["id"], body.total_items,
+    )
+    audit_event("import_job.create", principal["id"], "success", {
+        "import_job_id": jid, "space_id": space_id, "total_items": body.total_items,
+    })
+    row = repo.get_import_job(jid, space_id=space_id)
+    return ImportJobOut(**row)
+
+
+@app.get("/api/v1/import-jobs")
+def list_import_jobs(
+    status: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+):
+    """List import jobs for the caller's space, newest first."""
+    space_id = principal["space_id"]
+    if status is not None and status not in (
+        "queued", "running", "done", "failed", "cancelled",
+    ):
+        raise HTTPException(status_code=422, detail="unknown import job status")
+    rows = repo.list_import_jobs(
+        space_id=space_id, status=status, limit=limit,
+    )
+    return [ImportJobOut(**r) for r in rows]
+
+
+@app.post("/api/v1/import-jobs/{jid}/cancel")
+def cancel_import_job(
+    jid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Cancel a queued or running import job. Idempotent."""
+    jid = _canonical_id(jid, "import job id")
+    space_id = principal["space_id"]
+    ok = repo.cancel_import_job(jid, space_id=space_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="import job not found or not cancellable")
+    audit_event("import_job.cancel", principal["id"], "success", {
+        "import_job_id": jid, "space_id": space_id,
+    })
+    row = repo.get_import_job(jid, space_id=space_id)
+    return ImportJobOut(**row)

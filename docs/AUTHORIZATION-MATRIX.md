@@ -83,6 +83,9 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/objects/{oid}/restore` | `objects:delete` | undo a soft delete (trash); 409 unless the object is `deleted` and was fully uploaded |
 | POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin; a storage failure keeps the catalogue row and returns **502** (M06) |
 | POST | `/api/v1/admin/objects/{oid}/reverify` | `admin:write` | re-hash a published/`suspect` object; republishes it on a checksum match, otherwise 409 and stays `suspect` |
+| POST | `/api/v1/import-jobs` | `objects:write` | create a bulk import job for the caller's space; status `queued` |
+| GET | `/api/v1/import-jobs` | `objects:read` | list import jobs for the caller's space, optional `status` filter |
+| POST | `/api/v1/import-jobs/{jid}/cancel` | `objects:write` | cancel a queued/running import job; idempotent |
 | GET | `/api/v1/folders` | `objects:read` | **human only**; owner-scoped, root, `?parent_id=`, or `?all=true` (flat tree) |
 | POST | `/api/v1/folders` | `objects:write` | **human only**; logical folder, no host directory |
 | GET | `/api/v1/folders/{fid}` | `objects:read` | **human only**; 404 outside the owner's tree |

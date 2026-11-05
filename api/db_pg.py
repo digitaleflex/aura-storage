@@ -518,6 +518,56 @@ class Repository:
     def delete_shares_for_object(self, object_id: str) -> None:
         self._run("DELETE FROM object_shares WHERE object_id = %s", (object_id,))
 
+    # -- folder shares ----------------------------------------------------
+    # PostgreSQL twin of the SqliteRepository methods, with identical signatures.
+    def create_folder_share(
+        self, folder_id: str, space_id: str, created_by: str,
+        created_by_kind: str, token_hash: str, expires_at: int,
+        max_uses: Optional[int] = None,
+    ) -> str:
+        sid = self.new_id()
+        self._run(
+            "INSERT INTO folder_shares (id, folder_id, space_id, created_by, "
+            "created_by_kind, token_hash, expires_at, max_uses, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (sid, folder_id, space_id, created_by, created_by_kind, token_hash,
+             expires_at, max_uses, self.now()),
+        )
+        return sid
+
+    def get_folder_share(self, sid: str) -> Optional[dict]:
+        return self._one("SELECT * FROM folder_shares WHERE id = %s", (sid,))
+
+    def get_folder_share_by_token_hash(self, token_hash: str) -> Optional[dict]:
+        return self._one(
+            "SELECT * FROM folder_shares WHERE token_hash = %s", (token_hash,)
+        )
+
+    def list_folder_shares(self, folder_id: str) -> list:
+        return self._all(
+            "SELECT * FROM folder_shares WHERE folder_id = %s "
+            "ORDER BY created_at DESC, id",
+            (folder_id,),
+        )
+
+    def consume_folder_share(self, sid: str, now: int) -> bool:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE folder_shares SET use_count = use_count + 1, "
+                "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
+                "AND expires_at > %s "
+                "AND (max_uses IS NULL OR use_count < max_uses)",
+                (now, sid, now),
+            )
+            return cur.rowcount == 1
+
+    def revoke_folder_share(self, sid: str, now: int) -> None:
+        self._run(
+            "UPDATE folder_shares SET revoked_at = %s "
+            "WHERE id = %s AND revoked_at IS NULL",
+            (now, sid),
+        )
+
     # -- objects ----------------------------------------------------------
     def create_pending_object(
         self, *, space_id: str, application_id: Optional[str], environment: Optional[str],
@@ -1285,3 +1335,89 @@ class Repository:
         for key, sql in counts.items():
             stats[key] = self._one(sql)["n"]
         return stats
+
+    # -- import jobs ------------------------------------------------------
+    def create_import_job(
+        self, jid: str, space_id: str, application_id: str, created_by: str,
+        total_items: int,
+    ) -> str:
+        now = self.now()
+        self._run(
+            "INSERT INTO import_jobs (id, space_id, application_id, created_by, "
+            "status, total_items, processed_items, failed_items, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s, 'queued', %s, 0, 0, %s, %s)",
+            (jid, space_id, application_id, created_by, total_items, now, now),
+        )
+        return jid
+
+    def get_import_job(self, jid: str, *, space_id: str) -> Optional[dict]:
+        return self._one(
+            "SELECT * FROM import_jobs WHERE id = %s AND space_id = %s",
+            (jid, space_id),
+        )
+
+    def list_import_jobs(
+        self, *, space_id: str, status: Optional[str] = None,
+        limit: int = 50,
+    ) -> list:
+        if status is None:
+            rows = self._all(
+                "SELECT * FROM import_jobs WHERE space_id = %s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (space_id, limit),
+            )
+        else:
+            rows = self._all(
+                "SELECT * FROM import_jobs WHERE space_id = %s AND status = %s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (space_id, status, limit),
+            )
+        return rows
+
+    def update_import_job(
+        self, jid: str, *, status: Optional[str] = None,
+        processed_items: Optional[int] = None,
+        failed_items: Optional[int] = None,
+        summary: Optional[str] = None,
+    ) -> None:
+        fields = []
+        params: list = []
+        if status is not None:
+            fields.append("status = %s")
+            params.append(status)
+        if processed_items is not None:
+            fields.append("processed_items = %s")
+            params.append(processed_items)
+        if failed_items is not None:
+            fields.append("failed_items = %s")
+            params.append(failed_items)
+        if summary is not None:
+            fields.append("summary = %s")
+            params.append(summary)
+        if not fields:
+            return
+        fields.append("updated_at = %s")
+        params.append(self.now())
+        params.append(jid)
+        self._run(
+            f"UPDATE import_jobs SET {', '.join(fields)} WHERE id = %s",
+            tuple(params),
+        )
+
+    def cancel_import_job(self, jid: str, *, space_id: str) -> bool:
+        """Mark a queued/running job as cancelled. Idempotent: returns True if
+        the job exists and is now cancelled (even if it already was)."""
+        row = self._one(
+            "SELECT status FROM import_jobs WHERE id = %s AND space_id = %s",
+            (jid, space_id),
+        )
+        if row is None:
+            return False
+        if row["status"] == "cancelled":
+            return True  # already cancelled: idempotent
+        cur = self._run(
+            "UPDATE import_jobs SET status = 'cancelled', updated_at = %s "
+            "WHERE id = %s AND space_id = %s AND status IN ('queued', 'running')",
+            (self.now(), jid, space_id),
+        )
+        return cur.rowcount > 0
