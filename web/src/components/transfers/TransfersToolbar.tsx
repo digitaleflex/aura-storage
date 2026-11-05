@@ -56,6 +56,11 @@ export function TransfersToolbar({
           className="btn btn-primary transfers-toolbar-primary"
           onClick={onPauseAll}
           disabled={!canPause}
+          aria-label={
+            canPause
+              ? "Mettre en pause tous les transferts"
+              : "Aucun transfert en attente à suspendre"
+          }
           title={
             canPause ? undefined : "Aucun transfert en attente à suspendre."
           }
@@ -68,6 +73,11 @@ export function TransfersToolbar({
           className="btn"
           onClick={onResumeAll}
           disabled={!canResume}
+          aria-label={
+            canResume
+              ? "Reprendre tous les transferts"
+              : "Aucun transfert en pause à reprendre"
+          }
           title={
             canResume
               ? undefined
@@ -77,7 +87,7 @@ export function TransfersToolbar({
           <TransferIcon name="play" size={16} />
           Reprendre
         </button>
-        <button type="button" className="btn" onClick={onAddFiles}>
+        <button type="button" className="btn" onClick={onAddFiles} aria-label="Ajouter des fichiers">
           <TransferIcon name="plus" size={16} />
           Ajouter des fichiers
         </button>
@@ -86,6 +96,11 @@ export function TransfersToolbar({
           className="btn btn-danger transfers-toolbar-cancel"
           onClick={onCancelAll}
           disabled={!canCancel}
+          aria-label={
+            canCancel
+              ? "Annuler tous les transferts"
+              : "Aucun transfert en cours à annuler"
+          }
           title={
             canCancel
               ? undefined
