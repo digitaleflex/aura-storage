@@ -237,7 +237,7 @@ paths:
           name: status
           schema:
             type: string
-            enum: [pending, available, deleted, expired, failed, aborted]
+            enum: [pending, verifying, available, suspect, deleted, expired, failed, aborted, purging]
           description: Exact catalogue status.
         - in: query
           name: content_type
@@ -1112,6 +1112,70 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Folder not found or not visible }
         "409": { description: Folder is not empty }
+  /api/v1/folders/{fid}/share:
+    post:
+      summary: Mint a public read-only link for a folder subtree (objects:read, human only)
+      tags: [folders]
+      description: >-
+        Same capability as an object share, scoped to a folder and all of its
+        subfolders. Human-only; expiry is bounded by AURA_SHARE_TTL_MAX, an
+        optional max_uses counts file downloads (not page views), and the token
+        is returned exactly once while only its SHA-256 fingerprint is stored.
+        The link is redeemed outside this API root, at GET /f/{token}.
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                expires_in:
+                  type: integer
+                  minimum: 60
+                  description: Seconds of validity; omitted = AURA_SHARE_TTL_DEFAULT, above AURA_SHARE_TTL_MAX is refused with 422
+                max_uses:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000000
+                  description: Download ceiling; omitted = unlimited
+      responses:
+        "200": { description: "Folder link created; url, token, expiry and use ceiling (token shown once)" }
+        "401": { description: Authentication required }
+        "403": { description: "Not authorised, or a service identity (human-only capability)" }
+        "404": { description: Folder not found or not visible }
+        "422": { description: "Identifier is not a canonical UUID v4, expiry above the maximum, or an invalid body field" }
+  /api/v1/folders/{fid}/shares:
+    get:
+      summary: List the share links of a folder (objects:read, human only)
+      tags: [folders]
+      description: Never returns the tokens themselves; `active` is computed server-side.
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      responses:
+        "200": { description: "Folder share links without their tokens" }
+        "401": { description: Authentication required }
+        "403": { description: Access denied }
+        "404": { description: Folder not found or not visible }
+        "422": { description: Identifier is not a canonical UUID v4 }
+  /api/v1/folders/{fid}/shares/{sid}:
+    delete:
+      summary: Revoke a folder share link immediately (objects:read, human only, creator only)
+      tags: [folders]
+      description: >-
+        Idempotent: revoking an already revoked link returns the original
+        revoked_at. Only the creator may revoke; any other caller gets 403.
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+        - $ref: "#/components/parameters/ShareId"
+      responses:
+        "200": { description: Link revoked (or already revoked) }
+        "401": { description: Authentication required }
+        "403": { description: Not the creator of this share link }
+        "404": { description: "Folder or share not found, or the share belongs to another folder" }
+        "422": { description: Identifier is not a canonical UUID v4 }
   /api/v1/admin/reconcile:
     post:
       summary: Expire stale pending uploads (admin:write)
@@ -2180,7 +2244,7 @@ components:
         checksum_algorithm: { type: string, enum: [sha256] }
         status:
           type: string
-          enum: [pending, available, deleted, expired, failed, aborted]
+          enum: [pending, verifying, available, suspect, deleted, expired, failed, aborted, purging]
         folder_id: { $ref: "#/components/schemas/Uuid4" }
         created_at: { type: integer }
         updated_at: { type: integer }

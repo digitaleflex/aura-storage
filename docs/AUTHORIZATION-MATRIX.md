@@ -55,7 +55,7 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/login` | public | failed attempts rate-limited per client IP |
 | POST | `/api/v1/logout` | authenticated **human** + CSRF | deletes the session |
 | GET | `/api/v1/me` | authenticated | principal metadata |
-| GET | `/api/v1/objects` | `objects:read` | scoped to space (+ owner for humans); optional `folder_id` filter (`root` = unfiled) |
+| GET | `/api/v1/objects` | `objects:read` | scoped to space (+ owner for humans); optional `folder_id` filter (`root` = unfiled); optional `status` filter (`pending`, `verifying`, `available`, `suspect`, `deleted`, `expired`, `failed`, `aborted`, `purging`; `deleted` hidden by default) |
 | GET | `/api/v1/objects/{oid}` | `objects:read` | 404 if outside the caller's scope |
 | PATCH | `/api/v1/objects/{oid}` | `objects:write` | **human only**; file/unfile an object into an owned folder |
 | POST | `/api/v1/objects/upload-intents` | `objects:write` | server picks the object key; server enforces type/size/empty policy; optional `Idempotency-Key` dedupes double submits |
@@ -88,6 +88,9 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | GET | `/api/v1/folders/{fid}` | `objects:read` | **human only**; 404 outside the owner's tree |
 | PATCH | `/api/v1/folders/{fid}` | `objects:write` | **human only**; rename/move, cycle-refused |
 | DELETE | `/api/v1/folders/{fid}` | `objects:delete` | **human only**; 409 if the folder still has children or live objects; soft-deleted objects are ignored and detached before removal |
+| POST | `/api/v1/folders/{fid}/share` | `objects:read` | **human only**; mints a public link for the folder and all its subfolders (one-time token, bounded expiry) |
+| GET | `/api/v1/folders/{fid}/shares` | `objects:read` | **human only**; lists links without their tokens, `active` computed server-side |
+| DELETE | `/api/v1/folders/{fid}/shares/{sid}` | `objects:read` | **human only**, creator only; immediate, idempotent revocation |
 | POST | `/api/v1/admin/reconcile` | `admin:write` | bounded global sweep of stale intents (`limit` 1..5000, oldest first; repeat until 0); returns `{expired, storage_deletes_attempted, storage_failures}` — a storage failure keeps the intent `pending` for the next sweep and is counted in `storage_failures`, never as cleaned (M06) |
 | GET | `/api/v1/admin/stats` | `admin:read` | aggregate counts, no content |
 | GET | `/api/v1/admin/audit` | `admin:read` | audit search newest-first (period/actor/action/result/space/application/request filters, `limit` 1..500 + `offset`); `total` counts window matches, `truncated` warns of older history (M07) |
