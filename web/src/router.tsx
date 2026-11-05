@@ -14,6 +14,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { SharesPage } from "./pages/SharesPage";
 import { TrashPage } from "./pages/TrashPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { HelpPage } from "./pages/HelpPage";
 import { lazy, Suspense } from "react";
 import { Loading } from "./components/Loading";
 import { RouteError } from "./components/RouteError";
@@ -126,6 +127,18 @@ const settingsRoute = createRoute({
   ),
 });
 
+const helpRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/help",
+  component: () => (
+    <Layout>
+      <RequireAuth>
+        <HelpPage />
+      </RequireAuth>
+    </Layout>
+  ),
+});
+
 const diagRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/diagnostic",
@@ -149,6 +162,7 @@ const routeTree = rootRoute.addChildren([
   sharesRoute,
   trashRoute,
   settingsRoute,
+  helpRoute,
   diagRoute,
 ]);
 
