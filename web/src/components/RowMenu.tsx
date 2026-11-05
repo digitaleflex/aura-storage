@@ -6,6 +6,7 @@ export interface RowMenuItem {
   onSelect: () => void;
   disabled?: boolean;
   danger?: boolean;
+  title?: string;  // Tooltip / aide contextuelle au survol
 }
 
 /**
@@ -112,6 +113,7 @@ export function RowMenu({ label, items }: { label: string; items: RowMenuItem[] 
               role="menuitem"
               className={item.danger ? "menu-item menu-item-danger" : "menu-item"}
               disabled={item.disabled}
+              title={item.title}
               onClick={() => {
                 // The action may open a modal; let the dialog own focus rather
                 // than pulling it back to a trigger that is now inert.

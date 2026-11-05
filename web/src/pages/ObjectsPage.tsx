@@ -2105,6 +2105,7 @@ export function ObjectsPage() {
             {
               label: "Partager",
               onSelect: () => setShareTarget({ kind: "folder" as const, folder }),
+              title: `Partager le dossier "${folder.name}"`,
             },
           ]
         : []),
@@ -2121,6 +2122,7 @@ export function ObjectsPage() {
           }
         },
         disabled: isZipping || !csrf,
+        title: `Télécharger le dossier "${folder.name}" en ZIP`,
       },
       {
         label: "Renommer",
@@ -2128,8 +2130,9 @@ export function ObjectsPage() {
           setRenameName(folder.name);
           setRenameTarget(folder);
         },
+        title: `Renommer le dossier "${folder.name}"`,
       },
-      { label: "Déplacer", onSelect: () => setMoveTarget(folder) },
+      { label: "Déplacer", onSelect: () => setMoveTarget(folder), title: `Déplacer le dossier "${folder.name}"` },
       {
         label: "Supprimer",
         danger: true,
@@ -2156,6 +2159,7 @@ export function ObjectsPage() {
             },
           });
         },
+        title: `Supprimer le dossier "${folder.name}"`,
       },
     ];
   }
@@ -2927,7 +2931,41 @@ export function ObjectsPage() {
                   </button>
                 ) : null}
               </>
-            ) : null}
+            ) : (
+              <>
+                <p className="muted empty-help">
+                  Aucun objet ne correspond aux filtres actuellement appliqués.
+                </p>
+                {canCreate ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setIntakeOpen(true)}
+                  >
+                    Importer des fichiers
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn btn-small btn-ghost"
+                  onClick={() => {
+                    setSearch("");
+                    setStatusFilter("");
+                    setTypeFilter("");
+                    setMinSize("");
+                    setMaxSize("");
+                    setFromDate("");
+                    setToDate("");
+                    setSortField("created_at");
+                    setSortOrder("desc");
+                    void queryClient.invalidateQueries({ queryKey: ["objects"] });
+                    void queryClient.invalidateQueries({ queryKey: ["folders"] });
+                  }}
+                >
+                  Réinitialiser les filtres
+                </button>
+              </>
+            )}
           </div>
         ) : (
           <>
@@ -3092,6 +3130,7 @@ export function ObjectsPage() {
                       type="button"
                       className="folder-open"
                       onClick={() => setCurrentFolderId(folder.id)}
+                      title={`Ouvrir le dossier « ${folder.name} »`}
                     >
                       <span className="folder-icon" aria-hidden="true">
                         <FolderMark />
@@ -3187,34 +3226,38 @@ export function ObjectsPage() {
                     <RowMenu
                       label={`Actions pour ${item.display_name}`}
                       items={[
-                        { label: "Détails", onSelect: () => setDetails(item) },
+                        { label: "Détails", onSelect: () => setDetails(item), title: `Voir les détails de "${item.display_name}"` },
                         ...(item.status === "available" && isPreviewable(item.content_type)
-                          ? [{ label: "Aperçu", onSelect: () => setPreviewTarget(item) }]
+                          ? [{ label: "Aperçu", onSelect: () => setPreviewTarget(item), title: `Aperçu de "${item.display_name}"` }]
                           : []),
                         {
                           label: "Télécharger",
                           disabled:
                             item.status !== "available" || downloadingId !== null,
                           onSelect: () => void handleDownload(item),
+                          title: `Télécharger "${item.display_name}"`,
                         },
                         ...(canShare && item.status === "available"
                           ? [{
                               label: "Partager",
                               onSelect: () =>
                                 setShareTarget({ kind: "object" as const, item }),
+                              title: `Partager "${item.display_name}"`,
                             }]
                           : []),
                         ...(canShare && item.status === "available"
-                          ? [{ label: "Publier", onSelect: () => setPublishTarget(item) }]
+                          ? [{ label: "Publier", onSelect: () => setPublishTarget(item), title: `Publier "${item.display_name}"` }]
                           : []),
                         {
                           label: "Copier la référence",
                           onSelect: () => void handleCopyReference(item),
+                          title: `Copier la référence de "${item.display_name}"`,
                         },
                         {
                           label: "Déplacer",
                           disabled: rowBusy,
                           onSelect: () => setMoveObjectTarget(item),
+                          title: `Déplacer "${item.display_name}"`,
                         },
                         ...(item.status === "pending"
                           ? [
@@ -3248,6 +3291,7 @@ export function ObjectsPage() {
                                 label: "Restaurer",
                                 disabled: objectBusy,
                                 onSelect: () => restoreMutation.mutate(item.id),
+                                title: `Restaurer "${item.display_name}"`,
                               },
                             ]
                           : []),
@@ -3271,6 +3315,7 @@ export function ObjectsPage() {
                               danger: true,
                               onConfirm: () => deleteObjectMutation.mutate(item.id),
                             }),
+                          title: `Supprimer "${item.display_name}"`,
                         },
                         ...(canPurge
                           ? [
@@ -3278,6 +3323,7 @@ export function ObjectsPage() {
                                 label: "Purger définitivement",
                                 danger: true,
                                 disabled: objectBusy,
+                                title: `Purger définitivement "${item.display_name}"`,
                                 // Master mode: no confirmation per item.
                                 onSelect: () =>
                                   master.active

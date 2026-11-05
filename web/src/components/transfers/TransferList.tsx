@@ -388,27 +388,45 @@ function TransferRow({
 
   const actions: RowMenuItem[] = [];
   if (canPauseItem(item)) {
-    actions.push({ label: "Mettre en pause", onSelect: () => onPause(item.id) });
+    actions.push({
+      label: "Mettre en pause",
+      onSelect: () => onPause(item.id),
+      title: "Mettre en pause ce transfert",
+    });
   }
   if (canResumeItem(item)) {
-    actions.push({ label: "Reprendre", onSelect: () => onResume(item.id) });
+    actions.push({
+      label: "Reprendre",
+      onSelect: () => onResume(item.id),
+      title: "Reprendre ce transfert",
+    });
   }
   if (canCancelItem(item)) {
     actions.push({
       label: "Annuler",
       danger: true,
       onSelect: () => onCancel(item.id),
+      title: "Annuler ce transfert",
     });
   }
   if (canRetryItem(item)) {
-    actions.push({ label: "Réessayer", onSelect: () => onRetry(item.id) });
+    actions.push({
+      label: "Réessayer",
+      onSelect: () => onRetry(item.id),
+      title: "Réessayer ce transfert",
+    });
   }
-  actions.push({ label: "Détails", onSelect: () => onDetails(item.id) });
+  actions.push({
+    label: "Détails",
+    onSelect: () => onDetails(item.id),
+    title: "Voir les détails de ce transfert",
+  });
   if (status === "completed" && item.objectId) {
     const objectId = item.objectId;
     actions.push({
       label: "Ouvrir le fichier",
       onSelect: () => onOpen(objectId),
+      title: "Ouvrir le fichier",
     });
   }
 

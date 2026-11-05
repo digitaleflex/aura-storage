@@ -114,6 +114,15 @@ export function SharesPage() {
               Vous n'avez aucun objet à partager. Importez des fichiers depuis la
               page Fichiers, puis revenez ici pour cr&eacute;er des liens publics.
             </p>
+            <div className="shares-empty-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => navigate({ to: "/" })}
+              >
+                Aller aux fichiers
+              </button>
+            </div>
           </section>
         ) : null}
 
