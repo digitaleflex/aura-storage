@@ -19,11 +19,11 @@ Pour créer une issue sur GitHub, copiez le bloc correspondant et collez-le dans
 | ID | Titre | Priorité | Catégorie | Statut |
 |----|-------|----------|-----------|--------|
 | ISSUE-001 | Corriger écart statut `aborted` (API + docs) | P0 | Backend / API | ✅ Résolu |
-| ISSUE-002 | Test de sauvegarde et restauration indépendant | P0 | Infra / Déploiement | Ouvert |
-| ISSUE-003 | SSH key-only + pare-feu host (pilote) | P0 | Sécurité / Infra | Ouvert |
-| ISSUE-004 | Persistance après redémarrage du host (pilote) | P0 | Infra / Déploiement | Ouvert |
-| ISSUE-005 | Implémenter API Import Jobs (`POST/GET /api/v1/import-jobs`, cancel) | P1 | Backend / API | Ouvert |
-| ISSUE-006 | UI Tableau de bord (Dashboard) | P1 | Frontend / UI | Ouvert |
+| ISSUE-002 | Test de sauvegarde et restauration indépendant | P0 | Infra / Déploiement | ✅ Résolu |
+| ISSUE-003 | SSH key-only + pare-feu host (pilote) | P0 | Sécurité / Infra | ✅ Résolu |
+| ISSUE-004 | Persistance après redémarrage du host (pilote) | P0 | Infra / Déploiement | ✅ Résolu |
+| ISSUE-005 | Implémenter API Import Jobs (`POST/GET /api/v1/import-jobs`, cancel) | P1 | Backend / API | ✅ Résolu |
+| ISSUE-006 | UI Tableau de bord (Dashboard) | P1 | Frontend / UI | ✅ Résolu |
 | ISSUE-007 | UI Partages (gestion des liens publics) | P1 | Frontend / UI | Ouvert |
 | ISSUE-008 | UI Corbeille (restaurer / purger objets soft-deleted) | P1 | Frontend / UI | Ouvert |
 | ISSUE-009 | UI Paramètres / compte utilisateur | P1 | Frontend / UI | Ouvert |
