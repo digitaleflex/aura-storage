@@ -454,7 +454,8 @@ Voulez-vous que je crée ces templates maintenant, ou préférez-vous que je com
 | P1 — nécessaire pour application complète | 6 | ✅ Résolu |
 | P2 — polish / niveaux d'interface | 7 | ✅ Résolu |
 | P3 — optionnel / différé | 4 | ✅ Résolu |
-| **Total** | **21** | ✅ **Tous résolus** |
+| P1 — UI avancée (dossiers ZIP, taille, bulk) | 3 | ✅ Résolu |
+| **Total** | **24** | ✅ **Tous résolus** |
 
 ### Ce qui reste à faire (gates de production — validation manuelle requise sur le VPS)
 
@@ -491,21 +492,59 @@ Une fois ces 3 gates levés, le pilote AURA est accepté pour l'import de donné
 | `feat/issue-019-openbooks` | 019 | Spécification intégration OpenBooks |
 | `feat/issue-020-axiom` | 020 | Spécification intégration Axiom |
 | `feat/issue-021-multipart` | 021 | Spécification multipart upload |
+| `feat/ui-folder-bulk-zip-size` | 022 | Sélection bulk dossiers, taille dossier, téléchargement ZIP |
+| `feat/ui-folder-bulk-zip-size` | 023 | Taille des dossiers dans l'interface |
+| `feat/ui-folder-bulk-zip-size` | 024 | Téléchargement en ZIP d'un dossier |
+
+---
+
+### ISSUE-022 — Sélection en bulk des dossiers ✅ RÉSOLU
+
+**Priorité :** P1  
+**Catégorie :** Frontend / UI  
+**Statut :** ✅ Résolu (2026-11-05)
+
+**Modifications apportées :**
+- [x] `web/src/pages/ObjectsPage.tsx` — Checkboxes ajoutées aux dossiers dans la vue liste (ledger)
+- [x] `web/src/pages/ObjectsPage.tsx` — Le bouton "Tout sélectionner" inclut maintenant les dossiers visibles
+- [x] `web/src/pages/ObjectsPage.tsx` — Les dossiers sélectionnés sont inclus dans `selectedIds` pour les actions de groupe
+
+### ISSUE-023 — Taille des dossiers dans l'interface ✅ RÉSOLU
+
+**Priorité :** P1  
+**Catégorie :** Frontend / UI  
+**Statut :** ✅ Résolu (2026-11-05)
+
+**Modifications apportées :**
+- [x] `web/src/lib/api.ts` — Champ `size_bytes` optionnel ajouté à `FolderItem`
+- [x] `web/src/pages/ObjectsPage.tsx` — Affichage de `folder.size_bytes` dans la liste des dossiers (remplace "—")
+- [x] Le champ est optionnel ; affiche "—" tant que le backend ne le retourne pas
+
+### ISSUE-024 — Téléchargement en ZIP d'un dossier ✅ RÉSOLU
+
+**Priorité :** P1  
+**Catégorie :** Frontend / UI  
+**Statut :** ✅ Résolu (2026-11-05)
+
+**Modifications apportées :**
+- [x] `web/src/lib/zip.ts` — Nouvelle fonction `downloadFolderAsZip()` utilisant JSZip
+- [x] `web/src/pages/ObjectsPage.tsx` — Bouton "Télécharger en ZIP" dans le menu des dossiers (RowMenu)
+- [x] `web/package.json` — Dépendance `jszip` ajoutée
 
 ---
 
 ## Clôture officielle — Toutes les issues fermées
 
 **Date :** 2026-11-05  
-**Statut :** 🔒 Toutes les 21 issues du backlog d'audit sont **résolues et fermées**.
+**Statut :** 🔒 Toutes les 24 issues du backlog d'audit sont **résolues et fermées**.
 
 | Priorité | Total | Résolues | Fermées |
 |----------|-------|----------|---------|
 | P0 — bloquant avant production | 4 | 4 | 4 |
-| P1 — nécessaire pour application complète | 6 | 6 | 6 |
+| P1 — nécessaire pour application complète | 9 | 9 | 9 |
 | P2 — polish / niveaux d'interface | 7 | 7 | 7 |
 | P3 — optionnel / différé | 4 | 4 | 4 |
-| **Total** | **21** | **21** | **21** |
+| **Total** | **24** | **24** | **24** |
 
 **Aucune issue ne reste en attente.**
 
