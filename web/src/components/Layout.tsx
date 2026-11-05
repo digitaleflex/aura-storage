@@ -287,6 +287,33 @@ export function Layout({ children }: { children: React.ReactNode }) {
               </span>
             ) : null}
           </Link>
+          {/* Entrée : Tableau de bord — vue d'agrégation de l'espace. */}
+          <Link
+            to="/dashboard"
+            activeOptions={{ exact: true }}
+            className={
+              location.pathname === "/dashboard"
+                ? "nav-link nav-link-active"
+                : "nav-link"
+            }
+            onClick={() => toggleSidebar(false)}
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 12h4l2-6 4 12 2-6h6" />
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+            </svg>
+            Tableau de bord
+          </Link>
           <Link
             to="/diagnostic"
             activeOptions={{ exact: true }}
@@ -429,6 +456,33 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     {transfers.queue.items.length}
                   </span>
                 ) : null}
+              </Link>
+              {/* Entrée : Tableau de bord (mobile). */}
+              <Link
+                to="/dashboard"
+                activeOptions={{ exact: true }}
+                className={
+                  location.pathname === "/dashboard"
+                    ? "nav-link nav-link-active"
+                    : "nav-link"
+                }
+                onClick={() => closeMobile(false)}
+              >
+                <svg
+                  aria-hidden="true"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M3 12h4l2-6 4 12 2-6h6" />
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                </svg>
+                Tableau de bord
               </Link>
               <Link
                 to="/diagnostic"
