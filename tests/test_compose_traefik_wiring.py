@@ -81,5 +81,6 @@ def test_share_router_is_reachable_past_the_spa(
     assert labels is not None, "the public share router disappeared"
     share = _index(labels, ROUTER)["aura-share"]
     assert "PathPrefix(`/s/`)" in share.get("rule", "")
+    assert "PathPrefix(`/f/`)" in share.get("rule", "")
     assert share.get("service") == "aura-share"
     assert int(share.get("priority", "0")) > 0

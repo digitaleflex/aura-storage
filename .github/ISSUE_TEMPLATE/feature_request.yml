@@ -1,0 +1,74 @@
+name: Feature request
+description: Proposez une nouvelle fonctionnalité pour AURA Storage
+title: "[Feature] "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de proposer une amélioration pour AURA Storage. Remplissez les champs ci-dessous.
+  - type: input
+    id: issue-ref
+    attributes:
+      label: Référence issue (ISSUE-XXX)
+      description: Référence dans docs/ISSUES-AUDIT-2026-11.md si applicable
+      placeholder: "ex: ISSUE-006"
+    validations:
+      required: false
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priorité
+      description: Priorité d'implémentation
+      options:
+        - P0 — bloquant avant production
+        - P1 — nécessaire pour application complète
+        - P2 — polish / niveaux d'interface
+        - P3 — optionnel / différé
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Catégorie
+      options:
+        - Backend / API
+        - Frontend / UI
+        - Frontend / Performance
+        - Frontend / Accessibilité
+        - Infra / Déploiement
+        - Sécurité / Infra
+        - Intégration
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description de la fonctionnalité
+      description: Décrivez clairement ce que vous voulez ajouter.
+      placeholder: "En tant que ..., je veux ..., afin de ..."
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation / Contexte
+      description: Pourquoi cette fonctionnalité est-elle nécessaire ?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Critères d'acceptation
+      description: Liste des conditions pour considérer l'issue comme résolue.
+      placeholder: "- [ ] Critère 1\n- [ ] Critère 2"
+    validations:
+      required: false
+  - type: textarea
+    id: files
+    attributes:
+      label: Fichiers concernés
+      description: Fichiers du dépôt susceptibles d'être modifiés.
+    validations:
+      required: false

@@ -483,6 +483,46 @@ export interface SharesListResponse {
   items: ObjectShare[];
 }
 
+/**
+ * A public, read-only share link for a folder subtree. Same one-time-token
+ * model as ObjectShare; `use_count` counts file downloads, not page views.
+ */
+export interface FolderShare {
+  id: string;
+  folder_id: string;
+  created_by: string;
+  created_by_kind: string;
+  created_at: number;
+  expires_at: number;
+  max_uses: number | null;
+  use_count: number;
+  last_used_at: number | null;
+  revoked_at: number | null;
+  /** Computed by the server (expiry, exhaustion, revocation). */
+  active: boolean;
+}
+
+export interface FolderSharesListResponse {
+  items: FolderShare[];
+}
+
+/** Body of POST /folders/{id}/share. Subfolders are always included. */
+export interface FolderShareCreateInput {
+  expires_in?: number;
+  max_uses?: number | null;
+}
+
+/** Creation response for a folder link; `url` is `/f/<token>` when relative. */
+export interface FolderShareCreateResponse {
+  id: string;
+  folder_id: string;
+  url: string;
+  token: string;
+  expires_in: number;
+  expires_at: number;
+  max_uses: number | null;
+}
+
 /** Body of POST /objects/{id}/share. Expiry is always bounded by the server. */
 export interface ShareCreateInput {
   expires_in?: number;
@@ -889,6 +929,38 @@ export const api = {
   ): Promise<{ id: string; revoked: boolean; revoked_at: number }> {
     return request<{ id: string; revoked: boolean; revoked_at: number }>(
       `/api/v1/objects/${encodeURIComponent(id)}/shares/${encodeURIComponent(shareId)}`,
+      { method: "DELETE", csrf },
+    );
+  },
+
+  // --- Public folder share links (mint/revoke are human-only) ---
+  /** Mint one link for a folder and its subfolders; the token is shown once. */
+  createFolderShare(
+    id: string,
+    input: FolderShareCreateInput,
+    csrf: string,
+  ): Promise<FolderShareCreateResponse> {
+    return request<FolderShareCreateResponse>(
+      `/api/v1/folders/${encodeURIComponent(id)}/share`,
+      { method: "POST", body: input, csrf },
+    );
+  },
+
+  /** Links created for one folder, without their tokens. */
+  listFolderShares(id: string): Promise<FolderSharesListResponse> {
+    return request<FolderSharesListResponse>(
+      `/api/v1/folders/${encodeURIComponent(id)}/shares`,
+    );
+  },
+
+  /** Revoke a folder link immediately; idempotent on the server. */
+  revokeFolderShare(
+    id: string,
+    shareId: string,
+    csrf: string,
+  ): Promise<{ id: string; revoked: boolean; revoked_at: number }> {
+    return request<{ id: string; revoked: boolean; revoked_at: number }>(
+      `/api/v1/folders/${encodeURIComponent(id)}/shares/${encodeURIComponent(shareId)}`,
       { method: "DELETE", csrf },
     );
   },

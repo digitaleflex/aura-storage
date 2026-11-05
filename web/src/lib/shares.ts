@@ -1,5 +1,3 @@
-import type { ObjectShare } from "./api";
-
 /**
  * Content types the API allows with `Content-Disposition: inline` on a share
  * link (mirror of SAFE_INLINE_TYPES in api/shares.py). Active documents (HTML,
@@ -50,11 +48,19 @@ export function absoluteShareUrl(url: string, origin: string): string {
 
 export type ShareState = "active" | "revoked" | "expired" | "exhausted";
 
+/** The subset of a share link that decides whether it still works. */
+export interface ShareStateInput {
+  revoked_at: number | null;
+  expires_at: number;
+  max_uses: number | null;
+  use_count: number;
+}
+
 /**
  * Why a link is usable or not. The server sends an authoritative `active` flag;
  * this only names the reason for the UI, in the same precedence order.
  */
-export function shareState(share: ObjectShare, now: number): ShareState {
+export function shareState(share: ShareStateInput, now: number): ShareState {
   if (share.revoked_at !== null) return "revoked";
   if (share.expires_at <= now) return "expired";
   if (share.max_uses !== null && share.use_count >= share.max_uses) return "exhausted";

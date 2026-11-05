@@ -159,6 +159,18 @@ so the format is enforced in code, not in DDL.
   `last_used_at`, `created_at`. `max_uses` is enforced inside the redemption
   UPDATE, so concurrent redemptions cannot exceed it.
 
+### FolderShare (implemented)
+- Same capability model as `ObjectShare`, scoped to `folder_id` and its whole
+  subtree (subfolders are always included).
+- `folder_id`: **no foreign key on purpose**. Deleting a folder must not be
+  blocked by a link; the share row becomes inert and answers 404.
+- `space_id`, `created_by`, `created_by_kind`, `token_hash`, `expires_at`,
+  `max_uses`, `use_count`, `revoked_at`, `last_used_at`, `created_at`. There is
+  no `content_disposition`: each file is served inline when its type is safe and
+  as an attachment otherwise (or when `?download=1` is requested).
+- `use_count` counts file downloads, not page views of the listing. Featured in
+  `docs/FOLDER-SHARING.md`.
+
 ## Proposal (not implemented)
 
 ### ImportJob

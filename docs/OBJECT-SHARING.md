@@ -124,8 +124,9 @@ history is never rewritten); the object's bytes were only read.
    `objects:share` capability for machines — and is **not** done here.
 2. **An admin cannot revoke another user's links**, for the same reason: no admin
    route reaches another user's objects today.
-3. **No UI yet.** The web client does not expose sharing; the API and the links
-   are usable as documented above.
+3. **A link covers exactly one object.** To hand over a whole folder tree, use a
+   [folder share link](FOLDER-SHARING.md) (`/f/<token>`), which lists files and
+   redirects each download to its own presigned GET.
 
 ## Deployment and rollback
 

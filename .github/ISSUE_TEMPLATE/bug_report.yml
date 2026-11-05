@@ -1,0 +1,89 @@
+name: Bug report
+description: Create a report to help us improve AURA Storage
+title: "[Bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de signaler un bug sur AURA Storage. Remplissez les champs ci-dessous.
+  - type: input
+    id: issue-ref
+    attributes:
+      label: Référence issue (ISSUE-XXX)
+      description: Référence dans docs/ISSUES-AUDIT-2026-11.md si applicable
+      placeholder: "ex: ISSUE-001"
+    validations:
+      required: false
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priorité
+      description: Priorité de correction
+      options:
+        - P0 — bloquant avant production
+        - P1 — nécessaire pour application complète
+        - P2 — polish / niveaux d'interface
+        - P3 — optionnel / différé
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Catégorie
+      options:
+        - Backend / API
+        - Frontend / UI
+        - Frontend / Performance
+        - Frontend / Accessibilité
+        - Infra / Déploiement
+        - Sécurité / Infra
+        - Intégration
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description du bug
+      description: Décrivez clairement le problème.
+      placeholder: "Que se passe-t-il ? Que attendiez-vous ?"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Étapes pour reproduire
+      description: Décrivez les étapes pour reproduire le bug.
+      placeholder: "1. Aller sur ... 2. Cliquer sur ... 3. Voir l'erreur"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportement attendu
+      description: Que devriez-vous voir ?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Comportement observé
+      description: Que voyez-vous réellement ?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environnement
+      description: Navigateur, OS, version de l'application, URL
+      placeholder: "Chrome 120, Ubuntu 26.04, AURA v..., https://app.aura.example.com"
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / captures d'écran
+      description: Collez ici les logs pertinents ou ajoutez des captures.
+    validations:
+      required: false

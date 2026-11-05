@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import type {
+  FolderItem,
+  FolderShare,
   ObjectItem,
   ObjectShare,
   ShareCreateInput,
-  ShareCreateResponse,
 } from "../lib/api";
 import { describeError } from "../lib/errors";
 import {
@@ -40,49 +41,111 @@ function formatDate(epoch: number): string {
   return Number.isFinite(epoch) && epoch > 0 ? DATE_FORMAT.format(new Date(epoch * 1000)) : "—";
 }
 
-function usesLabel(share: ObjectShare): string {
-  const used = `${share.use_count} utilisation${share.use_count > 1 ? "s" : ""}`;
+function usesLabel(share: ShareLink, isFolder: boolean): string {
+  const noun = isFolder ? "téléchargement" : "utilisation";
+  const used = `${share.use_count} ${noun}${share.use_count > 1 ? "s" : ""}`;
   return share.max_uses === null ? `${used} · illimité` : `${used} / ${share.max_uses}`;
 }
 
+/** One file or one folder can be shared; the dialog adapts to both. */
+export type ShareTarget =
+  | { kind: "object"; item: ObjectItem }
+  | { kind: "folder"; folder: FolderItem };
+
+/** Common shape of an object link and a folder link, for the list below. */
+interface ShareLink {
+  id: string;
+  created_at: number;
+  expires_at: number;
+  max_uses: number | null;
+  use_count: number;
+  last_used_at: number | null;
+  revoked_at: number | null;
+  active: boolean;
+  /** null for a folder link (each file picks its own safe disposition). */
+  content_disposition: "attachment" | "inline" | null;
+}
+
+/** The freshly minted link, normalized from either creation response. */
+interface CreatedLink {
+  id: string;
+  url: string;
+  expires_at: number;
+  max_uses: number | null;
+  content_disposition: "attachment" | "inline" | null;
+}
+
+function toLink(share: ObjectShare | FolderShare): ShareLink {
+  return {
+    id: share.id,
+    created_at: share.created_at,
+    expires_at: share.expires_at,
+    max_uses: share.max_uses,
+    use_count: share.use_count,
+    last_used_at: share.last_used_at,
+    revoked_at: share.revoked_at,
+    active: share.active,
+    content_disposition:
+      "content_disposition" in share ? share.content_disposition : null,
+  };
+}
+
 /**
- * Create and revoke public share links for one object.
+ * Create and revoke public share links for one file or one folder subtree.
  *
  * The token is returned by the API exactly once, so the freshly minted link is
  * the only chance to copy it: the list below (which only carries the stored
  * fingerprint) can revoke a link but never display it again. Creation and
  * revocation are human-only server-side; the caller only opens this dialog for
- * a human session on an available object.
+ * a human session on an object/folder the user owns.
  */
 export function ShareDialog({
-  item,
+  target,
   csrf,
   onClose,
   onNotify,
 }: {
-  item: ObjectItem | null;
+  target: ShareTarget | null;
   csrf: string | null;
   onClose: () => void;
   onNotify: (kind: "ok" | "error", text: string) => void;
 }) {
-  const open = item !== null;
+  const open = target !== null;
+  const kind = target?.kind ?? null;
+  const targetId =
+    target === null ? null : target.kind === "object" ? target.item.id : target.folder.id;
+  const targetName =
+    target === null
+      ? ""
+      : target.kind === "object"
+        ? target.item.display_name
+        : target.folder.name;
+  const isFolder = kind === "folder";
+
   const queryClient = useQueryClient();
   const [expiresIn, setExpiresIn] = useState("86400");
   const [maxUses, setMaxUses] = useState("");
   const [disposition, setDisposition] = useState<"attachment" | "inline">("attachment");
-  const [created, setCreated] = useState<ShareCreateResponse | null>(null);
+  const [created, setCreated] = useState<CreatedLink | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
 
-  const sharesQuery = useQuery({
-    queryKey: ["object-shares", item?.id],
-    queryFn: () => api.listShares(item!.id),
+  const linksQuery = useQuery({
+    queryKey: ["share-links", kind, targetId],
+    queryFn: async (): Promise<ShareLink[]> => {
+      if (target === null) return [];
+      const response =
+        target.kind === "folder"
+          ? await api.listFolderShares(target.folder.id)
+          : await api.listShares(target.item.id);
+      return response.items.map((share) => toLink(share));
+    },
     enabled: open,
     retry: false,
   });
 
-  // Fresh dialog per object: never show one file's link while opening another.
+  // Fresh dialog per target: never show one file's link while opening another.
   useEffect(() => {
     setCreated(null);
     setError(null);
@@ -91,16 +154,51 @@ export function ShareDialog({
     setDisposition("attachment");
     setExpiresIn("86400");
     setMaxUses("");
-  }, [item?.id]);
+  }, [kind, targetId]);
+
+  const links = useMemo(() => linksQuery.data ?? [], [linksQuery.data]);
 
   function invalidate() {
-    void queryClient.invalidateQueries({ queryKey: ["object-shares", item?.id] });
+    void queryClient.invalidateQueries({ queryKey: ["share-links", kind, targetId] });
   }
 
   const createMutation = useMutation({
-    mutationFn: (input: ShareCreateInput) => {
-      if (!item || !csrf) throw new Error("Session expirée.");
-      return api.createShare(item.id, input, csrf);
+    mutationFn: async (input: {
+      expiresIn: number;
+      maxUses: number | null;
+      disposition: "attachment" | "inline";
+    }): Promise<CreatedLink> => {
+      if (!target || !csrf) throw new Error("Session expirée.");
+      if (target.kind === "folder") {
+        const folderShare = await api.createFolderShare(
+          target.folder.id,
+          { expires_in: input.expiresIn, max_uses: input.maxUses },
+          csrf,
+        );
+        return {
+          id: folderShare.id,
+          url: folderShare.url,
+          expires_at: folderShare.expires_at,
+          max_uses: folderShare.max_uses,
+          content_disposition: null,
+        };
+      }
+      const objectShare = await api.createShare(
+        target.item.id,
+        {
+          expires_in: input.expiresIn,
+          max_uses: input.maxUses,
+          content_disposition: input.disposition,
+        } satisfies ShareCreateInput,
+        csrf,
+      );
+      return {
+        id: objectShare.id,
+        url: objectShare.url,
+        expires_at: objectShare.expires_at,
+        max_uses: objectShare.max_uses,
+        content_disposition: objectShare.content_disposition,
+      };
     },
     onSuccess: (result) => {
       setCreated({
@@ -118,9 +216,12 @@ export function ShareDialog({
   });
 
   const revokeMutation = useMutation({
-    mutationFn: (shareId: string) => {
-      if (!item || !csrf) throw new Error("Session expirée.");
-      return api.revokeShare(item.id, shareId, csrf);
+    mutationFn: async (shareId: string) => {
+      if (!target || !csrf) throw new Error("Session expirée.");
+      if (target.kind === "folder") {
+        return api.revokeFolderShare(target.folder.id, shareId, csrf);
+      }
+      return api.revokeShare(target.item.id, shareId, csrf);
     },
     onSuccess: (_result, shareId) => {
       setConfirmRevokeId(null);
@@ -146,12 +247,13 @@ export function ShareDialog({
     }
   }
 
-  const inlineAllowed = canShareInline(item?.content_type);
+  const inlineAllowed =
+    !isFolder && target?.kind === "object" && canShareInline(target.item.content_type);
   const creating = createMutation.isPending;
   const now = Math.floor(Date.now() / 1000);
 
   return (
-    <Dialog open={open} title={item ? `Partager — ${item.display_name}` : "Partager"} onClose={onClose}>
+    <Dialog open={open} title={target ? `Partager — ${targetName}` : "Partager"} onClose={onClose}>
       {created ? (
         <div className="share-created" role="status">
           <strong>Lien créé. Copiez-le maintenant : il ne sera plus affiché.</strong>
@@ -170,8 +272,12 @@ export function ShareDialog({
           <p className="muted">
             Expire le {formatDate(created.expires_at)}
             {created.max_uses === null
-              ? " · utilisations illimitées"
-              : ` · ${created.max_uses} utilisation${created.max_uses > 1 ? "s" : ""} maximum`}
+              ? isFolder
+                ? " · téléchargements illimités"
+                : " · utilisations illimitées"
+              : isFolder
+                ? ` · ${created.max_uses} téléchargement${created.max_uses > 1 ? "s" : ""} maximum`
+                : ` · ${created.max_uses} utilisation${created.max_uses > 1 ? "s" : ""} maximum`}
             .
           </p>
           {copyError ? (
@@ -191,9 +297,9 @@ export function ShareDialog({
             return;
           }
           createMutation.mutate({
-            expires_in: Number(expiresIn),
-            max_uses: maxUses === "" ? null : Number(maxUses),
-            content_disposition: disposition,
+            expiresIn: Number(expiresIn),
+            maxUses: maxUses === "" ? null : Number(maxUses),
+            disposition,
           });
         }}
       >
@@ -209,34 +315,40 @@ export function ShareDialog({
             </select>
           </label>
           <label className="field">
-            <span>Utilisations maximum</span>
+            <span>{isFolder ? "Téléchargements maximum" : "Utilisations maximum"}</span>
             <select value={maxUses} onChange={(e) => setMaxUses(e.target.value)}>
               {MAX_USES_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
-                  {option.label}
+                  {isFolder
+                    ? option.label.replace("utilisation", "téléchargement")
+                    : option.label}
                 </option>
               ))}
             </select>
           </label>
-          <label className="field">
-            <span>À l'ouverture</span>
-            <select
-              value={disposition}
-              onChange={(e) => setDisposition(e.target.value as "attachment" | "inline")}
-            >
-              <option value="attachment">Télécharger le fichier</option>
-              {inlineAllowed ? (
-                <option value="inline">Afficher dans le navigateur</option>
-              ) : null}
-            </select>
-          </label>
+          {!isFolder ? (
+            <label className="field">
+              <span>À l'ouverture</span>
+              <select
+                value={disposition}
+                onChange={(e) => setDisposition(e.target.value as "attachment" | "inline")}
+              >
+                <option value="attachment">Télécharger le fichier</option>
+                {inlineAllowed ? (
+                  <option value="inline">Afficher dans le navigateur</option>
+                ) : null}
+              </select>
+            </label>
+          ) : null}
         </div>
         <p className="muted share-hint">
-          Un lien donne accès à ce fichier sans compte AURA. Révoquez-le dès qu'il
-          n'est plus utile.
-          {inlineAllowed
-            ? ""
-            : " Ce type de fichier est partagé en téléchargement uniquement."}
+          {isFolder
+            ? "Un lien donne accès à ce dossier et à tous ses sous-dossiers, sans compte AURA. Chaque téléchargement compte comme une utilisation."
+            : "Un lien donne accès à ce fichier sans compte AURA."}{" "}
+          Révoquez-le dès qu'il n'est plus utile.
+          {!isFolder && !inlineAllowed
+            ? " Ce type de fichier est partagé en téléchargement uniquement."
+            : null}
         </p>
 
         {error ? (
@@ -261,22 +373,24 @@ export function ShareDialog({
 
       <section className="share-links" aria-labelledby="share-links-title">
         <h3 id="share-links-title">Liens créés</h3>
-        {sharesQuery.isLoading ? (
+        {linksQuery.isLoading ? (
           <p className="muted" role="status">
             Chargement des liens…
           </p>
         ) : null}
-        {sharesQuery.isError ? (
+        {linksQuery.isError ? (
           <p className="alert alert-error" role="alert">
-            {describeError(sharesQuery.error, "Liste des liens indisponible.")}
+            {describeError(linksQuery.error, "Liste des liens indisponible.")}
           </p>
         ) : null}
-        {sharesQuery.data && sharesQuery.data.items.length === 0 ? (
-          <p className="muted">Aucun lien pour ce fichier.</p>
+        {links.length === 0 && linksQuery.isSuccess ? (
+          <p className="muted">
+            Aucun lien pour {isFolder ? "ce dossier" : "ce fichier"}.
+          </p>
         ) : null}
-        {sharesQuery.data && sharesQuery.data.items.length > 0 ? (
+        {links.length > 0 ? (
           <ul className="share-list">
-            {[...sharesQuery.data.items]
+            {[...links]
               .sort((a, b) => b.created_at - a.created_at)
               .map((share) => {
                 const state = shareState(share, now);
@@ -289,9 +403,13 @@ export function ShareDialog({
                         {SHARE_STATE_LABELS[state]}
                       </span>
                       <span className="muted">
-                        {share.content_disposition === "inline" ? "Affichage" : "Téléchargement"}
+                        {share.content_disposition === null
+                          ? "Dossier"
+                          : share.content_disposition === "inline"
+                            ? "Affichage"
+                            : "Téléchargement"}
                         {" · "}
-                        {usesLabel(share)}
+                        {usesLabel(share, isFolder)}
                         {" · expire le "}
                         {formatDate(share.expires_at)}
                       </span>

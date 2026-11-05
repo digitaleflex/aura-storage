@@ -1,0 +1,66 @@
+name: Task
+description: Tâche technique ou de maintenance pour AURA Storage
+title: "[Task] "
+labels: ["task", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de créer une tâche pour AURA Storage. Remplissez les champs ci-dessous.
+  - type: input
+    id: issue-ref
+    attributes:
+      label: Référence issue (ISSUE-XXX)
+      description: Référence dans docs/ISSUES-AUDIT-2026-11.md si applicable
+      placeholder: "ex: ISSUE-002"
+    validations:
+      required: false
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priorité
+      description: Priorité d'exécution
+      options:
+        - P0 — bloquant avant production
+        - P1 — nécessaire pour application complète
+        - P2 — polish / niveaux d'interface
+        - P3 — optionnel / différé
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Catégorie
+      options:
+        - Backend / API
+        - Frontend / UI
+        - Frontend / Performance
+        - Frontend / Accessibilité
+        - Infra / Déploiement
+        - Sécurité / Infra
+        - Intégration
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description de la tâche
+      description: Décrivez clairement ce qu'il faut faire.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Critères d'acceptation
+      description: Liste des conditions pour considérer la tâche comme terminée.
+      placeholder: "- [ ] Critère 1\n- [ ] Critère 2"
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Fichiers concernés
+      description: Fichiers du dépôt susceptibles d'être modifiés.
+    validations:
+      required: false

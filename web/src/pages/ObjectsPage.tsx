@@ -49,6 +49,7 @@ import { RowMenu } from "../components/RowMenu";
 import { describeError } from "../lib/errors";
 import { PreviewModal } from "../components/PreviewModal";
 import { ShareDialog } from "../components/ShareDialog";
+import type { ShareTarget } from "../components/ShareDialog";
 import { PublishDialog } from "../components/PublishDialog";
 import { PacksDialog } from "../components/PacksDialog";
 import { TagsEditor } from "../components/TagsEditor";
@@ -438,7 +439,7 @@ export function ObjectsPage() {
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
   const [details, setDetails] = useState<ObjectItem | null>(null);
   const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
-  const [shareTarget, setShareTarget] = useState<ObjectItem | null>(null);
+  const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null);
   const [publishTarget, setPublishTarget] = useState<ObjectItem | null>(null);
   const [packsOpen, setPacksOpen] = useState(false);
   const [tagFilter, setTagFilter] = useState("");
@@ -2095,6 +2096,14 @@ export function ObjectsPage() {
 
   function folderMenuItems(folder: FolderItem) {
     return [
+      ...(canShare
+        ? [
+            {
+              label: "Partager",
+              onSelect: () => setShareTarget({ kind: "folder" as const, folder }),
+            },
+          ]
+        : []),
       {
         label: "Renommer",
         onSelect: () => {
@@ -3143,7 +3152,11 @@ export function ObjectsPage() {
                           onSelect: () => void handleDownload(item),
                         },
                         ...(canShare && item.status === "available"
-                          ? [{ label: "Partager", onSelect: () => setShareTarget(item) }]
+                          ? [{
+                              label: "Partager",
+                              onSelect: () =>
+                                setShareTarget({ kind: "object" as const, item }),
+                            }]
                           : []),
                         ...(canShare && item.status === "available"
                           ? [{ label: "Publier", onSelect: () => setPublishTarget(item) }]
@@ -3346,7 +3359,9 @@ export function ObjectsPage() {
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => setShareTarget(details)}
+                  onClick={() =>
+                    setShareTarget({ kind: "object" as const, item: details })
+                  }
                 >
                   Partager
                 </button>
@@ -3856,7 +3871,7 @@ export function ObjectsPage() {
         }}
       />
       <ShareDialog
-        item={shareTarget}
+        target={shareTarget}
         csrf={csrf}
         onClose={() => setShareTarget(null)}
         onNotify={notify}

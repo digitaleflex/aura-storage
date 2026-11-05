@@ -40,8 +40,12 @@ every operation is scoped to the owner. `GET /api/v1/folders?all=true` returns t
 whole tree as a flat list (each item carries `parent_id`) so a client rebuilds the
 hierarchy in one request.
 An object is filed or unfiled with `PATCH /api/v1/objects/{id}` (`folder_id`, null =
-root). Folder routes require a human session; space-scoped folders for service
-identities remain a follow-up (#35).
+root). A folder (and its whole subtree) can be handed to an anonymous recipient
+through a public, expiring, revocable link: `POST /api/v1/folders/{id}/share`
+returns the token once, `GET /f/{token}` serves the listing and each file answers
+a 302 to a presigned GET. Folder routes require a human session; space-scoped
+folders for service identities remain a follow-up (#35). See
+`docs/FOLDER-SHARING.md`.
 
 ### Administration registry (implemented, M04)
 Applications, spaces and buckets are managed through the `admin:*` routes
@@ -78,6 +82,7 @@ Track asynchronous bulk uploads/imports with a stable job ID, status (`queued`, 
 - `POST /api/v1/objects/{id}/download-intent` — authorize and return short-lived download URL.
 - `DELETE /api/v1/objects/{id}` — soft-delete first; permanent purge is a separate privileged operation.
 - `GET /api/v1/folders`, `POST /api/v1/folders`, `GET|PATCH|DELETE /api/v1/folders/{id}` — implemented (#61); see `docs/openapi.yaml`.
+- `POST /api/v1/folders/{id}/share`, `GET /api/v1/folders/{id}/shares`, `DELETE /api/v1/folders/{id}/shares/{sid}` — implemented public folder links; the public side is `GET /f/{token}` and `GET /f/{token}/o/{oid}`; see `docs/FOLDER-SHARING.md`.
 - `POST /api/v1/import-jobs`, `GET /api/v1/import-jobs/{id}`, `POST /api/v1/import-jobs/{id}/cancel`.
 
 The import-job endpoints above are proposals, not currently available routes. The exact request/response schemas and OpenAPI contract must be reviewed before implementation.
