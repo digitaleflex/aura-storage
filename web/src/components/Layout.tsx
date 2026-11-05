@@ -287,6 +287,34 @@ export function Layout({ children }: { children: React.ReactNode }) {
               </span>
             ) : null}
           </Link>
+          {/* Entrée : Partages — gestion des liens publics. */}
+          <Link
+            to="/shares"
+            activeOptions={{ exact: true }}
+            className={
+              location.pathname === "/shares"
+                ? "nav-link nav-link-active"
+                : "nav-link"
+            }
+            onClick={() => toggleSidebar(false)}
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M4 12v1a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-1" />
+              <path d="M12 4v16" />
+              <path d="M8 12h8" />
+            </svg>
+            Partages
+          </Link>
           <Link
             to="/diagnostic"
             activeOptions={{ exact: true }}
