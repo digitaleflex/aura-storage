@@ -594,6 +594,7 @@ class Repository:
     def list_objects(
         self, *, space_id: str, owner_id: Optional[str] = None,
         folder_id: Optional[str] = None, q: Optional[str] = None,
+        search: Optional[str] = None,
         status: Optional[str] = None, hide_deleted: bool = False,
         content_type: Optional[str] = None, tag: Optional[str] = None,
         min_size: Optional[int] = None, max_size: Optional[int] = None,
@@ -605,7 +606,8 @@ class Repository:
         # lockstep with the SQLite repository (M02).
         where, params = build_object_where(
             ph="%s", space_id=space_id, owner_id=owner_id, folder_id=folder_id,
-            q=q, status=status, hide_deleted=hide_deleted,
+            q=q, search=search,
+            status=status, hide_deleted=hide_deleted,
             content_type=content_type, tag=tag, min_size=min_size,
             max_size=max_size, created_after=created_after,
             created_before=created_before,
