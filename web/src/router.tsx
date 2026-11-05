@@ -10,6 +10,7 @@ import { FolderProvider } from "./lib/folderContext";
 import { LoginPage } from "./pages/LoginPage";
 import { ObjectsPage } from "./pages/ObjectsPage";
 import { TransfersPage } from "./pages/TransfersPage";
+import { TrashPage } from "./pages/TrashPage";
 import { lazy, Suspense } from "react";
 import { Loading } from "./components/Loading";
 import { RouteError } from "./components/RouteError";
@@ -74,6 +75,18 @@ const transfersRoute = createRoute({
   ),
 });
 
+const trashRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/trash",
+  component: () => (
+    <Layout>
+      <RequireAuth>
+        <TrashPage />
+      </RequireAuth>
+    </Layout>
+  ),
+});
+
 const diagRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/diagnostic",
@@ -93,6 +106,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   adminRoute,
   transfersRoute,
+  trashRoute,
   diagRoute,
 ]);
 
