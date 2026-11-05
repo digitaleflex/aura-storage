@@ -12,11 +12,16 @@ Ce document recense les **3 gates de production** qui doivent être validés man
 
 ### Procédure
 
-1. **Créer une sauvegarde complète :**
+1. **Créer une sauvegarde complète (en local sur le VPS pour l'instant) :**
    ```bash
    cd /opt/aura-storage
-   bash ./scripts/aura-backup.sh /var/lib/aura-storage/backups
+   bash ./scripts/aura-backup.sh /var/lib/aura-storage/backups 7
    ```
+   Le second argument (`7`) est le nombre de backups à garder (rotation automatique).
+
+   > ⚠️  Ce backup est stocké **en local sur le VPS** en attendant un serveur de secours.
+   > Dès qu'un serveur externe est disponible, copiez les archives vers celui-ci
+   > (rsync/scp/sftp). Ne laissez pas les backups uniquement sur le VPS de production.
 
 2. **Vérifier l'intégrité de l'archive :**
    ```bash
