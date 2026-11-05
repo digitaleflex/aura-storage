@@ -12,6 +12,7 @@ import { ObjectsPage } from "./pages/ObjectsPage";
 import { TransfersPage } from "./pages/TransfersPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { SharesPage } from "./pages/SharesPage";
+import { TrashPage } from "./pages/TrashPage";
 import { lazy, Suspense } from "react";
 import { Loading } from "./components/Loading";
 import { RouteError } from "./components/RouteError";
@@ -100,6 +101,18 @@ const sharesRoute = createRoute({
   ),
 });
 
+const trashRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/trash",
+  component: () => (
+    <Layout>
+      <RequireAuth>
+        <TrashPage />
+      </RequireAuth>
+    </Layout>
+  ),
+});
+
 const diagRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/diagnostic",
@@ -121,6 +134,7 @@ const routeTree = rootRoute.addChildren([
   transfersRoute,
   dashboardRoute,
   sharesRoute,
+  trashRoute,
   diagRoute,
 ]);
 
