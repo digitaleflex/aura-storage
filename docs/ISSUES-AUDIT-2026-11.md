@@ -556,21 +556,26 @@ Une fois ces 3 gates levés, le pilote AURA est accepté pour l'import de donné
 
 ---
 
-### ISSUE-026 — Barre de recherche globale prominente
+### ISSUE-026 — Barre de recherche globale prominente ✅ RÉSOLU
 
 **Priorité :** P1  
 **Catégorie :** Frontend / UI  
-**Statut :** Ouvert
+**Statut :** ✅ Résolu (2026-11-05)
 
-**Contexte :** La recherche est cachée dans les filtres, pas en évidence.
+**Modifications apportées :**
+- [x] `web/src/components/SearchBar.tsx` — Nouveau composant avec débounce (300ms), raccourci clavier `/`, liste déroulante des résultats
+- [x] `web/src/components/Layout.tsx` — Intégration de la SearchBar dans le header, visible sur toutes les pages
+- [x] `web/src/styles.css` — Styles pour la barre de recherche et les résultats déroulants
+- [x] Redirection vers la page Fichiers avec le paramètre `q` pré-rempli
 
-**Critères d'acceptation :**
-- [ ] Barre de recherche en haut de page, bien visible
-- [ ] Recherche dans les noms de fichiers et dossiers
-- [ ] Résultats affichés en temps réel (débounce)
-- [ ] Touche `/` pour focus rapide
-
-**Fichiers concernés :** `web/src/pages/ObjectsPage.tsx`, `web/src/components/SearchBar.tsx`
+**Fonctionnalités :**
+- Champ de recherche accessible depuis n'importe quelle page
+- Raccourci clavier `/` pour ouvrir/focus la recherche
+- Échap pour fermer
+- Débounce 300ms (pas de requête à chaque frappe)
+- Recherche dans les noms de fichiers et dossiers
+- Résultats affichés avec icône, nom, type et taille
+- Sélection d'un résultat redirige vers la page Fichiers avec le filtre appliqué
 
 ---
 
@@ -612,17 +617,17 @@ Une fois ces 3 gates levés, le pilote AURA est accepté pour l'import de donné
 ## Clôture officielle — État du backlog
 
 **Date :** 2026-11-05  
-**Statut :** 🔒 24 issues résolues et fermées — 4 nouvelles issues UI ouvertes (025-028).
+**Statut :** 🔒 25 issues résolues et fermées — 2 nouvelles issues UI ouvertes (027-028).
 
 | Priorité | Total | Résolues | Fermées | Ouvertes |
 |----------|-------|----------|---------|----------|
 | P0 — bloquant avant production | 4 | 4 | 4 | 0 |
-| P1 — nécessaire pour application complète | 12 | 9 | 9 | 3 |
+| P1 — nécessaire pour application complète | 12 | 10 | 10 | 2 |
 | P2 — polish / niveaux d'interface | 10 | 7 | 7 | 3 |
 | P3 — optionnel / différé | 4 | 4 | 4 | 0 |
-| **Total** | **30** | **24** | **24** | **6** |
+| **Total** | **30** | **25** | **25** | **5** |
 
-**4 issues en attente :** ISSUE-025 (onboarding), ISSUE-026 (recherche globale), ISSUE-027 (états vides), ISSUE-028 (tooltips).
+**2 issues en attente :** ISSUE-027 (états vides avec appel à l'action), ISSUE-028 (tooltips / aide contextuelle).
 
 ### Gates de production restants (validation manuelle sur le VPS)
 
