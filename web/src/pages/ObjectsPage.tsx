@@ -54,6 +54,7 @@ import { PublishDialog } from "../components/PublishDialog";
 import { PacksDialog } from "../components/PacksDialog";
 import { TagsEditor } from "../components/TagsEditor";
 import { ObjectAnalytics } from "../components/ObjectAnalytics";
+import { downloadFolderAsZip } from "../lib/zip";
 import {
   MasterModeBanner,
   MasterModeDialog,
@@ -2094,7 +2095,10 @@ export function ObjectsPage() {
   // search or filter narrows files only, so folders step aside meanwhile.
   const visibleFolders = hasActiveFilters ? [] : subfolders;
 
+  const [zippingFolderId, setZippingFolderId] = useState<string | null>(null);
+
   function folderMenuItems(folder: FolderItem) {
+    const isZipping = zippingFolderId === folder.id;
     return [
       ...(canShare
         ? [
@@ -2104,6 +2108,20 @@ export function ObjectsPage() {
             },
           ]
         : []),
+      {
+        label: "Télécharger en ZIP",
+        onSelect: async () => {
+          setZippingFolderId(folder.id);
+          try {
+            await downloadFolderAsZip(folder.id, csrf ?? "");
+          } catch (err) {
+            notify("error", describeError(err, "Impossible de créer l'archive ZIP."));
+          } finally {
+            setZippingFolderId(null);
+          }
+        },
+        disabled: isZipping || !csrf,
+      },
       {
         label: "Renommer",
         onSelect: () => {
@@ -3019,16 +3037,21 @@ export function ObjectsPage() {
                   type="checkbox"
                   aria-label="Tout sélectionner"
                   checked={
-                    selectableItems.length > 0 &&
-                    selectableItems.every((item) => selectedIds.has(item.id))
+                    (selectableItems.length + visibleFolders.length) > 0 &&
+                    selectableItems.every((item) => selectedIds.has(item.id)) &&
+                    visibleFolders.every((folder) => selectedIds.has(folder.id))
                   }
                   disabled={
-                    selectableItems.length === 0 || deleteManyMutation.isPending
+                    (selectableItems.length + visibleFolders.length) === 0 ||
+                    deleteManyMutation.isPending
                   }
                   onChange={(e) => {
                     if (e.target.checked) {
                       setSelectedIds(
-                        new Set(selectableItems.map((item) => item.id)),
+                        new Set([
+                          ...selectableItems.map((item) => item.id),
+                          ...visibleFolders.map((folder) => folder.id),
+                        ]),
                       );
                     } else {
                       setSelectedIds(new Set());
@@ -3043,37 +3066,58 @@ export function ObjectsPage() {
               {sortHeader("created_at")}
               <span aria-hidden="true" />
             </div>
-            {visibleFolders.map((folder) => (
-              <div className="ledger-row folder-row" role="listitem" key={folder.id}>
-                <div className="ledger-name">
-                  <span className="check-spacer" aria-hidden="true" />
-                  <button
-                    type="button"
-                    className="folder-open"
-                    onClick={() => setCurrentFolderId(folder.id)}
-                  >
-                    <span className="folder-icon" aria-hidden="true">
-                      <FolderMark />
+            {visibleFolders.map((folder) => {
+              const folderChecked = selectedIds.has(folder.id);
+              return (
+                <div className="ledger-row folder-row" role="listitem" key={folder.id}>
+                  <div className="ledger-name">
+                    <input
+                      type="checkbox"
+                      className="folder-check"
+                      aria-label={`Sélectionner le dossier ${folder.name}`}
+                      checked={folderChecked}
+                      disabled={deleteManyMutation.isPending}
+                      onChange={(e) => {
+                        setSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(folder.id);
+                          else next.delete(folder.id);
+                          return next;
+                        });
+                      }}
+                    />{" "}
+                    <button
+                      type="button"
+                      className="folder-open"
+                      onClick={() => setCurrentFolderId(folder.id)}
+                    >
+                      <span className="folder-icon" aria-hidden="true">
+                        <FolderMark />
+                      </span>
+                      <span className="folder-name">{folder.name}</span>
+                    </button>
+                  </div>
+                  <div className="ledger-meta">
+                    <span className="ledger-type">Dossier</span>
+                    <span className="ledger-size num">
+                      {folder.size_bytes != null
+                        ? formatBytes(folder.size_bytes)
+                        : "—"}
                     </span>
-                    <span className="folder-name">{folder.name}</span>
-                  </button>
+                    <span className="ledger-status" />
+                    <span className="ledger-date num">
+                      {formatDateTime(folder.created_at)}
+                    </span>
+                  </div>
+                  <div className="ledger-menu">
+                    <RowMenu
+                      label={`Actions pour le dossier ${folder.name}`}
+                      items={folderMenuItems(folder)}
+                    />
+                  </div>
                 </div>
-                <div className="ledger-meta">
-                  <span className="ledger-type">Dossier</span>
-                  <span className="ledger-size num">—</span>
-                  <span className="ledger-status" />
-                  <span className="ledger-date num">
-                    {formatDateTime(folder.created_at)}
-                  </span>
-                </div>
-                <div className="ledger-menu">
-                  <RowMenu
-                    label={`Actions pour le dossier ${folder.name}`}
-                    items={folderMenuItems(folder)}
-                  />
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {items.map((item) => {
               const rowBusy =
                 deletePendingId === item.id ||

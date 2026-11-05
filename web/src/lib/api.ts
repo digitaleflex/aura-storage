@@ -119,6 +119,8 @@ export interface FolderItem {
   name: string;
   parent_id: string | null;
   created_at: number;
+  /** Taille totale du dossier (octets), optionnelle selon l'endpoint appelé. */
+  size_bytes?: number;
 }
 
 export interface FolderCreateInput {
