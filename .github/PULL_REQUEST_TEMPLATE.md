@@ -1,34 +1,40 @@
-## Summary
-Describe the problem and the outcome.
+# Pull Request — AURA Storage
 
-## Scope
-- [ ] Changes are limited to this task.
-- [ ] Unrelated existing work is preserved.
-- [ ] No unsupported behavior or production state is claimed.
+## Résumé
 
-## Validation
-- Commands/tests run:
-- Actual results:
-- Checks not run and why:
+**Issue :** ISSUE-XXX — [titre de l'issue]  
+**Branche :** `feat/issue-XXX-…` → `main`  
+**Priorité :** P0 / P1 / P2 / P3  
+**Catégorie :** Backend / API / Frontend / UI / Infra / Sécurité / Docs
 
-## Security and data safety
-- [ ] No secrets, customer files, backups or production config included.
-- [ ] Authorization and least privilege reviewed where applicable.
-- [ ] No destructive production action was performed without explicit approval.
-- [ ] Data migration/rollback plan included if applicable.
+## Changements
 
-## Operational impact
-- Service impact:
-- Data/schema impact:
-- Rollback/recovery:
-- Approval gates remaining:
+- [ ] Description des fichiers modifiés
+- [ ] Nouvelle fonctionnalité / correction de bug / documentation
+- [ ] Tests ajoutés ou mis à jour
 
-## Documentation
-- [ ] Relevant documentation updated.
-- [ ] Verification evidence updated when operational state changed.
+## Tests exécutés
 
-## Reviewer checklist
-- [ ] Diff reviewed.
-- [ ] Tests and claims match actual evidence.
-- [ ] Required CI checks pass.
-- [ ] Security-sensitive changes received independent review.
+| Test | Résultat |
+|------|----------|
+| `pytest tests/test_*.py` (offline) | ✅ / ❌ / ⚠️ |
+| `npm run build` (web) | ✅ / ❌ / ⚠️ |
+| `npx tsc --noEmit` (web) | ✅ / ❌ / ⚠️ |
+
+## Vérifications
+
+- [ ] Contrat OpenAPI respecté (`tests/test_openapi_contract.py`)
+- [ ] Aucun secret committé (`.env`, clés, tokens)
+- [ ] Matrice d'autorisation mise à jour si nouvelle route
+- [ ] Documentation mise à jour (`docs/`)
+- [ ] Breaking change : oui / non
+
+## Notes pour le reviewer
+
+[Éventuelles remarques, zones d'attention, décisions prises]
+
+---
+
+**Gate de production :** cette PR est-elle bloquante avant mise en production ?  
+- [ ] Oui (P0) — nécessite validation manuelle sur le VPS (backup, SSH, pare-feu, persistence reboot)  
+- [ ] Non (P1/P2/P3) — peut être mergée sans gate VPS
