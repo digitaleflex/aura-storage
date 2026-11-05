@@ -704,6 +704,41 @@ export function TransfersPage() {
     );
   }
 
+  function handleExportReport() {
+    const started = transfers.startedAt;
+    const finished = transfers.finishedAt;
+    const durationMs = started && finished ? finished - started : 0;
+    const totalBytes = queue.items.reduce(
+      (sum, item) => sum + item.sizeBytes, 0,
+    );
+    const transferredBytes = queue.items.reduce(
+      (sum, item) => sum + item.state.transferredBytes, 0,
+    );
+    const avgRate = durationMs > 0 ? transferredBytes / (durationMs / 1000) : 0;
+
+    const csv = toCsv(
+      ["Métrique", "Valeur"],
+      [
+        ["Date", new Date().toISOString()],
+        ["Durée (secondes)", durationMs / 1000],
+        ["Fichiers totaux", queue.items.length],
+        ["Réussis", counts.completed],
+        ["Échoués", counts.failed],
+        ["Annulés", counts.cancelled],
+        ["En attente", counts.queued],
+        ["Taille totale (octets)", totalBytes],
+        ["Transféré (octets)", transferredBytes],
+        ["Débit moyen (octets/s)", Math.round(avgRate)],
+      ],
+    );
+    const stamp = new Date()
+      .toISOString()
+      .slice(0, 16)
+      .replace(/[-:T]/g, "");
+    downloadCsv(`aura-rapport-transfert-${stamp}.csv`, csv);
+    notify("ok", "Rapport de transfert exporté.");
+  }
+
   function handleClear() {
     transfers.clear();
     setSelected(new Set());
@@ -864,6 +899,16 @@ export function TransfersPage() {
         onResetFilters={resetFilters}
         onRetryFailed={handleRetryFailed}
       />
+
+      <div className="transfers-report">
+        <button
+          type="button"
+          className="btn btn-small"
+          onClick={handleExportReport}
+        >
+          📄 Exporter le rapport complet
+        </button>
+      </div>
 
       <TransfersFilters
         counts={counts}
