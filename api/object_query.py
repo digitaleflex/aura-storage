@@ -47,6 +47,7 @@ def build_object_where(
     owner_id: Optional[str] = None,
     folder_id: Optional[str] = None,
     q: Optional[str] = None,
+    search: Optional[str] = None,
     status: Optional[str] = None,
     hide_deleted: bool = False,
     content_type: Optional[str] = None,
@@ -85,6 +86,13 @@ def build_object_where(
             f"LOWER(display_name) LIKE LOWER({ph}) {_ESCAPE_SQL}"
         )
         params.append(like_contains(q))
+    if search:
+        clauses.append(
+            f"(LOWER(display_name) LIKE LOWER({ph}) {_ESCAPE_SQL} "
+            f"OR LOWER(content_type) LIKE LOWER({ph}) {_ESCAPE_SQL})"
+        )
+        params.append(like_contains(search))
+        params.append(like_contains(search))
     if status is not None:
         clauses.append(f"status = {ph}")
         params.append(status)

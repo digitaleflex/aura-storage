@@ -238,6 +238,12 @@ paths:
             Case-insensitive display-name substring (M02). Never matches the
             internal object key; a blank value is ignored.
         - in: query
+          name: search
+          schema: { type: string, maxLength: 200 }
+          description: >-
+            Full-text search: matches display name or content type (case
+            insensitive). A blank value is ignored.
+        - in: query
           name: status
           schema:
             type: string

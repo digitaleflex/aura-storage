@@ -2167,6 +2167,7 @@ def list_objects(
     principal: dict = Depends(authorize(OBJECTS_READ)), limit: int = 50, offset: int = 0,
     folder_id: str | None = None,
     q: str | None = Query(default=None, max_length=200),
+    search: str | None = Query(default=None, max_length=200),
     status: ObjectStatus | None = None,
     content_type: str | None = Query(default=None, max_length=127),
     min_size: int | None = Query(default=None, ge=0),
@@ -2188,8 +2189,10 @@ def list_objects(
     # ``q`` is a case-insensitive display-name substring. It never touches the
     # internal object key, and a blank value is treated as "no search".
     needle = (q or "").strip() or None
+    search_needle = (search or "").strip() or None
     rows = repo.list_objects(
         **_object_scope(principal), folder_id=folder_filter, q=needle,
+        search=search_needle,
         status=status, hide_deleted=status is None,
         content_type=(content_type or None),
         min_size=min_size, max_size=max_size,
