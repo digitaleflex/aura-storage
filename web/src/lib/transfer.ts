@@ -655,6 +655,8 @@ export interface QueueItem {
   id: string;
   /** Caller-supplied identity (e.g. the upload journal fingerprint). */
   key?: string;
+  /** Backend object id once committed (phase "available"). Null until then. */
+  objectId: string | null;
   fileName: string;
   sizeBytes: number;
   state: TransferState;
@@ -995,6 +997,8 @@ export function startUploadQueue(
     paused: boolean;
     /** Automatic re-queues already granted by a reconnect. */
     reconnectRetries: number;
+    /** Backend object id once committed (phase "available"). */
+    objectId: string | null;
   }
 
   const items: Internal[] = entries.map((entry) => {
@@ -1011,6 +1015,7 @@ export function startUploadQueue(
       reserved: false,
       paused: false,
       reconnectRetries: 0,
+      objectId: null,
     };
   });
 
@@ -1030,6 +1035,7 @@ export function startUploadQueue(
     items: items.map((item) => ({
       id: item.id,
       key: item.key,
+      objectId: item.objectId,
       fileName: item.file.name,
       sizeBytes: item.file.size,
       state: item.state,
@@ -1204,6 +1210,12 @@ export function startUploadQueue(
         else emit();
       },
     })
+      .then((result) => {
+        if (result?.objectId) {
+          item.objectId = result.objectId;
+          emit();
+        }
+      })
       .catch(() => undefined)
       .finally(() => {
         item.controller = null;

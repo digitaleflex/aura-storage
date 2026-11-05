@@ -97,6 +97,7 @@ export function TransferList({
   onCancel,
   onRetry,
   onDetails,
+  onOpen,
   onCopyError,
   onDownloadDiagnostic,
   onShowMore,
@@ -118,6 +119,7 @@ export function TransferList({
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
   onDetails: (id: string) => void;
+  onOpen: (objectId: string) => void;
   onCopyError: (item: QueueItem) => void;
   onDownloadDiagnostic: (item: QueueItem) => void;
   onShowMore: () => void;
@@ -319,6 +321,7 @@ export function TransferList({
               onDetails={onDetails}
               onCopyError={onCopyError}
               onDownloadDiagnostic={onDownloadDiagnostic}
+              onOpen={onOpen}
             />
           ))}
           {bottomSpacer > 0 ? (
@@ -356,6 +359,7 @@ function TransferRow({
   onCancel,
   onRetry,
   onDetails,
+  onOpen,
   onCopyError,
   onDownloadDiagnostic,
 }: {
@@ -372,6 +376,7 @@ function TransferRow({
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
   onDetails: (id: string) => void;
+  onOpen: (objectId: string) => void;
   onCopyError: (item: QueueItem) => void;
   onDownloadDiagnostic: (item: QueueItem) => void;
 }) {
@@ -399,6 +404,13 @@ function TransferRow({
     actions.push({ label: "Réessayer", onSelect: () => onRetry(item.id) });
   }
   actions.push({ label: "Détails", onSelect: () => onDetails(item.id) });
+  if (status === "completed" && item.objectId) {
+    const objectId = item.objectId;
+    actions.push({
+      label: "Ouvrir le fichier",
+      onSelect: () => onOpen(objectId),
+    });
+  }
 
   return (
     <Fragment>

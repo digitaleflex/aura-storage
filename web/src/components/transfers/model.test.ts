@@ -36,6 +36,7 @@ function makeItem(overrides: Partial<QueueItem> = {}): QueueItem {
       phaseLog: [],
     } as QueueItem["state"],
     paused: overrides.paused ?? false,
+    objectId: overrides.objectId ?? null,
   };
 }
 
