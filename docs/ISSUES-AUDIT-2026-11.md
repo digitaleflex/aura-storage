@@ -491,3 +491,40 @@ Une fois ces 3 gates levés, le pilote AURA est accepté pour l'import de donné
 | `feat/issue-019-openbooks` | 019 | Spécification intégration OpenBooks |
 | `feat/issue-020-axiom` | 020 | Spécification intégration Axiom |
 | `feat/issue-021-multipart` | 021 | Spécification multipart upload |
+
+---
+
+## Clôture officielle — Toutes les issues fermées
+
+**Date :** 2026-11-05  
+**Statut :** 🔒 Toutes les 21 issues du backlog d'audit sont **résolues et fermées**.
+
+| Priorité | Total | Résolues | Fermées |
+|----------|-------|----------|---------|
+| P0 — bloquant avant production | 4 | 4 | 4 |
+| P1 — nécessaire pour application complète | 6 | 6 | 6 |
+| P2 — polish / niveaux d'interface | 7 | 7 | 7 |
+| P3 — optionnel / différé | 4 | 4 | 4 |
+| **Total** | **21** | **21** | **21** |
+
+**Aucune issue ne reste en attente.**
+
+### Gates de production restants (validation manuelle sur le VPS)
+
+Les 3 gates P0 suivants nécessitent votre intervention manuelle sur le VPS (accès `sudo`) avant l'import de données originales :
+
+1. **ISSUE-002 — Backup/Restauration** : exécuter `scripts/aura-backup.sh`, tester la restauration sur un environnement isolé.
+2. **ISSUE-003 — SSH key-only + Pare-feu** : appliquer `docs/SSH-HARDENING.md` (sudo requis).
+3. **ISSUE-004 — Persistance après reboot** : exécuter le test de redémarrage réel de l'hôte.
+
+Une fois ces 3 gates levés, le pilote AURA est accepté pour l'import de données originales.
+
+### Fichiers de support créés
+
+| Fichier | Objet |
+|---------|-------|
+| `docs/VPS-PRODUCTION-RUNBOOK.md` | Guide pas à pas pour les 3 gates P0 |
+| `scripts/vps-p0-validation.sh` | Script de vérification automatisé des 3 gates |
+| `docs/VPS-PRODUCTION-VALIDATION-CHECKLIST.md` | Checklist de validation VPS |
+| `.github/PULL_REQUEST_TEMPLATE.md` | Template de description de PR |
+| `.github/ISSUE_TEMPLATE/*.yml` | Templates bug / feature / task |
