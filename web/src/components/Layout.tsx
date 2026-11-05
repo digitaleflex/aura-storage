@@ -413,6 +413,33 @@ export function Layout({ children }: { children: React.ReactNode }) {
               Administration
             </Link>
           ) : null}
+          {/* Entrée : Paramètres — compte, préférences, déconnexion. */}
+          <Link
+            to="/settings"
+            activeOptions={{ exact: true }}
+            className={
+              location.pathname === "/settings"
+                ? "nav-link nav-link-active"
+                : "nav-link"
+            }
+            onClick={() => toggleSidebar(false)}
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-.33-1.82 1.65 1.65 0 0 0 1-1.51V4a2 2 0 0 1 2-2 1.65 1.65 0 0 0 .33-1.82l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.05c.45.05.89.25 1.1.57m-10.2 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2" />
+            </svg>
+            Paramètres
+          </Link>
         </nav>
 
         {/* Indicateur de stockage réel (capacité admin uniquement). */}
