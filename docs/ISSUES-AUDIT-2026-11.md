@@ -512,13 +512,16 @@ Une fois ces 3 gates levés, le pilote AURA est accepté pour l'import de donné
 ### ISSUE-023 — Taille des dossiers dans l'interface ✅ RÉSOLU
 
 **Priorité :** P1  
-**Catégorie :** Frontend / UI  
+**Catégorie :** Frontend / UI + Backend / API  
 **Statut :** ✅ Résolu (2026-11-05)
 
 **Modifications apportées :**
-- [x] `web/src/lib/api.ts` — Champ `size_bytes` optionnel ajouté à `FolderItem`
-- [x] `web/src/pages/ObjectsPage.tsx` — Affichage de `folder.size_bytes` dans la liste des dossiers (remplace "—")
-- [x] Le champ est optionnel ; affiche "—" tant que le backend ne le retourne pas
+- [x] `api/db.py` — `get_folder_size()` : calcul récursif taille (objets + sous-dossiers)
+- [x] `api/db_pg.py` — `get_folder_size()` : CTE récursive PostgreSQL
+- [x] `api/main.py` — `_folder_public()` inclut `size_bytes` ; `list_folders` et `get_folder` passent la taille
+- [x] `web/src/lib/api.ts` — Champ `size_bytes` optionnel dans `FolderItem`
+- [x] `web/src/pages/ObjectsPage.tsx` — Affichage de la taille dans la liste (ledger) des dossiers
+- [x] Remplacer "—" par la taille réelle quand disponible
 
 ### ISSUE-024 — Téléchargement en ZIP d'un dossier ✅ RÉSOLU
 
