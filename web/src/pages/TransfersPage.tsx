@@ -44,6 +44,7 @@ import {
   downloadTransferDiagnostic,
 } from "../components/transfers/diagnostics";
 import { useSession } from "../lib/auth";
+import { api } from "../lib/api";
 import { pendingEntries } from "../lib/uploadJournal";
 import type { JournalEntry } from "../lib/uploadJournal";
 import type { QueueItem } from "../lib/transfer";
@@ -461,6 +462,21 @@ export function TransfersPage() {
       }`,
       "Erreur",
     );
+  }
+
+  async function handleOpen(objectId: string) {
+    const csrf = session.data?.csrf_token ?? null;
+    if (!csrf) {
+      notify("error", "Session expirée. Reconnectez-vous.");
+      return;
+    }
+    try {
+      const intent = await api.createDownloadIntent(objectId, csrf);
+      void window.open(intent.download_url, "_blank");
+      notify("ok", "Ouverture du fichier.");
+    } catch {
+      notify("error", "Impossible d'ouvrir le fichier.");
+    }
   }
 
   function selectBy(filter: StatusFilter) {
@@ -962,6 +978,7 @@ export function TransfersPage() {
           onDetails={setDetailId}
           onCopyError={handleCopyError}
           onDownloadDiagnostic={handleDownloadDiagnostic}
+          onOpen={handleOpen}
           onShowMore={() => setVisible((value) => value + PAGE_SIZE)}
         />
       )}
