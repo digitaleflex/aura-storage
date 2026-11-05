@@ -69,6 +69,8 @@ interface UrlFilters {
   type: TypeFilter;
   min: string;
   max: string;
+  createdAfter: string;
+  createdBefore: string;
   sort: SortKey;
   dir: SortDirection;
 }
@@ -89,6 +91,8 @@ function readUrlFilters(raw: unknown): UrlFilters {
     type: TYPE_FILTERS.includes(type) ? type : "all",
     min: text(record.min),
     max: text(record.max),
+    createdAfter: text(record.createdAfter),
+    createdBefore: text(record.createdBefore),
     sort,
     dir:
       direction === "asc" || direction === "desc"
@@ -276,6 +280,12 @@ export function TransfersPage() {
       }
       if (minBytes !== null && item.sizeBytes < minBytes) return false;
       if (maxBytes !== null && item.sizeBytes > maxBytes) return false;
+      const addedMs = transfers.addedAt.get(item.id) ?? null;
+      if (addedMs !== null) {
+        const addedIso = new Date(addedMs).toISOString();
+        if (filters.createdAfter && addedIso < filters.createdAfter) return false;
+        if (filters.createdBefore && addedIso > filters.createdBefore) return false;
+      }
       return true;
     });
     return sortItems(
@@ -537,6 +547,8 @@ export function TransfersPage() {
         next.type = merged.type === "all" ? undefined : merged.type;
         next.min = merged.min.trim() ? merged.min : undefined;
         next.max = merged.max.trim() ? merged.max : undefined;
+        next.createdAfter = merged.createdAfter.trim() ? merged.createdAfter : undefined;
+        next.createdBefore = merged.createdBefore.trim() ? merged.createdBefore : undefined;
         next.sort = merged.sort === "added" ? undefined : merged.sort;
         next.dir =
           merged.dir === SORT_DEFAULT_DIRECTION[merged.sort]
