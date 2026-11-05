@@ -7,6 +7,7 @@ import { VaultMark } from "./VaultMark";
 import { StorageUsage } from "./StorageUsage";
 import { useTransfers } from "../lib/transferContext";
 import { readStorage, writeStorage } from "../lib/safeStorage";
+import { hasSeenOnboarding } from "../lib/onboarding";
 
 /** Local copy of formatBytes to avoid circular import with ObjectsPage. */
 function formatBytes(size: number): string {
@@ -210,6 +211,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
     location.pathname === "/" || location.pathname === "";
   const isTransfersPage = location.pathname === "/transfers";
   const isDiagPage = location.pathname === "/diagnostic";
+  const isOnboardingPage = location.pathname === "/onboarding";
+
+  // Rediriger vers l'onboarding si l'utilisateur ne l'a pas encore vu
+  React.useEffect(() => {
+    if (!session.data) return; // pas encore authentifié
+    if (isOnboardingPage) return; // déjà sur l'onboarding
+    if (!hasSeenOnboarding()) {
+      navigate({ to: "/onboarding" });
+    }
+  }, [session.data, location.pathname, navigate]);
 
   return (
     <div className={`shell${isTransfersPage ? " shell-transfers" : ""}`}>

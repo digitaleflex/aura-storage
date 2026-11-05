@@ -15,6 +15,7 @@ import { SharesPage } from "./pages/SharesPage";
 import { TrashPage } from "./pages/TrashPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { HelpPage } from "./pages/HelpPage";
+import { OnboardingPage } from "./pages/OnboardingPage";
 import { lazy, Suspense } from "react";
 import { Loading } from "./components/Loading";
 import { RouteError } from "./components/RouteError";
@@ -127,6 +128,18 @@ const settingsRoute = createRoute({
   ),
 });
 
+const onboardingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/onboarding",
+  component: () => (
+    <Layout>
+      <RequireAuth>
+        <OnboardingPage />
+      </RequireAuth>
+    </Layout>
+  ),
+});
+
 const helpRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/help",
@@ -162,6 +175,7 @@ const routeTree = rootRoute.addChildren([
   sharesRoute,
   trashRoute,
   settingsRoute,
+  onboardingRoute,
   helpRoute,
   diagRoute,
 ]);
