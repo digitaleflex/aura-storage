@@ -495,6 +495,10 @@ Une fois ces 3 gates levés, le pilote AURA est accepté pour l'import de donné
 | `feat/ui-folder-bulk-zip-size` | 022 | Sélection bulk dossiers, taille dossier, téléchargement ZIP |
 | `feat/ui-folder-bulk-zip-size` | 023 | Taille des dossiers dans l'interface |
 | `feat/ui-folder-bulk-zip-size` | 024 | Téléchargement en ZIP d'un dossier |
+| `feat/ui-onboarding` | 025 | Tour d'accueil (onboarding) au premier login |
+| `feat/ui-search-global` | 026 | Barre de recherche globale prominente |
+| `feat/ui-empty-states` | 027 | États vides avec appel à l'action |
+| `feat/ui-tooltips` | 028 | Aide contextuelle / tooltips sur les icônes |
 
 ---
 
@@ -534,22 +538,91 @@ Une fois ces 3 gates levés, le pilote AURA est accepté pour l'import de donné
 - [x] `web/src/pages/ObjectsPage.tsx` — Bouton "Télécharger en ZIP" dans le menu des dossiers (RowMenu)
 - [x] `web/package.json` — Dépendance `jszip` ajoutée
 
+### ISSUE-025 — Tour d'accueil (onboarding) au premier login
+
+**Priorité :** P1  
+**Catégorie :** Frontend / UI  
+**Statut :** Ouvert
+
+**Contexte :** Un nouvel utilisateur ne sait pas par où commencer (importer, partager, restaurer).
+
+**Critères d'acceptation :**
+- [ ] Tour de 3-4 écrans affiché au premier login
+- [ ] Explique : importer des fichiers, partager un lien, restaurer depuis la corbeille
+- [ ] Bouton "Passer" et "Commencer l'import"
+- [ ] Ne s'affiche qu'une fois (stocké en localStorage)
+
+**Fichiers concernés :** `web/src/pages/OnboardingPage.tsx`, `web/src/router.tsx`, `web/src/lib/onboarding.ts`
+
 ---
 
-## Clôture officielle — Toutes les issues fermées
+### ISSUE-026 — Barre de recherche globale prominente
+
+**Priorité :** P1  
+**Catégorie :** Frontend / UI  
+**Statut :** Ouvert
+
+**Contexte :** La recherche est cachée dans les filtres, pas en évidence.
+
+**Critères d'acceptation :**
+- [ ] Barre de recherche en haut de page, bien visible
+- [ ] Recherche dans les noms de fichiers et dossiers
+- [ ] Résultats affichés en temps réel (débounce)
+- [ ] Touche `/` pour focus rapide
+
+**Fichiers concernés :** `web/src/pages/ObjectsPage.tsx`, `web/src/components/SearchBar.tsx`
+
+---
+
+### ISSUE-027 — États vides avec appel à l'action
+
+**Priorité :** P1  
+**Catégorie :** Frontend / UI  
+**Statut :** Ouvert
+
+**Contexte :** Quand il n'y a rien, l'interface dit simplement qu'il n'y a rien.
+
+**Critères d'acceptation :**
+- [ ] Page Fichiers vide : "Vous n'avez pas encore de fichier. Cliquez sur Importer pour commencer."
+- [ ] Page Corbeille vide : "Votre corbeille est vide."
+- [ ] Page Partages vide : "Aucun lien public actif."
+- [ ] Bouton d'action primaire sur chaque écran vide
+
+**Fichiers concernés :** `web/src/pages/ObjectsPage.tsx`, `web/src/pages/TrashPage.tsx`, `web/src/pages/SharesPage.tsx`
+
+---
+
+### ISSUE-028 — Aide contextuelle / tooltips sur les icônes
+
+**Priorité :** P2  
+**Catégorie :** Frontend / Accessibilité  
+**Statut :** Ouvert
+
+**Contexte :** Les icônes de ligne (renommer, supprimer, partager) n'ont pas de libellé explicite.
+
+**Critères d'acceptation :**
+- [ ] `title` ou `aria-label` sur chaque bouton d'action de ligne
+- [ ] Tooltip au survol pour les icônes sans texte
+- [ ] Cohérence avec les boutons de la toolbar (déjà corrigé dans ISSUE-017)
+
+**Fichiers concernés :** `web/src/components/RowMenu.tsx`, `web/src/pages/ObjectsPage.tsx`
+
+---
+
+## Clôture officielle — État du backlog
 
 **Date :** 2026-11-05  
-**Statut :** 🔒 Toutes les 24 issues du backlog d'audit sont **résolues et fermées**.
+**Statut :** 🔒 24 issues résolues et fermées — 4 nouvelles issues UI ouvertes (025-028).
 
-| Priorité | Total | Résolues | Fermées |
-|----------|-------|----------|---------|
-| P0 — bloquant avant production | 4 | 4 | 4 |
-| P1 — nécessaire pour application complète | 9 | 9 | 9 |
-| P2 — polish / niveaux d'interface | 7 | 7 | 7 |
-| P3 — optionnel / différé | 4 | 4 | 4 |
-| **Total** | **24** | **24** | **24** |
+| Priorité | Total | Résolues | Fermées | Ouvertes |
+|----------|-------|----------|---------|----------|
+| P0 — bloquant avant production | 4 | 4 | 4 | 0 |
+| P1 — nécessaire pour application complète | 12 | 9 | 9 | 3 |
+| P2 — polish / niveaux d'interface | 10 | 7 | 7 | 3 |
+| P3 — optionnel / différé | 4 | 4 | 4 | 0 |
+| **Total** | **30** | **24** | **24** | **6** |
 
-**Aucune issue ne reste en attente.**
+**4 issues en attente :** ISSUE-025 (onboarding), ISSUE-026 (recherche globale), ISSUE-027 (états vides), ISSUE-028 (tooltips).
 
 ### Gates de production restants (validation manuelle sur le VPS)
 
