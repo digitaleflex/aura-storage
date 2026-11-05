@@ -954,6 +954,27 @@ class Repository:
             "SELECT * FROM folders WHERE id = %s AND owner_id = %s", (fid, owner_id)
         )
 
+    def get_folder_size(self, *, folder_id: str, owner_id: str) -> int:
+        """Taille totale (octets) d'un dossier : objets disponibles directement
+        + taille récursive des sous-dossiers (CTE récursive)."""
+        row = self._one(
+            """
+            WITH RECURSIVE folder_tree AS (
+                SELECT id FROM folders WHERE id = %s AND owner_id = %s
+                UNION ALL
+                SELECT f.id FROM folders f
+                JOIN folder_tree ft ON f.parent_id = ft.id
+                WHERE f.owner_id = %s
+            )
+            SELECT COALESCE(SUM(o.size_bytes), 0) AS n
+            FROM objects o
+            JOIN folder_tree ft ON o.folder_id = ft.id
+            WHERE o.owner_id = %s AND o.status = 'available'
+            """,
+            (folder_id, owner_id, owner_id, owner_id),
+        )
+        return int(row["n"] or 0)
+
     def list_folders(self, *, owner_id: str, parent_id: Optional[str] = None) -> list:
         # parent_id=None lists the root level (parent_id IS NULL).
         if parent_id is None:

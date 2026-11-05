@@ -468,13 +468,14 @@ def _validate_folder_name(value: str) -> str:
     return name
 
 
-def _folder_public(row) -> dict:
+def _folder_public(row, size_bytes: int | None = None) -> dict:
     row = _as_dict(row)
     return {
         "id": row["id"],
         "name": row["name"],
         "parent_id": row["parent_id"],
         "created_at": row["created_at"],
+        "size_bytes": size_bytes,
     }
 
 
@@ -3197,22 +3198,35 @@ def list_folders(
         # Flat tree in a single request: the client rebuilds the hierarchy from
         # parent_id instead of walking the per-level endpoint (#62 follow-up).
         rows = repo.list_all_folders(owner_id=owner_id)
-        return {"items": [_folder_public(r) for r in rows]}
+        return {
+            "items": [
+                _folder_public(r, size_bytes=repo.get_folder_size(folder_id=r["id"], owner_id=owner_id))
+                for r in rows
+            ]
+        }
     if parent_id is not None:
         parent_id = _canonical_id(parent_id, "parent id")
         if repo.get_folder(parent_id, owner_id=owner_id) is None:
             raise HTTPException(status_code=404, detail="folder not found")
     rows = repo.list_folders(owner_id=owner_id, parent_id=parent_id)
-    return {"items": [_folder_public(r) for r in rows]}
+    return {
+        "items": [
+            _folder_public(r, size_bytes=repo.get_folder_size(folder_id=r["id"], owner_id=owner_id))
+            for r in rows
+        ]
+    }
 
 
 @app.get("/api/v1/folders/{fid}")
 def get_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_READ, human=True))):
     fid = _canonical_id(fid, "folder id")
-    row = repo.get_folder(fid, owner_id=_folder_owner(principal))
+    owner_id = _folder_owner(principal)
+    row = repo.get_folder(fid, owner_id=owner_id)
     if row is None:
         raise HTTPException(status_code=404, detail="folder not found")
-    return _folder_public(row)
+    return _folder_public(
+        row, size_bytes=repo.get_folder_size(folder_id=fid, owner_id=owner_id)
+    )
 
 
 @app.post("/api/v1/folders")
