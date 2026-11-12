@@ -51,16 +51,13 @@ export function TransfersToolbar({
   return (
     <div className="transfers-toolbar">
       <div className="transfers-toolbar-actions">
+        {/* Le nom accessible reste le libellé visible (WCAG 2.5.3 « Label in
+            Name ») : l'explication d'un bouton désactivé passe par `title`. */}
         <button
           type="button"
           className="btn btn-primary transfers-toolbar-primary"
           onClick={onPauseAll}
           disabled={!canPause}
-          aria-label={
-            canPause
-              ? "Mettre en pause tous les transferts"
-              : "Aucun transfert en attente à suspendre"
-          }
           title={
             canPause ? undefined : "Aucun transfert en attente à suspendre."
           }
@@ -73,11 +70,6 @@ export function TransfersToolbar({
           className="btn"
           onClick={onResumeAll}
           disabled={!canResume}
-          aria-label={
-            canResume
-              ? "Reprendre tous les transferts"
-              : "Aucun transfert en pause à reprendre"
-          }
           title={
             canResume
               ? undefined
@@ -96,11 +88,6 @@ export function TransfersToolbar({
           className="btn btn-danger transfers-toolbar-cancel"
           onClick={onCancelAll}
           disabled={!canCancel}
-          aria-label={
-            canCancel
-              ? "Annuler tous les transferts"
-              : "Aucun transfert en cours à annuler"
-          }
           title={
             canCancel
               ? undefined

@@ -64,7 +64,7 @@ async function setup(page: Page, shares: MockShare[], items = ITEMS) {
         max_uses: number | null;
         content_disposition: "attachment" | "inline";
       };
-      const now = 1_700_000_000;
+      const now = Math.floor(Date.now() / 1000);
       const created: MockShare = {
         id: "share-1", object_id: "obj-1", created_by: "u1",
         created_by_kind: "user", content_disposition: body.content_disposition,
@@ -127,8 +127,8 @@ test("creating a link shows the one-time URL", async ({ page }) => {
 test("a link can be revoked after an explicit confirmation", async ({ page }) => {
   const shares: MockShare[] = [{
     id: "share-1", object_id: "obj-1", created_by: "u1", created_by_kind: "user",
-    content_disposition: "attachment", created_at: 1_700_000_000,
-    expires_at: 1_800_000_000, max_uses: null, use_count: 0,
+    content_disposition: "attachment", created_at: Math.floor(Date.now() / 1000) - 60,
+    expires_at: Math.floor(Date.now() / 1000) + 30 * 86_400, max_uses: null, use_count: 0,
     last_used_at: null, revoked_at: null, active: true,
   }];
   await setup(page, shares);

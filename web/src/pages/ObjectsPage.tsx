@@ -707,21 +707,9 @@ export function ObjectsPage() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [transferActive]);
 
-  // Raccourcis clavier : / pour focus recherche
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (isTextEntryTarget(event.target)) return;
-      // Un "/" majuscule ouvre la légende, pas la recherche : les deux
-      // raccourcis partagent la même touche physique.
-      if (event.key === "/" && !event.shiftKey) {
-        event.preventDefault();
-        const searchInput = document.querySelector('input[name="filter"]') as HTMLInputElement;
-        if (searchInput) searchInput.focus();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  // `/` et Ctrl/Cmd+K ouvrent la recherche globale : ils sont gérés par
+  // SearchBar (un seul propriétaire du raccourci, sinon deux gestionnaires
+  // se disputent le focus).
 
   // Coller-pour-importer (Ctrl+V / Cmd+V)
   useEffect(() => {
@@ -3890,9 +3878,9 @@ export function ObjectsPage() {
         <dl className="shortcut-list">
           <div>
             <dt>
-              <kbd>/</kbd>
+              <kbd>/</kbd> ou <kbd>Ctrl</kbd> + <kbd>K</kbd>
             </dt>
-            <dd>Rechercher dans le dossier courant</dd>
+            <dd>Ouvrir la recherche</dd>
           </div>
           <div>
             <dt>
