@@ -1,75 +1,34 @@
 /* AURA Storage — Transferts
- * Presentation layer for the transfers console. The palette is the AURA
- * product palette from the specification, defined once as --aura-* tokens and
- * mapped onto the existing design tokens only inside `.shell-transfers`, so
- * the rest of the product keeps its established look.
+ * Couche de présentation de la console de transferts. Elle ne définit plus de
+ * palette propre : les alias --aura-* ci-dessous pointent vers les jetons
+ * globaux (styles.css + aura-vault-refresh.css), de sorte que Fichiers et
+ * Transferts partagent le même accent (ambre), les mêmes surfaces et le même
+ * thème clair/sombre.
  */
 
 :root {
-  --aura-bg: #090d12;
-  --aura-sidebar: #080c11;
-  --aura-surface: #101720;
-  --aura-surface-raised: #151e29;
-  --aura-border: #243140;
-  --aura-text: #f3f6fa;
-  --aura-text-secondary: #a7b5c8;
-  --aura-text-muted: #9fb0c4;
-  --aura-primary: #c5f441;
-  --aura-primary-hover: #d5ff5a;
-  --aura-success: #35e59a;
-  --aura-info: #35a7ff;
-  --aura-warning: #ffbf36;
-  --aura-danger: #ff5964;
-  --aura-danger-bg: #251417;
+  --aura-bg: var(--steel-0);
+  --aura-sidebar: var(--side);
+  --aura-surface: var(--steel-1);
+  --aura-surface-raised: var(--steel-raised);
+  --aura-border: var(--line);
+  --aura-text: var(--ink);
+  --aura-text-secondary: var(--ink-2);
+  --aura-text-muted: var(--faint);
+  --aura-primary: var(--signal);
+  --aura-primary-hover: var(--signal-2);
+  --aura-success: var(--ok);
+  --aura-info: var(--run);
+  --aura-warning: var(--warn);
+  --aura-danger: var(--danger);
+  --aura-danger-bg: var(--danger-bg);
 }
 
 /* ------------------------------------------------------------------ */
-/* Scoped dark shell: only the transfers route.                        */
+/* Coque de la route Transferts : seulement la structure (gabarit).    */
 /* ------------------------------------------------------------------ */
 .shell-transfers {
   --side-w: 238px;
-
-  --steel-0: var(--aura-bg);
-  --steel-1: var(--aura-surface);
-  --steel-2: var(--aura-surface-raised);
-  --steel-3: var(--aura-border);
-  --steel-raised: var(--aura-surface-raised);
-
-  --ink: var(--aura-text);
-  --ink-2: var(--aura-text-secondary);
-  --muted: var(--aura-text-secondary);
-  --faint: var(--aura-text-muted);
-
-  --line: var(--aura-border);
-  --line-2: var(--aura-border);
-  --field-line: var(--aura-border);
-
-  --side: var(--aura-sidebar);
-  --side-2: color-mix(in srgb, var(--aura-primary) 12%, transparent);
-  --side-3: var(--aura-surface-raised);
-  --side-ink: var(--aura-text-secondary);
-  --side-muted: var(--aura-text-muted);
-
-  --signal: var(--aura-primary);
-  --signal-2: var(--aura-primary-hover);
-  --signal-soft: color-mix(in srgb, var(--aura-primary) 12%, transparent);
-  --signal-line: color-mix(in srgb, var(--aura-primary) 35%, transparent);
-  --signal-bright: var(--aura-primary);
-  --on-signal: var(--aura-bg);
-  --on-danger: #16080a;
-
-  --ok: var(--aura-success);
-  --ok-bg: color-mix(in srgb, var(--aura-success) 14%, transparent);
-  --run: var(--aura-info);
-  --run-bg: color-mix(in srgb, var(--aura-info) 14%, transparent);
-  --warn: var(--aura-warning);
-  --warn-bg: color-mix(in srgb, var(--aura-warning) 14%, transparent);
-  --danger: var(--aura-danger);
-  --danger-bg: var(--aura-danger-bg);
-  --danger-strong: #e04650;
-
-  background: var(--aura-bg);
-  color: var(--aura-text);
 }
 
 .shell-transfers .main {
@@ -86,11 +45,6 @@
   background: var(--aura-surface);
   border-bottom: 1px solid var(--aura-border);
   backdrop-filter: none;
-}
-
-.shell-transfers .topbar .btn[aria-label="Changer la densité d'affichage"],
-.shell-transfers .topbar .btn[aria-label="Changer le thème"] {
-  display: none;
 }
 
 .shell-transfers .content {
@@ -1506,7 +1460,7 @@
 .shell-transfers .btn-primary {
   background: var(--aura-primary);
   border-color: var(--aura-primary);
-  color: var(--aura-bg);
+  color: var(--on-signal);
 }
 
 .shell-transfers .btn-primary:hover {
@@ -1527,8 +1481,8 @@
 }
 
 .shell-transfers .btn-danger:hover {
-  background: #ff6f79;
-  border-color: #ff6f79;
+  background: var(--danger-strong);
+  border-color: var(--danger-strong);
 }
 
 .shell-transfers .btn-danger:disabled {

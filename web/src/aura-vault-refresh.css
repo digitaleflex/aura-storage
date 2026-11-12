@@ -36,7 +36,8 @@
   --warn-bg: #2b1d0f;
   --danger: #ff968e;
   --danger-bg: #2b1719;
-  --danger-strong: #b94840;
+  --danger-strong: #ffb0a9;
+  --on-danger: #16080a;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -72,7 +73,8 @@
     --warn-bg: #2b1d0f;
     --danger: #ff968e;
     --danger-bg: #2b1719;
-    --danger-strong: #b94840;
+    --danger-strong: #ffb0a9;
+    --on-danger: #16080a;
   }
 }
 
