@@ -48,8 +48,8 @@ Légende : `[ ]` à faire · `[x]` fait · `⛔` bloqué · `❓` en attente de 
 - [ ] **B1** `PageHeader` (h1, sous-titre, actions) + adoption sur Paramètres, Aide, Corbeille, Partages, Tableau de bord
 - [ ] **B2** `EmptyState`, `ErrorState` (avec « Réessayer »), `LoadingState` ; remplacer `dashboard-error`, `shares-error`, `trash-error`
 - [ ] **B3** Hook `useDocumentTitle` : titre d'onglet par route (`Fichiers · AURA Vault`)
-- [ ] **B4** Menu compte dans la barre du haut (avatar → thème, densité, déconnexion) ; retirer les boutons nus
-- [ ] **B5** Fichiers : supprimer la barre « Vue de contrôle »
+- [ ] **B4** Menu compte dans la barre du haut (avatar → thème, densité, déconnexion) ; retirer les boutons nus. Cible : maquette « AURA Vault — Nouvelle interface » (la recherche, la barre latérale flottante et la feuille sont déjà en place)
+- [x] **B5** Fichiers : supprimer la barre « Vue de contrôle » (fait avec la direction v3)
 - [ ] **B6** Fichiers : filtres en pastilles (Tous, Images, Documents, Autres, À traiter), filtres avancés repliés
 - [ ] **B7** Fichiers : actions de ligne au survol/focus (Télécharger, Partager, ⋯)
 - [ ] **B8** Barre latérale : jauge d'espace fine ; retirer `VaultOverview` de la page Fichiers (détails au Tableau de bord)
@@ -62,6 +62,22 @@ Légende : `[ ]` à faire · `[x]` fait · `⛔` bloqué · `❓` en attente de 
 - [ ] **B15** Connexion : erreur liée au champ (`aria-describedby`), focus automatique, afficher/masquer le mot de passe
 - [ ] **B16** Onboarding : indicateur d'étape, « Passer » toujours visible
 - [ ] **B17** Administration : un onglet = une route paresseuse (le `hash` actuel reste compatible)
+
+### Direction v3 (maquette « AURA Vault — Nouvelle interface »)
+
+Socle déjà livré (`web/src/vault-v3.css`) : barre latérale flottante, feuille
+arrondie, recherche globale dans la barre du haut, rayons, bandeau de synthèse.
+Reste, dans l'ordre :
+
+- [ ] **V1** Fichiers : filtres en pastilles (Tous, Images, Documents, Audio et archives, À traiter) à la place des listes déroulantes
+- [ ] **V2** Fichiers : dossiers en cartes compactes au-dessus de la liste
+- [ ] **V3** Fichiers : panneau de détails à droite (empreinte SHA-256, étapes de vérification, Télécharger / Partager / Corbeille) à la place de la fenêtre
+- [ ] **V4** Fichiers : actions de ligne au survol ou au focus (Télécharger, Partager, ⋯)
+- [ ] **V5** Barre latérale : bloc d'espace utilisé (jauge) conforme à la maquette ; retirer `VaultOverview` de la page Fichiers
+- [ ] **V6** Transferts : bandeau de synthèse (anneau, débit, temps restant, échecs) et lignes avec barre de progression, bouton plein unique « Ajouter des fichiers »
+- [ ] **V7** Connexion : mise en page en deux panneaux
+- [ ] **V8** Mobile : barre d'onglets en bas (Fichiers, Transferts, Partagés, Corbeille) et bouton « Importer » flottant
+- [ ] **V9** Police des titres : ajouter Manrope en auto-hébergé (licence OFL) puis l'appliquer aux titres
 
 ## Rôle A11Y-TESTS — accessibilité et filet de tests
 

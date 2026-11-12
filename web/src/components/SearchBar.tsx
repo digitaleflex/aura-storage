@@ -6,6 +6,7 @@
  * Le raccourci clavier `/` met le focus sur le champ depuis n'importe où.
  */
 
+import { Icon } from "./Icon";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { api } from "../lib/api";
@@ -203,10 +204,12 @@ export function SearchBar({
         type="button"
         className="search-toggle"
         onClick={toggle}
-        title="Rechercher (raccourci : /)"
+        title="Rechercher (raccourcis : / ou Ctrl K)"
         aria-label="Ouvrir la recherche"
       >
-        🔍
+        <Icon name="search" size={16} />
+        <span className="search-toggle-label">Rechercher un fichier, un dossier…</span>
+        <kbd className="search-toggle-kbd" aria-hidden="true">Ctrl K</kbd>
       </button>
     );
   }
@@ -223,7 +226,9 @@ export function SearchBar({
         }}
       >
         <div className="search-input-wrapper">
-          <span className="search-icon" aria-hidden="true">🔍</span>
+          <span className="search-icon" aria-hidden="true">
+            <Icon name="search" size={16} />
+          </span>
           <input
             ref={inputRef}
             type="search"
@@ -249,7 +254,7 @@ export function SearchBar({
               title="Effacer"
               aria-label="Effacer la recherche"
             >
-              ✕
+              <Icon name="close" size={14} />
             </button>
           )}
         </div>

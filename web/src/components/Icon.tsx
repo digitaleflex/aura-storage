@@ -65,8 +65,26 @@ const ICONS = {
       <path d="M8 20h8M12 16v4" />
     </>
   ),
-  "density-comfortable": <path d="M4 6h16M4 12h16M4 18h16" />,
-  "density-compact": <path d="M4 8h16M4 12h16M4 16h16" />,
+  "density-comfortable": (
+    <>
+      <rect x="3" y="4" width="18" height="6" rx="1.5" />
+      <rect x="3" y="14" width="18" height="6" rx="1.5" />
+    </>
+  ),
+  "density-compact": (
+    <>
+      <rect x="3" y="4" width="18" height="3.5" rx="1" />
+      <rect x="3" y="10.25" width="18" height="3.5" rx="1" />
+      <rect x="3" y="16.5" width="18" height="3.5" rx="1" />
+    </>
+  ),
+  search: <path d="M21 21l-4.3-4.3M17 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0z" />,
+  sidebar: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <path d="M9 4v16" />
+    </>
+  ),
 } satisfies Record<string, React.ReactNode>;
 
 export type IconName = keyof typeof ICONS;
