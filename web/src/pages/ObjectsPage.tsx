@@ -362,8 +362,20 @@ export function ObjectsPage() {
   const [pendingFolderEntries, setPendingFolderEntries] = useState<{ file: File; rel: string }[]>([]);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  // Retours d'action : des toasts (là où l'action a eu lieu), plus des
+  // bandeaux qui poussent le contenu. Les succès disparaissent seuls, les
+  // erreurs restent jusqu'à fermeture. `null` est ignoré (ancien « effacer »).
+  function setNotice(text: string | null) {
+    if (text) notify("ok", text);
+  }
+  function setActionError(text: string | null) {
+    if (!text) return;
+    setToasts((current) =>
+      current.some((toast) => toast.kind === "error" && toast.text === text)
+        ? current
+        : [...current.slice(-4), makeToast("error", text)],
+    );
+  }
   // A refused (409, non-empty) folder deletion is actionable: keep the target
   // so the user can empty it and retry, instead of losing the failure.
   const [folderDeleteError, setFolderDeleteError] = useState<{
@@ -2361,19 +2373,6 @@ export function ObjectsPage() {
         measuredLabel={usageQuery.data ? formatDateTime(usageQuery.data.measured_at) : ""}
       />
 
-      {actionError ? (
-        <p role="alert" className="alert alert-error">
-          {actionError}
-          <button
-            type="button"
-            className="btn btn-ghost btn-small"
-            onClick={() => setActionError(null)}
-          >
-            Fermer
-          </button>
-        </p>
-      ) : null}
-
       {master.active ? (
         <MasterModeBanner secondsLeft={master.secondsLeft} csrf={csrf} />
       ) : null}
@@ -2430,19 +2429,6 @@ export function ObjectsPage() {
           />
         </div>
       ) : null}
-      {notice ? (
-        <p role="status" className="alert alert-ok">
-          {notice}
-          <button
-            type="button"
-            className="btn btn-ghost btn-small"
-            onClick={() => setNotice(null)}
-          >
-            Fermer
-          </button>
-        </p>
-      ) : null}
-
       {folderDeleteError ? (
         <p role="alert" className="alert alert-error">
           Le dossier «&nbsp;{folderDeleteError.name}&nbsp;» n'est pas vide : supprimez
@@ -2975,10 +2961,12 @@ export function ObjectsPage() {
         ) : (
           <>
             {selectedIds.size > 0 ? (
-              <p role="status" className="alert">
-                {selectedIds.size === 1
-                  ? "1 objet sélectionné."
-                  : `${selectedIds.size} objets sélectionnés.`}{" "}
+              <div role="status" className="bulk-bar">
+                <strong className="bulk-bar-count">
+                  {selectedIds.size === 1
+                    ? "1 objet sélectionné"
+                    : `${selectedIds.size} objets sélectionnés`}
+                </strong>{" "}
                 <button
                   type="button"
                   className="btn btn-ghost btn-small"
@@ -3021,7 +3009,7 @@ export function ObjectsPage() {
                     {deleteManyProgress.total}…
                   </span>
                 ) : null}
-              </p>
+              </div>
             ) : null}
             {viewMode === "grid" ? (
               <div className="object-grid" role="list">
