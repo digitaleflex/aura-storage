@@ -13,7 +13,7 @@ const FOLDER = {
   owner_id: "u1",
   parent_id: null,
   name: "Documents",
-  created_at: 1_700_000_000,
+  created_at: Math.floor(Date.now() / 1000) - 60,
 };
 
 type MockShare = {
@@ -61,7 +61,7 @@ async function setup(page: Page, shares: MockShare[]) {
         expires_in: number;
         max_uses: number | null;
       };
-      const now = 1_700_000_000;
+      const now = Math.floor(Date.now() / 1000);
       const created: MockShare = {
         id: "share-1", folder_id: "folder-1", created_by: "u1",
         created_by_kind: "user", created_at: now,
@@ -128,8 +128,8 @@ test("creating a folder link shows the one-time URL", async ({ page }) => {
 test("a folder link can be revoked after confirmation", async ({ page }) => {
   const shares: MockShare[] = [{
     id: "share-1", folder_id: "folder-1", created_by: "u1",
-    created_by_kind: "user", created_at: 1_700_000_000,
-    expires_at: 1_800_000_000, max_uses: null, use_count: 0,
+    created_by_kind: "user", created_at: Math.floor(Date.now() / 1000) - 60,
+    expires_at: Math.floor(Date.now() / 1000) + 30 * 86_400, max_uses: null, use_count: 0,
     last_used_at: null, revoked_at: null, active: true,
   }];
   await setup(page, shares);

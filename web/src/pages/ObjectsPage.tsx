@@ -45,6 +45,7 @@ import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
+import { Icon } from "../components/Icon";
 import { RowMenu } from "../components/RowMenu";
 import { describeError } from "../lib/errors";
 import { PreviewModal } from "../components/PreviewModal";
@@ -361,8 +362,20 @@ export function ObjectsPage() {
   const [pendingFolderEntries, setPendingFolderEntries] = useState<{ file: File; rel: string }[]>([]);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  // Retours d'action : des toasts (là où l'action a eu lieu), plus des
+  // bandeaux qui poussent le contenu. Les succès disparaissent seuls, les
+  // erreurs restent jusqu'à fermeture. `null` est ignoré (ancien « effacer »).
+  function setNotice(text: string | null) {
+    if (text) notify("ok", text);
+  }
+  function setActionError(text: string | null) {
+    if (!text) return;
+    setToasts((current) =>
+      current.some((toast) => toast.kind === "error" && toast.text === text)
+        ? current
+        : [...current.slice(-4), makeToast("error", text)],
+    );
+  }
   // A refused (409, non-empty) folder deletion is actionable: keep the target
   // so the user can empty it and retry, instead of losing the failure.
   const [folderDeleteError, setFolderDeleteError] = useState<{
@@ -694,21 +707,9 @@ export function ObjectsPage() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [transferActive]);
 
-  // Raccourcis clavier : / pour focus recherche
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (isTextEntryTarget(event.target)) return;
-      // Un "/" majuscule ouvre la légende, pas la recherche : les deux
-      // raccourcis partagent la même touche physique.
-      if (event.key === "/" && !event.shiftKey) {
-        event.preventDefault();
-        const searchInput = document.querySelector('input[name="filter"]') as HTMLInputElement;
-        if (searchInput) searchInput.focus();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  // `/` et Ctrl/Cmd+K ouvrent la recherche globale : ils sont gérés par
+  // SearchBar (un seul propriétaire du raccourci, sinon deux gestionnaires
+  // se disputent le focus).
 
   // Coller-pour-importer (Ctrl+V / Cmd+V)
   useEffect(() => {
@@ -2228,7 +2229,9 @@ export function ObjectsPage() {
           aria-current={currentFolderId === null ? "page" : undefined}
           onClick={() => setCurrentFolderId(null)}
         >
-          <span className="crumb-icon">🏠</span>
+          <span className="crumb-icon" aria-hidden="true">
+            <Icon name="home" size={16} />
+          </span>
           <span className="crumb-label">Mes fichiers</span>
         </button>
         {breadcrumb.map((folder, index) => (
@@ -2244,7 +2247,9 @@ export function ObjectsPage() {
               aria-current={index === breadcrumb.length - 1 ? "page" : undefined}
               onClick={() => setCurrentFolderId(folder.id)}
             >
-              <span className="crumb-icon">📁</span>
+              <span className="crumb-icon" aria-hidden="true">
+                <Icon name="folder" size={16} />
+              </span>
               <span className="crumb-label">{folder.name}</span>
             </button>
           </span>
@@ -2356,19 +2361,6 @@ export function ObjectsPage() {
         measuredLabel={usageQuery.data ? formatDateTime(usageQuery.data.measured_at) : ""}
       />
 
-      {actionError ? (
-        <p role="alert" className="alert alert-error">
-          {actionError}
-          <button
-            type="button"
-            className="btn btn-ghost btn-small"
-            onClick={() => setActionError(null)}
-          >
-            Fermer
-          </button>
-        </p>
-      ) : null}
-
       {master.active ? (
         <MasterModeBanner secondsLeft={master.secondsLeft} csrf={csrf} />
       ) : null}
@@ -2425,19 +2417,6 @@ export function ObjectsPage() {
           />
         </div>
       ) : null}
-      {notice ? (
-        <p role="status" className="alert alert-ok">
-          {notice}
-          <button
-            type="button"
-            className="btn btn-ghost btn-small"
-            onClick={() => setNotice(null)}
-          >
-            Fermer
-          </button>
-        </p>
-      ) : null}
-
       {folderDeleteError ? (
         <p role="alert" className="alert alert-error">
           Le dossier «&nbsp;{folderDeleteError.name}&nbsp;» n'est pas vide : supprimez
@@ -2970,10 +2949,12 @@ export function ObjectsPage() {
         ) : (
           <>
             {selectedIds.size > 0 ? (
-              <p role="status" className="alert">
-                {selectedIds.size === 1
-                  ? "1 objet sélectionné."
-                  : `${selectedIds.size} objets sélectionnés.`}{" "}
+              <div role="status" className="bulk-bar">
+                <strong className="bulk-bar-count">
+                  {selectedIds.size === 1
+                    ? "1 objet sélectionné"
+                    : `${selectedIds.size} objets sélectionnés`}
+                </strong>{" "}
                 <button
                   type="button"
                   className="btn btn-ghost btn-small"
@@ -3016,7 +2997,7 @@ export function ObjectsPage() {
                     {deleteManyProgress.total}…
                   </span>
                 ) : null}
-              </p>
+              </div>
             ) : null}
             {viewMode === "grid" ? (
               <div className="object-grid" role="list">
@@ -3897,9 +3878,9 @@ export function ObjectsPage() {
         <dl className="shortcut-list">
           <div>
             <dt>
-              <kbd>/</kbd>
+              <kbd>/</kbd> ou <kbd>Ctrl</kbd> + <kbd>K</kbd>
             </dt>
-            <dd>Rechercher dans le dossier courant</dd>
+            <dd>Ouvrir la recherche</dd>
           </div>
           <div>
             <dt>

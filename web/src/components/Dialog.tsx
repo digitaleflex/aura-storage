@@ -51,7 +51,21 @@ export function Dialog({
   }, [open, titleId]);
 
   return (
-    <dialog ref={ref} className="dialog" onClose={onClose} aria-labelledby={titleId}>
+    <dialog
+      ref={ref}
+      className="dialog"
+      onClose={onClose}
+      // Chrome ne ferme pas toujours un <dialog> modal sur Échap (garde
+      // anti-abus des « close watchers » sans activation utilisateur récente) :
+      // on route Échap explicitement pour que la touche ferme toujours.
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onClose();
+        }
+      }}
+      aria-labelledby={titleId}
+    >
       <div className="dialog-head">
         <h2 id={titleId}>{title}</h2>
         <button

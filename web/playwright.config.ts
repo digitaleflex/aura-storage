@@ -15,6 +15,20 @@ export default defineConfig({
   retries: 0,
   use: {
     baseURL: "http://127.0.0.1:5173",
+    // Le tour d'accueil (ISSUE-025) redirige chaque première connexion vers
+    // /onboarding : sans cette clé, tous les tests qui se connectent
+    // n'atteignent jamais la page Fichiers. Un utilisateur qui a déjà vu le tour
+    // d'accueil est le cas par défaut ; le tour lui-même se teste en vidant
+    // `storageState` dans le test concerné.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: "http://127.0.0.1:5173",
+          localStorage: [{ name: "aura_onboarding_seen", value: "1" }],
+        },
+      ],
+    },
     launchOptions: {
       // Headless environments without GPU: avoid the gpu-process sandbox
       // crash seen with the default flags.
