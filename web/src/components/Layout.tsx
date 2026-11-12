@@ -308,10 +308,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
         />
       </aside>
 
-      {/* Barre de recherche globale — accessible depuis n'importe quelle page */}
-      <header className="search-header" aria-label="Recherche globale">
-        <SearchBar alwaysOpen={false} />
-      </header>
 
       {/* Mobile drawer overlay */}
       {mobileOpen ? (
@@ -376,17 +372,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             aria-controls="mobile-navigation"
             onClick={() => setMobileOpen(true)}
           >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-            >
-              <path d="M3 12h18M3 6h18M3 18h18" />
-            </svg>
+            <Icon name="menu" />
           </button>
           {/* Bouton de togglage sidebar (réduire/agrandir) sur grand écran */}
           <button
@@ -395,18 +381,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
             aria-pressed={sidebarCollapsed}
             onClick={() => toggleSidebar(!sidebarCollapsed)}
           >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-            >
-              <path d="M3 12h18M3 6h18M3 18h18" />
-            </svg>
+            <Icon name="sidebar" />
           </button>
+          {/* Recherche globale : au centre de la barre du haut, sur toutes les pages. */}
+          <div className="topbar-search" role="search" aria-label="Recherche globale">
+            <SearchBar alwaysOpen={false} />
+          </div>
           <div className="session">
             {csrf ? (
               <>

@@ -1,0 +1,300 @@
+/* AURA Vault — UI v3 (direction « Vault », nov. 2026).
+ *
+ * Couche de présentation chargée en dernier : elle ne change ni les routes, ni
+ * les données, ni le comportement. Elle ne consomme que les jetons existants
+ * (styles.css + aura-vault-refresh.css) et reste valable en thème clair comme
+ * en thème sombre.
+ *
+ * Principes :
+ *  - barre latérale = panneau sombre arrondi, détaché des bords ;
+ *  - page = grande feuille arrondie posée sur un fond doux ;
+ *  - barre du haut transparente, recherche globale au centre ;
+ *  - un seul bouton plein par écran (l'ambre est réservé à l'action).
+ */
+
+/* ---------------------------------------------------------------------- */
+/* Boutons, champs, cartes : rayons plus doux                              */
+/* ---------------------------------------------------------------------- */
+.btn {
+  border-radius: 12px;
+}
+
+.btn-small {
+  border-radius: 10px;
+}
+
+.field input[type="text"],
+.field input[type="password"],
+.field input[type="search"],
+.field input[type="number"],
+.field input[type="date"],
+.field select,
+.field textarea {
+  border-radius: 12px;
+}
+
+.card {
+  border-radius: 16px;
+  box-shadow: none;
+  border: 1px solid var(--line);
+}
+
+.page-head h1 {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+/* Synthèse du coffre : bandeau de quatre repères, plat et compact. */
+.overview {
+  gap: 12px;
+}
+
+.overview-tile {
+  border-radius: 14px;
+  box-shadow: none;
+  padding: 14px 16px;
+}
+
+.overview-value {
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+
+.overview-sub {
+  font-size: 12px;
+}
+
+.ledger-row {
+  border-radius: 12px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Recherche globale (dans la barre du haut)                               */
+/* ---------------------------------------------------------------------- */
+.topbar-search {
+  flex: 1 1 auto;
+  max-width: 560px;
+  min-width: 0;
+  margin: 0 auto;
+  position: relative;
+}
+
+.search-bar-container {
+  position: relative;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.search-toggle {
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: var(--bw) solid var(--line);
+  background: var(--steel-1);
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.search-toggle:hover {
+  background: var(--steel-1);
+  border-color: var(--line-2);
+  color: var(--ink-2);
+}
+
+.search-toggle-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.search-toggle-kbd {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: var(--bw) solid var(--line);
+  background: transparent;
+  color: var(--muted);
+}
+
+.search-icon {
+  display: flex;
+  left: 14px;
+  color: var(--muted);
+}
+
+.search-input {
+  height: 40px;
+  padding: 0 44px 0 40px;
+  border-radius: 12px;
+  border: var(--bw) solid var(--line-2);
+  background: var(--steel-1);
+  color: var(--ink);
+}
+
+.search-input:focus {
+  border-color: var(--signal);
+  background: var(--steel-1);
+}
+
+.search-input::placeholder {
+  color: var(--muted);
+}
+
+.search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.search-results {
+  top: calc(100% + 6px);
+  background: var(--steel-1);
+  border: var(--bw) solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-2);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Coque : bureau et tablette                                              */
+/* ---------------------------------------------------------------------- */
+@media (min-width: 761px) {
+  .shell {
+    padding: 12px;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .sidebar {
+    top: 12px;
+    height: calc(100vh - 24px);
+    border: 0;
+    border-radius: 20px;
+  }
+
+  .main {
+    gap: 12px;
+    min-height: calc(100vh - 24px);
+    background: transparent;
+  }
+
+  /* Barre du haut : transparente sur le fond, collante, sans filet. */
+  .topbar {
+    top: 0;
+    height: 60px;
+    margin-top: -12px;
+    padding: 12px 4px 0;
+    box-sizing: border-box;
+    gap: 12px;
+    background: var(--steel-0);
+    backdrop-filter: none;
+    border-bottom: 0;
+    color: var(--ink);
+  }
+
+  .topbar .session {
+    margin-left: 0;
+    gap: 6px;
+  }
+
+  /* Feuille de contenu. */
+  .content {
+    flex: 1 1 auto;
+    max-width: none;
+    box-sizing: border-box;
+    padding: 28px 32px 120px;
+    background: var(--steel-1);
+    border: var(--bw) solid var(--line);
+    border-radius: 20px;
+  }
+}
+
+/* La barre du haut n'est plus sombre : texte et boutons suivent le thème. */
+.topbar,
+.topbar .whoami-name {
+  color: var(--ink);
+}
+
+.topbar .whoami-role {
+  color: var(--muted);
+}
+
+.topbar .btn-ghost,
+.topbar .topbar-sidebar-toggle,
+.topbar .topbar-mobile-toggle,
+.topbar .session a {
+  color: var(--ink-2);
+}
+
+.topbar .btn-ghost:hover,
+.topbar .topbar-sidebar-toggle:hover,
+.topbar .topbar-mobile-toggle:hover {
+  background: var(--steel-2);
+  color: var(--ink);
+}
+
+.topbar .btn-ghost {
+  border-radius: 12px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Mobile                                                                  */
+/* ---------------------------------------------------------------------- */
+@media (max-width: 760px) {
+  .topbar {
+    gap: 4px;
+    background: var(--steel-0);
+    border-bottom: var(--bw) solid var(--line);
+  }
+
+  /* La recherche se réduit à une icône ; ouverte, elle prend toute la barre. */
+  .topbar-search {
+    flex: 0 0 auto;
+    margin: 0 0 0 auto;
+  }
+
+  .search-toggle {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .search-toggle-label,
+  .search-toggle-kbd {
+    display: none;
+  }
+
+  .topbar-search:has(.search-input) {
+    position: absolute;
+    inset: 8px 8px auto 8px;
+    z-index: var(--z-menu);
+    max-width: none;
+    margin: 0;
+  }
+
+  /* Le nom et le rôle ne tiennent pas : l'avatar suffit. */
+  .topbar .whoami-text {
+    display: none;
+  }
+
+  .content {
+    padding-inline: 16px;
+  }
+}
