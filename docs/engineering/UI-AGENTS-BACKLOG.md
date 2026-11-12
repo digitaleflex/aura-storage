@@ -18,10 +18,16 @@ le livre en une PR, coche la case dans cette même PR, puis s'arrête.
    passer au vert.
 4. **PR** : gabarit `.github/PULL_REQUEST_TEMPLATE.md`, titre `type(ui): …`,
    cases du backlog cochées dans la même PR. Pied de page d'attribution Claude.
-5. **Merge** : attendre que **toutes** les vérifications de la PR soient vertes
-   (`CI Tests (PR)` : build, tests unitaires, API, e2e ; `Validate storage
-   configuration`) et que la PR soit fusionnable. Alors seulement : merge
-   **squash**, puis supprimer la branche.
+5. **Merge** : attendre que les vérifications **propres au front** soient
+   vertes : `unit-tests`, `e2e` (workflow `CI Tests (PR)`) et `config`
+   (workflow `Validate storage configuration`), et que la PR soit fusionnable.
+   **Exception actée (2026-11-12)** : le job `api-postgres` est rouge sur
+   `main` depuis au moins le 2026-11-05 (erreur Postgres
+   `object_revisions_object_id_revision_number_key`), indépendamment du front ;
+   il ne bloque pas le merge d'une PR qui ne touche pas `api/`. Un autre job
+   rouge, ou `api-postgres` rouge pour une raison nouvelle, bloque. Alors
+   seulement : merge **squash**, puis supprimer la branche. À retirer dès que
+   `api-postgres` est réparé sur `main`.
 6. **Si rouge** : lire le journal, corriger, repousser (2 tentatives
    maximum). Toujours rouge → fermer la PR, marquer le paquet `⛔ bloqué :
    <raison>` dans le backlog (PR docs séparée, mergée si verte) et passer au
