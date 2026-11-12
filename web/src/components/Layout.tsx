@@ -9,6 +9,15 @@ import { useTransfers } from "../lib/transferContext";
 import { readStorage, writeStorage } from "../lib/safeStorage";
 import { hasSeenOnboarding } from "../lib/onboarding";
 import { SearchBar } from "./SearchBar";
+import { Icon, type IconName } from "./Icon";
+
+interface NavItem {
+  to: string;
+  label: string;
+  icon: IconName;
+  active: boolean;
+  badge?: number;
+}
 
 /** Local copy of formatBytes to avoid circular import with ObjectsPage. */
 function formatBytes(size: number): string {
@@ -223,6 +232,47 @@ export function Layout({ children }: { children: React.ReactNode }) {
     }
   }, [session.data, location.pathname, navigate]);
 
+  // Source unique de la navigation : le menu latéral et le tiroir mobile
+  // rendent la même liste (ajouter une page = une ligne ici).
+  const navItems: NavItem[] = [
+    { to: "/", label: "Fichiers", icon: "folder", active: isFilesPage },
+    {
+      to: "/transfers",
+      label: "Transferts",
+      icon: "transfer",
+      active: isTransfersPage,
+      // Compteur purement décoratif (aria-hidden) : le nom du lien suffit.
+      badge: transfers.queue.items.length,
+    },
+    { to: "/dashboard", label: "Tableau de bord", icon: "dashboard", active: location.pathname === "/dashboard" },
+    { to: "/shares", label: "Partages", icon: "share", active: location.pathname === "/shares" },
+    { to: "/trash", label: "Corbeille", icon: "trash", active: location.pathname === "/trash" },
+    { to: "/diagnostic", label: "Diagnostic réseau", icon: "pulse", active: isDiagPage },
+    ...(canAdmin
+      ? [{ to: "/admin", label: "Administration", icon: "shield" as const, active: location.pathname === "/admin" }]
+      : []),
+    { to: "/settings", label: "Paramètres", icon: "settings", active: location.pathname === "/settings" },
+    { to: "/help", label: "Aide", icon: "help", active: location.pathname === "/help" },
+  ];
+
+  const renderNavLink = (item: NavItem, onNavigate: () => void) => (
+    <Link
+      key={item.to}
+      to={item.to}
+      activeOptions={{ exact: true }}
+      className={item.active ? "nav-link nav-link-active" : "nav-link"}
+      onClick={onNavigate}
+    >
+      <Icon name={item.icon} />
+      {item.label}
+      {item.badge ? (
+        <span className="nav-badge" aria-hidden="true">
+          {item.badge}
+        </span>
+      ) : null}
+    </Link>
+  );
+
   return (
     <div className={`shell${isTransfersPage ? " shell-transfers" : ""}`}>
       <a className="skip-link" href="#main-content">
@@ -247,239 +297,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Navigation principale */}
         <nav className="nav" aria-label="Navigation principale">
-          {/* Élément : Fichiers — état actif via classe .nav-link-active */}
-          <Link
-            to="/"
-            activeOptions={{ exact: true }}
-            className={isFilesPage ? "nav-link nav-link-active" : "nav-link"}
-            onClick={() => toggleSidebar(false)}
-          >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-            >
-              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
-            </svg>
-            Fichiers
-          </Link>
-          {/* Entrée : Transferts — file d'importation de la session courante.
-              Le compteur reste un ornement (aria-hidden) : le nom accessible
-              du lien suffit, un lecteur d'écran n'a pas besoin du nombre. */}
-          <Link
-            to="/transfers"
-            activeOptions={{ exact: true }}
-            className={
-              isTransfersPage ? "nav-link nav-link-active" : "nav-link"
-            }
-            onClick={() => toggleSidebar(false)}
-          >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M7 20V5M7 20l-3-3M7 20l3-3" />
-              <path d="M17 4v15M17 4l-3 3M17 4l3 3" />
-            </svg>
-            Transferts
-            {transfers.queue.items.length > 0 ? (
-              <span className="nav-badge" aria-hidden="true">
-                {transfers.queue.items.length}
-              </span>
-            ) : null}
-          </Link>
-          {/* Entrée : Tableau de bord — vue d'agrégation de l'espace. */}
-          <Link
-            to="/dashboard"
-            activeOptions={{ exact: true }}
-            className={
-              location.pathname === "/dashboard"
-                ? "nav-link nav-link-active"
-                : "nav-link"
-            }
-            onClick={() => toggleSidebar(false)}
-          >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M3 12h4l2-6 4 12 2-6h6" />
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            </svg>
-            Tableau de bord
-          </Link>
-          {/* Entrée : Partages — gestion des liens publics. */}
-          <Link
-            to="/shares"
-            activeOptions={{ exact: true }}
-            className={
-              location.pathname === "/shares"
-                ? "nav-link nav-link-active"
-                : "nav-link"
-            }
-            onClick={() => toggleSidebar(false)}
-          >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M4 12v1a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-1" />
-              <path d="M12 4v16" />
-              <path d="M8 12h8" />
-            </svg>
-            Partages
-          </Link>
-          {/* Entrée : Corbeille — objets supprimés, restaurez ou purgez. */}
-          <Link
-            to="/trash"
-            activeOptions={{ exact: true }}
-            className={
-              location.pathname === "/trash"
-                ? "nav-link nav-link-active"
-                : "nav-link"
-            }
-            onClick={() => toggleSidebar(false)}
-          >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-            </svg>
-            Corbeille
-          </Link>
-          <Link
-            to="/diagnostic"
-            activeOptions={{ exact: true }}
-            className={isDiagPage ? "nav-link nav-link-active" : "nav-link"}
-            onClick={() => toggleSidebar(false)}
-          >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M3 12h4l2-6 4 12 2-6h6" />
-            </svg>
-            Diagnostic réseau
-          </Link>
-          {canAdmin ? (
-            <Link
-              to="/admin"
-              activeOptions={{ exact: true }}
-              className={
-                location.pathname === "/admin" ? "nav-link nav-link-active" : "nav-link"
-              }
-              onClick={() => toggleSidebar(false)}
-            >
-              <svg
-                aria-hidden="true"
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-              >
-                <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
-              </svg>
-              Administration
-            </Link>
-          ) : null}
-          {/* Entrée : Paramètres — compte, préférences, déconnexion. */}
-          <Link
-            to="/settings"
-            activeOptions={{ exact: true }}
-            className={
-              location.pathname === "/settings"
-                ? "nav-link nav-link-active"
-                : "nav-link"
-            }
-            onClick={() => toggleSidebar(false)}
-          >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-.33-1.82 1.65 1.65 0 0 0 1-1.51V4a2 2 0 0 1 2-2 1.65 1.65 0 0 0 .33-1.82l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.05c.45.05.89.25 1.1.57m-10.2 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2" />
-            </svg>
-            Paramètres
-          </Link>
-          {/* Entrée : Aide — guide rapide et FAQ. */}
-          <Link
-            to="/help"
-            activeOptions={{ exact: true }}
-            className={
-              location.pathname === "/help"
-                ? "nav-link nav-link-active"
-                : "nav-link"
-            }
-            onClick={() => toggleSidebar(false)}
-          >
-            <svg
-              aria-hidden="true"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-              <path d="M12 17h.01" />
-            </svg>
-            Aide
-          </Link>
+          {navItems.map((item) => renderNavLink(item, () => toggleSidebar(false)))}
         </nav>
 
         {/* Indicateur de stockage réel (capacité admin uniquement). */}
@@ -532,239 +350,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 aria-label="Fermer le menu"
                 onClick={() => closeMobile()}
               >
-                ✕
+                <Icon name="close" />
               </button>
             </div>
             <nav className="mobile-drawer-nav" aria-label="Navigation mobile">
-              <Link
-                to="/"
-                activeOptions={{ exact: true }}
-                className={isFilesPage ? "nav-link nav-link-active" : "nav-link"}
-                onClick={() => closeMobile(false)}
-              >
-                <svg
-                  aria-hidden="true"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                >
-                  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
-                </svg>
-                Fichiers
-              </Link>
-              <Link
-                to="/transfers"
-                activeOptions={{ exact: true }}
-                className={
-                  isTransfersPage ? "nav-link nav-link-active" : "nav-link"
-                }
-                onClick={() => closeMobile(false)}
-              >
-                <svg
-                  aria-hidden="true"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M7 20V5M7 20l-3-3M7 20l3-3" />
-                  <path d="M17 4v15M17 4l-3 3M17 4l3 3" />
-                </svg>
-                Transferts
-                {transfers.queue.items.length > 0 ? (
-                  <span className="nav-badge" aria-hidden="true">
-                    {transfers.queue.items.length}
-                  </span>
-                ) : null}
-              </Link>
-              {/* Entrée : Tableau de bord (mobile). */}
-              <Link
-                to="/dashboard"
-                activeOptions={{ exact: true }}
-                className={
-                  location.pathname === "/dashboard"
-                    ? "nav-link nav-link-active"
-                    : "nav-link"
-                }
-                onClick={() => closeMobile(false)}
-              >
-                <svg
-                  aria-hidden="true"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M3 12h4l2-6 4 12 2-6h6" />
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                </svg>
-                Tableau de bord
-              </Link>
-              {/* Entrée : Partages (mobile). */}
-              <Link
-                to="/shares"
-                activeOptions={{ exact: true }}
-                className={
-                  location.pathname === "/shares"
-                    ? "nav-link nav-link-active"
-                    : "nav-link"
-                }
-                onClick={() => closeMobile(false)}
-              >
-                <svg
-                  aria-hidden="true"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M4 12v1a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-1" />
-                  <path d="M12 4v16" />
-                  <path d="M8 12h8" />
-                </svg>
-                Partages
-              </Link>
-              {/* Entrée : Corbeille (mobile). */}
-              <Link
-                to="/trash"
-                activeOptions={{ exact: true }}
-                className={
-                  location.pathname === "/trash"
-                    ? "nav-link nav-link-active"
-                    : "nav-link"
-                }
-                onClick={() => closeMobile(false)}
-              >
-                <svg
-                  aria-hidden="true"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <polyline points="3 6 5 6 21 6" />
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                </svg>
-                Corbeille
-              </Link>
-              {/* Entrée : Paramètres (mobile). */}
-              <Link
-                to="/settings"
-                activeOptions={{ exact: true }}
-                className={
-                  location.pathname === "/settings"
-                    ? "nav-link nav-link-active"
-                    : "nav-link"
-                }
-                onClick={() => closeMobile(false)}
-              >
-                <svg
-                  aria-hidden="true"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0 1-1.51V4a2 2 0 0 1 2-2 1.65 1.65 0 0 0 .33-1.82l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.05c.45.05.89.25 1.1.57m-10.2 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2" />
-                </svg>
-                Paramètres
-              </Link>
-              {/* Entrée : Aide (mobile). */}
-              <Link
-                to="/help"
-                activeOptions={{ exact: true }}
-                className={
-                  location.pathname === "/help"
-                    ? "nav-link nav-link-active"
-                    : "nav-link"
-                }
-                onClick={() => closeMobile(false)}
-              >
-                <svg
-                  aria-hidden="true"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="10" />
-                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                  <path d="M12 17h.01" />
-                </svg>
-                Aide
-              </Link>
-              <Link
-                to="/diagnostic"
-                activeOptions={{ exact: true }}
-                className={isDiagPage ? "nav-link nav-link-active" : "nav-link"}
-                onClick={() => closeMobile(false)}
-              >
-                <svg
-                  aria-hidden="true"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M3 12h4l2-6 4 12 2-6h6" />
-                </svg>
-                Diagnostic réseau
-              </Link>
-              {canAdmin ? (
-                <Link
-                  to="/admin"
-                  activeOptions={{ exact: true }}
-                  className={
-                    location.pathname === "/admin" ? "nav-link nav-link-active" : "nav-link"
-                  }
-                  onClick={() => closeMobile(false)}
-                >
-                  <svg
-                    aria-hidden="true"
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                  >
-                    <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
-                  </svg>
-                  Administration
-                </Link>
-              ) : null}
+              {navItems.map((item) => renderNavLink(item, () => closeMobile(false)))}
             </nav>
             <StorageUsage
               usage={usageQuery.data}
@@ -837,7 +427,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   aria-label="Changer la densité d'affichage"
                   onClick={() => setDensity((d) => (d === "compact" ? "comfortable" : "compact"))}
                 >
-                  {density === "compact" ? " ≡ " : " ☰ "}
+                  <Icon name={density === "compact" ? "density-compact" : "density-comfortable"} />
                 </button>
                 <button
                   type="button"
@@ -847,7 +437,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     setTheme((t) => (t === "dark" ? "light" : t === "light" ? "auto" : "dark"))
                   }
                 >
-                  {theme === "dark" ? "🌙" : theme === "light" ? "☀️" : "💻"}
+                  <Icon name={theme === "dark" ? "moon" : theme === "light" ? "sun" : "monitor"} />
                 </button>
                 <button
                   type="button"

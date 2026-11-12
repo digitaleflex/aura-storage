@@ -176,7 +176,10 @@ export function SearchBar({
         return;
       }
 
-      if (event.key === "/" || event.key === "k" && (event as KeyboardEvent).metaKey) {
+      if (
+        event.key === "/" ||
+        (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey))
+      ) {
         event.preventDefault();
         setIsOpen(true);
         requestAnimationFrame(() => inputRef.current?.focus());

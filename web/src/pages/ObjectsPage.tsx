@@ -45,6 +45,7 @@ import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { makeToast, ToastStack, type Toast } from "../components/Toasts";
 import { FolderMark } from "../components/FolderMark";
+import { Icon } from "../components/Icon";
 import { RowMenu } from "../components/RowMenu";
 import { describeError } from "../lib/errors";
 import { PreviewModal } from "../components/PreviewModal";
@@ -2228,7 +2229,9 @@ export function ObjectsPage() {
           aria-current={currentFolderId === null ? "page" : undefined}
           onClick={() => setCurrentFolderId(null)}
         >
-          <span className="crumb-icon">🏠</span>
+          <span className="crumb-icon" aria-hidden="true">
+            <Icon name="home" size={16} />
+          </span>
           <span className="crumb-label">Mes fichiers</span>
         </button>
         {breadcrumb.map((folder, index) => (
@@ -2244,7 +2247,9 @@ export function ObjectsPage() {
               aria-current={index === breadcrumb.length - 1 ? "page" : undefined}
               onClick={() => setCurrentFolderId(folder.id)}
             >
-              <span className="crumb-icon">📁</span>
+              <span className="crumb-icon" aria-hidden="true">
+                <Icon name="folder" size={16} />
+              </span>
               <span className="crumb-label">{folder.name}</span>
             </button>
           </span>
