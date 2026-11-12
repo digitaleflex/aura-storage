@@ -36,14 +36,10 @@
 }
 
 .shell-transfers .sidebar {
-  background: var(--aura-sidebar);
-  border-right: 1px solid var(--aura-border);
   padding: 22px 18px 18px;
 }
 
 .shell-transfers .topbar {
-  background: var(--aura-surface);
-  border-bottom: 1px solid var(--aura-border);
   backdrop-filter: none;
 }
 
@@ -51,33 +47,8 @@
   color: var(--aura-text);
 }
 
-/* Brand + navigation */
-.shell-transfers .brand {
-  color: var(--aura-text);
-}
-
-.shell-transfers .brand svg path:first-child {
-  fill: var(--aura-primary);
-}
-
-.shell-transfers .nav-link {
-  color: var(--aura-text-secondary);
-  border: 1px solid transparent;
-}
-
-.shell-transfers .nav-link:hover {
-  background: color-mix(in srgb, var(--aura-primary) 7%, transparent);
-  color: var(--aura-text);
-}
-
-.shell-transfers .nav-link-active,
-.shell-transfers .nav a.nav-link-active {
-  background: color-mix(in srgb, var(--aura-primary) 12%, transparent);
-  border-color: transparent;
-  color: var(--aura-primary);
-  font-weight: 600;
-  box-shadow: inset 3px 0 var(--aura-primary);
-}
+/* Marque et navigation : la barre latérale est sombre dans les deux thèmes
+ * et garde les styles globaux (styles.css), comme sur les autres pages. */
 
 .nav-badge {
   margin-left: auto;
@@ -90,15 +61,15 @@
   justify-content: center;
   font-size: 11px;
   font-weight: 500;
-  background: var(--aura-surface-raised, var(--side-2));
-  border: 1px solid var(--aura-border, var(--side-3));
-  color: var(--aura-text-secondary, var(--side-muted));
+  background: var(--side-3);
+  border: 1px solid var(--side-3);
+  color: var(--side-ink);
 }
 
-.shell-transfers .nav-link-active .nav-badge {
-  background: color-mix(in srgb, var(--aura-primary) 18%, transparent);
+.nav-link-active .nav-badge {
+  background: color-mix(in srgb, var(--signal-bright) 20%, transparent);
   border-color: transparent;
-  color: var(--aura-primary);
+  color: var(--signal-bright);
 }
 
 .sidebar-collapsed .nav-badge {
@@ -515,7 +486,9 @@
 .transfers-tab.is-active {
   border-color: var(--aura-primary);
   background: color-mix(in srgb, var(--aura-primary) 9%, transparent);
-  color: var(--aura-primary);
+  /* --signal-2 : plus foncé en thème clair, plus clair en sombre, pour tenir
+     4,5:1 sur le fond teinté d'ambre (--signal seul donne 4,3:1). */
+  color: var(--signal-2);
 }
 
 .transfers-tab-count {
@@ -1449,12 +1422,6 @@
 .shell-transfers .btn:hover {
   background: color-mix(in srgb, var(--aura-text) 6%, var(--aura-surface-raised));
   border-color: color-mix(in srgb, var(--aura-text) 18%, var(--aura-border));
-}
-
-.shell-transfers .btn-ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--aura-text-secondary);
 }
 
 .shell-transfers .btn-primary {
