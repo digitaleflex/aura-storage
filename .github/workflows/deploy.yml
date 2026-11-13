@@ -27,11 +27,11 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          # Fail the workflow when the remote script fails. Without this,
-          # appleboy/ssh-action reports success even when bootstrap aborts
-          # (it did: npm was missing from the non-interactive PATH and every
-          # "successful" deploy since then never rebuilt the frontend).
-          script_stop: true
+          # Fail the workflow when the remote script fails: scripts/deploy.sh
+          # starts with `set -Eeuo pipefail`, so the first failing step exits
+          # non-zero and ssh-action reports the job as failed. The former
+          # `script_stop` input was removed from appleboy/ssh-action (v1.2.x)
+          # and is ignored; GitHub flags it as an unexpected input.
           # The build runs on the host, whose non-interactive SSH shell does not
           # load the Node version manager profile.
           command_timeout: 25m
