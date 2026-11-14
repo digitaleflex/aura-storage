@@ -21,7 +21,7 @@ export function HelpPage() {
           <h2>Importer des fichiers</h2>
           <ul>
             <li>
-              Allez sur la page <strong>Fichiers</strong> et cliquez sur
+              Allez sur la page <strong>Fichiers</strong> et cliquez sur{" "}
               <strong>Importer</strong>, ou glissez-déposez vos fichiers.
             </li>
             <li>
@@ -62,7 +62,7 @@ export function HelpPage() {
           <h2>Corbeille</h2>
           <ul>
             <li>
-              Supprimer un fichier le place dans la <strong>Corbeille</strong>
+              Supprimer un fichier le place dans la <strong>Corbeille</strong>{" "}
               (soft delete). Il reste récupérable.
             </li>
             <li>

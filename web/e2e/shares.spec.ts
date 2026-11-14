@@ -166,3 +166,15 @@ test("a video offers inline playback for embedding", async ({ page }) => {
   await mode.selectOption("inline");
   await expect(mode).toHaveValue("inline");
 });
+
+test("la page Partages s'affiche sans erreur de rendu", async ({ page }) => {
+  await setup(page, []);
+  const pageErrors: string[] = [];
+  page.on("pageerror", (e) => pageErrors.push(e.message));
+
+  await page.getByRole("link", { name: "Partages", exact: true }).click();
+
+  await expect(page.getByRole("heading", { level: 1, name: "Partages publics" })).toBeVisible();
+  await expect(page.getByText("Cette page n'a pas pu s'afficher")).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});

@@ -106,7 +106,7 @@ export function SettingsPage() {
             Thème sombre
           </label>
           <p className="settings-muted">
-            La préférence est m&eémorisée dans votre navigateur (localStorage).
+            La préférence est mémorisée dans votre navigateur (localStorage).
           </p>
         </section>
 

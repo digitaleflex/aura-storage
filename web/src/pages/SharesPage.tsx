@@ -57,15 +57,7 @@ export function SharesPage() {
     };
   }, []);
 
-  if (loading) {
-    return (
-      <div className="shares-page" data-testid="shares-page">
-        <VaultMark />
-        <p>Chargement des partages&hellip;</p>
-      </div>
-    );
-  }
-
+  // Les hooks restent avant tout retour anticipé (règle des hooks).
   const allEntries = useMemo<ShareEntry[]>(() => {
     const entries: ShareEntry[] = [];
     for (const o of objects) {
@@ -76,6 +68,15 @@ export function SharesPage() {
     }
     return entries.sort((a, b) => a.name.localeCompare(b.name));
   }, [objects, folders]);
+
+  if (loading) {
+    return (
+      <div className="shares-page" data-testid="shares-page">
+        <VaultMark />
+        <p>Chargement des partages&hellip;</p>
+      </div>
+    );
+  }
 
   return (
     <div className="shares-page" data-testid="shares-page">
