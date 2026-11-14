@@ -1438,9 +1438,10 @@ class Repository:
             return False
         if row["status"] == "cancelled":
             return True  # already cancelled: idempotent
-        cur = self._run(
+        # _run renvoie déjà le nombre de lignes modifiées (et non un curseur).
+        updated = self._run(
             "UPDATE import_jobs SET status = 'cancelled', updated_at = %s "
             "WHERE id = %s AND space_id = %s AND status IN ('queued', 'running')",
             (self.now(), jid, space_id),
         )
-        return cur.rowcount > 0
+        return updated > 0
