@@ -87,18 +87,19 @@ async function setup(page: Page) {
   ).toBeVisible();
 }
 
-test("`?` opens the legend and `/` focuses the search field", async ({ page }) => {
+test("`?` opens the legend and `/` focuses the global search field", async ({ page }) => {
   await setup(page);
 
   await page.keyboard.press("Shift+/");
   const legend = page.getByRole("dialog", { name: "Raccourcis clavier" });
   await expect(legend).toBeVisible();
-  await expect(legend.getByText("Rechercher dans le dossier courant")).toBeVisible();
+  await expect(legend.getByText("Ouvrir la recherche")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(legend).toHaveCount(0);
 
   await page.keyboard.press("/");
-  await expect(page.getByLabel("Rechercher")).toBeFocused();
+  // `/` ouvre la recherche globale (SearchBar, ISSUE-026) et y place le focus.
+  await expect(page.getByRole("searchbox", { name: "Recherche globale" })).toBeFocused();
 });
 
 test("Suppr asks for confirmation on a checked selection", async ({ page }) => {

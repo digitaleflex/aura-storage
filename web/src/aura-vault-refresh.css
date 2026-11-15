@@ -36,7 +36,8 @@
   --warn-bg: #2b1d0f;
   --danger: #ff968e;
   --danger-bg: #2b1719;
-  --danger-strong: #b94840;
+  --danger-strong: #ffb0a9;
+  --on-danger: #16080a;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -72,7 +73,8 @@
     --warn-bg: #2b1d0f;
     --danger: #ff968e;
     --danger-bg: #2b1719;
-    --danger-strong: #b94840;
+    --danger-strong: #ffb0a9;
+    --on-danger: #16080a;
   }
 }
 
@@ -544,4 +546,29 @@
   .resume-actions .btn {
     flex: 1 1 100%;
   }
+}
+
+/* Barre de sélection : reste visible pendant le défilement de la liste
+ * (sticky dans la section), au lieu d'une ligne qui sort de l'écran. */
+.bulk-bar {
+  position: sticky;
+  bottom: var(--space-4);
+  z-index: var(--z-sticky);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+  max-width: 100%;
+  margin: var(--space-3) auto;
+  padding: var(--space-2) var(--space-3);
+  background: var(--steel-raised);
+  border: var(--bw) solid var(--line-2);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-2);
+}
+
+.bulk-bar-count {
+  margin-right: var(--space-2);
+  font-weight: 600;
 }

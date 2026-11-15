@@ -150,7 +150,7 @@ export function DashboardPage() {
               </div>
               <p className="dashboard-muted">
                 Mesur&eacute; le{" "}
-                {new Date(usage.measured_at * 1000).toLocaleString()}
+                {new Date(usage.measured_at * 1000).toLocaleString("fr-FR")}
               </p>
             </section>
           ) : null}

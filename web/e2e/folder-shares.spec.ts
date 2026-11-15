@@ -13,7 +13,7 @@ const FOLDER = {
   owner_id: "u1",
   parent_id: null,
   name: "Documents",
-  created_at: 1_700_000_000,
+  created_at: Math.floor(Date.now() / 1000) - 60,
 };
 
 type MockShare = {

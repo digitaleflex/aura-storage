@@ -8,6 +8,7 @@ import { router } from "./router";
 import "./styles.css";
 import "./aura-vault-refresh.css";
 import "./transfers.css";
+import "./vault-v3.css";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const queryClient = new QueryClient({

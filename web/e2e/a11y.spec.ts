@@ -10,6 +10,14 @@ const LOGIN = async (page: import("@playwright/test").Page, role = "admin") => {
 };
 
 test.describe("accessibilite — pages principales", () => {
+  // axe mesure le contraste sur les couleurs calculées : en pleine transition
+  // (fondu d'entrée), les teintes intermédiaires donnent des faux positifs qui
+  // changent à chaque exécution. On coupe les animations, comme le ferait un
+  // utilisateur avec « réduire les animations ».
+  test.beforeEach(async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+  });
+
   test("login desktop", async ({ page }) => {
     await page.goto("/login");
     const results = await new AxeBuilder({ page })
