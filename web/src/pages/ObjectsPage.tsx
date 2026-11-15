@@ -12,13 +12,10 @@ import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import {
   CascadeOp,
   CascadeFailure,
-  CascadeRoot,
   CascadeScanError,
   CascadeState,
-  dedupeCascadeRoots,
   scanCascade,
-  scanCascadeMany,
-  planCascadeOpsForRoots,
+  planCascadeOps,
   cascadeOpKey,
 } from "../lib/cascade";
 import { UploadTray } from "../components/UploadTray";
@@ -56,14 +53,9 @@ import { ShareDialog } from "../components/ShareDialog";
 import type { ShareTarget } from "../components/ShareDialog";
 import { PublishDialog } from "../components/PublishDialog";
 import { PacksDialog } from "../components/PacksDialog";
-import { Breadcrumb } from "../components/Breadcrumb";
-import { EmptyState } from "../components/EmptyState";
 import { TagsEditor } from "../components/TagsEditor";
 import { ObjectAnalytics } from "../components/ObjectAnalytics";
-import {
-  downloadFolderAsZip,
-  downloadSelectionAsZip,
-} from "../lib/zip";
+import { downloadFolderAsZip } from "../lib/zip";
 import {
   MasterModeBanner,
   MasterModeDialog,
@@ -340,22 +332,6 @@ function isDeletable(item: ObjectItem): boolean {
   return item.status === "available" || item.status === "pending";
 }
 
-/** Résumé français de la sélection : accords corrects, zéro partie masquée. */
-function selectionSummary(fileCount: number, folderCount: number): string {
-  const parts: string[] = [];
-  if (fileCount > 0) {
-    parts.push(`${fileCount} ${fileCount === 1 ? "fichier" : "fichiers"}`);
-  }
-  if (folderCount > 0) {
-    parts.push(
-      `${folderCount} ${
-        folderCount === 1 ? "dossier sélectionné" : "dossiers sélectionnés"
-      }`,
-    );
-  }
-  return parts.join(" · ");
-}
-
 
 /** The whole folder tree is fetched in one request (`?all=true`); the hierarchy
  * is rebuilt client-side from parent_id for breadcrumbs and the move pickers. */
@@ -414,14 +390,6 @@ export function ObjectsPage() {
   // Mirror of the live cascade state, read/written by the async run loop where
   // a state updater would otherwise close over a stale render.
   const cascadeRef = useRef<CascadeState | null>(null);
-  // Jeton de génération : un scan lent lancé avant la fermeture ne doit jamais
-  // écraser le plan du flux rouvert ensuite (même première racine).
-  const cascadeTokenRef = useRef(0);
-  // Fichiers sélectionnés hors des dossiers visés : ajoutés aux opérations de
-  // la cascade pour que « Supprimer la sélection » traite toute la sélection.
-  const cascadeExtraFilesRef = useRef<
-    { id: string; name: string; path: string }[]
-  >([]);
   const cascadeCancelRef = useRef(false);
   const cascadeDialogRef = useRef<HTMLDialogElement | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -447,7 +415,6 @@ export function ObjectsPage() {
   const [packsOpen, setPacksOpen] = useState(false);
   const [tagFilter, setTagFilter] = useState("");
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [zippingSelection, setZippingSelection] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // The import panel opens on demand (header button) and stays open while it
   // holds pending files, a queue or an error; a drop anywhere also opens it.
@@ -1123,14 +1090,6 @@ export function ObjectsPage() {
     },
     onSuccess: (_data, id) => {
       setDetails(null);
-      // L'id ne doit pas rester fantôme dans la sélection : il n'existe plus
-      // dans la liste, mais « Suppr » le compterait encore.
-      setSelectedIds((current) => {
-        if (!current.has(id)) return current;
-        const next = new Set(current);
-        next.delete(id);
-        return next;
-      });
       notify("ok", "Objet marqué comme supprimé. Les octets restent jusqu'à une purge.", {
         label: "Annuler",
         onClick: () => restoreMutation.mutate(id),
@@ -1143,29 +1102,13 @@ export function ObjectsPage() {
   // Bulk delete reuses the audited single-object endpoint once per selected
   // file (no bulk API surface): sequential, per-file outcome, server truth.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  // Les ids de fichiers figés à l'ouverture de la confirmation : le texte et
-  // la boucle portent sur exactement le même ensemble, même si un refetch
-  // change le statut ou la pagination entre-temps.
-  const [bulkDeleteIds, setBulkDeleteIds] = useState<string[]>([]);
-  // La sélection appartient au dossier courant : changer de dossier la vide.
-  useEffect(() => {
-    setSelectedIds(new Set());
-  }, [currentFolderId]);
   const deleteManyMutation = useMutation({
     mutationFn: async (ids: string[]) => {
       if (!csrf) throw new Error("Session expirée.");
-      // Un id de dossier ne doit JAMAIS atteindre l'endpoint objet : seuls les
-      // fichiers réellement supprimables (et non les dossiers de l'arbre)
-      // participent à la boucle.
-      const objectIds = ids.filter(
-        (id) =>
-          !byId.has(id) &&
-          items.some((item) => item.id === id && isDeletable(item)),
-      );
       const failed: string[] = [];
       let deleted = 0;
-      setDeleteManyProgress({ done: 0, total: objectIds.length });
-      for (const id of objectIds) {
+      setDeleteManyProgress({ done: 0, total: ids.length });
+      for (const id of ids) {
         try {
           await api.deleteObject(id, csrf);
           deleted += 1;
@@ -1173,37 +1116,27 @@ export function ObjectsPage() {
           const target = items.find((item) => item.id === id);
           failed.push(target?.display_name ?? id);
         } finally {
-          setDeleteManyProgress({
-            done: deleted + failed.length,
-            total: objectIds.length,
-          });
+          setDeleteManyProgress({ done: deleted + failed.length, total: ids.length });
         }
       }
-      const ignored = ids.length - objectIds.length;
-      return { deleted, failed, objectIds, ignored };
+      return { deleted, failed };
     },
-    onSuccess: ({ deleted, failed, objectIds, ignored }) => {
+    onSuccess: ({ deleted, failed }, ids) => {
       setBulkDeleteOpen(false);
-      setBulkDeleteIds([]);
       setDeleteManyProgress(null);
       setSelectedIds(new Set());
       setDetails(null);
-      const ignoredLabel =
-        ignored > 0
-          ? ` ${ignored} ${ignored === 1 ? "ignoré" : "ignorés"} (déjà traités ou plus supprimables).`
-          : "";
       if (failed.length === 0) {
         notify(
           "ok",
-          (deleted === 1
+          deleted === 1
             ? "1 objet marqué comme supprimé. Les octets restent jusqu'à une purge."
-            : `${deleted} objets marqués comme supprimés. Les octets restent jusqu'à une purge.`) +
-            ignoredLabel,
+            : `${deleted} objets marqués comme supprimés. Les octets restent jusqu'à une purge.`,
           {
             label: "Annuler",
             onClick: () => {
               if (!csrf) return;
-              for (const id of objectIds) {
+              for (const id of ids) {
                 void restoreMutation.mutate(id);
               }
             },
@@ -1215,18 +1148,44 @@ export function ObjectsPage() {
           failed.length === 1 ? "1 échec" : `${failed.length} échecs`;
         notify(
           "error",
-          `${deletedLabel}, ${failedLabel} : ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}${ignoredLabel}`,
+          `${deletedLabel}, ${failedLabel} : ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`,
         );
       }
       invalidateLibrary();
     },
     onError: (err) => {
       setBulkDeleteOpen(false);
-      setBulkDeleteIds([]);
       setDeleteManyProgress(null);
       reportError(err, "Suppression en masse impossible.");
     },
   });
+
+  // Raccourcis clavier globaux (P1.1): `?` ouvre la légende et `Suppr`
+  // prépare la suppression de la sélection. Ignorés dans les champs de
+  // saisie et quand un dialogue est ouvert (il a déjà son propre clavier).
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (isTextEntryTarget(event.target)) return;
+      if (document.querySelector("dialog[open]")) return;
+      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
+        // "? peut arriver tel quel (clavier réel) ou comme "/" + Shift
+        // (événement synthétique, claviers où ? exige une autre touche).
+        event.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      if (
+        event.key === "Delete" &&
+        selectedIds.size > 0 &&
+        !deleteManyMutation.isPending
+      ) {
+        event.preventDefault();
+        setBulkDeleteOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedIds.size, deleteManyMutation.isPending]);
 
   const restoreMutation = useMutation({
     mutationFn: (id: string) => {
@@ -1854,136 +1813,6 @@ export function ObjectsPage() {
   );
   const selectableIds = new Set(selectableItems.map((item) => item.id));
 
-  // La barre de sélection ne compte que les identifiants connus : dossiers de
-  // l'arbre et fichiers réellement sélectionnables.
-  const selectedFolderIds = [...selectedIds].filter((id) => byId.has(id));
-  const selectedFileIds = [...selectedIds].filter((id) => selectableIds.has(id));
-  const selectedFolderCount = selectedFolderIds.length;
-  const selectedFileCount = selectedFileIds.length;
-  const selectedKnownCount = selectedFolderCount + selectedFileCount;
-
-  // Un changement de filtre change la population affichée : garder une
-  // sélection devenue invisible produirait des comptes faux et une suppression
-  // partielle silencieuse. Le tri, lui, ne change pas la population.
-  const filterSignature = [
-    debouncedSearch,
-    statusFilter,
-    typeFilter,
-    minSize,
-    maxSize,
-    fromDate,
-    toDate,
-    tagFilter,
-  ].join("\u0000");
-  useEffect(() => {
-    setSelectedIds(new Set());
-  }, [filterSignature]);
-
-  // Élague les identifiants qui ne correspondent plus à rien (objet supprimé
-  // ailleurs, dossier retiré, page rechargée) sans toucher au reste.
-  useEffect(() => {
-    setSelectedIds((current) => {
-      if (current.size === 0) return current;
-      const known = new Set<string>(items.map((item) => item.id));
-      for (const folder of tree) known.add(folder.id);
-      let changed = false;
-      const next = new Set<string>();
-      for (const id of current) {
-        if (known.has(id)) next.add(id);
-        else changed = true;
-      }
-      return changed ? next : current;
-    });
-  }, [items, tree]);
-
-  const selectionBusy =
-    deleteManyMutation.isPending ||
-    bulkPurgeMutation.isPending ||
-    zippingSelection ||
-    cascade?.phase === "scanning" ||
-    cascade?.phase === "deleting";
-
-  /** Télécharge toute la sélection (fichiers seuls ou dossiers complets). */
-  async function handleDownloadSelection() {
-    if (!csrf) {
-      notify("error", "Session expirée. Reconnectez-vous pour télécharger.");
-      return;
-    }
-    setZippingSelection(true);
-    try {
-      await downloadSelectionAsZip(
-        {
-          files: selectedFileIds
-            .map((id) => {
-              const item = items.find((entry) => entry.id === id);
-              return item
-                ? { id: item.id, name: item.display_name, status: item.status }
-                : null;
-            })
-            .filter(
-              (entry): entry is { id: string; name: string; status: string } =>
-                entry !== null,
-            ),
-          folders: selectedFolderIds.map((id) => ({
-            id,
-            name: byId.get(id)?.name ?? id,
-          })),
-        },
-        csrf,
-      );
-      notify("ok", "Archive ZIP téléchargée.");
-    } catch (err) {
-      notify("error", describeError(err, "Impossible de créer l'archive ZIP."));
-    } finally {
-      setZippingSelection(false);
-    }
-  }
-
-  /** Dossier(s) sélectionné(s) : flux cascade ; fichiers seuls : confirmation. */
-  function requestBulkDelete() {
-    if (selectedFolderIds.length > 0) {
-      openBatchCascade(
-        selectedFolderIds.map((id) => ({ id, name: byId.get(id)?.name ?? id })),
-      );
-      return;
-    }
-    const fileIds = selectedFileIds.filter((id) => {
-      const item = items.find((entry) => entry.id === id);
-      return item !== undefined && isDeletable(item);
-    });
-    if (fileIds.length === 0) return;
-    setBulkDeleteIds(fileIds);
-    setBulkDeleteOpen(true);
-  }
-
-  // Raccourcis clavier globaux (P1.1): `?` ouvre la légende et `Suppr`
-  // prépare la suppression de la sélection. Ignorés dans les champs de
-  // saisie et quand un dialogue est ouvert (il a déjà son propre clavier).
-  // Déclaré après la sélection : le handler lit items/arbre à jour.
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (isTextEntryTarget(event.target)) return;
-      if (document.querySelector("dialog[open]")) return;
-      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
-        // "? peut arriver tel quel (clavier réel) ou comme "/" + Shift
-        // (événement synthétique, claviers où ? exige une autre touche).
-        event.preventDefault();
-        setShortcutsOpen(true);
-        return;
-      }
-      if (
-        event.key === "Delete" &&
-        selectedIds.size > 0 &&
-        !deleteManyMutation.isPending
-      ) {
-        event.preventDefault();
-        requestBulkDelete();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedIds, selectedFileIds, selectedFolderIds, items, byId, deleteManyMutation.isPending]);
-
   const currentName = currentFolderId ? byId.get(currentFolderId)?.name : null;
 
   const moveBlocked = moveTarget ? forbiddenTargets(moveTarget.id) : new Set<string>();
@@ -2011,17 +1840,15 @@ export function ObjectsPage() {
 
   /** Open the cascade flow for `target`: scan its real content first. */
   function openCascade(target: { id: string; name: string }) {
-    cascadeTokenRef.current += 1;
     setPendingConfirm(null);
     setFolderDeleteError(null);
     setFolderDeleteWithContent(false);
     setCascadeConfirmText("");
     cascadeCancelRef.current = false;
-    cascadeExtraFilesRef.current = [];
     applyCascade({
       rootId: target.id,
       rootName: target.name,
-      roots: [target],
+      roots: [{ id: target.id, name: target.name }],
       phase: "scanning",
       plan: null,
       ops: [],
@@ -2031,133 +1858,22 @@ export function ObjectsPage() {
       cancelled: false,
       scanError: null,
     });
-    void runCascadeScan([target]);
-  }
-
-  /**
-   * Ouvre le flux cascade pour plusieurs dossiers sélectionnés. Les racines
-   * déjà contenues dans une autre sont retirées avant le scan : leur contenu
-   * sera supprimé une seule fois, avec leur ancêtre.
-   */
-  function openBatchCascade(folders: { id: string; name: string }[]) {
-    if (folders.length === 0) return;
-    const unique = dedupeCascadeRoots(folders, tree);
-    if (unique.length === 0) return;
-    // Les fichiers sélectionnés en dehors des dossiers visés sont ajoutés au
-    // plan pour ne pas laisser une partie de la sélection derrière.
-    const extraFiles = selectedFileIds
-      .map((id) => {
-        const item = items.find((entry) => entry.id === id);
-        return item && isDeletable(item)
-          ? {
-              id: item.id,
-              name: item.display_name,
-              path: folderPath(currentFolderId),
-            }
-          : null;
-      })
-      .filter(
-        (entry): entry is { id: string; name: string; path: string } =>
-          entry !== null,
-      );
-    if (unique.length === 1) {
-      const only = unique[0] as CascadeRoot;
-      openCascade(only);
-      // openCascade réinitialise la référence : on la restaure après coup, le
-      // scan asynchrone lira la valeur au moment de construire les opérations.
-      cascadeExtraFilesRef.current = extraFiles;
-      return;
-    }
-    cascadeExtraFilesRef.current = extraFiles;
-    cascadeTokenRef.current += 1;
-    setPendingConfirm(null);
-    setFolderDeleteError(null);
-    setFolderDeleteWithContent(false);
-    setCascadeConfirmText("");
-    cascadeCancelRef.current = false;
-    applyCascade({
-      rootId: unique[0]?.id ?? "",
-      rootName: `${unique.length} dossiers`,
-      roots: unique,
-      phase: "scanning",
-      plan: null,
-      ops: [],
-      done: 0,
-      current: null,
-      failures: [],
-      cancelled: false,
-      scanError: null,
-    });
-    void runCascadeScan(unique);
+    void runCascadeScan(target.id, target.name);
   }
 
   /** List (never guess) the target's content; failure is surfaced, not hidden. */
-  async function runCascadeScan(roots: CascadeRoot[]) {
+  async function runCascadeScan(rootId: string, rootName: string) {
     const current = cascadeRef.current;
-    if (!current || roots.length === 0) return;
-    const rootId = roots[0]?.id ?? "";
-    // Le jeton est capturé avant l'attente : un flux fermé puis rouvert ne
-    // peut pas recevoir le plan de l'ancien scan, même avec la même racine.
-    const token = cascadeTokenRef.current;
+    if (!current) return;
     applyCascade({ ...current, phase: "scanning", plan: null, scanError: null });
     try {
-      const plan =
-        roots.length > 1
-          ? await scanCascadeMany(roots)
-          : await scanCascade(rootId, roots[0]?.name ?? "");
+      const plan = await scanCascade(rootId, rootName);
       const live = cascadeRef.current;
-      if (
-        token !== cascadeTokenRef.current ||
-        !live ||
-        live.rootId !== rootId ||
-        live.phase !== "scanning"
-      ) {
-        return;
-      }
-      // Les fichiers sélectionnés hors dossiers sont traités après le contenu
-      // des dossiers (ils sont indépendants de leur arborescence).
-      const plannedObjectIds = new Set(plan.objects.map((object) => object.id));
-      const extraOps: CascadeOp[] = cascadeExtraFilesRef.current
-        .filter((file) => !plannedObjectIds.has(file.id))
-        .map((file) => ({
-          kind: "object",
-          id: file.id,
-          label: file.name,
-          path: file.path,
-        }));
-      const ops = [...planCascadeOpsForRoots(plan), ...extraOps];
-      // Rien à supprimer (dossiers disparus entre-temps) : inutile de faire
-      // taper une confirmation pour un flux qui ne ferait rien.
-      if (ops.length === 0) {
-        applyCascade({
-          ...live,
-          phase: "confirm",
-          plan: { ...plan, fileCount: 0, extraFileCount: 0 },
-          ops: [],
-          scanError: "Ces dossiers n'existent plus ou ne contiennent plus rien.",
-        });
-        return;
-      }
-      applyCascade({
-        ...live,
-        phase: "confirm",
-        plan: {
-          ...plan,
-          fileCount: plan.fileCount + extraOps.length,
-          extraFileCount: extraOps.length,
-        },
-        ops,
-      });
+      if (!live || live.rootId !== rootId || live.phase !== "scanning") return;
+      applyCascade({ ...live, phase: "confirm", plan, ops: planCascadeOps(plan) });
     } catch (err) {
       const live = cascadeRef.current;
-      if (
-        token !== cascadeTokenRef.current ||
-        !live ||
-        live.rootId !== rootId ||
-        live.phase !== "scanning"
-      ) {
-        return;
-      }
+      if (!live || live.rootId !== rootId || live.phase !== "scanning") return;
       applyCascade({
         ...live,
         phase: "confirm",
@@ -2197,7 +1913,6 @@ export function ObjectsPage() {
     cascadeCancelRef.current = false;
     let done = start.done;
     let failures = start.failures;
-    let sessionLost = false;
     applyCascade({ ...start, phase: "deleting", current: null, cancelled: false });
 
     for (const op of opsToRun) {
@@ -2221,22 +1936,11 @@ export function ObjectsPage() {
         done += 1;
         failures = failures.filter((failure) => failure.key !== key);
       } catch (err) {
-        // Session expirée ou scope retiré : inutile d'enchaîner N refus.
-        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-          sessionLost = true;
-          break;
-        }
-        // Un objet déjà absent a atteint l'état voulu : ce n'est pas un échec.
-        if (err instanceof ApiError && err.status === 404 && op.kind === "object") {
-          done += 1;
-          failures = failures.filter((failure) => failure.key !== key);
-        } else {
-          const detail = describeError(err, "Échec de suppression.");
-          failures = [
-            ...failures.filter((failure) => failure.key !== key),
-            { key, kind: op.kind, id: op.id, label: op.label, path: op.path, error: detail },
-          ];
-        }
+        const detail = describeError(err, "Échec de suppression.");
+        failures = [
+          ...failures.filter((failure) => failure.key !== key),
+          { key, kind: op.kind, id: op.id, label: op.label, path: op.path, error: detail },
+        ];
       }
       applyCascade({
         ...(cascadeRef.current ?? start),
@@ -2246,49 +1950,19 @@ export function ObjectsPage() {
       });
     }
 
-    if (sessionLost) {
-      const live = cascadeRef.current ?? start;
-      invalidateLibrary();
-      setSelectedIds(new Set());
-      cascadeExtraFilesRef.current = [];
-      applyCascade({
-        ...live,
-        phase: "done",
-        done,
-        failures,
-        current: null,
-        scanError: "Session expirée. Reconnectez-vous pour reprendre.",
-      });
-      notify(
-        "error",
-        "Session expirée : suppression interrompue. Reconnectez-vous puis réessayez.",
-      );
-      return;
-    }
-
     const end = cascadeRef.current ?? start;
     invalidateLibrary();
     applyCascade({ ...end, phase: "done", current: null });
-    // La sélection a été traitée (ou interrompue) : on ne garde pas des ids
-    // dont une partie n'existe plus.
-    setSelectedIds(new Set());
-    cascadeExtraFilesRef.current = [];
 
     const final = cascadeRef.current;
     if (!final) return;
-    const manyRoots = (final.plan?.roots?.length ?? final.roots.length) > 1;
     if (final.cancelled) {
       notify(
         "info",
         `Suppression interrompue : ${final.done} élément(s) supprimé(s), ${final.failures.length} échec(s).`,
       );
     } else if (final.failures.length === 0) {
-      notify(
-        "ok",
-        manyRoots
-          ? `Sélection supprimée : ${final.done} élément(s).`
-          : `Dossier et contenu supprimés : ${final.done} élément(s).`,
-      );
+      notify("ok", `Dossier et contenu supprimés : ${final.done} élément(s).`);
     } else {
       notify(
         "error",
@@ -2337,7 +2011,6 @@ export function ObjectsPage() {
       cascadeCancelRef.current = true;
       return;
     }
-    cascadeExtraFilesRef.current = [];
     applyCascade(null);
   }
 
@@ -2380,21 +2053,6 @@ export function ObjectsPage() {
   // Subfolders are listed first in the register, like any file browser; a
   // search or filter narrows files only, so folders step aside meanwhile.
   const visibleFolders = hasActiveFilters ? [] : subfolders;
-
-  // Ensembles identiques pour les deux « Tout sélectionner » (grille et ledger) :
-  // fichiers sélectionnables + dossiers visibles.
-  const allSelectableIds = [
-    ...selectableItems.map((item) => item.id),
-    ...visibleFolders.map((folder) => folder.id),
-  ];
-  const allSelected =
-    allSelectableIds.length > 0 &&
-    allSelectableIds.every((id) => selectedIds.has(id));
-  const selectAllDisabled =
-    allSelectableIds.length === 0 || deleteManyMutation.isPending || selectionBusy;
-  function toggleSelectAll(checked: boolean) {
-    setSelectedIds(checked ? new Set(allSelectableIds) : new Set());
-  }
 
   const [zippingFolderId, setZippingFolderId] = useState<string | null>(null);
 
@@ -2498,21 +2156,11 @@ export function ObjectsPage() {
     );
   }
 
-  const cascadeRoots = cascade?.plan?.roots ?? cascade?.roots ?? [];
-  const cascadeMany = cascadeRoots.length > 1;
-  const cascadeExtraFiles = cascade?.plan?.extraFileCount ?? 0;
-  const cascadeBlocked = cascade?.plan?.blockedCount ?? 0;
-  // Des fichiers hors dossiers sont aussi détruits : le nom du dossier ne
-  // suffit plus à couvrir l'ensemble, on demande le mot explicite.
-  const cascadeConfirmTarget =
-    cascadeMany || cascadeExtraFiles > 0
-      ? "SUPPRIMER"
-      : (cascadeRoots[0]?.name ?? cascade?.rootName ?? "");
   const cascadeConfirmed =
     cascade !== null &&
     cascade.plan !== null &&
-    cascadeConfirmTarget.trim() !== "" &&
-    cascadeConfirmText.trim() === cascadeConfirmTarget.trim();
+    cascade.rootName.trim() !== "" &&
+    cascadeConfirmText.trim() === cascade.rootName.trim();
 
   return (
     <div
@@ -2532,2572 +2180,39 @@ export function ObjectsPage() {
         void handleDrop(e);
       }}
     >
-      <Breadcrumb
-        ariaLabel="Fil d’Ariane"
-        onSelect={(id) => setCurrentFolderId(id)}
-        items={[
-          {
-            id: null,
-            label: "Mes fichiers",
-            icon: <span>🏠</span>,
-          },
-          ...breadcrumb.map((folder) => ({
-            id: folder.id,
-            label: folder.name,
-            icon: <span>📁</span>,
-          })),
-        ]}
-      />
-ck, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
-import {
-  useInfiniteQuery,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
-import { ApiError, api, hasAdminAccess, hasScope } from "../lib/api";
-import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
-import {
-  CascadeOp,
-  CascadeFailure,
-  CascadeRoot,
-  CascadeScanError,
-  CascadeState,
-  dedupeCascadeRoots,
-  scanCascade,
-  scanCascadeMany,
-  planCascadeOpsForRoots,
-  cascadeOpKey,
-} from "../lib/cascade";
-import { UploadTray } from "../components/UploadTray";
-import { VaultOverview } from "../components/VaultOverview";
-import {
-  addEntries,
-  clearOwner,
-  fingerprint,
-  pendingEntries,
-  removeEntries,
-  type JournalEntry,
-} from "../lib/uploadJournal";
-import type { QueueInput, QueueState } from "../lib/transfer";
-import { useTransfers } from "../lib/transferContext";
-import {
-  loadFilesView,
-  patchFilesView,
-  type FilesViewState,
-} from "../lib/filesViewState";
-import {
-  MAX_UPLOAD_DEPTH,
-  normalizeRelativePath,
-  parentDirOf,
-  planFolders,
-} from "../lib/folderTree";
-import { useAuth, useSession } from "../lib/auth";
-import { ConfirmAction, Dialog } from "../components/Dialog";
-import { makeToast, ToastStack, type Toast } from "../components/Toasts";
-import { FolderMark } from "../components/FolderMark";
-import { Icon } from "../components/Icon";
-import { RowMenu } from "../components/RowMenu";
-import { describeError } from "../lib/errors";
-import { PreviewModal } from "../components/PreviewModal";
-import { ShareDialog } from "../components/ShareDialog";
-import type { ShareTarget } from "../components/ShareDialog";
-import { PublishDialog } from "../components/PublishDialog";
-import { PacksDialog } from "../components/PacksDialog";
-import { Breadcrumb } from "../components/Breadcrumb";
-import { EmptyState } from "../components/EmptyState";
-import { TagsEditor } from "../components/TagsEditor";
-import { ObjectAnalytics } from "../components/ObjectAnalytics";
-import {
-  downloadFolderAsZip,
-  downloadSelectionAsZip,
-} from "../lib/zip";
-import {
-  MasterModeBanner,
-  MasterModeDialog,
-  useMasterMode,
-} from "../components/MasterMode";
-import { isPreviewable } from "../lib/preview";
-
-/** Objects fetched per page ("Charger plus" increments the offset). */
-const OBJECTS_PAGE_SIZE = 50;
-
-/**
- * True when a key event belongs to text entry. Global shortcuts must not
- * hijack typing, but they should still work when focus is on a checkbox or a
- * button (e.g. selecting rows then pressing Suppr).
- */
-function isTextEntryTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  if (target.tagName === "TEXTAREA" || target.tagName === "SELECT") return true;
-  if (target.tagName === "INPUT") {
-    const type = (target as HTMLInputElement).type;
-    return ![
-      "checkbox",
-      "radio",
-      "button",
-      "submit",
-      "reset",
-      "file",
-      "range",
-      "color",
-    ].includes(type);
-  }
-  return false;
-}
-
-const STATUS_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "Tous les états" },
-  { value: "available", label: "Disponible" },
-  { value: "pending", label: "En cours" },
-  { value: "verifying", label: "Vérification" },
-  { value: "deleted", label: "Corbeille" },
-  { value: "expired", label: "Expiré" },
-  { value: "failed", label: "Échec" },
-  { value: "aborted", label: "Abandonné" },
-];
-
-/** Sortable columns: the API field, its label and the order a first click uses. */
-const SORT_COLUMNS: {
-  field: NonNullable<ObjectQuery["sort"]>;
-  label: string;
-  firstOrder: NonNullable<ObjectQuery["order"]>;
-}[] = [
-  { field: "display_name", label: "Nom", firstOrder: "asc" },
-  { field: "size_bytes", label: "Taille", firstOrder: "desc" },
-  { field: "created_at", label: "Ajouté", firstOrder: "desc" },
-];
-
-/** Common media types offered as suggestions; the field stays free text. */
-const CONTENT_TYPE_SUGGESTIONS = [
-  "application/pdf",
-  "application/json",
-  "application/octet-stream",
-  "image/jpeg",
-  "image/png",
-  "text/csv",
-  "text/plain",
-  "audio/mpeg",
-  "video/mp4",
-];
-
-function formatBytes(size: number): string {
-  if (!Number.isFinite(size) || size < 0) {
-    return "taille inconnue";
-  }
-  if (size === 0) {
-    return "0 o";
-  }
-  const units = ["o", "Ko", "Mo", "Go", "To"];
-  const index = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
-  const value = size / 1024 ** index;
-  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
-}
-
-/** Seconds -> "m:ss" / "h:mm:ss" for media duration badges. */
-function formatDuration(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) return "—";
-  const total = Math.round(seconds);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  return h > 0
-    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
-    : `${m}:${String(s).padStart(2, "0")}`;
-}
-
-const DATE_FORMAT = new Intl.DateTimeFormat("fr-FR", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
-/** Epoch seconds -> localized label. Invalid/zero values render an em dash. */
-function formatDateTime(epoch: number | undefined): string {
-  if (epoch === undefined || !Number.isFinite(epoch) || epoch <= 0) {
-    return "—";
-  }
-  return DATE_FORMAT.format(new Date(epoch * 1000));
-}
-
-/** "<input type=date>" value -> inclusive epoch-second bound (local day). */
-function dateToEpoch(value: string, endOfDay = false): number | undefined {
-  if (!value) return undefined;
-  const date = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return undefined;
-  if (endOfDay) date.setHours(23, 59, 59, 999);
-  return Math.floor(date.getTime() / 1000);
-}
-
-/** Free-text byte count -> a non-negative integer, or undefined when blank. */
-function parseSize(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
-}
-
-const STATUS_LABELS: Record<string, string> = {
-  available: "Disponible",
-  pending: "En cours",
-  verifying: "Vérification…",
-  deleted: "Supprimé",
-  purging: "Purge en cours",
-  expired: "Expiré",
-  failed: "Échec",
-  aborted: "Abandonné",
-};
-
-/** Friendly type label for scanning; the raw MIME stays in the details panel. */
-/** SVG icon for a recognized file type. Returns null for unknown types. */
-function FileTypeIcon({ contentType }: { contentType: string }) {
-  const value = contentType.toLowerCase();
-  if (value.startsWith("image/")) {
-    return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.6" />
-        <circle cx="8" cy="10" r="2" fill="currentColor" />
-        <path d="M3 17l5-4 4 3 5-5 4 4" stroke="currentColor" strokeWidth="1.4" />
-      </svg>
-    );
-  }
-  if (value === "application/pdf") {
-    return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect x="6" y="2" width="12" height="20" rx="1" stroke="currentColor" strokeWidth="1.6" />
-        <path d="M9 7h6M9 11h6M9 15h4" stroke="currentColor" strokeWidth="1.2" />
-      </svg>
-    );
-  }
-  if (value.startsWith("audio/")) {
-    return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" stroke="currentColor" strokeWidth="1.6" />
-        <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3" stroke="currentColor" strokeWidth="1.6" />
-      </svg>
-    );
-  }
-  if (value.startsWith("video/")) {
-    return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect x="2" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
-        <path d="M18 9l4-2v10l-4-2" stroke="currentColor" strokeWidth="1.6" />
-      </svg>
-    );
-  }
-  if (value === "application/zip" || value === "application/gzip" || value === "application/x-tar") {
-    return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
-        <path d="M4 10h16M10 4v6" stroke="currentColor" strokeWidth="1.2" />
-      </svg>
-    );
-  }
-  if (value.startsWith("text/")) {
-    return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="1.6" />
-        <path d="M14 2v6h6M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.2" />
-      </svg>
-    );
-  }
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
-
-/** Visual family of a file, for the coloured tile in the ledger. */
-function fileKind(contentType: string): string {
-  const value = contentType.toLowerCase();
-  if (value === "application/pdf") return "pdf";
-  if (value.startsWith("audio/")) return "audio";
-  if (value.startsWith("image/")) return "image";
-  if (value.startsWith("video/")) return "video";
-  if (value === "application/zip" || value === "application/gzip" || value === "application/x-tar") {
-    return "archive";
-  }
-  if (
-    value.includes("wordprocessingml") || value.includes("spreadsheetml") ||
-    value.includes("presentationml") || value === "application/msword" ||
-    value.startsWith("text/")
-  ) {
-    return "doc";
-  }
-  return "other";
-}
-
-function typeLabel(contentType: string): string {
-  const value = contentType.toLowerCase();
-  if (value === "application/pdf") return "PDF";
-  if (value.startsWith("image/")) return "Image";
-  if (value.startsWith("audio/")) return "Audio";
-  if (value.startsWith("video/")) return "Vidéo";
-  if (
-    value === "application/zip" ||
-    value === "application/gzip" ||
-    value === "application/x-tar"
-  ) {
-    return "Archive";
-  }
-  if (value.includes("wordprocessingml") || value === "application/msword") return "Word";
-  if (value.includes("spreadsheetml") || value === "application/vnd.ms-excel") return "Excel";
-  if (value.includes("presentationml") || value === "application/vnd.ms-powerpoint") {
-    return "PowerPoint";
-  }
-  if (value === "application/json") return "JSON";
-  if (value === "text/csv") return "CSV";
-  if (value.startsWith("text/")) return "Texte";
-  if (value === "application/octet-stream") return "Binaire";
-  return contentType.split("/")[1] ?? contentType;
-}
-
-/** Variant class shared by the status badge and the loaded-pages tally, so the
- * two never diverge on colour semantics. */
-function statusVariantClass(status: string): string {
-  if (status === "available") return "status status-ok";
-  if (status === "pending" || status === "verifying") return "status status-warn";
-  if (status === "failed") return "status status-error";
-  // Deletion stays neutral grey: it never borrows the activity colour.
-  if (status === "deleted") return "status status-muted";
-  return "status";
-}
-
-/** Status shown as a dot plus a word, so it never relies on colour alone. */
-function StatusLabel({ status }: { status: string }) {
-  return <span className={statusVariantClass(status)}>{STATUS_LABELS[status] ?? status}</span>;
-}
-
-/** Commit phase durations, in whole milliseconds, French number grouping. */
-/** Server-side soft delete accepts only `available` or `pending` rows; anything
- * else is refused with 409. The bulk selection and the per-row "Supprimer"
- * action share this predicate so they never diverge. */
-function newIdempotencyKey(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
-  return `k-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-/** In the trash and fully uploaded: the server refuses to restore anything else. */
-function isRestorable(item: ObjectItem): boolean {
-  return item.status === "deleted" && item.size_bytes >= 0;
-}
-
-function isDeletable(item: ObjectItem): boolean {
-  return item.status === "available" || item.status === "pending";
-}
-
-/** Résumé français de la sélection : accords corrects, zéro partie masquée. */
-function selectionSummary(fileCount: number, folderCount: number): string {
-  const parts: string[] = [];
-  if (fileCount > 0) {
-    parts.push(`${fileCount} ${fileCount === 1 ? "fichier" : "fichiers"}`);
-  }
-  if (folderCount > 0) {
-    parts.push(
-      `${folderCount} ${
-        folderCount === 1 ? "dossier sélectionné" : "dossiers sélectionnés"
-      }`,
-    );
-  }
-  return parts.join(" · ");
-}
-
-
-/** The whole folder tree is fetched in one request (`?all=true`); the hierarchy
- * is rebuilt client-side from parent_id for breadcrumbs and the move pickers. */
-export function ObjectsPage() {
-  const { csrf } = useAuth();
-  const session = useSession();
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const location = useLocation();
-  // The live queue is owned by the shell (TransfersProvider): imports keep
-  // running when the user opens the transfers page, and the same snapshot
-  // feeds the floating tray and the transfers page.
-  const transfers = useTransfers();
-  const queue = transfers.queue;
-
-  // The folder, filters and position the user had before a lost session. Read
-  // once: after this render the component owns the state and writes it back.
-  const [restoredView] = useState<FilesViewState | null>(() => loadFilesView());
-  const [viewMode, setViewMode] = useState<"list" | "grid">(
-    () => restoredView?.viewMode ?? "list",
-  );
-
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(
-    () => restoredView?.folderId ?? null,
-  );
-  // Uploads run through the M03 transfer engine as a bounded multi-file queue.
-  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-  const [pendingFolderEntries, setPendingFolderEntries] = useState<{ file: File; rel: string }[]>([]);
-  const dirInputRef = useRef<HTMLInputElement | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  // Retours d'action : des toasts (là où l'action a eu lieu), plus des
-  // bandeaux qui poussent le contenu. Les succès disparaissent seuls, les
-  // erreurs restent jusqu'à fermeture. `null` est ignoré (ancien « effacer »).
-  function setNotice(text: string | null) {
-    if (text) notify("ok", text);
-  }
-  function setActionError(text: string | null) {
-    if (!text) return;
-    setToasts((current) =>
-      current.some((toast) => toast.kind === "error" && toast.text === text)
-        ? current
-        : [...current.slice(-4), makeToast("error", text)],
-    );
-  }
-  // A refused (409, non-empty) folder deletion is actionable: keep the target
-  // so the user can empty it and retry, instead of losing the failure.
-  const [folderDeleteError, setFolderDeleteError] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
-  // Recursive folder deletion: opened from the 409 refusal or from the
-  // "Supprimer avec son contenu" option; always explicit and confirmed.
-  const [folderDeleteWithContent, setFolderDeleteWithContent] = useState(false);
-  const [cascade, setCascade] = useState<CascadeState | null>(null);
-  const [cascadeConfirmText, setCascadeConfirmText] = useState("");
-  // Mirror of the live cascade state, read/written by the async run loop where
-  // a state updater would otherwise close over a stale render.
-  const cascadeRef = useRef<CascadeState | null>(null);
-  // Jeton de génération : un scan lent lancé avant la fermeture ne doit jamais
-  // écraser le plan du flux rouvert ensuite (même première racine).
-  const cascadeTokenRef = useRef(0);
-  // Fichiers sélectionnés hors des dossiers visés : ajoutés aux opérations de
-  // la cascade pour que « Supprimer la sélection » traite toute la sélection.
-  const cascadeExtraFilesRef = useRef<
-    { id: string; name: string; path: string }[]
-  >([]);
-  const cascadeCancelRef = useRef(false);
-  const cascadeDialogRef = useRef<HTMLDialogElement | null>(null);
-  const [toasts, setToasts] = useState<Toast[]>([]);
-
-
-  function dismissToast(id: number) {
-    setToasts((current) => current.filter((toast) => toast.id !== id));
-  }
-
-  function notify(kind: Toast["kind"], text: string, action?: Toast["action"]) {
-    setToasts((current) => [...current.slice(-4), makeToast(kind, text, action)]);
-  }
-  const [newFolderOpen, setNewFolderOpen] = useState(false);
-  const [newFolderName, setNewFolderName] = useState("");
-  const [renameTarget, setRenameTarget] = useState<FolderItem | null>(null);
-  const [renameName, setRenameName] = useState("");
-  const [moveTarget, setMoveTarget] = useState<FolderItem | null>(null);
-  const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
-  const [details, setDetails] = useState<ObjectItem | null>(null);
-  const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
-  const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null);
-  const [publishTarget, setPublishTarget] = useState<ObjectItem | null>(null);
-  const [packsOpen, setPacksOpen] = useState(false);
-  const [tagFilter, setTagFilter] = useState("");
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [zippingSelection, setZippingSelection] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  // The import panel opens on demand (header button) and stays open while it
-  // holds pending files, a queue or an error; a drop anywhere also opens it.
-  const [intakeOpen, setIntakeOpen] = useState(false);
-  // Arriving from the transfers page's "Ajouter des fichiers": open the
-  // existing import panel once, then drop the one-shot query parameter.
-  useEffect(() => {
-    const search = location.search as { import?: string };
-    if (search.import !== "1") return;
-    setIntakeOpen(true);
-    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    requestAnimationFrame(() => {
-      document
-        .getElementById("intake")
-        ?.scrollIntoView({ block: "start", behavior: reduced ? "auto" : "smooth" });
-    });
-    void navigate({
-      to: "/",
-      search: (prev) => {
-        const next = { ...(prev as { import?: string }) };
-        next.import = undefined;
-        return next;
-      },
-      replace: true,
-    });
-  }, [location.search, navigate]);
-  // Directory import: which folder of the plan is being created (item P1.7).
-  const [folderProgress, setFolderProgress] = useState<{
-    done: number;
-    total: number;
-    name: string;
-  } | null>(null);
-  // Folder drops can take a while (tree walk + folder creation). This drives a
-  // persistent "patientez" status so the drop never looks dead before the queue
-  // tray appears.
-  const [dropScan, setDropScan] = useState<{ files: number } | null>(null);
-  // Bulk delete: the dialog stays open while the per-file loop reports its
-  // real progress instead of a silent "Suppression…" (item P1.8).
-  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
-  const [deleteManyProgress, setDeleteManyProgress] = useState<{
-    done: number;
-    total: number;
-  } | null>(null);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  // Stable callbacks for the memoised <UploadTray>: inline arrows would change
-  // on every render and defeat the memo.
-  const clearTray = useCallback(() => transfers.clear(), [transfers.clear]);
-  const pauseQueue = useCallback(() => transfers.pauseAll(), [transfers.pauseAll]);
-  const resumeQueue = useCallback(() => transfers.resumeAll(), [transfers.resumeAll]);
-  const cancelQueueItem = useCallback(
-    (id: string) => transfers.cancelItem(id),
-    [transfers.cancelItem],
-  );
-  const retryQueueItem = useCallback(
-    (id: string) => {
-      setUploadError(null);
-      transfers.retryItem(id);
-    },
-    [transfers.retryItem],
-  );
-  const libraryRefreshRef = useRef({ at: 0, done: 0 });
-
-  // File d'attente automatique : placeholder (defini plus bas apres transferActive)
-
-  // Infinite scroll : charger automatiquement quand le bouton "Charger plus" est visible
-  // (defini apres objectsQuery pour eviter le TDZ)
-  const [pendingConfirm, setPendingConfirm] = useState<{
-    title: string;
-    message: ReactNode;
-    confirmLabel: string;
-    danger?: boolean;
-    /** Folder deletion: offer the "with its content" recursive option. */
-    folderCascade?: boolean;
-    /** `withContent` is only meaningful for a folder deletion confirmation. */
-    onConfirm: (withContent: boolean) => void;
-  } | null>(null);
-
-  // -- search / filter / sort (server-side; M02) ---------------------------
-  const [search, setSearch] = useState(() => restoredView?.search ?? "");
-  const [debouncedSearch, setDebouncedSearch] = useState(
-    () => restoredView?.search ?? "",
-  );
-  const [statusFilter, setStatusFilter] = useState(
-    () => restoredView?.statusFilter ?? "",
-  );
-  const [typeFilter, setTypeFilter] = useState(
-    () => restoredView?.typeFilter ?? "",
-  );
-  const [minSize, setMinSize] = useState(() => restoredView?.minSize ?? "");
-  const [maxSize, setMaxSize] = useState(() => restoredView?.maxSize ?? "");
-  const [fromDate, setFromDate] = useState(() => restoredView?.fromDate ?? "");
-  const [toDate, setToDate] = useState(() => restoredView?.toDate ?? "");
-  const [sortField, setSortField] = useState<NonNullable<ObjectQuery["sort"]>>(
-    () => restoredView?.sortField ?? "created_at",
-  );
-  const [sortOrder, setSortOrder] = useState<NonNullable<ObjectQuery["order"]>>(
-    () => restoredView?.sortOrder ?? "desc",
-  );
-
-  // Debounce the name filter so typing does not fire one request per keystroke.
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
-    return () => clearTimeout(timer);
-  }, [search]);
-
-  const filters = useMemo<ObjectQuery>(() => {
-    const query: ObjectQuery = { folderId: currentFolderId };
-    if (debouncedSearch) query.q = debouncedSearch;
-    if (statusFilter) query.status = statusFilter;
-    if (typeFilter.trim()) query.contentType = typeFilter.trim();
-    const min = parseSize(minSize);
-    const max = parseSize(maxSize);
-    if (min !== undefined) query.minSize = min;
-    if (max !== undefined) query.maxSize = max;
-    const after = dateToEpoch(fromDate);
-    const before = dateToEpoch(toDate, true);
-    if (after !== undefined) query.createdAfter = after;
-    if (before !== undefined) query.createdBefore = before;
-    if (tagFilter.trim()) query.tag = tagFilter.trim().toLowerCase();
-    query.sort = sortField;
-    query.order = sortOrder;
-    return query;
-  }, [
-    currentFolderId,
-    debouncedSearch,
-    statusFilter,
-    typeFilter,
-    minSize,
-    maxSize,
-    fromDate,
-    toDate,
-    sortField,
-    sortOrder,
-    tagFilter,
-  ]);
-
-  const hasActiveFilters =
-    debouncedSearch !== "" ||
-    statusFilter !== "" ||
-    typeFilter.trim() !== "" ||
-    minSize.trim() !== "" ||
-    maxSize.trim() !== "" ||
-    fromDate !== "" ||
-    toDate !== "";
-
-  /** Advanced filters moved off the default screen; the count badges the toggle. */
-  const advancedCount = [typeFilter, minSize, maxSize, fromDate, toDate].filter(
-    (value) => value.trim() !== "",
-  ).length;
-
-  function resetFilters() {
-    setSearch("");
-    setStatusFilter("");
-    setTypeFilter("");
-    setMinSize("");
-    setMaxSize("");
-    setFromDate("");
-    setToDate("");
-    setTagFilter("");
-  }
-
-  const canPurge = hasScope(session.data?.scopes, "objects:purge");
-
-  // Permissions d'écriture : tout utilisateur authentifié peut créer des dossiers
-  // et importer des fichiers ; l'API reste autoritaire.
-  const canCreate = !!session.data?.id;
-  const canCreateFolder = !!session.data?.id;
-  // Recursive deletion deletes objects (objects:delete) inside folders the
-  // caller owns (objects:write); it is a human-only flow, like folders. When
-  // either scope is missing the option is never offered.
-  const canCascadeDelete =
-    session.data?.kind === "user" &&
-    hasScope(session.data?.scopes, "objects:delete") &&
-    hasScope(session.data?.scopes, "objects:write");
-  // Minting and revoking public links is human-only server-side (a leaked
-  // machine token must not create links that outlive its revocation).
-  const canShare =
-    session.data?.kind === "user" && hasScope(session.data?.scopes, "objects:read");
-
-  // Storage usage is only ever the real admin figure (`GET /admin/usage`,
-  // `admin:read`): no fabricated capacity is displayed for anyone else.
-  const usageQuery = useQuery({
-    queryKey: ["admin", "usage"],
-    queryFn: () => api.adminUsage(),
-    enabled: hasAdminAccess(session.data?.role),
-    retry: false,
-  });
-
-  /** True while any file of the queue is transferring (blocks double submit). */
-  const transferActive = queue.active > 0;
-
-  // File d'attente automatique : quand le transfert se termine et qu'il y a
-  // des fichiers/dossiers en attente, les lancer automatiquement.
-  useEffect(() => {
-    if (transferActive) return;
-    if (pendingFiles.length === 0 && pendingFolderEntries.length === 0) return;
-    if (!csrf) return;
-    // Petite temporisation pour laisser l'UI se stabiliser
-    const timer = setTimeout(() => {
-      if (pendingFolderEntries.length > 0) {
-        const folderList = pendingFolderEntries.map((entry) => entry.file);
-        const folderRels = pendingFolderEntries.map((entry) => entry.rel);
-        const looseList = pendingFiles;
-        const looseRels = pendingFiles.map((file) => file.name);
-        void uploadRelPaths([...folderList, ...looseList], [...folderRels, ...looseRels]);
-        setPendingFiles([]);
-        setPendingFolderEntries([]);
-      } else {
-        launchQueue(
-          csrf,
-          pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
-        );
-        setPendingFiles([]);
-      }
-      setNotice(null);
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [transferActive, pendingFiles.length, pendingFolderEntries.length, csrf, currentFolderId]);
-
-  // -- Upload journal: resume a long import after a reload --------------------
-  const owner = session.data?.id ?? null;
-  const [resumable, setResumable] = useState<JournalEntry[]>([]);
-  const resumeFilesRef = useRef<HTMLInputElement>(null);
-  const resumeDirRef = useRef<HTMLInputElement>(null);
-  /** Journal keys already forgotten, so each settled file is removed once. */
-  const forgottenRef = useRef<Set<string>>(new Set());
-
-  function refreshResumable() {
-    if (!owner) return;
-    void pendingEntries(owner).then(setResumable);
-  }
-
-  useEffect(() => {
-    if (!transferActive) refreshResumable();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [owner, transferActive]);
-
-  // Leaving the page mid-import loses the files in flight: ask first.
-  useEffect(() => {
-    if (!transferActive) return;
-    function onBeforeUnload(event: BeforeUnloadEvent) {
-      event.preventDefault();
-      event.returnValue = "";
-    }
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [transferActive]);
-
-  // `/` et Ctrl/Cmd+K ouvrent la recherche globale : ils sont gérés par
-  // SearchBar (un seul propriétaire du raccourci, sinon deux gestionnaires
-  // se disputent le focus).
-
-  // Coller-pour-importer (Ctrl+V / Cmd+V)
-  useEffect(() => {
-    function onPaste(event: ClipboardEvent) {
-      const files = event.clipboardData?.files;
-      if (!files || files.length === 0) return;
-      // Ignorer si on est dans un champ de saisie
-      const target = event.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
-      event.preventDefault();
-      setPendingFiles((prev) => [...prev, ...Array.from(files)]);
-      setIntakeOpen(true);
-    }
-    window.addEventListener("paste", onPaste);
-    return () => window.removeEventListener("paste", onPaste);
-  }, []);
-
-  // Keep the screen (and so the machine) awake while files are being sent.
-  // Best effort: unsupported browsers or a refused lock change nothing.
-  useEffect(() => {
-    if (!transferActive) return;
-    let lock: { release(): Promise<void> } | null = null;
-    let released = false;
-    const wakeLock = (navigator as Navigator & {
-      wakeLock?: { request(type: "screen"): Promise<{ release(): Promise<void> }> };
-    }).wakeLock;
-    wakeLock
-      ?.request("screen")
-      .then((acquired) => {
-        if (released) void acquired.release();
-        else lock = acquired;
-      })
-      .catch(() => undefined);
-    return () => {
-      released = true;
-      void lock?.release().catch(() => undefined);
-    };
-  }, [transferActive]);
-
-  /** Start a queue, journaling every file so the import survives a reload. */
-  function launchQueue(
-    activeCsrf: string,
-    entries: Array<{
-      file: File;
-      rel: string;
-      folderId: string | null;
-      idempotencyKey?: string;
-    }>,
-  ) {
-    const journal: JournalEntry[] = [];
-    const inputs: QueueInput[] = entries.map(({ file, rel, folderId, idempotencyKey }) => {
-      if (!owner) return { file, folderId };
-      const key = fingerprint(owner, rel, file);
-      // One key per file for its whole life: a resume after a reload reopens
-      // the same server session and keeps the parts already sent.
-      const idem = idempotencyKey ?? newIdempotencyKey();
-      forgottenRef.current.delete(key);
-      journal.push({ key, owner, rel, size: file.size, folderId, idempotencyKey: idem });
-      return { file, folderId, key, idempotencyKey: idem };
-    });
-    void addEntries(journal);
-    libraryRefreshRef.current = { at: Date.now(), done: 0 };
-    transfers.start(inputs, {
-      csrf: activeCsrf,
-      folderId: currentFolderId,
-      onUpdate: handleQueueUpdate,
-      // A file whose PUT died with the link is replayed by the queue as soon as
-      // the browser reports the network back: say so, instead of leaving the
-      // user in front of a tray full of "Échec" they did not ask to fix.
-      onAutoRetry: (count) =>
-        notify(
-          "ok",
-          `Connexion rétablie : ${count} fichier${count > 1 ? "s" : ""} relancé${
-            count > 1 ? "s" : ""
-          } automatiquement.`,
-        ),
-    });
-  }
-
-  /** Re-selected files: send only those the journal still lists. */
-  function handleResume(selected: FileList | null) {
-    if (!selected || selected.length === 0 || !owner || !csrf || transferActive) return;
-    const byKey = new Map(resumable.map((entry) => [entry.key, entry]));
-    // Same file picked through the other picker (plain files vs folder) has a
-    // different relative path: fall back to name + size + mtime.
-    const byName = new Map(
-      resumable.map((entry) => [
-        `${entry.rel.split("/").pop()}\u0000${entry.size}`,
-        entry,
-      ]),
-    );
-    const matched: Array<{
-      file: File;
-      rel: string;
-      folderId: string | null;
-      idempotencyKey?: string;
-    }> = [];
-    const seen = new Set<string>();
-    for (const file of Array.from(selected)) {
-      const rel = normalizeRelativePath(
-        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
-      );
-      const entry =
-        byKey.get(fingerprint(owner, rel, file)) ??
-        (() => {
-          const candidate = byName.get(`${file.name}\u0000${file.size}`);
-          return candidate &&
-            candidate.key === fingerprint(owner, candidate.rel, file)
-            ? candidate
-            : undefined;
-        })();
-      if (!entry || seen.has(entry.key)) continue;
-      seen.add(entry.key);
-      matched.push({
-        file,
-        rel: entry.rel,
-        folderId: entry.folderId,
-        idempotencyKey: entry.idempotencyKey,
-      });
-    }
-    const ignored = selected.length - matched.length;
-    if (matched.length === 0) {
-      setUploadError(
-        "Aucun des fichiers choisis ne correspond à l'import interrompu (même nom, taille et date de modification).",
-      );
-      return;
-    }
-    setUploadError(null);
-    setNotice(
-      `Reprise de ${matched.length} fichier(s)` +
-        (ignored > 0 ? ` ; ${ignored} déjà envoyé(s) ou hors import ignoré(s).` : "."),
-    );
-    launchQueue(csrf, matched);
-  }
-
-  function forgetResumable() {
-    if (!owner) return;
-    void clearOwner(owner).then(() => setResumable([]));
-  }
-
-  const treeQuery = useQuery({
-    queryKey: ["folders", "all"],
-    queryFn: () => api.listAllFolders(),
-  });
-  const objectsQuery = useInfiniteQuery({
-    queryKey: ["objects", filters],
-    queryFn: ({ pageParam }) =>
-      api.listObjects({ ...filters, limit: OBJECTS_PAGE_SIZE, offset: pageParam }),
-    initialPageParam: 0,
-    getNextPageParam: (lastPage, _pages, lastOffset) =>
-      lastPage.items.length === OBJECTS_PAGE_SIZE
-        ? lastOffset + lastPage.items.length
-        : undefined,
-  });
-
-  // Infinite scroll : charger automatiquement quand le bouton "Charger plus" est visible
-  useEffect(() => {
-    if (!objectsQuery.hasNextPage) return;
-    const el = loadMoreRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting && !objectsQuery.isFetchingNextPage) {
-          void objectsQuery.fetchNextPage();
-        }
-      },
-      { threshold: 0.1 },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [objectsQuery.hasNextPage, objectsQuery.isFetchingNextPage]);
-
-  // -- restore the view after a lost session -------------------------------
-  // The guard sends the user to /login?redirect=… and the login page comes
-  // back here, but the in-memory list is gone. sessionStorage keeps the
-  // folder, filters, page depth and scroll offset; the catalogue is still
-  // re-fetched from the server (no object data is stored client-side).
-  const restorePagesRef = useRef(restoredView?.pages ?? 0);
-  const restoreScrollRef = useRef(restoredView?.scrollY ?? 0);
-  const restoreDoneRef = useRef(
-    !restoredView || (restoredView.pages <= 1 && restoredView.scrollY <= 0),
-  );
-  const initialFiltersRef = useRef(filters);
-
-  // A filter/folder change is a new view: never force the old depth onto it.
-  useEffect(() => {
-    if (filters !== initialFiltersRef.current) {
-      initialFiltersRef.current = filters;
-      restoreDoneRef.current = true;
-    }
-  }, [filters]);
-
-  // Filters and folder change slowly: one write per keystroke burst.
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      patchFilesView({
-        folderId: currentFolderId,
-        search,
-        statusFilter,
-        typeFilter,
-        minSize,
-        maxSize,
-        fromDate,
-        toDate,
-        sortField,
-        sortOrder,
-        viewMode,
-      });
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [
-    currentFolderId,
-    search,
-    statusFilter,
-    typeFilter,
-    minSize,
-    maxSize,
-    fromDate,
-    toDate,
-    sortField,
-    sortOrder,
-    viewMode,
-  ]);
-
-  // Scroll offset and page depth are written together: a scroll position is
-  // only reachable if the pages that produced it are loaded again.
-  useEffect(() => {
-    let frame = 0;
-    const onScroll = () => {
-      if (frame) return;
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        patchFilesView({
-          scrollY: window.scrollY,
-          pages: objectsQuery.data?.pages.length ?? 0,
-        });
-      });
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      window.removeEventListener("scroll", onScroll);
-      if (frame) window.cancelAnimationFrame(frame);
-    };
-  }, [objectsQuery.data?.pages.length]);
-
-  // Re-load the missing pages sequentially, then put the viewport back. The
-  // auto-load observer is idle until the list is tall enough, so this is what
-  // actually reconstructs a 200+ object view.
-  useEffect(() => {
-    if (restoreDoneRef.current) return;
-    if (!objectsQuery.isSuccess) return;
-    const loaded = objectsQuery.data.pages.length;
-    if (loaded < restorePagesRef.current && objectsQuery.hasNextPage) {
-      if (!objectsQuery.isFetchingNextPage) void objectsQuery.fetchNextPage();
-      return;
-    }
-    restoreDoneRef.current = true;
-    const y = restoreScrollRef.current;
-    if (y > 0) {
-      window.requestAnimationFrame(() => window.scrollTo({ top: y, left: 0 }));
-    }
-  }, [
-    objectsQuery.isSuccess,
-    objectsQuery.data,
-    objectsQuery.hasNextPage,
-    objectsQuery.isFetchingNextPage,
-  ]);
-
-  const tree = treeQuery.data?.items ?? [];
-  const byId = useMemo(() => new Map(tree.map((f) => [f.id, f])), [tree]);
-  // A restored folder may have been deleted while the session was away.
-  useEffect(() => {
-    if (!treeQuery.isSuccess) return;
-    if (currentFolderId && !byId.has(currentFolderId)) {
-      setCurrentFolderId(null);
-    }
-  }, [treeQuery.isSuccess, byId, currentFolderId]);
-  const childrenOf = useMemo(() => {
-    const map = new Map<string | null, FolderItem[]>();
-    for (const folder of tree) {
-      const key = folder.parent_id;
-      const bucket = map.get(key);
-      if (bucket) {
-        bucket.push(folder);
-      } else {
-        map.set(key, [folder]);
-      }
-    }
-    return map;
-  }, [tree]);
-
-  const subfolders = childrenOf.get(currentFolderId) ?? [];
-
-  const breadcrumb = useMemo(() => {
-    const path: FolderItem[] = [];
-    let cursor = currentFolderId;
-    let guard = 0;
-    while (cursor && guard < 64) {
-      const folder = byId.get(cursor);
-      if (!folder) break;
-      path.unshift(folder);
-      cursor = folder.parent_id;
-      guard += 1;
-    }
-    return path;
-  }, [byId, currentFolderId]);
-
-  /** Human-readable folder path for an object ("Racine / Dossier / Sous-dossier"). */
-  function folderPath(folderId: string | null): string {
-    if (!folderId) return "Racine";
-    const names: string[] = [];
-    let cursor: string | null = folderId;
-    let guard = 0;
-    while (cursor && guard < 64) {
-      const folder: FolderItem | undefined = byId.get(cursor);
-      if (!folder) break;
-      names.unshift(folder.name);
-      cursor = folder.parent_id;
-      guard += 1;
-    }
-    return ["Racine", ...names].join(" / ");
-  }
-
-  function invalidateLibrary() {
-    void queryClient.invalidateQueries({ queryKey: ["objects"] });
-    void queryClient.invalidateQueries({ queryKey: ["folders"] });
-  }
-
-  function reportError(err: unknown, fallback: string) {
-    setNotice(null);
-    setActionError(describeError(err, fallback));
-  }
-
-  // -- mutations -----------------------------------------------------------
-  const createFolderMutation = useMutation({
-    mutationFn: (name: string) => {
-      if (!csrf) throw new Error("Session expirée.");
-      return api.createFolder({ name, parent_id: currentFolderId }, csrf);
-    },
-    onSuccess: () => {
-      setNewFolderOpen(false);
-      setNewFolderName("");
-      setNotice("Dossier créé.");
-      invalidateLibrary();
-    },
-    onError: (err) => reportError(err, "Création du dossier impossible."),
-  });
-
-  const renameMutation = useMutation({
-    mutationFn: (input: { id: string; name: string }) => {
-      if (!csrf) throw new Error("Session expirée.");
-      return api.updateFolder(input.id, { name: input.name }, csrf);
-    },
-    onSuccess: () => {
-      setRenameTarget(null);
-      setNotice("Dossier renommé.");
-      invalidateLibrary();
-    },
-    onError: (err) => reportError(err, "Renommage impossible."),
-  });
-
-  const moveMutation = useMutation({
-    mutationFn: (input: { id: string; parentId: string | null }) => {
-      if (!csrf) throw new Error("Session expirée.");
-      return api.updateFolder(input.id, { parent_id: input.parentId }, csrf);
-    },
-    onSuccess: () => {
-      setMoveTarget(null);
-      setNotice("Dossier déplacé.");
-      invalidateLibrary();
-    },
-    onError: (err) => reportError(err, "Déplacement impossible."),
-  });
-
-  const moveObjectMutation = useMutation({
-    mutationFn: (input: { id: string; folderId: string | null }) => {
-      if (!csrf) throw new Error("Session expirée.");
-      return api.moveObject(input.id, input.folderId, csrf);
-    },
-    onSuccess: () => {
-      setMoveObjectTarget(null);
-      setDetails(null);
-      setNotice("Objet déplacé.");
-      invalidateLibrary();
-    },
-    onError: (err) => reportError(err, "Déplacement de l'objet impossible."),
-  });
-
-  // Folder delete is confirmed against the server: a non-empty folder (409) is
-  // surfaced as an actionable refusal (friendly FR + retry), never a fake success.
-  const deleteFolderMutation = useMutation({
-    mutationFn: (input: { id: string; name: string }) => {
-      if (!csrf) throw new Error("Session expirée.");
-      return api.deleteFolder(input.id, csrf);
-    },
-    onSuccess: (_data, input) => {
-      if (currentFolderId === input.id) setCurrentFolderId(null);
-      setFolderDeleteError(null);
-      setNotice("Dossier supprimé.");
-      invalidateLibrary();
-    },
-    onError: (err, input) => {
-      setNotice(null);
-      if (err instanceof ApiError && err.status === 409) {
-        // The server refuses a folder that still holds files or subfolders.
-        setActionError(null);
-        setFolderDeleteError({ id: input.id, name: input.name });
-        return;
-      }
-      setFolderDeleteError(null);
-      reportError(err, "Suppression du dossier impossible.");
-    },
-  });
-
-  // Delete is confirmed against the server: the row is only refreshed (never
-  // removed locally) once the API reports success.
-  const deleteObjectMutation = useMutation({
-    mutationFn: (id: string) => {
-      if (!csrf) throw new Error("Session expirée.");
-      return api.deleteObject(id, csrf);
-    },
-    onSuccess: (_data, id) => {
-      setDetails(null);
-      // L'id ne doit pas rester fantôme dans la sélection : il n'existe plus
-      // dans la liste, mais « Suppr » le compterait encore.
-      setSelectedIds((current) => {
-        if (!current.has(id)) return current;
-        const next = new Set(current);
-        next.delete(id);
-        return next;
-      });
-      notify("ok", "Objet marqué comme supprimé. Les octets restent jusqu'à une purge.", {
-        label: "Annuler",
-        onClick: () => restoreMutation.mutate(id),
-      });
-      invalidateLibrary();
-    },
-    onError: (err) => reportError(err, "Suppression impossible."),
-  });
-
-  // Bulk delete reuses the audited single-object endpoint once per selected
-  // file (no bulk API surface): sequential, per-file outcome, server truth.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  // Les ids de fichiers figés à l'ouverture de la confirmation : le texte et
-  // la boucle portent sur exactement le même ensemble, même si un refetch
-  // change le statut ou la pagination entre-temps.
-  const [bulkDeleteIds, setBulkDeleteIds] = useState<string[]>([]);
-  // La sélection appartient au dossier courant : changer de dossier la vide.
-  useEffect(() => {
-    setSelectedIds(new Set());
-  }, [currentFolderId]);
-  const deleteManyMutation = useMutation({
-    mutationFn: async (ids: string[]) => {
-      if (!csrf) throw new Error("Session expirée.");
-      // Un id de dossier ne doit JAMAIS atteindre l'endpoint objet : seuls les
-      // fichiers réellement supprimables (et non les dossiers de l'arbre)
-      // participent à la boucle.
-      const objectIds = ids.filter(
-        (id) =>
-          !byId.has(id) &&
-          items.some((item) => item.id === id && isDeletable(item)),
-      );
-      const failed: string[] = [];
-      let deleted = 0;
-      setDeleteManyProgress({ done: 0, total: objectIds.length });
-      for (const id of objectIds) {
-        try {
-          await api.deleteObject(id, csrf);
-          deleted += 1;
-        } catch {
-          const target = items.find((item) => item.id === id);
-          failed.push(target?.display_name ?? id);
-        } finally {
-          setDeleteManyProgress({
-            done: deleted + failed.length,
-            total: objectIds.length,
-          });
-        }
-      }
-      const ignored = ids.length - objectIds.length;
-      return { deleted, failed, objectIds, ignored };
-    },
-    onSuccess: ({ deleted, failed, objectIds, ignored }) => {
-      setBulkDeleteOpen(false);
-      setBulkDeleteIds([]);
-      setDeleteManyProgress(null);
-      setSelectedIds(new Set());
-      setDetails(null);
-      const ignoredLabel =
-        ignored > 0
-          ? ` ${ignored} ${ignored === 1 ? "ignoré" : "ignorés"} (déjà traités ou plus supprimables).`
-          : "";
-      if (failed.length === 0) {
-        notify(
-          "ok",
-          (deleted === 1
-            ? "1 objet marqué comme supprimé. Les octets restent jusqu'à une purge."
-            : `${deleted} objets marqués comme supprimés. Les octets restent jusqu'à une purge.`) +
-            ignoredLabel,
-          {
-            label: "Annuler",
-            onClick: () => {
-              if (!csrf) return;
-              for (const id of objectIds) {
-                void restoreMutation.mutate(id);
-              }
-            },
-          },
-        );
-      } else {
-        const deletedLabel = deleted === 1 ? "1 supprimé" : `${deleted} supprimés`;
-        const failedLabel =
-          failed.length === 1 ? "1 échec" : `${failed.length} échecs`;
-        notify(
-          "error",
-          `${deletedLabel}, ${failedLabel} : ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}${ignoredLabel}`,
-        );
-      }
-      invalidateLibrary();
-    },
-    onError: (err) => {
-      setBulkDeleteOpen(false);
-      setBulkDeleteIds([]);
-      setDeleteManyProgress(null);
-      reportError(err, "Suppression en masse impossible.");
-    },
-  });
-
-  const restoreMutation = useMutation({
-    mutationFn: (id: string) => {
-      if (!csrf) throw new Error("Session expirée.");
-      return api.restoreObject(id, csrf);
-    },
-    onSuccess: () => {
-      setDetails(null);
-      notify("ok", "Fichier restauré depuis la corbeille.");
-      invalidateLibrary();
-    },
-    onError: (err) => reportError(err, "Restauration impossible."),
-  });
-
-  // -- Master mode: bulk purges without a confirmation per item ------------
-  const master = useMasterMode();
-  const [masterDialogOpen, setMasterDialogOpen] = useState(false);
-  const bulkPurgeMutation = useMutation({
-    mutationFn: async (ids: string[]) => {
-      if (!csrf) throw new Error("Session expirée.");
-      return api.bulkPurge(ids, csrf);
-    },
-    onSuccess: (out) => {
-      setSelectedIds(new Set());
-      setDetails(null);
-      notify(
-        out.failed.length ? "error" : "ok",
-        `${out.purged.length} fichier(s) purgé(s) définitivement` +
-          (out.failed.length
-            ? ` ; ${out.failed.length} échec(s) du stockage, fiches conservées.`
-            : "."),
-      );
-      invalidateLibrary();
-    },
-    onError: (err) => reportError(err, "Purge en masse impossible."),
-  });
-  const emptyTrashMutation = useMutation({
-    mutationFn: async () => {
-      if (!csrf) throw new Error("Session expirée.");
-      let purged = 0;
-      let failed = 0;
-      // The server purges at most one batch per call and says when to go on.
-      for (let round = 0; round < 50; round += 1) {
-        const out = await api.emptyTrash(csrf);
-        purged += out.purged.length;
-        failed += out.failed.length;
-        if (!out.more || out.purged.length === 0) break;
-      }
-      return { purged, failed };
-    },
-    onSuccess: ({ purged, failed }) => {
-      notify(
-        failed ? "error" : "ok",
-        purged === 0
-          ? "La corbeille était déjà vide."
-          : `Corbeille vidée : ${purged} fichier(s) purgé(s)` +
-              (failed ? ` ; ${failed} échec(s) du stockage, fiches conservées.` : "."),
-      );
-      invalidateLibrary();
-    },
-    onError: (err) => reportError(err, "Vidage de la corbeille impossible."),
-  });
-
-  const purgeMutation = useMutation({
-    mutationFn: (id: string) => {
-      if (!csrf) throw new Error("Session expirée.");
-      return api.purgeObject(id, csrf);
-    },
-    onSuccess: () => {
-      setDetails(null);
-      setNotice("Objet purgé définitivement.");
-      invalidateLibrary();
-    },
-    onError: (err) => reportError(err, "Purge impossible."),
-  });
-
-  // Abandon a stuck pending upload intent: the backend deletes the partial
-  // bytes and the row leaves the "En cours" state. Re-uploading the same
-  // file afterwards mints a fresh intent.
-  const abortUploadMutation = useMutation({
-    mutationFn: (id: string) => {
-      if (!csrf) throw new Error("Session expirée.");
-      return api.abortObject(id, csrf);
-    },
-    onSuccess: () => {
-      setDetails(null);
-      setNotice("Envoi abandonné, octets partiels supprimés.");
-      invalidateLibrary();
-    },
-    onError: (err) => reportError(err, "Abandon impossible."),
-  });
-
-  // -- handlers ------------------------------------------------------------
-  /** Shared queue subscriber: mirrors state and reacts when it settles. */
-  function handleQueueUpdate(next: QueueState) {
-    const nowMs = Date.now();
-    // Files become visible as they are verified, not only when the whole batch
-    // ends (an import can run for hours): refresh the ledger at most every 10 s.
-    const refresh = libraryRefreshRef.current;
-    if (!next.finished && next.done > refresh.done && nowMs - refresh.at >= 10_000) {
-      libraryRefreshRef.current = { at: nowMs, done: next.done };
-      invalidateLibrary();
-    }
-    // Confirmed by the server, or cancelled on purpose: nothing left to resume.
-    const settled = next.items
-      .filter(
-        (item) =>
-          item.key !== undefined &&
-          (item.state.phase === "available" || item.state.phase === "cancelled") &&
-          !forgottenRef.current.has(item.key),
-      )
-      .map((item) => item.key as string);
-    if (settled.length > 0) {
-      for (const key of settled) forgottenRef.current.add(key);
-      void removeEntries(settled);
-    }
-    if (!next.finished) return;
-    if (next.done > 0) {
-      invalidateLibrary();
-      notify("ok", `${next.done} fichier(s) vérifié(s) et disponible(s).`, {
-        label: "Voir",
-        onClick: () => void navigate({ to: "/transfers" }),
-      });
-    }
-    if (next.failed > 0) {
-      const firstFailed = next.items.find((item) => item.state.phase === "failed");
-      setUploadError(firstFailed?.state.error ?? "Envoi impossible.");
-    } else {
-      setUploadError(null);
-    }
-  }
-
-  function handleUpload(event: FormEvent) {
-    event.preventDefault();
-    setUploadError(null);
-    setNotice(null);
-    if (pendingFiles.length === 0 && pendingFolderEntries.length === 0) {
-      setUploadError("Choisissez au moins un fichier ou un dossier.");
-      return;
-    }
-    if (transferActive) {
-      // File d'attente : les fichiers sont mis en attente et seront uploadés
-      // automatiquement quand le transfert en cours se termine.
-      if (pendingFiles.length > 0) {
-        setNotice(
-          `${pendingFiles.length} fichier(s) mis en file d'attente — ils seront uploadés automatiquement à la fin du transfert en cours.`,
-        );
-      }
-      if (pendingFolderEntries.length > 0) {
-        setNotice("Dossiers en attente — ils seront importés à la fin du transfert en cours.");
-      }
-      return;
-    }
-    if (!csrf) {
-      setUploadError("Session expirée. Reconnectez-vous.");
-      return;
-    }
-    // Garde-fou taille client : vérifier max_object_bytes avant l'upload
-    const maxBytes = usageQuery.data?.limits?.max_object_bytes;
-    const combinedForSize = [
-      ...pendingFiles,
-      ...pendingFolderEntries.map((e) => e.file),
-    ];
-    if (maxBytes && maxBytes > 0) {
-      const oversized = combinedForSize.filter((f) => f.size > maxBytes);
-      if (oversized.length > 0) {
-        const names = oversized.map((f) => f.name).join(", ");
-        setUploadError(
-          `Fichier(s) trop volumineux (max ${formatBytes(maxBytes)}) : ${names}. ` +
-            "Réduisez la taille ou contactez l'administrateur.",
-        );
-        return;
-      }
-    }
-    if (pendingFolderEntries.length > 0) {
-      const folderList = pendingFolderEntries.map((e) => e.file);
-      const folderRels = pendingFolderEntries.map((e) => e.rel);
-      const looseList = pendingFiles;
-      const looseRels = pendingFiles.map((f) => f.name);
-      void uploadRelPaths([...folderList, ...looseList], [...folderRels, ...looseRels]);
-      setPendingFiles([]);
-      setPendingFolderEntries([]);
-      return;
-    }
-    launchQueue(
-      csrf,
-      pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
-    );
-    // The queue now owns the submitted files: clear them so anything dropped
-    // during the transfer stays visible as a real backlog for the next run.
-    setPendingFiles([]);
-  }
-
-  /** Directory import (#64): recreate the missing folders, then upload in place. */
-  async function handleFolderUpload(selected: FileList | null) {
-    if (!selected || selected.length === 0) return;
-    const list = Array.from(selected);
-    const relPaths = list.map((file) =>
-      normalizeRelativePath(
-        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
-      ),
-    );
-    setUploadError(null);
-    setPendingFolderEntries((current) => [
-      ...current,
-      ...list.map((file, index) => ({ file, rel: relPaths[index] ?? file.name })),
-    ]);
-  }
-
-  /** Shared core: plan folders, create them, queue files with folder ids. */
-  async function uploadRelPaths(list: File[], relPaths: string[]) {
-    if (!csrf) {
-      setUploadError("Session expirée. Reconnectez-vous.");
-      return;
-    }
-    if (transferActive) return;
-    setUploadError(null);
-    setNotice(null);
-
-    const plan = planFolders(relPaths);
-    const tooDeep = new Set(plan.tooDeep);
-    const kept = list
-      .map((file, index) => ({ file, rel: relPaths[index] ?? file.name }))
-      .filter((item) => !tooDeep.has(item.rel));
-    if (kept.length === 0) {
-      setUploadError("Aucun fichier importable dans cette sélection.");
-      return;
-    }
-
-    const keyOf = (parentId: string | null, name: string) =>
-      `${parentId ?? "root"}/${name}`;
-    const folderIds = new Map<string, string>(); // relative path -> id
-    const existing = new Map<string, string>(); // parentId/name -> id
-    for (const folder of tree) {
-      existing.set(keyOf(folder.parent_id, folder.name), folder.id);
-    }
-
-    if (plan.folders.length > 0) {
-      setFolderProgress({
-        done: 0,
-        total: plan.folders.length,
-        name: plan.folders[0]!.name,
-      });
-    }
-
-    let createdAny = false;
-    for (const [index, folder] of plan.folders.entries()) {
-      setFolderProgress({
-        done: index,
-        total: plan.folders.length,
-        name: folder.name,
-      });
-      const parentId = folder.parentPath
-        ? (folderIds.get(folder.parentPath) ?? currentFolderId)
-        : currentFolderId;
-      const key = keyOf(parentId, folder.name);
-      const known = existing.get(key);
-      if (known) {
-        folderIds.set(folder.path, known);
-        continue;
-      }
-      try {
-        const made = await api.createFolder(
-          { name: folder.name, parent_id: parentId },
-          csrf,
-        );
-        existing.set(key, made.id);
-        folderIds.set(folder.path, made.id);
-        createdAny = true;
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 409) {
-          try {
-            const all = await api.listAllFolders();
-            const found = all.items.find(
-              (candidate) =>
-                (candidate.parent_id ?? null) === (parentId ?? null) &&
-                candidate.name === folder.name,
-            );
-            if (found) {
-              existing.set(key, found.id);
-              folderIds.set(folder.path, found.id);
-              continue;
-            }
-          } catch {
-            // Fall through to the named failure below: the folder that could
-            // not be resolved is the one worth reporting.
-          }
-        }
-        setFolderProgress(null);
-        setUploadError(
-          `Création du dossier « ${folder.name} » impossible : ${describeError(
-            err,
-            "réponse inattendue du serveur",
-          )}`,
-        );
-        return;
-      }
-    }
-    setFolderProgress(null);
-    if (createdAny) invalidateLibrary();
-    if (plan.tooDeep.length > 0) {
-      setNotice(
-        `${plan.tooDeep.length} fichier(s) ignoré(s) : arborescence trop profonde (max ${MAX_UPLOAD_DEPTH}).`,
-      );
-    }
-
-    launchQueue(
-      csrf,
-      kept.map((item) => {
-        const dir = parentDirOf(item.rel);
-        return {
-          file: item.file,
-          rel: item.rel,
-          folderId: dir ? (folderIds.get(dir) ?? currentFolderId) : currentFolderId,
-        };
-      }),
-    );
-  }
-
-  function handleCancelUpload() {
-    transfers.cancelAll();
-  }
-
-  function handleRetryFailed() {
-    setUploadError(null);
-    transfers.retryFailed();
-  }
-
-  function handleFilesChange(selected: FileList | File[] | null) {
-    const list = selected ? Array.from(selected) : [];
-    if (list.length === 0) return;
-    setUploadError(null);
-    setPendingFiles((current) => [...current, ...list]);
-  }
-
-  // Drop visual state (P0.3): a counter avoids flicker when crossing children.
-  const [dragDepth, setDragDepth] = useState(0);
-
-  /** Walk dropped entries: files keep their folder-relative path (P0.2).
-   * Empty (0 o) files and empty folders are skipped, but counted, so the caller
-   * can tell the two cases apart instead of showing one vague message. */
-  async function collectDroppedEntries(
-    items: DataTransferItemList,
-    onProgress?: (files: number) => void,
-  ): Promise<{
-    entries: { file: File; rel: string }[];
-    emptyFiles: number;
-    emptyFolders: number;
-  }> {
-    const out: { file: File; rel: string }[] = [];
-    let emptyFiles = 0;
-    let emptyFolders = 0;
-    // DataTransferItem access is only guaranteed during the drop dispatch:
-    // capture every item synchronously before the first await, otherwise the
-    // items after the first can be lost.
-    const roots = Array.from(items).map((item) => ({
-      entry: item.webkitGetAsEntry?.() ?? null,
-      file: item.getAsFile(),
-    }));
-    const readBatch = (reader: FileSystemDirectoryReader) =>
-      new Promise<FileSystemEntry[]>((resolve) => reader.readEntries(resolve));
-    // Returns how many importable files this entry's subtree contributed.
-    const walk = async (entry: FileSystemEntry, base: string): Promise<number> => {
-      if (entry.isFile) {
-        const file = await new Promise<File | null>((resolve) =>
-          (entry as FileSystemFileEntry).file(resolve, () => resolve(null)),
-        );
-        if (!file) return 0;
-        if (file.size === 0) {
-          // A 0-o file is not importable: the backend refuses empty objects
-          // unless the policy explicitly allows them (AURA_ALLOW_EMPTY_OBJECTS).
-          emptyFiles += 1;
-          return 0;
-        }
-        out.push({ file, rel: `${base}${entry.name}` });
-        onProgress?.(out.length);
-        return 1;
-      }
-      if (entry.isDirectory) {
-        const reader = (entry as FileSystemDirectoryEntry).createReader();
-        let found = 0;
-        for (;;) {
-          const batch = await readBatch(reader);
-          if (batch.length === 0) break;
-          for (const child of batch) {
-            found += await walk(child, `${base}${entry.name}/`);
-          }
-        }
-        // A dropped folder with no importable file anywhere is an empty folder.
-        if (found === 0) emptyFolders += 1;
-        return found;
-      }
-      return 0;
-    };
-    for (const root of roots) {
-      if (root.entry) {
-        await walk(root.entry, "");
-        continue;
-      }
-      const file = root.file;
-      if (!file) continue;
-      if (file.size === 0) {
-        emptyFiles += 1;
-      } else {
-        out.push({ file, rel: file.name });
-        onProgress?.(out.length);
-      }
-    }
-    return {
-      entries: out.map(({ file, rel }) => ({
-        file,
-        rel: normalizeRelativePath(rel),
-      })),
-      emptyFiles,
-      emptyFolders,
-    };
-  }
-
-  /** Drop intake: loose files buffer, folders reuse the folder pipeline. */
-  async function handleDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setDragDepth(0);
-    setIntakeOpen(true);
-    setUploadError(null);
-    setDropScan({ files: 0 });
-    notify(
-      "info",
-      "Lecture du dépôt en cours — patientez pendant que les fichiers sont analysés.",
-    );
-    try {
-      // Throttle: a large folder would otherwise re-render on every file.
-      let lastReported = 0;
-      const reportScan = (files: number) => {
-        if (files === 1 || files - lastReported >= 25) {
-          lastReported = files;
-          setDropScan({ files });
-        }
-      };
-      const { entries, emptyFiles, emptyFolders } = await collectDroppedEntries(
-        e.dataTransfer.items,
-        reportScan,
-      );
-      setDropScan(null);
-      if (entries.length === 0) {
-        // Distinguish a 0-o file from an empty folder, and recall the backend
-        // policy (empty objects are refused unless explicitly allowed).
-        const emptyFileNote =
-          emptyFiles === 1
-            ? "1 fichier vide (0 o) ignoré — le backend refuse les objets vides tant que la politique ne les autorise pas"
-            : `${emptyFiles} fichiers vides (0 o) ignorés — le backend refuse les objets vides tant que la politique ne les autorise pas`;
-        const emptyFolderNote =
-          emptyFolders === 1
-            ? "1 dossier vide ignoré (aucun fichier à l'intérieur)"
-            : `${emptyFolders} dossiers vides ignorés (aucun fichier à l'intérieur)`;
-        let message = "Aucun fichier importable dans ce dépôt.";
-        if (emptyFiles > 0 && emptyFolders > 0) {
-          message = `Aucun fichier importable : ${emptyFileNote}, et ${emptyFolderNote}.`;
-        } else if (emptyFiles > 0) {
-          message = `Aucun fichier importable : ${emptyFileNote}.`;
-        } else if (emptyFolders > 0) {
-          message = `Aucun fichier importable : ${emptyFolderNote}.`;
-        }
-        setUploadError(message);
-        return;
-      }
-      const hasFolders = entries.some((entry) => entry.rel.includes("/"));
-      if (transferActive) {
-        const loose = entries.filter((entry) => !entry.rel.includes("/"));
-        if (loose.length > 0) {
-          // Buffer loose files for the next run and say so (P0.1): never
-          // swallow a drop silently.
-          setUploadError(null);
-          setPendingFiles((current) => [
-            ...current,
-            ...loose.map((entry) => entry.file),
-          ]);
-          notify(
-            "info",
-            `Transfert en cours — ${
-              loose.length === 1
-                ? "1 fichier ajouté à la file d'attente."
-                : `${loose.length} fichiers ajoutés à la file d'attente.`
-            }` + (hasFolders ? " Les dossiers attendront la fin du transfert." : ""),
-          );
-        }
-        if (hasFolders) {
-          const folderEntries = entries.filter((entry) => entry.rel.includes("/"));
-          setPendingFolderEntries((current) => [...current, ...folderEntries]);
-          notify("info", "Transfert en cours — dossiers mis en attente, ils seront importés ensuite.");
-        }
-        if (loose.length === 0 && !hasFolders) {
-          // Folder creation needs a free queue: say so instead of swallowing.
-          setUploadError(
-            "Un transfert est en cours : attendez sa fin pour déposer un dossier.",
-          );
-        }
-        return;
-      }
-      if (hasFolders) {
-        notify(
-          "info",
-          entries.length === 1
-            ? "1 fichier prêt — préparation des dossiers…"
-            : `${entries.length} fichiers prêts — préparation des dossiers…`,
-        );
-        await uploadRelPaths(
-          entries.map((entry) => entry.file),
-          entries.map((entry) => entry.rel),
-        );
-      } else {
-        handleFilesChange(entries.map((entry) => entry.file));
-      }
-    } catch (error) {
-      setUploadError(describeError(error, "Lecture du dépôt impossible."));
-    } finally {
-      setDropScan(null);
-    }
-  }
-
-  function removePendingFile(index: number) {
-    setPendingFiles((current) => current.filter((_, i) => i !== index));
-  }
-
-  async function handleDownload(item: ObjectItem) {
-    setActionError(null);
-    if (!csrf) {
-      setActionError("Session expirée. Reconnectez-vous.");
-      return;
-    }
-    setDownloadingId(item.id);
-    // Open the tab inside the user gesture: after the await, popup blockers
-    // (Firefox/Safari) refuse it even though the toast claimed success.
-    const pendingWindow = window.open("about:blank", "_blank");
-    try {
-      const intent = await api.createDownloadIntent(item.id, csrf);
-      // The browser performs the direct S3 GET; it manages its own progress.
-      if (pendingWindow) {
-        pendingWindow.opener = null;
-        pendingWindow.location.replace(intent.download_url);
-      } else {
-        const link = document.createElement("a");
-        link.href = intent.download_url;
-        link.target = "_blank";
-        link.rel = "noopener";
-        link.download = intent.display_name;
-        link.click();
-      }
-      notify(
-        "ok",
-        `Téléchargement de « ${intent.display_name} » lancé (${formatBytes(
-          intent.size_bytes,
-        )}).`,
-      );
-    } catch (err) {
-      pendingWindow?.close();
-      setActionError(`Téléchargement impossible. ${describeError(err, "")}`.trim());
-    } finally {
-      setDownloadingId(null);
-    }
-  }
-
-  async function handleCopyReference(item: ObjectItem) {
-    setActionError(null);
-    try {
-      await navigator.clipboard.writeText(item.id);
-      notify("ok", `Référence copiée : ${item.id}`);
-    } catch {
-      setActionError("Copie impossible dans ce navigateur.");
-    }
-  }
-
-  /** Folders that cannot be a move target: the folder itself and its subtree. */
-  function forbiddenTargets(rootId: string): Set<string> {
-    const out = new Set<string>([rootId]);
-    const queue = [rootId];
-    while (queue.length > 0) {
-      const node = queue.shift();
-      for (const child of childrenOf.get(node ?? null) ?? []) {
-        if (!out.has(child.id)) {
-          out.add(child.id);
-          queue.push(child.id);
-        }
-      }
-    }
-    return out;
-  }
-
-  // Offset pagination refetches each loaded page at its old offset; if objects
-  // were inserted at the top (an import finishing), the same row can appear on
-  // two pages. Deduplicate by id so the ledger never shows a file twice or
-  // loses one to a duplicate React key.
-  const items = useMemo(() => {
-    const seen = new Set<string>();
-    const out: ObjectItem[] = [];
-    for (const page of objectsQuery.data?.pages ?? []) {
-      for (const item of page.items) {
-        if (seen.has(item.id)) continue;
-        seen.add(item.id);
-        out.push(item);
-      }
-    }
-    return out;
-  }, [objectsQuery.data]);
-
-  // Répartition des statuts sur les pages déjà chargées. Elle ne peut pas
-  // vivre dans le filtre d'état : celui-ci sert justement à charger les autres
-  // statuts, donc un compteur y serait circulaire et partiel par construction.
-  // `deleted` et `purging` n'apparaissent jamais sans filtre : l'API applique
-  // `hide_deleted = status is None` et ne renvoie donc pas ces lignes.
-  const statusTally = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const item of items) {
-      counts.set(item.status, (counts.get(item.status) ?? 0) + 1);
-    }
-    return STATUS_OPTIONS.filter((option) => option.value !== "")
-      .map((option) => ({ ...option, count: counts.get(option.value) ?? 0 }))
-      .filter((entry) => entry.count > 0);
-  }, [items]);
-
-  // Only deletable rows are selectable: the server refuses anything else
-  // with 409, so offering them would manufacture failures.
-  // In master mode the trash can be selected too: its rows are purgeable.
-  const selectableItems = items.filter(
-    (item) => isDeletable(item) || (master.active && item.status === "deleted"),
-  );
-  const selectableIds = new Set(selectableItems.map((item) => item.id));
-
-  // La barre de sélection ne compte que les identifiants connus : dossiers de
-  // l'arbre et fichiers réellement sélectionnables.
-  const selectedFolderIds = [...selectedIds].filter((id) => byId.has(id));
-  const selectedFileIds = [...selectedIds].filter((id) => selectableIds.has(id));
-  const selectedFolderCount = selectedFolderIds.length;
-  const selectedFileCount = selectedFileIds.length;
-  const selectedKnownCount = selectedFolderCount + selectedFileCount;
-
-  // Un changement de filtre change la population affichée : garder une
-  // sélection devenue invisible produirait des comptes faux et une suppression
-  // partielle silencieuse. Le tri, lui, ne change pas la population.
-  const filterSignature = [
-    debouncedSearch,
-    statusFilter,
-    typeFilter,
-    minSize,
-    maxSize,
-    fromDate,
-    toDate,
-    tagFilter,
-  ].join("\u0000");
-  useEffect(() => {
-    setSelectedIds(new Set());
-  }, [filterSignature]);
-
-  // Élague les identifiants qui ne correspondent plus à rien (objet supprimé
-  // ailleurs, dossier retiré, page rechargée) sans toucher au reste.
-  useEffect(() => {
-    setSelectedIds((current) => {
-      if (current.size === 0) return current;
-      const known = new Set<string>(items.map((item) => item.id));
-      for (const folder of tree) known.add(folder.id);
-      let changed = false;
-      const next = new Set<string>();
-      for (const id of current) {
-        if (known.has(id)) next.add(id);
-        else changed = true;
-      }
-      return changed ? next : current;
-    });
-  }, [items, tree]);
-
-  const selectionBusy =
-    deleteManyMutation.isPending ||
-    bulkPurgeMutation.isPending ||
-    zippingSelection ||
-    cascade?.phase === "scanning" ||
-    cascade?.phase === "deleting";
-
-  /** Télécharge toute la sélection (fichiers seuls ou dossiers complets). */
-  async function handleDownloadSelection() {
-    if (!csrf) {
-      notify("error", "Session expirée. Reconnectez-vous pour télécharger.");
-      return;
-    }
-    setZippingSelection(true);
-    try {
-      await downloadSelectionAsZip(
-        {
-          files: selectedFileIds
-            .map((id) => {
-              const item = items.find((entry) => entry.id === id);
-              return item
-                ? { id: item.id, name: item.display_name, status: item.status }
-                : null;
-            })
-            .filter(
-              (entry): entry is { id: string; name: string; status: string } =>
-                entry !== null,
-            ),
-          folders: selectedFolderIds.map((id) => ({
-            id,
-            name: byId.get(id)?.name ?? id,
-          })),
-        },
-        csrf,
-      );
-      notify("ok", "Archive ZIP téléchargée.");
-    } catch (err) {
-      notify("error", describeError(err, "Impossible de créer l'archive ZIP."));
-    } finally {
-      setZippingSelection(false);
-    }
-  }
-
-  /** Dossier(s) sélectionné(s) : flux cascade ; fichiers seuls : confirmation. */
-  function requestBulkDelete() {
-    if (selectedFolderIds.length > 0) {
-      openBatchCascade(
-        selectedFolderIds.map((id) => ({ id, name: byId.get(id)?.name ?? id })),
-      );
-      return;
-    }
-    const fileIds = selectedFileIds.filter((id) => {
-      const item = items.find((entry) => entry.id === id);
-      return item !== undefined && isDeletable(item);
-    });
-    if (fileIds.length === 0) return;
-    setBulkDeleteIds(fileIds);
-    setBulkDeleteOpen(true);
-  }
-
-  // Raccourcis clavier globaux (P1.1): `?` ouvre la légende et `Suppr`
-  // prépare la suppression de la sélection. Ignorés dans les champs de
-  // saisie et quand un dialogue est ouvert (il a déjà son propre clavier).
-  // Déclaré après la sélection : le handler lit items/arbre à jour.
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (isTextEntryTarget(event.target)) return;
-      if (document.querySelector("dialog[open]")) return;
-      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
-        // "? peut arriver tel quel (clavier réel) ou comme "/" + Shift
-        // (événement synthétique, claviers où ? exige une autre touche).
-        event.preventDefault();
-        setShortcutsOpen(true);
-        return;
-      }
-      if (
-        event.key === "Delete" &&
-        selectedIds.size > 0 &&
-        !deleteManyMutation.isPending
-      ) {
-        event.preventDefault();
-        requestBulkDelete();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedIds, selectedFileIds, selectedFolderIds, items, byId, deleteManyMutation.isPending]);
-
-  const currentName = currentFolderId ? byId.get(currentFolderId)?.name : null;
-
-  const moveBlocked = moveTarget ? forbiddenTargets(moveTarget.id) : new Set<string>();
-  const deletePendingId = deleteObjectMutation.isPending
-    ? deleteObjectMutation.variables
-    : undefined;
-  const purgePendingId = purgeMutation.isPending ? purgeMutation.variables : undefined;
-  const abortPendingId = abortUploadMutation.isPending
-    ? abortUploadMutation.variables
-    : undefined;
-  const objectBusy =
-    deleteObjectMutation.isPending ||
-    purgeMutation.isPending ||
-    restoreMutation.isPending ||
-    abortUploadMutation.isPending ||
-    moveObjectMutation.isPending ||
-    downloadingId !== null;
-
-  // -- recursive (cascade) folder deletion ---------------------------------
-  /** Keep the React state and the run-loop mirror in lockstep. */
-  function applyCascade(next: CascadeState | null) {
-    cascadeRef.current = next;
-    setCascade(next);
-  }
-
-  /** Open the cascade flow for `target`: scan its real content first. */
-  function openCascade(target: { id: string; name: string }) {
-    cascadeTokenRef.current += 1;
-    setPendingConfirm(null);
-    setFolderDeleteError(null);
-    setFolderDeleteWithContent(false);
-    setCascadeConfirmText("");
-    cascadeCancelRef.current = false;
-    cascadeExtraFilesRef.current = [];
-    applyCascade({
-      rootId: target.id,
-      rootName: target.name,
-      roots: [target],
-      phase: "scanning",
-      plan: null,
-      ops: [],
-      done: 0,
-      current: null,
-      failures: [],
-      cancelled: false,
-      scanError: null,
-    });
-    void runCascadeScan([target]);
-  }
-
-  /**
-   * Ouvre le flux cascade pour plusieurs dossiers sélectionnés. Les racines
-   * déjà contenues dans une autre sont retirées avant le scan : leur contenu
-   * sera supprimé une seule fois, avec leur ancêtre.
-   */
-  function openBatchCascade(folders: { id: string; name: string }[]) {
-    if (folders.length === 0) return;
-    const unique = dedupeCascadeRoots(folders, tree);
-    if (unique.length === 0) return;
-    // Les fichiers sélectionnés en dehors des dossiers visés sont ajoutés au
-    // plan pour ne pas laisser une partie de la sélection derrière.
-    const extraFiles = selectedFileIds
-      .map((id) => {
-        const item = items.find((entry) => entry.id === id);
-        return item && isDeletable(item)
-          ? {
-              id: item.id,
-              name: item.display_name,
-              path: folderPath(currentFolderId),
-            }
-          : null;
-      })
-      .filter(
-        (entry): entry is { id: string; name: string; path: string } =>
-          entry !== null,
-      );
-    if (unique.length === 1) {
-      const only = unique[0] as CascadeRoot;
-      openCascade(only);
-      // openCascade réinitialise la référence : on la restaure après coup, le
-      // scan asynchrone lira la valeur au moment de construire les opérations.
-      cascadeExtraFilesRef.current = extraFiles;
-      return;
-    }
-    cascadeExtraFilesRef.current = extraFiles;
-    cascadeTokenRef.current += 1;
-    setPendingConfirm(null);
-    setFolderDeleteError(null);
-    setFolderDeleteWithContent(false);
-    setCascadeConfirmText("");
-    cascadeCancelRef.current = false;
-    applyCascade({
-      rootId: unique[0]?.id ?? "",
-      rootName: `${unique.length} dossiers`,
-      roots: unique,
-      phase: "scanning",
-      plan: null,
-      ops: [],
-      done: 0,
-      current: null,
-      failures: [],
-      cancelled: false,
-      scanError: null,
-    });
-    void runCascadeScan(unique);
-  }
-
-  /** List (never guess) the target's content; failure is surfaced, not hidden. */
-  async function runCascadeScan(roots: CascadeRoot[]) {
-    const current = cascadeRef.current;
-    if (!current || roots.length === 0) return;
-    const rootId = roots[0]?.id ?? "";
-    // Le jeton est capturé avant l'attente : un flux fermé puis rouvert ne
-    // peut pas recevoir le plan de l'ancien scan, même avec la même racine.
-    const token = cascadeTokenRef.current;
-    applyCascade({ ...current, phase: "scanning", plan: null, scanError: null });
-    try {
-      const plan =
-        roots.length > 1
-          ? await scanCascadeMany(roots)
-          : await scanCascade(rootId, roots[0]?.name ?? "");
-      const live = cascadeRef.current;
-      if (
-        token !== cascadeTokenRef.current ||
-        !live ||
-        live.rootId !== rootId ||
-        live.phase !== "scanning"
-      ) {
-        return;
-      }
-      // Les fichiers sélectionnés hors dossiers sont traités après le contenu
-      // des dossiers (ils sont indépendants de leur arborescence).
-      const plannedObjectIds = new Set(plan.objects.map((object) => object.id));
-      const extraOps: CascadeOp[] = cascadeExtraFilesRef.current
-        .filter((file) => !plannedObjectIds.has(file.id))
-        .map((file) => ({
-          kind: "object",
-          id: file.id,
-          label: file.name,
-          path: file.path,
-        }));
-      const ops = [...planCascadeOpsForRoots(plan), ...extraOps];
-      // Rien à supprimer (dossiers disparus entre-temps) : inutile de faire
-      // taper une confirmation pour un flux qui ne ferait rien.
-      if (ops.length === 0) {
-        applyCascade({
-          ...live,
-          phase: "confirm",
-          plan: { ...plan, fileCount: 0, extraFileCount: 0 },
-          ops: [],
-          scanError: "Ces dossiers n'existent plus ou ne contiennent plus rien.",
-        });
-        return;
-      }
-      applyCascade({
-        ...live,
-        phase: "confirm",
-        plan: {
-          ...plan,
-          fileCount: plan.fileCount + extraOps.length,
-          extraFileCount: extraOps.length,
-        },
-        ops,
-      });
-    } catch (err) {
-      const live = cascadeRef.current;
-      if (
-        token !== cascadeTokenRef.current ||
-        !live ||
-        live.rootId !== rootId ||
-        live.phase !== "scanning"
-      ) {
-        return;
-      }
-      applyCascade({
-        ...live,
-        phase: "confirm",
-        scanError:
-          err instanceof CascadeScanError
-            ? `Analyse interrompue dans « ${err.path} ». ${describeError(
-                err.cause,
-                "Réessayez dans un instant.",
-              )}`
-            : `Analyse du contenu impossible. ${describeError(err, "Réessayez dans un instant.")}`,
-      });
-    }
-  }
-
-  /** The typed confirmation matched: start the confirmed run. */
-  function startCascade() {
-    const current = cascadeRef.current;
-    if (!current || current.phase !== "confirm" || !current.plan) return;
-    void executeCascade([...current.ops]);
-  }
-
-  /** Run the ordered steps sequentially, recording each real server outcome. */
-  async function executeCascade(opsToRun: CascadeOp[]) {
-    const start = cascadeRef.current;
-    if (!start) return;
-    const activeCsrf = csrf;
-    if (!activeCsrf) {
-      notify("error", "Session expirée. Reconnectez-vous pour supprimer.");
-      applyCascade({
-        ...start,
-        phase: "done",
-        current: null,
-        scanError: "Session expirée.",
-      });
-      return;
-    }
-    cascadeCancelRef.current = false;
-    let done = start.done;
-    let failures = start.failures;
-    let sessionLost = false;
-    applyCascade({ ...start, phase: "deleting", current: null, cancelled: false });
-
-    for (const op of opsToRun) {
-      if (cascadeCancelRef.current) {
-        // Cancellation lands between items: whatever the server confirmed stays
-        // deleted, nothing local is faked.
-        const live = cascadeRef.current ?? start;
-        applyCascade({ ...live, done, failures, current: null, cancelled: true });
-        break;
-      }
-      const key = cascadeOpKey(op);
-      applyCascade({
-        ...(cascadeRef.current ?? start),
-        done,
-        failures,
-        current: op.path,
-      });
-      try {
-        if (op.kind === "object") await api.deleteObject(op.id, activeCsrf);
-        else await api.deleteFolder(op.id, activeCsrf);
-        done += 1;
-        failures = failures.filter((failure) => failure.key !== key);
-      } catch (err) {
-        // Session expirée ou scope retiré : inutile d'enchaîner N refus.
-        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-          sessionLost = true;
-          break;
-        }
-        // Un objet déjà absent a atteint l'état voulu : ce n'est pas un échec.
-        if (err instanceof ApiError && err.status === 404 && op.kind === "object") {
-          done += 1;
-          failures = failures.filter((failure) => failure.key !== key);
-        } else {
-          const detail = describeError(err, "Échec de suppression.");
-          failures = [
-            ...failures.filter((failure) => failure.key !== key),
-            { key, kind: op.kind, id: op.id, label: op.label, path: op.path, error: detail },
-          ];
-        }
-      }
-      applyCascade({
-        ...(cascadeRef.current ?? start),
-        done,
-        failures,
-        current: null,
-      });
-    }
-
-    if (sessionLost) {
-      const live = cascadeRef.current ?? start;
-      invalidateLibrary();
-      setSelectedIds(new Set());
-      cascadeExtraFilesRef.current = [];
-      applyCascade({
-        ...live,
-        phase: "done",
-        done,
-        failures,
-        current: null,
-        scanError: "Session expirée. Reconnectez-vous pour reprendre.",
-      });
-      notify(
-        "error",
-        "Session expirée : suppression interrompue. Reconnectez-vous puis réessayez.",
-      );
-      return;
-    }
-
-    const end = cascadeRef.current ?? start;
-    invalidateLibrary();
-    applyCascade({ ...end, phase: "done", current: null });
-    // La sélection a été traitée (ou interrompue) : on ne garde pas des ids
-    // dont une partie n'existe plus.
-    setSelectedIds(new Set());
-    cascadeExtraFilesRef.current = [];
-
-    const final = cascadeRef.current;
-    if (!final) return;
-    const manyRoots = (final.plan?.roots?.length ?? final.roots.length) > 1;
-    if (final.cancelled) {
-      notify(
-        "info",
-        `Suppression interrompue : ${final.done} élément(s) supprimé(s), ${final.failures.length} échec(s).`,
-      );
-    } else if (final.failures.length === 0) {
-      notify(
-        "ok",
-        manyRoots
-          ? `Sélection supprimée : ${final.done} élément(s).`
-          : `Dossier et contenu supprimés : ${final.done} élément(s).`,
-      );
-    } else {
-      notify(
-        "error",
-        `${final.done} élément(s) supprimé(s), ${final.failures.length} échec(s) : ouvrez le journal pour réessayer.`,
-      );
-    }
-  }
-
-  function retryCascadeFailures() {
-    const current = cascadeRef.current;
-    if (!current || current.phase !== "done" || current.failures.length === 0) return;
-    void executeCascade(
-      current.failures.map((failure) => ({
-        kind: failure.kind,
-        id: failure.id,
-        label: failure.label,
-        path: failure.path,
-      })),
-    );
-  }
-
-  function retryCascadeItem(failure: CascadeFailure) {
-    const current = cascadeRef.current;
-    if (!current || current.phase !== "done") return;
-    void executeCascade([
-      { kind: failure.kind, id: failure.id, label: failure.label, path: failure.path },
-    ]);
-  }
-
-  function abandonCascadeItem(failure: CascadeFailure) {
-    const current = cascadeRef.current;
-    if (!current) return;
-    applyCascade({
-      ...current,
-      failures: current.failures.filter((entry) => entry.key !== failure.key),
-    });
-  }
-
-  /** Request a stop; it is honoured between items by the run loop. */
-  function cancelCascade() {
-    cascadeCancelRef.current = true;
-  }
-
-  function closeCascade() {
-    if (cascadeRef.current?.phase === "deleting") {
-      cascadeCancelRef.current = true;
-      return;
-    }
-    cascadeExtraFilesRef.current = [];
-    applyCascade(null);
-  }
-
-  // The cascade modal is a native <dialog> so Escape/focus trapping come for
-  // free; it is shown while a cascade state exists and closed when it clears.
-  useEffect(() => {
-    const el = cascadeDialogRef.current;
-    if (!el) return;
-    if (cascade && !el.open) {
-      el.showModal();
-    } else if (!cascade && el.open) {
-      el.close();
-    }
-  }, [cascade]);
-
-  // Details drawer: focus its close button on open and close it on Escape
-  // from anywhere (focus may still be on the row that opened it). A modal
-  // dialog stacked on top handles its own Escape first.
-  const detailsCloseRef = useRef<HTMLButtonElement | null>(null);
-  const detailsId = details?.id ?? null;
-  useEffect(() => {
-    if (!detailsId) return;
-    detailsCloseRef.current?.focus();
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape" || document.querySelector("dialog[open]")) return;
-      setDetails(null);
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [detailsId]);
-
-  const intakeVisible =
-    intakeOpen ||
-    dropScan !== null ||
-    pendingFiles.length > 0 ||
-    pendingFolderEntries.length > 0 ||
-    queue.items.length > 0 ||
-    uploadError !== null;
-
-  // Subfolders are listed first in the register, like any file browser; a
-  // search or filter narrows files only, so folders step aside meanwhile.
-  const visibleFolders = hasActiveFilters ? [] : subfolders;
-
-  // Ensembles identiques pour les deux « Tout sélectionner » (grille et ledger) :
-  // fichiers sélectionnables + dossiers visibles.
-  const allSelectableIds = [
-    ...selectableItems.map((item) => item.id),
-    ...visibleFolders.map((folder) => folder.id),
-  ];
-  const allSelected =
-    allSelectableIds.length > 0 &&
-    allSelectableIds.every((id) => selectedIds.has(id));
-  const selectAllDisabled =
-    allSelectableIds.length === 0 || deleteManyMutation.isPending || selectionBusy;
-  function toggleSelectAll(checked: boolean) {
-    setSelectedIds(checked ? new Set(allSelectableIds) : new Set());
-  }
-
-  const [zippingFolderId, setZippingFolderId] = useState<string | null>(null);
-
-  function folderMenuItems(folder: FolderItem) {
-    const isZipping = zippingFolderId === folder.id;
-    return [
-      ...(canShare
-        ? [
-            {
-              label: "Partager",
-              onSelect: () => setShareTarget({ kind: "folder" as const, folder }),
-              title: `Partager le dossier "${folder.name}"`,
-            },
-          ]
-        : []),
-      {
-        label: "Télécharger en ZIP",
-        onSelect: async () => {
-          setZippingFolderId(folder.id);
-          try {
-            await downloadFolderAsZip(folder.id, csrf ?? "");
-          } catch (err) {
-            notify("error", describeError(err, "Impossible de créer l'archive ZIP."));
-          } finally {
-            setZippingFolderId(null);
-          }
-        },
-        disabled: isZipping || !csrf,
-        title: `Télécharger le dossier "${folder.name}" en ZIP`,
-      },
-      {
-        label: "Renommer",
-        onSelect: () => {
-          setRenameName(folder.name);
-          setRenameTarget(folder);
-        },
-        title: `Renommer le dossier "${folder.name}"`,
-      },
-      { label: "Déplacer", onSelect: () => setMoveTarget(folder), title: `Déplacer le dossier "${folder.name}"` },
-      {
-        label: "Supprimer",
-        danger: true,
-        onSelect: () => {
-          setFolderDeleteWithContent(false);
-          setCascadeConfirmText("");
-          setPendingConfirm({
-            title: "Supprimer le dossier",
-            message: (
-              <>
-                Supprimer <strong>{folder.name}</strong> ? Un dossier contenant
-                encore des fichiers ou sous-dossiers sera refusé.
-              </>
-            ),
-            confirmLabel: "Supprimer",
-            danger: true,
-            folderCascade: canCascadeDelete,
-            onConfirm: (withContent: boolean) => {
-              if (withContent) {
-                openCascade({ id: folder.id, name: folder.name });
-              } else {
-                deleteFolderMutation.mutate({ id: folder.id, name: folder.name });
-              }
-            },
-          });
-        },
-        title: `Supprimer le dossier "${folder.name}"`,
-      },
-    ];
-  }
-
-  /** A column header that sorts server-side: same column toggles the order. */
-  function sortHeader(field: NonNullable<ObjectQuery["sort"]>) {
-    const column = SORT_COLUMNS.find((entry) => entry.field === field);
-    if (!column) return null;
-    const active = sortField === field;
-    return (
-      <button
-        type="button"
-        className={active ? "sort-head sort-head-active" : "sort-head"}
-        onClick={() => {
-          if (active) {
-            setSortOrder(sortOrder === "asc" ? "desc" : "asc");
-          } else {
-            setSortField(field);
-            setSortOrder(column.firstOrder);
-          }
-        }}
-      >
-        {column.label}
-        {active ? (
-          <>
-            <span aria-hidden="true" className="sort-arrow">
-              {sortOrder === "asc" ? "▲" : "▼"}
+      <nav className="breadcrumb" aria-label="Fil d'Ariane">
+        <button
+          type="button"
+          className={currentFolderId === null ? "crumb crumb-current" : "crumb"}
+          aria-current={currentFolderId === null ? "page" : undefined}
+          onClick={() => setCurrentFolderId(null)}
+        >
+          <span className="crumb-icon" aria-hidden="true">
+            <Icon name="home" size={16} />
+          </span>
+          <span className="crumb-label">Mes fichiers</span>
+        </button>
+        {breadcrumb.map((folder, index) => (
+          <span key={folder.id} className="crumb-item">
+            <span className="crumb-sep" aria-hidden="true">
+              /
             </span>
-            <span className="visually-hidden">
-              {sortOrder === "asc" ? " (tri croissant)" : " (tri décroissant)"}
-            </span>
-          </>
-        ) : null}
-      </button>
-    );
-  }
-
-  const cascadeRoots = cascade?.plan?.roots ?? cascade?.roots ?? [];
-  const cascadeMany = cascadeRoots.length > 1;
-  const cascadeExtraFiles = cascade?.plan?.extraFileCount ?? 0;
-  const cascadeBlocked = cascade?.plan?.blockedCount ?? 0;
-  // Des fichiers hors dossiers sont aussi détruits : le nom du dossier ne
-  // suffit plus à couvrir l'ensemble, on demande le mot explicite.
-  const cascadeConfirmTarget =
-    cascadeMany || cascadeExtraFiles > 0
-      ? "SUPPRIMER"
-      : (cascadeRoots[0]?.name ?? cascade?.rootName ?? "");
-  const cascadeConfirmed =
-    cascade !== null &&
-    cascade.plan !== null &&
-    cascadeConfirmTarget.trim() !== "" &&
-    cascadeConfirmText.trim() === cascadeConfirmTarget.trim();
-
-  return (
-    <div
-      className="stack vault-workspace"
-      onDragEnter={(e) => {
-        e.preventDefault();
-        setDragDepth((depth) => depth + 1);
-      }}
-      onDragLeave={() => {
-        setDragDepth((depth) => Math.max(0, depth - 1));
-      }}
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
-      }}
-      onDrop={(e) => {
-        void handleDrop(e);
-      }}
-    >
-      <Breadcrumb
-        ariaLabel="Fil d’Ariane"
-        onSelect={(id) => setCurrentFolderId(id)}
-        items={[
-          {
-            id: null,
-            label: "Mes fichiers",
-            icon: <span>🏠</span>,
-          },
-          ...breadcrumb.map((folder) => ({
-            id: folder.id,
-            label: folder.name,
-            icon: <span>📁</span>,
-          })),
-        ]}
-      />
+            <button
+              type="button"
+              className={
+                index === breadcrumb.length - 1 ? "crumb crumb-current" : "crumb"
+              }
+              aria-current={index === breadcrumb.length - 1 ? "page" : undefined}
+              onClick={() => setCurrentFolderId(folder.id)}
+            >
+              <span className="crumb-icon" aria-hidden="true">
+                <Icon name="folder" size={16} />
+              </span>
+              <span className="crumb-label">{folder.name}</span>
+            </button>
+          </span>
+        ))}
+      </nav>
 
       <div className="page-head">
         <div className="page-title">
@@ -5709,23 +2824,22 @@ export function ObjectsPage() {
             ))}
           </div>
         ) : items.length === 0 && visibleFolders.length === 0 ? (
-          <EmptyState
-            className="empty empty-rich"
-            icon={
+          <div className="empty empty-rich">
+            <span className="empty-mark" aria-hidden="true">
               <FileTypeIcon contentType={hasActiveFilters ? "" : "application/pdf"} />
-            }
-            title={
-              hasActiveFilters
+            </span>
+            <p className="empty-title">
+              {hasActiveFilters
                 ? "Aucun fichier ne correspond à ces critères."
-                : "Aucun fichier dans ce dossier."
-            }
-            description={
-              hasActiveFilters
-                ? "Aucun objet ne correspond aux filtres actuellement appliqués."
-                : "Glissez des fichiers ou des dossiers n'importe où sur la page. Chaque fichier n'est déclaré disponible qu'une fois sa taille et son empreinte SHA-256 vérifiées par le serveur."
-            }
-            actions={
+                : "Aucun fichier dans ce dossier."}
+            </p>
+            {!hasActiveFilters ? (
               <>
+                <p className="muted empty-help">
+                  Glissez des fichiers ou des dossiers n'importe où sur la page. Chaque
+                  fichier n'est déclaré disponible qu'une fois sa taille et son empreinte
+                  SHA-256 vérifiées par le serveur.
+                </p>
                 {canCreate ? (
                   <button
                     type="button"
@@ -5735,30 +2849,43 @@ export function ObjectsPage() {
                     Importer des fichiers
                   </button>
                 ) : null}
-                {hasActiveFilters ? (
+              </>
+            ) : (
+              <>
+                <p className="muted empty-help">
+                  Aucun objet ne correspond aux filtres actuellement appliqués.
+                </p>
+                {canCreate ? (
                   <button
                     type="button"
-                    className="btn btn-small btn-ghost"
-                    onClick={() => {
-                      setSearch("");
-                      setStatusFilter("");
-                      setTypeFilter("");
-                      setMinSize("");
-                      setMaxSize("");
-                      setFromDate("");
-                      setToDate("");
-                      setSortField("created_at");
-                      setSortOrder("desc");
-                      void queryClient.invalidateQueries({ queryKey: ["objects"] });
-                      void queryClient.invalidateQueries({ queryKey: ["folders"] });
-                    }}
+                    className="btn btn-primary"
+                    onClick={() => setIntakeOpen(true)}
                   >
-                    Réinitialiser les filtres
+                    Importer des fichiers
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  className="btn btn-small btn-ghost"
+                  onClick={() => {
+                    setSearch("");
+                    setStatusFilter("");
+                    setTypeFilter("");
+                    setMinSize("");
+                    setMaxSize("");
+                    setFromDate("");
+                    setToDate("");
+                    setSortField("created_at");
+                    setSortOrder("desc");
+                    void queryClient.invalidateQueries({ queryKey: ["objects"] });
+                    void queryClient.invalidateQueries({ queryKey: ["folders"] });
+                  }}
+                >
+                  Réinitialiser les filtres
+                </button>
               </>
-            }
-          />
+            )}
+          </div>
         ) : (
           <>
             {selectedIds.size > 0 ? (
@@ -5767,7 +2894,7 @@ export function ObjectsPage() {
                   {selectedIds.size === 1
                     ? "1 objet sélectionné"
                     : `${selectedIds.size} objets sélectionnés`}
-                </strong>
+                </strong>{" "}
                 <button
                   type="button"
                   className="btn btn-ghost btn-small"
@@ -5775,21 +2902,23 @@ export function ObjectsPage() {
                   onClick={() => setSelectedIds(new Set())}
                 >
                   Tout désélectionner
-                </button>
+                </button>{" "}
                 {master.active ? (
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-small"
-                    disabled={deleteManyMutation.isPending}
-                    onClick={() => bulkPurgeMutation.mutate(Array.from(selectedIds))}
-                  >
-                    {bulkPurgeMutation.isPending ? (
-                      <span className="spinner" aria-hidden="true" />
-                    ) : null}
-                    {bulkPurgeMutation.isPending
-                      ? "Purge…"
-                      : `Purger définitivement (${selectedIds.size})`}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-small"
+                      disabled={bulkPurgeMutation.isPending}
+                      onClick={() => bulkPurgeMutation.mutate([...selectedIds])}
+                    >
+                      {bulkPurgeMutation.isPending ? (
+                        <span className="spinner" aria-hidden="true" />
+                      ) : null}
+                      {bulkPurgeMutation.isPending
+                        ? "Purge…"
+                        : `Purger définitivement (${selectedIds.size})`}
+                    </button>{" "}
+                  </>
                 ) : null}
                 <button
                   type="button"
@@ -5802,127 +2931,65 @@ export function ObjectsPage() {
                     : "Supprimer la sélection"}
                 </button>
                 {deleteManyProgress ? (
-                  <span className="muted">
-                    Suppression {deleteManyProgress.done}/{deleteManyProgress.total}…
+                  <span role="status" className="muted">
+                    {" "}
+                    Suppression {deleteManyProgress.done}/
+                    {deleteManyProgress.total}…
                   </span>
                 ) : null}
               </div>
             ) : null}
             {viewMode === "grid" ? (
-              <>
-                <div className="grid-select-bar">
-                  <label>
+              <div className="object-grid" role="list">
+                {items.map((item) => (
+                  <div className="object-card" key={item.id} role="listitem">
                     <input
                       type="checkbox"
-                      aria-label="Tout sélectionner"
-                      checked={allSelected}
-                      disabled={selectAllDisabled}
-                      onChange={(e) => toggleSelectAll(e.target.checked)}
-                    />{" "}
-                    Tout sélectionner
-                  </label>
-                </div>
-                <div className="object-grid" role="list">
-                  {visibleFolders.map((folder) => (
-                    <div
-                      className="object-card object-card-folder"
-                      role="listitem"
-                      key={folder.id}
+                      className="object-card-check"
+                      aria-label={`Sélectionner ${item.display_name}`}
+                      checked={selectedIds.has(item.id)}
+                      onChange={(e) =>
+                        setSelectedIds((current) => {
+                          const next = new Set(current);
+                          if (e.target.checked) next.add(item.id);
+                          else next.delete(item.id);
+                          return next;
+                        })
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="object-card-open"
+                      onClick={() => setDetails(item)}
+                      aria-label={`Détails de ${item.display_name}`}
                     >
-                      <input
-                        type="checkbox"
-                        className="object-card-check"
-                        aria-label={`Sélectionner le dossier ${folder.name}`}
-                        checked={selectedIds.has(folder.id)}
-                        disabled={deleteManyMutation.isPending}
-                        onChange={(e) =>
-                          setSelectedIds((current) => {
-                            const next = new Set(current);
-                            if (e.target.checked) next.add(folder.id);
-                            else next.delete(folder.id);
-                            return next;
-                          })
-                        }
-                      />
-                      <div className="object-card-menu">
-                        <RowMenu
-                          label={`Actions pour le dossier ${folder.name}`}
-                          items={folderMenuItems(folder)}
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        className="object-card-open"
-                        onClick={() => setCurrentFolderId(folder.id)}
-                        aria-label={`Ouvrir le dossier ${folder.name}`}
-                      >
-                        <span className="object-card-media folder-card-media">
-                          <FolderMark />
-                        </span>
-                        <span className="object-card-name">{folder.name}</span>
-                        <span className="muted object-card-meta">
-                          Dossier ·{" "}
-                          {folder.size_bytes != null
-                            ? formatBytes(folder.size_bytes)
-                            : "taille indisponible"}
-                        </span>
-                      </button>
-                    </div>
-                  ))}
-                  {items.map((item) => (
-                    <div className="object-card" key={item.id} role="listitem">
-                      <input
-                        type="checkbox"
-                        className="object-card-check"
-                        aria-label={`Sélectionner ${item.display_name}`}
-                        checked={selectedIds.has(item.id)}
-                        disabled={
-                          !selectableIds.has(item.id) ||
-                          deleteManyMutation.isPending
-                        }
-                        onChange={(e) =>
-                          setSelectedIds((current) => {
-                            const next = new Set(current);
-                            if (e.target.checked) next.add(item.id);
-                            else next.delete(item.id);
-                            return next;
-                          })
-                        }
-                      />
-                      <button
-                        type="button"
-                        className="object-card-open"
-                        onClick={() => setDetails(item)}
-                        aria-label={`Détails de ${item.display_name}`}
-                      >
-                        <span className={`object-card-media file-tile-${fileKind(item.content_type)}`}>
-                          <FileTypeIcon contentType={item.content_type} />
-                          {item.thumbnail ? (
-                            <img
-                              src={`/api/v1/objects/${item.id}/thumbnail`}
-                              alt=""
-                              loading="lazy"
-                              onError={(e) => {
-                                e.currentTarget.style.display = "none";
-                              }}
-                            />
-                          ) : null}
-                          {item.duration_seconds ? (
-                            <span className="object-card-duration">
-                              {formatDuration(item.duration_seconds)}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="object-card-name">{item.display_name}</span>
-                        <span className="muted object-card-meta">
-                          {typeLabel(item.content_type)} ·{" "}
-                          {formatBytes(item.size_bytes)}
-                        </span>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </>
+                      <span className={`object-card-media file-tile-${fileKind(item.content_type)}`}>
+                        <FileTypeIcon contentType={item.content_type} />
+                        {item.thumbnail ? (
+                          <img
+                            src={`/api/v1/objects/${item.id}/thumbnail`}
+                            alt=""
+                            loading="lazy"
+                            onError={(e) => {
+                              e.currentTarget.style.display = "none";
+                            }}
+                          />
+                        ) : null}
+                        {item.duration_seconds ? (
+                          <span className="object-card-duration">
+                            {formatDuration(item.duration_seconds)}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="object-card-name">{item.display_name}</span>
+                      <span className="muted object-card-meta">
+                        {typeLabel(item.content_type)} ·{" "}
+                        {formatBytes(item.size_bytes)}
+                      </span>
+                    </button>
+                  </div>
+                ))}
+              </div>
             ) : null}
             <div className="ledger" role="list" hidden={viewMode === "grid"}>
             <div className="ledger-head" role="listitem">
@@ -5930,9 +2997,27 @@ export function ObjectsPage() {
                 <input
                   type="checkbox"
                   aria-label="Tout sélectionner"
-                  checked={allSelected}
-                  disabled={selectAllDisabled}
-                  onChange={(e) => toggleSelectAll(e.target.checked)}
+                  checked={
+                    (selectableItems.length + visibleFolders.length) > 0 &&
+                    selectableItems.every((item) => selectedIds.has(item.id)) &&
+                    visibleFolders.every((folder) => selectedIds.has(folder.id))
+                  }
+                  disabled={
+                    (selectableItems.length + visibleFolders.length) === 0 ||
+                    deleteManyMutation.isPending
+                  }
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedIds(
+                        new Set([
+                          ...selectableItems.map((item) => item.id),
+                          ...visibleFolders.map((folder) => folder.id),
+                        ]),
+                      );
+                    } else {
+                      setSelectedIds(new Set());
+                    }
+                  }}
                 />{" "}
                 {sortHeader("display_name")}
               </span>
@@ -5976,13 +3061,10 @@ export function ObjectsPage() {
                   </div>
                   <div className="ledger-meta">
                     <span className="ledger-type">Dossier</span>
-                    <span
-                      className="ledger-size num"
-                      title="Taille totale du dossier (fichiers disponibles, sous-dossiers inclus)"
-                    >
+                    <span className="ledger-size num">
                       {folder.size_bytes != null
                         ? formatBytes(folder.size_bytes)
-                        : "taille indisponible"}
+                        : "—"}
                     </span>
                     <span className="ledger-status" />
                     <span className="ledger-date num">
@@ -6666,19 +3748,14 @@ export function ObjectsPage() {
       <Dialog
         open={bulkDeleteOpen}
         title="Supprimer la sélection"
-        onClose={() => {
-          setBulkDeleteOpen(false);
-          setBulkDeleteIds([]);
-        }}
+        onClose={() => setBulkDeleteOpen(false)}
       >
         <div className="dialog-text">
           Marquer{" "}
           <strong>
-            {bulkDeleteIds.length === 1
-              ? "1 fichier"
-              : `${bulkDeleteIds.length} fichiers`}
+            {selectedIds.size === 1 ? "1 objet" : `${selectedIds.size} objets`}
           </strong>{" "}
-          comme {bulkDeleteIds.length === 1 ? "supprimé" : "supprimés"} ?
+          comme {selectedIds.size === 1 ? "supprimé" : "supprimés"} ?
           Chaque fichier est supprimé individuellement et le résultat est
           rapporté par fichier. Les octets restent jusqu'à une purge.
         </div>
@@ -6715,18 +3792,17 @@ export function ObjectsPage() {
             type="button"
             className="btn"
             disabled={deleteManyMutation.isPending}
-            onClick={() => {
-              setBulkDeleteOpen(false);
-              setBulkDeleteIds([]);
-            }}
+            onClick={() => setBulkDeleteOpen(false)}
           >
             Annuler
           </button>
           <button
             type="button"
             className="btn btn-danger"
-            disabled={deleteManyMutation.isPending || bulkDeleteIds.length === 0}
-            onClick={() => deleteManyMutation.mutate(bulkDeleteIds)}
+            disabled={
+              deleteManyMutation.isPending || selectedIds.size === 0
+            }
+            onClick={() => deleteManyMutation.mutate([...selectedIds])}
           >
             {deleteManyMutation.isPending ? "Suppression…" : "Supprimer"}
           </button>
@@ -6816,7 +3892,7 @@ export function ObjectsPage() {
       <PacksDialog
         open={packsOpen}
         csrf={csrf}
-        selectedIds={new Set(selectedFileIds)}
+        selectedIds={selectedIds}
         objects={items}
         onClose={() => setPacksOpen(false)}
         onNotify={notify}
@@ -6853,11 +3929,7 @@ export function ObjectsPage() {
           }}
         >
           <div className="dialog-head">
-            <h2 id="cascade-title">
-              {cascadeMany
-                ? "Supprimer la sélection et son contenu"
-                : "Supprimer le dossier et son contenu"}
-            </h2>
+            <h2 id="cascade-title">Supprimer le dossier et son contenu</h2>
             {cascade.phase === "scanning" || cascade.phase === "confirm" ? (
               <button
                 type="button"
@@ -6872,9 +3944,7 @@ export function ObjectsPage() {
           <div className="dialog-body">
             {cascade.phase === "scanning" ? (
               <p className="muted" role="status">
-                {cascadeMany
-                  ? "Analyse du contenu réel des dossiers…"
-                  : "Analyse du contenu réel du dossier…"}
+                Analyse du contenu réel du dossier…
               </p>
             ) : null}
 
@@ -6885,7 +3955,9 @@ export function ObjectsPage() {
                   <button
                     type="button"
                     className="btn btn-ghost btn-small"
-                    onClick={() => void runCascadeScan(cascadeRoots)}
+                    onClick={() =>
+                      void runCascadeScan(cascade.rootId, cascade.rootName)
+                    }
                   >
                     Réessayer
                   </button>
@@ -6893,50 +3965,17 @@ export function ObjectsPage() {
               ) : cascade.plan ? (
                 <>
                   <p className="dialog-text">
-                    {cascadeMany ? (
-                      <>
-                        Les <strong>{cascadeRoots.length} dossiers sélectionnés</strong>{" "}
-                        contiennent{" "}
-                        <strong>
-                          {cascade.plan.fileCount - cascadeExtraFiles} fichier(s)
-                        </strong>{" "}
-                        et <strong>{cascade.plan.folderCount} sous-dossier(s)</strong>.
-                      </>
-                    ) : (
-                      <>
-                        Le dossier <strong>{cascade.rootName}</strong> contient{" "}
-                        <strong>
-                          {cascade.plan.fileCount - cascadeExtraFiles} fichier(s)
-                        </strong>{" "}
-                        et <strong>{cascade.plan.folderCount} sous-dossier(s)</strong>.
-                      </>
-                    )}
-                    {cascadeExtraFiles > 0 ? (
-                      <>
-                        {" "}
-                        Plus{" "}
-                        <strong>
-                          {cascadeExtraFiles} fichier(s) sélectionné(s) hors dossier
-                        </strong>
-                        .
-                      </>
-                    ) : null}
+                    Le dossier <strong>{cascade.rootName}</strong> contient{" "}
+                    <strong>{cascade.plan.fileCount} fichier(s)</strong> et{" "}
+                    <strong>{cascade.plan.folderCount} sous-dossier(s)</strong>.
                   </p>
-                  {cascadeBlocked > 0 ? (
-                    <p role="alert" className="alert alert-warn">
-                      {cascadeBlocked} fichier(s) en cours de vérification ne
-                      peuvent pas encore être supprimés et empêchent la
-                      suppression du dossier. Attendez la fin de la vérification,
-                      puis réessayez.
-                    </p>
-                  ) : null}
                   <p role="alert" className="alert alert-error">
                     Suppression du contenu : chaque fichier est marqué supprimé
                     (les octets restent jusqu'à une purge), puis chaque dossier
                     vidé est supprimé, des feuilles vers la racine.
                   </p>
                   <label className="field cascade-confirm-field">
-                    <span>Recopiez «&nbsp;{cascadeConfirmTarget}&nbsp;» pour confirmer</span>
+                    <span>Recopiez «&nbsp;{cascade.rootName}&nbsp;» pour confirmer</span>
                     <input
                       type="text"
                       value={cascadeConfirmText}
@@ -6954,12 +3993,10 @@ export function ObjectsPage() {
                     <button
                       type="button"
                       className="btn btn-danger"
-                      disabled={!cascadeConfirmed || cascadeBlocked > 0}
+                      disabled={!cascadeConfirmed}
                       onClick={startCascade}
                     >
-                      {cascadeMany || cascadeExtraFiles > 0
-                        ? "Supprimer la sélection et son contenu"
-                        : "Supprimer le contenu et le dossier"}
+                      Supprimer le contenu et le dossier
                     </button>
                   </div>
                 </>
@@ -6983,11 +4020,7 @@ export function ObjectsPage() {
                     : cascade.cancelled
                       ? `Suppression interrompue — ${cascade.done}/${cascade.ops.length}`
                       : cascade.failures.length === 0
-                        ? `${
-                            cascadeMany || cascadeExtraFiles > 0
-                              ? "Sélection supprimée"
-                              : "Contenu supprimé et dossier supprimé"
-                          } — ${cascade.done}/${cascade.ops.length}`
+                        ? `Contenu supprimé et dossier supprimé — ${cascade.done}/${cascade.ops.length}`
                         : `Suppression terminée avec échecs — ${cascade.done}/${cascade.ops.length}`}
                 </p>
                 <div
