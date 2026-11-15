@@ -1744,6 +1744,93 @@ paths:
         "403": { description: Missing capability }
         "404": { description: Import job not found or not cancellable }
         "422": { description: Identifier is not a canonical UUID v4 }
+  /api/v1/transfers:
+    get:
+      summary: List terminal transfer history for the caller's scope (objects:read)
+      tags: [objects]
+      description: >-
+        Read-only, append-only journal of terminal upload outcomes. A plain user
+        sees only their own transfers; an operator or administrator sees the
+        whole space. The journal stores no bucket, object key, storage path,
+        presigned URL or credential. Dates are unix epoch seconds applied to
+        `terminal_at`; `from`/`to` and `created_after`/`created_before` (and
+        their `from_ts`/`to_ts` spellings) are accepted aliases.
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [available, failed, aborted, expired] }
+          description: Filter by terminal transfer status
+        - in: query
+          name: session_id
+          schema: { type: string, format: uuid }
+          description: Canonical UUID of the client-generated transfer session
+        - in: query
+          name: from
+          schema: { type: integer, minimum: 0 }
+          description: Inclusive lower bound on terminal_at (unix epoch seconds)
+        - in: query
+          name: to
+          schema: { type: integer, minimum: 0 }
+          description: Inclusive upper bound on terminal_at (unix epoch seconds)
+        - in: query
+          name: from_ts
+          schema: { type: integer, minimum: 0 }
+          description: Alias of `from`
+        - in: query
+          name: to_ts
+          schema: { type: integer, minimum: 0 }
+          description: Alias of `to`
+        - in: query
+          name: created_after
+          schema: { type: integer, minimum: 0 }
+          description: Alias of `from`
+        - in: query
+          name: created_before
+          schema: { type: integer, minimum: 0 }
+          description: Alias of `to`
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+          description: Maximum number of records to return
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: Number of records to skip
+      responses:
+        "200":
+          description: Terminal transfer records, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/TransferRecord" }
+        "401": { description: Authentication required }
+        "403": { description: Missing capability }
+        "422": { description: Invalid filter or session id }
+  /api/v1/transfers/{tid}:
+    get:
+      summary: One terminal transfer record (objects:read)
+      tags: [objects]
+      parameters:
+        - in: path
+          name: tid
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+          description: Canonical UUID v4 transfer record id
+      responses:
+        "200":
+          description: Transfer record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TransferRecord" }
+        "401": { description: Authentication required }
+        "403": { description: Missing capability }
+        "404": { description: Transfer not found in the caller's scope }
+        "422": { description: Identifier is not a canonical UUID v4 }
   /api/v1/admin/applications/{aid}:
     get:
       summary: Application detail with its stable id and space count (admin:read)
@@ -2242,6 +2329,12 @@ components:
         content_type: { type: string, maxLength: 127, default: application/octet-stream }
         size_bytes: { type: integer, minimum: 0 }
         folder_id: { $ref: "#/components/schemas/Uuid4" }
+        transfer_session_id:
+          $ref: "#/components/schemas/Uuid4"
+          description: >-
+            Optional client-generated UUID correlating one upload batch. It is
+            copied to the terminal transfer journal only; omitting it keeps the
+            historical request shape.
     UploadIntent:
       type: object
       required: [id, status, method, upload_url, headers, content_type, size_bytes]
@@ -2265,6 +2358,9 @@ components:
         idempotent_replay:
           type: boolean
           description: True when a repeated Idempotency-Key returned this same pending intent
+        transfer_session_id:
+          oneOf: [{ $ref: "#/components/schemas/Uuid4" }, { type: "null" }]
+          description: The client-generated upload session id, echoed when provided
     CommitResult:
       type: object
       required: [id, status, size_bytes, checksum_sha256, checksum_algorithm]
@@ -2436,6 +2532,38 @@ components:
         summary: { type: [string, "null"], description: Sanitised job summary (no secrets/paths) }
         created_at: { type: integer, description: Epoch seconds }
         updated_at: { type: integer, description: Epoch seconds }
+    TransferRecord:
+      type: object
+      description: >-
+        One immutable terminal upload outcome. Never contains a bucket, object
+        key, storage path, presigned URL, token or blob.
+      required: [id, object_id, space_id, display_name, content_type, status, checksum_sha256, created_at, terminal_at]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        transfer_session_id:
+          oneOf: [{ $ref: "#/components/schemas/Uuid4" }, { type: "null" }]
+          description: Optional client-generated upload session id
+        object_id: { $ref: "#/components/schemas/Uuid4" }
+        space_id: { $ref: "#/components/schemas/Uuid4" }
+        owner_id:
+          oneOf: [{ $ref: "#/components/schemas/Uuid4" }, { type: "null" }]
+          description: Null for objects created by a service identity
+        actor_id: { $ref: "#/components/schemas/Uuid4" }
+        actor_kind: { type: string, enum: [user, service] }
+        display_name: { type: string }
+        content_type: { type: string }
+        expected_size_bytes: { type: [integer, "null"] }
+        final_size_bytes: { type: [integer, "null"] }
+        status: { type: string, enum: [available, failed, aborted, expired] }
+        failure_kind:
+          type: [string, "null"]
+          description: Bounded machine-readable failure category, when applicable
+        error_message:
+          type: [string, "null"]
+          description: Bounded, URL-redacted human-readable error
+        checksum_sha256: { type: string }
+        created_at: { type: integer, description: Epoch seconds when the transfer started }
+        terminal_at: { type: integer, description: Epoch seconds when the terminal state was reached }
   parameters:
     ObjectId:
       in: path

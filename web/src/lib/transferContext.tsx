@@ -58,6 +58,19 @@ export interface TransfersApi {
 
 const TransfersContext = createContext<TransfersApi | null>(null);
 
+/**
+ * Stable id for the transfers of this page load (#246). Sent with each upload
+ * intent so the server can group history rows by import session. It is a
+ * client UUID, never a credential, and is regenerated when the auth session
+ * changes so one account's history is never labelled with another's id.
+ */
+function newTransferSessionId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `transfer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function transferredTotal(queue: QueueState): number {
   return queue.items.reduce((sum, item) => sum + item.state.transferredBytes, 0);
 }
@@ -99,6 +112,12 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
   const lastRateSampleAtRef = useRef(0);
   const smoothedRef = useRef(0);
   const addedAtRef = useRef(new Map<string, number>());
+  // Lazily generated once per provider mount (one page load), then reused by
+  // every intent of every import until the auth session changes.
+  const transferSessionIdRef = useRef<string | undefined>(undefined);
+  if (!transferSessionIdRef.current) {
+    transferSessionIdRef.current = newTransferSessionId();
+  }
 
   const resetTelemetry = useCallback(() => {
     setRateHistory([]);
@@ -195,11 +214,15 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
       setItemRates(new Map());
       resetTelemetry();
       setStartedAt(Date.now());
-      const uploadQueue = startUploadQueue(entries, transferDeps(options.csrf), {
-        folderId: options.folderId,
-        onUpdate: (next) => handleQueueUpdate(next, options.onUpdate),
-        onAutoRetry: options.onAutoRetry,
-      });
+      const uploadQueue = startUploadQueue(
+        entries,
+        transferDeps(options.csrf, transferSessionIdRef.current),
+        {
+          folderId: options.folderId,
+          onUpdate: (next) => handleQueueUpdate(next, options.onUpdate),
+          onAutoRetry: options.onAutoRetry,
+        },
+      );
       queueRef.current = uploadQueue;
       return uploadQueue;
     },
@@ -242,6 +265,7 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
       queueRef.current?.cancelAll();
       queueRef.current?.dispose();
       resetQueue();
+      transferSessionIdRef.current = newTransferSessionId();
     }
     previousCsrfRef.current = csrf ?? null;
   }, [csrf, resetQueue]);

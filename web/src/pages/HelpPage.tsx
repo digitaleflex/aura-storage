@@ -99,6 +99,7 @@ export function HelpPage() {
           <button
             type="button"
             className="btn btn-small btn-ghost"
+            aria-label="Se déconnecter d'AURA Vault"
             onClick={() => {
               void logout();
               navigate({ to: "/login" });

@@ -15,6 +15,11 @@ from .migrations import (
     apply_migrations,
 )
 from .object_query import build_object_where, order_clause
+from .transfer import (
+    TRANSFER_RECORD_STATUSES,
+    build_transfer_where,
+    sanitize_transfer_error,
+)
 
 SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
 
@@ -651,6 +656,7 @@ class Repository:
         expected_size_bytes: Optional[int] = None,
         idempotency_key: Optional[str] = None,
         content_encoding: Optional[str] = None,
+        transfer_session_id: Optional[str] = None,
     ) -> str:
         oid = self.new_id()
         now = self.now()
@@ -659,14 +665,125 @@ class Repository:
                size_bytes, checksum_sha256, folder_id, owner_id, visibility, status,
                created_at, updated_at, actor_kind, actor_id, application_id, space_id,
                environment, intent_expires_at, expected_size_bytes, idempotency_key,
-               content_encoding)
-               VALUES (?, ?, ?, ?, ?, -1, '', ?, ?, 'private', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               content_encoding, transfer_session_id)
+               VALUES (?, ?, ?, ?, ?, -1, '', ?, ?, 'private', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (oid, bucket, object_key, display_name, content_type, folder_id, owner_id,
              now, now, actor_kind, actor_id, application_id, space_id, environment,
-             intent_expires_at, expected_size_bytes, idempotency_key, content_encoding),
+             intent_expires_at, expected_size_bytes, idempotency_key, content_encoding,
+             transfer_session_id),
         )
         self.conn.commit()
         return oid
+
+    def set_transfer_session(self, oid: str, transfer_session_id: Optional[str]) -> None:
+        """Attach a client session id to a live intent (replay without one)."""
+        self.conn.execute(
+            "UPDATE objects SET transfer_session_id = ?, updated_at = ? "
+            "WHERE id = ? AND transfer_session_id IS NULL",
+            (transfer_session_id, self.now(), oid),
+        )
+        self.conn.commit()
+
+    # -- transfer history journal (#246) ----------------------------------
+    def record_transfer_record(
+        self, oid: str, status: str, *,
+        final_size_bytes: Optional[int] = None,
+        checksum_sha256: str = "",
+        failure_kind: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> Optional[str]:
+        """Append one terminal transfer row for ``oid``, idempotently.
+
+        ``objects`` remains the source of truth; this journal only stores the
+        terminal transition and final metadata. A replayed terminal event (same
+        ``object_id``) returns the existing row id and inserts nothing. The
+        object row is read here so callers cannot forget to copy the tenant,
+        owner, actor or display metadata. Returns ``None`` when the object no
+        longer exists or ``status`` is not a transfer terminal state.
+        """
+        if status not in TRANSFER_RECORD_STATUSES:
+            return None
+        row = self.conn.execute(
+            "SELECT * FROM objects WHERE id = ?", (oid,)
+        ).fetchone()
+        if row is None:
+            return None
+        existing = self.conn.execute(
+            "SELECT id FROM transfer_records WHERE object_id = ?", (oid,)
+        ).fetchone()
+        if existing is not None:
+            return existing["id"]
+        if final_size_bytes is None and status == "available":
+            stored = row["size_bytes"]
+            if stored is not None and int(stored) >= 0:
+                final_size_bytes = int(stored)
+        if not checksum_sha256 and status == "available":
+            checksum_sha256 = row["checksum_sha256"] or ""
+        rid = self.new_id()
+        now = self.now()
+        self.conn.execute(
+            "INSERT INTO transfer_records (id, transfer_session_id, object_id, "
+            "space_id, owner_id, actor_id, actor_kind, display_name, content_type, "
+            "expected_size_bytes, final_size_bytes, status, failure_kind, "
+            "error_message, checksum_sha256, created_at, terminal_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT DO NOTHING",
+            (
+                rid, row["transfer_session_id"], oid, row["space_id"],
+                row["owner_id"], row["actor_id"], row["actor_kind"],
+                row["display_name"], row["content_type"],
+                row["expected_size_bytes"], final_size_bytes, status,
+                failure_kind, sanitize_transfer_error(error_message),
+                checksum_sha256 or "", int(row["created_at"] or now), now,
+            ),
+        )
+        self.conn.commit()
+        return rid
+
+    def list_transfer_records(
+        self, *, space_id: str, owner_id: Optional[str] = None,
+        status: Optional[str] = None,
+        transfer_session_id: Optional[str] = None,
+        created_after: Optional[int] = None,
+        created_before: Optional[int] = None,
+        limit: int = 50, offset: int = 0,
+    ):
+        where, params = build_transfer_where(
+            space_id=space_id, owner_id=owner_id, status=status,
+            transfer_session_id=transfer_session_id,
+            created_after=created_after, created_before=created_before,
+        )
+        params += [limit, offset]
+        return self.conn.execute(
+            f"SELECT * FROM transfer_records WHERE {where} "
+            "ORDER BY terminal_at DESC, id ASC LIMIT ? OFFSET ?",
+            params,
+        ).fetchall()
+
+    def get_transfer_record(
+        self, rid: str, *, space_id: str, owner_id: Optional[str] = None,
+    ):
+        sql = "SELECT * FROM transfer_records WHERE id = ? AND space_id = ?"
+        params = [rid, space_id]
+        if owner_id is not None:
+            sql += " AND owner_id = ?"
+            params.append(owner_id)
+        return self.conn.execute(sql, params).fetchone()
+
+    def purge_transfer_records_before(self, cutoff: int, limit: int = 500) -> int:
+        """Drop journal rows whose terminal state is older than ``cutoff``.
+
+        Bounded so a forgotten retention setting cannot stall the sweep on a
+        huge table; the next run continues where this one stopped.
+        """
+        cur = self.conn.execute(
+            "DELETE FROM transfer_records WHERE id IN ("
+            "SELECT id FROM transfer_records WHERE terminal_at < ? "
+            "ORDER BY terminal_at ASC LIMIT ?)",
+            (cutoff, limit),
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     def get_object(self, oid: str, *, space_id: str, owner_id: Optional[str] = None):
         sql = "SELECT * FROM objects WHERE id = ? AND space_id = ?"
@@ -982,6 +1099,17 @@ class Repository:
                 (size_bytes, checksum_sha256, self.now(), self.now(), oid, expected_version),
             )
         self.conn.commit()
+        # The journal write is best-effort and idempotent: a failed insert must
+        # never undo a successful publication, and a replayed commit must not
+        # create a second row for the same object.
+        if cur.rowcount:
+            try:
+                self.record_transfer_record(
+                    oid, "available", final_size_bytes=size_bytes,
+                    checksum_sha256=checksum_sha256,
+                )
+            except Exception:
+                pass
         return cur.rowcount
 
     def set_multipart(self, oid: str, upload_id: Optional[str],
@@ -1032,7 +1160,9 @@ class Repository:
         return cur.rowcount
 
     def set_status(self, oid: str, status: str, *,
-                   expected_version=None, allowed_from=None) -> int:
+                   expected_version=None, allowed_from=None,
+                   failure_kind: Optional[str] = None,
+                   error_message: Optional[str] = None) -> int:
         clauses = ["status = ?", "version = version + 1", "updated_at = ?"]
         params = [status, self.now()]
         where = ["id = ?"]
@@ -1049,6 +1179,17 @@ class Repository:
         sql = "UPDATE objects SET " + ", ".join(clauses) + " WHERE " + " AND ".join(where)
         cur = self.conn.execute(sql, params)
         self.conn.commit()
+        # Successful transfers are journaled by `mark_available`; `set_status`
+        # journals the failure/abort/expiry terminal transitions. `available`
+        # is excluded here on purpose: a restore is not a new transfer.
+        if cur.rowcount and status in TRANSFER_RECORD_STATUSES and status != "available":
+            try:
+                self.record_transfer_record(
+                    oid, status, failure_kind=failure_kind,
+                    error_message=error_message,
+                )
+            except Exception:
+                pass
         return cur.rowcount
 
     def list_status_before(self, status: str, cutoff: int, limit: int = 500):

@@ -59,6 +59,15 @@ def _stream_sha256(body, max_bytes: int, chunk_size: int) -> tuple[int, str]:
     return total, digest.hexdigest()
 
 
+_FAILURE_MESSAGES = {
+    "changed": "object bytes changed during verification",
+    "too_large": "object exceeds maximum allowed size",
+    "size_mismatch": "uploaded size does not match storage",
+    "av_infected": "object failed av scan",
+    "gave_up": "verification gave up after repeated storage errors",
+}
+
+
 def verify_one(repo, s3ops, settings, *, now=time.time, audit=None) -> str | None:
     """Claim and verify one object. Returns its outcome, or None if idle.
 
@@ -74,7 +83,10 @@ def verify_one(repo, s3ops, settings, *, now=time.time, audit=None) -> str | Non
     oid = row["id"]
 
     def fail(reason: str) -> str:
-        repo.set_status(oid, "failed")
+        repo.set_status(
+            oid, "failed", failure_kind=reason,
+            error_message=_FAILURE_MESSAGES.get(reason, reason),
+        )
         if audit:
             audit("verify", "system", reason, {"object_id": oid})
         return "failed"

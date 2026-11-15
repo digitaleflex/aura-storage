@@ -69,7 +69,7 @@ export function LoginPage() {
         </ul>
       </section>
       <section className="login-card" aria-labelledby="login-title">
-        <h1 id="login-title">Connexion</h1>
+        <h1 id="login-title">Connexion — AURA Vault</h1>
         <p className="muted">Identifiez-vous pour accéder au coffre.</p>
         {error ? (
           <p role="alert" className="alert alert-error">

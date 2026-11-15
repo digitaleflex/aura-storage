@@ -8,6 +8,7 @@ import {
 import { describeError } from "../lib/errors";
 import { VaultMark } from "../components/VaultMark";
 import { ToastStack, makeToast, type Toast } from "../components/Toasts";
+import { EmptyState } from "../components/EmptyState";
 
 export function TrashPage() {
   const { logout } = useAuth();
@@ -50,8 +51,16 @@ export function TrashPage() {
   if (loading) {
     return (
       <div className="trash-page" data-testid="trash-page">
-        <VaultMark />
-        <p>Chargement de la corbeille&hellip;</p>
+        <div className="trash-shell">
+          <VaultMark />
+          <div className="trash-header">
+            <h1>Corbeille</h1>
+            <p className="trash-subtitle muted">Chargement des objets supprimés…</p>
+          </div>
+          <p className="muted" role="status" aria-live="polite">
+            Chargement de la corbeille…
+          </p>
+        </div>
       </div>
     );
   }
@@ -108,15 +117,14 @@ export function TrashPage() {
               Vos objets supprim&eacute;s sont conserv&eacute;s temporairement.
             </p>
           </div>
-          <section className="trash-empty">
-            <span className="trash-empty-icon" aria-hidden="true">
-              🗑️
-            </span>
-            <h2>Corbeille vide</h2>
-            <p>
-              Aucun objet supprim&eacute; &agrave; restaurer ou purger.
-            </p>
-          </section>
+          <div aria-live="polite">
+            <EmptyState
+              className="trash-empty"
+              icon="🗑️"
+              title="Corbeille vide"
+              description="Aucun objet supprimé à restaurer ou purger."
+            />
+          </div>
           <div className="trash-actions">
             <button
               type="button"
@@ -128,12 +136,13 @@ export function TrashPage() {
             <button
               type="button"
               className="btn btn-small btn-ghost"
+              aria-label="Se déconnecter d'AURA Vault"
               onClick={() => {
                 void logout();
                 navigate({ to: "/login" });
               }}
             >
-              D&eacute;connexion
+              Déconnexion
             </button>
           </div>
         </div>
@@ -156,14 +165,14 @@ export function TrashPage() {
         </div>
 
         {error && (
-          <div className="trash-error" role="alert">
-            {error}
+          <div className="alert alert-error trash-error" role="alert">
+            <span>{error}</span>
             <button
               type="button"
               className="btn btn-small"
               onClick={() => window.location.reload()}
             >
-              Rafra&icirc;chir
+              Rafraîchir
             </button>
           </div>
         )}
@@ -171,10 +180,10 @@ export function TrashPage() {
         <table aria-label="Objets dans la corbeille">
           <thead>
             <tr>
-              <th>Objet</th>
-              <th>Type</th>
-              <th>Taille</th>
-              <th>Actions</th>
+              <th scope="col">Objet</th>
+              <th scope="col">Type</th>
+              <th scope="col">Taille</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -183,11 +192,12 @@ export function TrashPage() {
                 <td>{obj.display_name}</td>
                 <td>{obj.content_type}</td>
                 <td>{formatBytes(obj.size_bytes)}</td>
-                <td>
+                <td className="trash-row-actions">
                   <button
                     type="button"
                     className="btn btn-small"
                     disabled={isPurging(obj.id)}
+                    aria-label={`Restaurer ${obj.display_name}`}
                     onClick={() => void handleRestore(obj.id)}
                   >
                     Restaurer
@@ -196,6 +206,7 @@ export function TrashPage() {
                     type="button"
                     className="btn btn-small btn-danger"
                     disabled={isPurging(obj.id)}
+                    aria-label={`Purger définitivement ${obj.display_name}`}
                     onClick={() => void handlePurge(obj.id)}
                   >
                     Purger
@@ -217,12 +228,13 @@ export function TrashPage() {
           <button
             type="button"
             className="btn btn-small btn-ghost"
+            aria-label="Se déconnecter d'AURA Vault"
             onClick={() => {
               void logout();
               navigate({ to: "/login" });
             }}
           >
-            D&eacute;connexion
+            Déconnexion
           </button>
         </div>
       </div>

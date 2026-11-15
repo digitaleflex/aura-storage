@@ -36,7 +36,7 @@ from __future__ import annotations
 import threading
 import time
 
-from .lifecycle import reconcile_pending, resume_purges
+from .lifecycle import purge_transfer_history, reconcile_pending, resume_purges
 
 _state_lock = threading.Lock()
 _last_sweep: dict | None = None
@@ -77,6 +77,10 @@ def sweep(repo, s3ops, settings, *, now=time.time, audit=None) -> dict:
         multipart_expired_before=started_at - settings.intent_grace_s,
     )
     out.update(resume_purges(repo, s3ops, limit=limit, now=now))
+    out.update(purge_transfer_history(
+        repo, retention_days=settings.transfer_history_retention_days,
+        limit=limit, now=now,
+    ))
     out["at"] = started_at
     out["duration_ms"] = int((time.monotonic() - monotonic_start) * 1000)
     _record(out)

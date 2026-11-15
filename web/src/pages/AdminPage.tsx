@@ -929,7 +929,15 @@ export function AdminPage() {
   return (
     <div className="stack admin-page">
       <div className="page-head">
-        <h1>Administration</h1>
+        <div className="page-title">
+          <h1>Administration</h1>
+          <p className="muted page-sub">
+            Applications, espaces, buckets et identités machine-à-machine.
+            {canWrite
+              ? " Votre rôle peut créer, modifier, activer/désactiver, faire tourner et révoquer."
+              : " Lecture seule (les mutations exigent le rôle administrateur)."}
+          </p>
+        </div>
       </div>
       <div role="tablist" aria-label="Rubriques de l'administration" className="tabs">
         {ADMIN_TABS.map((item) => (
@@ -959,12 +967,6 @@ export function AdminPage() {
           </button>
         ))}
       </div>
-      <p className="muted">
-        Applications, espaces, buckets et identités machine-à-machine.
-        {canWrite
-          ? " Votre rôle peut créer, modifier, activer/désactiver, faire tourner et révoquer."
-          : " Lecture seule (les mutations exigent le rôle administrateur)."}
-      </p>
 
       {error ? (
         <p role="alert" className="alert alert-error">

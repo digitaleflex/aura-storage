@@ -69,10 +69,21 @@
 ## Machine-to-machine identities (#38)
 - Platforms call AURA with a service identity (`Authorization: Bearer aura_<id>_<secret>`),
   not with a human session and not with the bootstrap SeaweedFS S3 key.
-- The API itself must not use the bootstrap SeaweedFS `Admin` identity. Set
-  `S3_API_ACCESS_KEY`/`S3_API_SECRET_KEY` (identity `aura-api`, `Read`/`Write`/`List`)
-  and regenerate `config/seaweedfs/s3.json`; Compose falls back to the bootstrap key
-  only until that migration is done. See `scripts/generate-config.sh`.
+- The API itself never uses the bootstrap SeaweedFS `Admin` identity.
+  `scripts/bootstrap.sh` generates dedicated `S3_API_ACCESS_KEY`/`S3_API_SECRET_KEY`
+  (identity `aura-api`, `Read`/`Write`/`List`) when they are absent; they must differ
+  from the bootstrap `S3_*` keys. `scripts/generate-config.sh` and Compose require
+  them and fail closed: a deployment without valid dedicated credentials is refused,
+  with no fallback to the Admin key.
+- Rotate the API S3 credential by replacing both `S3_API_*` values in `.env`,
+  regenerating `config/seaweedfs/s3.json` with `scripts/generate-config.sh`, then
+  restarting the SeaweedFS S3 gateway so it reloads the identities. `scripts/deploy.sh`
+  detects a changed `s3.json` and restarts `seaweed-filer` automatically; a manual
+  rotation must run `docker compose restart seaweed-filer` (SeaweedFS 4.48 only
+  reloads `-s3.config` at startup or on SIGHUP, and a removed identity requires a
+  restart). Restart the `api` service afterwards so it picks up the new environment.
+  The retired key stops working once the gateway has reloaded its identities and the
+  API has restarted.
 - AURA stores only the SHA-256 fingerprint of the secret; the token is shown once at
   creation or rotation. Unknown, revoked and expired tokens all return 401.
 - Grant the minimum scopes per identity and one identity per application/environment.

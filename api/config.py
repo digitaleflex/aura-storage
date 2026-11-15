@@ -177,6 +177,12 @@ class Settings:
     reconcile_interval_s: int = _int("AURA_RECONCILE_INTERVAL_S", 300)
     reconcile_limit: int = _int("AURA_RECONCILE_LIMIT", 500)
     reconcile_extra_grace_s: int = _int("AURA_RECONCILE_EXTRA_GRACE_SECONDS", 3600)
+    # Append-only terminal transfer journal (#246). Rows older than this are
+    # purged by the reconciliation sweep; the journal is a retention window,
+    # never the source of truth (that stays `objects`).
+    transfer_history_retention_days: int = _int(
+        "AURA_TRANSFER_HISTORY_RETENTION_DAYS", 90
+    )
     commit_chunk_bytes: int = _int("AURA_COMMIT_CHUNK_BYTES", 1024 * 1024)
     # Global deadline for one commit request (hashing phase, #120): past it the
     # intent is marked failed and the client gets 504 instead of an unbounded
@@ -244,3 +250,5 @@ if settings.commit_deadline_s < 1:
 # A sweep every second would hammer the storage and the catalogue (#144).
 if settings.reconcile_interval_s < 30:
     raise RuntimeError("AURA_RECONCILE_INTERVAL_S must be >= 30")
+if settings.transfer_history_retention_days < 1:
+    raise RuntimeError("AURA_TRANSFER_HISTORY_RETENTION_DAYS must be >= 1")

@@ -148,10 +148,11 @@ openssl rand -hex 32
 
 Copy the key directly into the private `.env` file using a local editor; do not paste it into chat or GitHub. Keep an independent protected offline recovery copy. Losing the encryption key may make encrypted objects unrecoverable. Do not put secrets on a shell command line or into shell history.
 
-Inspect the generator and configuration before running:
+Inspect the generator and configuration before running. `bootstrap.sh` validates `.env` and generates the dedicated `S3_API_*` credentials required by the generator:
 
 ```bash
 sed -n '1,80p' scripts/generate-config.sh
+bash ./scripts/bootstrap.sh
 bash ./scripts/generate-config.sh
 chmod 600 config/seaweedfs/s3.json
 git check-ignore .env config/seaweedfs/s3.json
@@ -185,7 +186,7 @@ docker compose ps
 docker compose logs --tail=150 traefik seaweed-master seaweed-volume seaweed-filer
 ```
 
-`deploy.sh` builds the frontend bundle (`web/dist`, git-ignored, bind-mounted into the `app` container) with `npm ci && npm run build` before starting the stack, so Node.js and npm must be installed. It then rebuilds the API image from `api/` and pulls the remaining registry images.
+`deploy.sh` builds the frontend bundle (`web/dist`, git-ignored) with `npm ci && npm run build` before starting the stack, so Node.js and npm must be installed. It then publishes it as an immutable release outside the worktree and points `AURA_WEB_DIST_DIR` at it. It also rebuilds the API image from `api/` and pulls the remaining registry images.
 
 Use the service names from the current Compose file if they differ. Check DNS, certificate validity, expected container health, disk path, and absence of unintended public ports. Never publish full logs without checking for sensitive values.
 

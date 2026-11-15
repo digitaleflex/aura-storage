@@ -17,6 +17,11 @@ from .migrations import (
     apply_migrations,
 )
 from .object_query import build_object_where, order_clause
+from .transfer import (
+    TRANSFER_RECORD_STATUSES,
+    build_transfer_where,
+    sanitize_transfer_error,
+)
 
 SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
 
@@ -577,6 +582,7 @@ class Repository:
         expected_size_bytes: Optional[int] = None,
         idempotency_key: Optional[str] = None,
         content_encoding: Optional[str] = None,
+        transfer_session_id: Optional[str] = None,
     ) -> str:
         oid = self.new_id()
         now = self.now()
@@ -585,14 +591,107 @@ class Repository:
                size_bytes, checksum_sha256, folder_id, owner_id, visibility, status,
                created_at, updated_at, actor_kind, actor_id, application_id, space_id,
                environment, intent_expires_at, expected_size_bytes, idempotency_key,
-               content_encoding)
+               content_encoding, transfer_session_id)
                VALUES (%s, %s, %s, %s, %s, -1, '', %s, %s, 'private', 'pending', %s, %s,
-                       %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (oid, bucket, object_key, display_name, content_type, folder_id, owner_id,
              now, now, actor_kind, actor_id, application_id, space_id, environment,
-             intent_expires_at, expected_size_bytes, idempotency_key, content_encoding),
+             intent_expires_at, expected_size_bytes, idempotency_key, content_encoding,
+             transfer_session_id),
         )
         return oid
+
+    def set_transfer_session(self, oid: str, transfer_session_id: Optional[str]) -> None:
+        """Attach a client session id to a live intent (replay without one)."""
+        self._run(
+            "UPDATE objects SET transfer_session_id = %s, updated_at = %s "
+            "WHERE id = %s AND transfer_session_id IS NULL",
+            (transfer_session_id, self.now(), oid),
+        )
+
+    # -- transfer history journal (#246) ----------------------------------
+    def record_transfer_record(
+        self, oid: str, status: str, *,
+        final_size_bytes: Optional[int] = None,
+        checksum_sha256: str = "",
+        failure_kind: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> Optional[str]:
+        """PostgreSQL twin of ``SqliteRepository.record_transfer_record``."""
+        if status not in TRANSFER_RECORD_STATUSES:
+            return None
+        row = self._one("SELECT * FROM objects WHERE id = %s", (oid,))
+        if row is None:
+            return None
+        existing = self._one(
+            "SELECT id FROM transfer_records WHERE object_id = %s", (oid,)
+        )
+        if existing is not None:
+            return existing["id"]
+        if final_size_bytes is None and status == "available":
+            stored = row.get("size_bytes")
+            if stored is not None and int(stored) >= 0:
+                final_size_bytes = int(stored)
+        if not checksum_sha256 and status == "available":
+            checksum_sha256 = row.get("checksum_sha256") or ""
+        rid = self.new_id()
+        now = self.now()
+        self._run(
+            "INSERT INTO transfer_records (id, transfer_session_id, object_id, "
+            "space_id, owner_id, actor_id, actor_kind, display_name, content_type, "
+            "expected_size_bytes, final_size_bytes, status, failure_kind, "
+            "error_message, checksum_sha256, created_at, terminal_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT DO NOTHING",
+            (
+                rid, row.get("transfer_session_id"), oid, row.get("space_id"),
+                row.get("owner_id"), row.get("actor_id"), row.get("actor_kind"),
+                row.get("display_name") or "", row.get("content_type") or "",
+                row.get("expected_size_bytes"), final_size_bytes, status,
+                failure_kind, sanitize_transfer_error(error_message),
+                checksum_sha256 or "", int(row.get("created_at") or now), now,
+            ),
+        )
+        return rid
+
+    def list_transfer_records(
+        self, *, space_id: str, owner_id: Optional[str] = None,
+        status: Optional[str] = None,
+        transfer_session_id: Optional[str] = None,
+        created_after: Optional[int] = None,
+        created_before: Optional[int] = None,
+        limit: int = 50, offset: int = 0,
+    ):
+        where, params = build_transfer_where(
+            ph="%s", space_id=space_id, owner_id=owner_id, status=status,
+            transfer_session_id=transfer_session_id,
+            created_after=created_after, created_before=created_before,
+        )
+        params += [limit, offset]
+        return self._all(
+            f"SELECT * FROM transfer_records WHERE {where} "
+            "ORDER BY terminal_at DESC, id ASC LIMIT %s OFFSET %s",
+            tuple(params),
+        )
+
+    def get_transfer_record(
+        self, rid: str, *, space_id: str, owner_id: Optional[str] = None,
+    ):
+        sql = "SELECT * FROM transfer_records WHERE id = %s AND space_id = %s"
+        params = [rid, space_id]
+        if owner_id is not None:
+            sql += " AND owner_id = %s"
+            params.append(owner_id)
+        return self._one(sql, tuple(params))
+
+    def purge_transfer_records_before(self, cutoff: int, limit: int = 500) -> int:
+        """PostgreSQL twin of ``SqliteRepository.purge_transfer_records_before``."""
+        return self._run(
+            "DELETE FROM transfer_records WHERE id IN ("
+            "SELECT id FROM transfer_records WHERE terminal_at < %s "
+            "ORDER BY terminal_at ASC LIMIT %s)",
+            (cutoff, limit),
+        )
 
     def get_object(self, oid: str, *, space_id: str, owner_id: Optional[str] = None):
         sql = "SELECT * FROM objects WHERE id = %s AND space_id = %s"
@@ -853,20 +952,30 @@ class Repository:
     def mark_available(self, oid: str, size_bytes: int, checksum_sha256: str,
                        expected_version=None) -> int:
         if expected_version is None:
-            return self._run(
+            n = self._run(
                 "UPDATE objects SET status = 'available', size_bytes = %s, "
                 "checksum_sha256 = %s, version = version + 1, updated_at = %s, "
                 "scrubbed_at = %s, scrub_result = 'ok' "
                 "WHERE id = %s AND status IN ('pending', 'verifying')",
                 (size_bytes, checksum_sha256, self.now(), self.now(), oid),
             )
-        return self._run(
-            "UPDATE objects SET status = 'available', size_bytes = %s, "
-            "checksum_sha256 = %s, version = version + 1, updated_at = %s, "
-            "scrubbed_at = %s, scrub_result = 'ok' "
-            "WHERE id = %s AND status IN ('pending', 'verifying') AND version = %s",
-            (size_bytes, checksum_sha256, self.now(), self.now(), oid, expected_version),
-        )
+        else:
+            n = self._run(
+                "UPDATE objects SET status = 'available', size_bytes = %s, "
+                "checksum_sha256 = %s, version = version + 1, updated_at = %s, "
+                "scrubbed_at = %s, scrub_result = 'ok' "
+                "WHERE id = %s AND status IN ('pending', 'verifying') AND version = %s",
+                (size_bytes, checksum_sha256, self.now(), self.now(), oid, expected_version),
+            )
+        if n:
+            try:
+                self.record_transfer_record(
+                    oid, "available", final_size_bytes=size_bytes,
+                    checksum_sha256=checksum_sha256,
+                )
+            except Exception:
+                pass
+        return n
 
     def set_multipart(self, oid: str, upload_id: Optional[str],
                       part_bytes: Optional[int]) -> None:
@@ -909,7 +1018,9 @@ class Repository:
         )
 
     def set_status(self, oid: str, status: str, *,
-                   expected_version=None, allowed_from=None) -> int:
+                   expected_version=None, allowed_from=None,
+                   failure_kind: Optional[str] = None,
+                   error_message: Optional[str] = None) -> int:
         clauses = ["status = %s", "version = version + 1", "updated_at = %s"]
         params = [status, self.now()]
         where = ["id = %s"]
@@ -924,7 +1035,16 @@ class Repository:
             clauses.append("terminal_since = COALESCE(terminal_since, %s)")
             params.insert(1, self.now())
         sql = "UPDATE objects SET " + ", ".join(clauses) + " WHERE " + " AND ".join(where)
-        return self._run(sql, params + params2)
+        n = self._run(sql, params + params2)
+        if n and status in TRANSFER_RECORD_STATUSES and status != "available":
+            try:
+                self.record_transfer_record(
+                    oid, status, failure_kind=failure_kind,
+                    error_message=error_message,
+                )
+            except Exception:
+                pass
+        return n
 
     def list_status_before(self, status: str, cutoff: int, limit: int = 500):
         """Rows in ``status`` not updated since ``cutoff``, oldest first."""

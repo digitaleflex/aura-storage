@@ -7,6 +7,7 @@ import { TransfersOverview } from "../components/transfers/TransfersOverview";
 import { TransfersToolbar } from "../components/transfers/TransfersToolbar";
 import { TransfersFilters } from "../components/transfers/TransfersFilters";
 import { TransferList } from "../components/transfers/TransferList";
+import { TransferHistory } from "../components/transfers/TransferHistory";
 import {
   TransferCancelDialog,
   TransferDetailsDialog,
@@ -107,8 +108,9 @@ function readUrlFilters(raw: unknown): UrlFilters {
  * It is a view over the shell-owned upload queue: starting files still happens
  * in the existing importer on the files page, while progress, filtering,
  * pausing, retrying and cancelling all go through the same engine actions.
- * There is no server-side transfer history, so the page never pretends to show
- * one: it states that the session is being followed.
+ * A separate "Historique" section reads the server-side, terminal-only history
+ * (#246); when that endpoint is not deployed it says so instead of pretending
+ * the live session is history.
  */
 export function TransfersPage() {
   const transfers = useTransfers();
@@ -1039,6 +1041,8 @@ export function TransfersPage() {
           onShowMore={() => setVisible((value) => value + PAGE_SIZE)}
         />
       )}
+
+      <TransferHistory />
 
       <p className="visually-hidden" role="status">
         {queue.done}/{queue.items.length} fichiers transférés

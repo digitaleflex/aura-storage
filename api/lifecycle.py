@@ -79,7 +79,11 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
             storage_failures += 1
             continue
         storage_deletes += 1
-        repo.set_status(row["id"], "expired")
+        repo.set_status(
+            row["id"], "expired",
+            failure_kind="expired",
+            error_message="upload intent expired before commit",
+        )
         expired += 1
     return {
         "expired": expired,
@@ -122,6 +126,23 @@ def reconcile_terminal(repo, s3ops, *, statuses=("failed", "aborted", "deleted")
         "storage_deletes_attempted": storage_deletes,
         "storage_failures": storage_failures,
     }
+
+
+def purge_transfer_history(repo, *, retention_days: int | None = None,
+                           limit: int = 500, now=time.time) -> dict:
+    """Drop transfer-journal rows older than the configured retention window.
+
+    The journal is append-only while retained, but it is not the source of
+    truth: `objects` stays authoritative, so old rows can be purged safely.
+    A missing/zero retention falls back to the configured default (90 days).
+    """
+    if retention_days is None:
+        from .config import settings
+        retention_days = settings.transfer_history_retention_days
+    retention_days = max(1, int(retention_days))
+    cutoff = int(now()) - retention_days * 86400
+    purged = repo.purge_transfer_records_before(cutoff, limit=max(1, limit))
+    return {"transfer_records_purged": purged, "transfer_history_cutoff": cutoff}
 
 
 def reconcile_reverse(repo, s3ops, *, dry_run: bool = True,

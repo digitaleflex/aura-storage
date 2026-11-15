@@ -60,6 +60,26 @@ disabled space.
 
 ### Upload intents
 An upload intent is a server-side record that authorizes one upload to a server-generated object key for a bounded time. It must bind the authenticated application/tenant, expected size and checksum constraints where provided, allowed method, expiry, and lifecycle status. The client must not choose arbitrary buckets or object keys.
+`POST /api/v1/objects/upload-intents` accepts an optional client-generated
+`transfer_session_id` (canonical UUID v4) to correlate one upload batch. It is
+copied to the terminal transfer journal only; no bucket, object key or URL is
+derived from it, and omitting it keeps the historical request shape.
+
+### Transfer history (implemented, #246)
+A read-only, append-only journal of **terminal** upload outcomes
+(`transfer_records`). It is deliberately **not** a source of truth: `objects`
+remains authoritative, and journal rows can be purged after the retention
+window. One immutable row is written per object when the transfer reaches
+`available`, `failed`, `aborted` or `expired`; a replayed terminal event is a
+no-op, not a duplicate. The journal stores no bucket, object key, storage path,
+presigned URL, token, credential or blob. A terminal error message is bounded
+(300 characters) and URL-redacted before insertion.
+
+Reads use the same isolation as the object catalogue: a plain user sees only
+their own transfers, while an operator or administrator sees the whole space
+(machine-created objects have no human owner). A record outside the caller's
+scope answers `404`, never `403`, so ids cannot be probed. See
+`docs/DATA-MODEL.md` for the columns and retention semantics.
 
 ### Import jobs
 Track asynchronous bulk uploads/imports with a stable job ID, status (`queued`, `running`, `completed`, `failed`, `cancelled`), counts, timestamps, and a sanitized error summary. Do not store secret values or raw credentials in job logs.
@@ -78,6 +98,14 @@ Track asynchronous bulk uploads/imports with a stable job ID, status (`queued`, 
 - `POST /api/v1/objects/upload-intents` — authorize and issue a short-lived upload URL/intent.
 - `POST /api/v1/objects/{id}/commit` or an equivalent intent-scoped completion endpoint — verify the stored object and transition it to available idempotently.
 - `GET /api/v1/objects/{id}` — metadata only.
+- `GET /api/v1/transfers` — read-only terminal transfer history, newest first.
+  Filters: `status` (`available`/`failed`/`aborted`/`expired`), `session_id`
+  (client-generated `transfer_session_id`), and date bounds on `terminal_at`
+  (`from`/`to`, also spelled `created_after`/`created_before` and
+  `from_ts`/`to_ts`, in unix epoch seconds). Pagination uses `limit` (1–100,
+  default 50) and `offset`; the response is `{"items": [...]}`.
+- `GET /api/v1/transfers/{id}` — one terminal transfer record, same scope; an
+  unknown or out-of-scope id answers `404`.
 - `PATCH /api/v1/objects/{id}` — file or unfile the object in a logical folder (`folder_id`, null = root); implemented (#62).
 - `POST /api/v1/objects/{id}/download-intent` — authorize and return short-lived download URL.
 - `DELETE /api/v1/objects/{id}` — soft-delete first; permanent purge is a separate privileged operation.
@@ -96,6 +124,7 @@ The import-job endpoints above are proposals, not currently available routes. Th
 - Keep file bytes on the S3 data path. Use a bounded multipart protocol for large files; never buffer a full large object in API memory.
 - Require a commit step that verifies the stored object, actual size and checksum where required before making it available.
 - Make commit idempotent. Reconcile abandoned intents and orphaned objects after a safe grace period.
+- Record each terminal upload outcome (`available`, `failed`, `aborted`, `expired`) in an append-only history journal that contains no storage key, signed URL or credential, and retain it only for a bounded window.
 - Redact signed URL query strings, credentials and authorization headers from logs and audit events.
 - FTPS is not a default API requirement. If added for a specific legacy partner, it must be an isolated adapter that feeds the same validation/catalogue lifecycle.
 

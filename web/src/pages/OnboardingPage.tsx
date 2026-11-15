@@ -78,6 +78,7 @@ export function OnboardingPage() {
                 type="button"
                 className="btn btn-ghost btn-small"
                 onClick={handleSkip}
+                aria-label="Passer l'introduction"
               >
                 Passer l'introduction
               </button>
@@ -96,6 +97,7 @@ export function OnboardingPage() {
               type="button"
               className="btn btn-ghost btn-small"
               onClick={handleLogout}
+              aria-label="Se déconnecter d'AURA Vault"
             >
               Se déconnecter
             </button>

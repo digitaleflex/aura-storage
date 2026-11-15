@@ -26,9 +26,9 @@ Backlog publié sur GitHub le 23 octobre 2026, regroupé en cinq jalons.
 | Transferts D — Qualité & CI | [#243](https://github.com/digitaleflex/aura-storage/issues/243) | Exécuter les e2e Playwright dans le CI | Livré — PR #255, déployé |
 | Transferts D — Qualité & CI | [#244](https://github.com/digitaleflex/aura-storage/issues/244) | Audit d'accessibilité automatisé (axe) sur les pages clés | Livré — PR #255, déployé |
 | Transferts D — Qualité & CI | [#245](https://github.com/digitaleflex/aura-storage/issues/245) | Annonces lecteur d'écran ciblées sur les transitions de statut | Livré — PR #255, déployé |
-| Transferts E — Backend & produit | [#246](https://github.com/digitaleflex/aura-storage/issues/246) | Historique serveur des transferts (API + persistance) | Ouvert |
+| Transferts E — Backend & produit | [#246](https://github.com/digitaleflex/aura-storage/issues/246) | Historique serveur des transferts (API + persistance) | Implémenté — en attente de déploiement |
 | Transferts E — Backend & produit | [#247](https://github.com/digitaleflex/aura-storage/issues/247) | Reprise sans re-sélection via File System Access API | Fermé (reporté) |
-| Transferts E — Backend & produit | [#256](https://github.com/digitaleflex/aura-storage/issues/256) | Snapshot de diagnostic des échecs (export JSON + persistance) | Phase 1 + télémétrie livrées et déployées, phase 2 ouverte |
+| Transferts E — Backend & produit | [#256](https://github.com/digitaleflex/aura-storage/issues/256) | Snapshot de diagnostic des échecs (export JSON + persistance) | Phase 1 + télémétrie livrées et déployées ; phase 2 ouverte, adossée à #246 |
 | Transferts E — Backend & produit | [#259](https://github.com/digitaleflex/aura-storage/issues/259) | Débit plus faible après une reprise | En investigation |
 
 ## Jalons
@@ -47,4 +47,25 @@ Backlog publié sur GitHub le 23 octobre 2026, regroupé en cinq jalons.
 2. **Lot B — Pilotage** : implémenté (PR #252), en attente de déploiement.
 3. **Lot C — Liste & reprise** : implémenté (PR #253), non déployé.
 4. **Lot D — Qualité & CI** : livré (PR #255), non déployé.
-5. Lot E — Backend & produit (décision produit requise).
+5. Lot E — Backend & produit : #246 est implémenté (en attente de déploiement) ; #256 phase 2 reste à planifier, adossée à #246.
+
+## Lot E — état (#246)
+
+#246 est implémenté côté API : journal append-only `transfer_records` pour les
+statuts terminaux `available`, `failed`, `aborted` et `expired` ; corrélation
+optionnelle d'un lot d'uploads via `transfer_session_id` (UUID v4 généré par le
+client) à la création de l'intent ; lecture par `GET /api/v1/transfers`
+(pagination `limit`/`offset`, filtres `status`, `session_id`, bornes de date
+`from`/`to` avec les alias `created_after`/`created_before` et
+`from_ts`/`to_ts` en secondes epoch, réponse `{"items": [...]}`) et
+`GET /api/v1/transfers/{id}`.
+
+Le journal ne stocke ni URL présignée, ni clé ou chemin S3, ni jeton, ni blob ;
+`objects` reste la source de vérité. L'isolation est celle du catalogue
+(propriétaire, ou admin/opérateur de l'espace ; hors périmètre → 404). La
+rétention est pilotée par `AURA_TRANSFER_HISTORY_RETENTION_DAYS` (défaut 90
+jours) et la purge est exécutée par le balayage de réconciliation et la route
+admin de réconciliation.
+
+Suite : déploiement, puis #256 phase 2 (persistance et consultation support du
+snapshot de diagnostic), qui dépend de #246.

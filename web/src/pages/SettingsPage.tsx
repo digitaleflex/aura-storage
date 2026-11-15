@@ -40,32 +40,34 @@ export function SettingsPage() {
   }
 
   const user = session.data;
-  const isDark = document.documentElement.dataset.theme === "dark";
 
   return (
     <div className="settings-page" data-testid="settings-page">
-      <ToastStack toasts={toasts} onDismiss={(id: number) =>
-        setToasts((current) => current.filter((t) => t.id !== id))
-      } />
+      <ToastStack
+        toasts={toasts}
+        onDismiss={(id: number) =>
+          setToasts((current) => current.filter((t) => t.id !== id))
+        }
+      />
       <div className="settings-shell">
         <VaultMark />
         <div className="settings-header">
           <h1>Paramètres</h1>
-          <p className="settings-subtitle">
+          <p className="settings-subtitle muted">
             Compte de {user?.name ?? "utilisateur"}
           </p>
         </div>
 
-        <section className="settings-card">
-          <h2>Compte</h2>
-          <table>
+        <section className="settings-card" aria-labelledby="settings-account-title">
+          <h2 id="settings-account-title">Compte</h2>
+          <table className="settings-table">
             <tbody>
               <tr>
-                <td>Nom d'utilisateur</td>
+                <th scope="row">Nom d'utilisateur</th>
                 <td>{user?.name ?? "—"}</td>
               </tr>
               <tr>
-                <td>Rôle</td>
+                <th scope="row">Rôle</th>
                 <td>
                   {user?.role === "admin"
                     ? "Administrateur"
@@ -75,7 +77,7 @@ export function SettingsPage() {
                 </td>
               </tr>
               <tr>
-                <td>Type de session</td>
+                <th scope="row">Type de session</th>
                 <td>
                   {user?.kind === "service"
                     ? "Identité de service"
@@ -83,45 +85,46 @@ export function SettingsPage() {
                 </td>
               </tr>
               <tr>
-                <td>Espace</td>
+                <th scope="row">Espace</th>
                 <td>{user?.space_id ?? "—"}</td>
               </tr>
             </tbody>
           </table>
-          <p className="settings-muted">
-            Le changement de mot de passe n'est pas encore expos&eacute; via
-            l'API publique. Contactez un administrateur pour r&eacute;initialiser
-            votre mot de passe.
+          <p className="settings-muted muted">
+            Le changement de mot de passe n'est pas encore exposé via l'API
+            publique. Contactez un administrateur pour réinitialiser votre mot de
+            passe.
           </p>
         </section>
 
-        <section className="settings-card">
-          <h2>Préférences</h2>
+        <section className="settings-card" aria-labelledby="settings-preferences-title">
+          <h2 id="settings-preferences-title">Préférences</h2>
           <label className="settings-field">
             <input
               type="checkbox"
-              checked={isDark}
+              checked={darkMode}
               onChange={handleToggleDark}
             />
             Thème sombre
           </label>
-          <p className="settings-muted">
-            La préférence est m&eémorisée dans votre navigateur (localStorage).
+          <p className="settings-muted muted">
+            La préférence est mémorisée dans votre navigateur (localStorage).
           </p>
         </section>
 
-        <section className="settings-card settings-card-danger">
-          <h2>Session</h2>
+        <section className="settings-card settings-card-danger" aria-labelledby="settings-session-title">
+          <h2 id="settings-session-title">Session</h2>
           <button
             type="button"
             className="btn btn-danger"
             disabled={saving}
+            aria-label="Se déconnecter d'AURA Vault"
             onClick={handleLogout}
           >
             {saving ? "Déconnexion…" : "Se déconnecter"}
           </button>
-          <p className="settings-muted">
-            Votre session sera supprim&eacute;e. Vous devrez vous reconnecter.
+          <p className="settings-muted muted">
+            Votre session sera supprimée. Vous devrez vous reconnecter.
           </p>
         </section>
 

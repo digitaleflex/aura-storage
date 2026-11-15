@@ -56,5 +56,8 @@ web/dist.bak-*/
 # Off-site backup destination and crypt keys
 /config/backup.env
 
+# Deploy bookkeeping hashes (local state, never committed)
+.deploy-s3-config-hash
+
 # Deepwork session state (local, never committed)
 .slim/deepwork/

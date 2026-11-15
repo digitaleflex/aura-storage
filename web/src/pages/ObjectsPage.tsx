@@ -12,10 +12,13 @@ import type { FolderItem, ObjectItem, ObjectQuery } from "../lib/api";
 import {
   CascadeOp,
   CascadeFailure,
+  CascadeRoot,
   CascadeScanError,
   CascadeState,
+  dedupeCascadeRoots,
   scanCascade,
-  planCascadeOps,
+  scanCascadeMany,
+  planCascadeOpsForRoots,
   cascadeOpKey,
 } from "../lib/cascade";
 import { UploadTray } from "../components/UploadTray";
@@ -52,9 +55,14 @@ import { ShareDialog } from "../components/ShareDialog";
 import type { ShareTarget } from "../components/ShareDialog";
 import { PublishDialog } from "../components/PublishDialog";
 import { PacksDialog } from "../components/PacksDialog";
+import { Breadcrumb } from "../components/Breadcrumb";
+import { EmptyState } from "../components/EmptyState";
 import { TagsEditor } from "../components/TagsEditor";
 import { ObjectAnalytics } from "../components/ObjectAnalytics";
-import { downloadFolderAsZip } from "../lib/zip";
+import {
+  downloadFolderAsZip,
+  downloadSelectionAsZip,
+} from "../lib/zip";
 import {
   MasterModeBanner,
   MasterModeDialog,
@@ -331,6 +339,22 @@ function isDeletable(item: ObjectItem): boolean {
   return item.status === "available" || item.status === "pending";
 }
 
+/** Résumé français de la sélection : accords corrects, zéro partie masquée. */
+function selectionSummary(fileCount: number, folderCount: number): string {
+  const parts: string[] = [];
+  if (fileCount > 0) {
+    parts.push(`${fileCount} ${fileCount === 1 ? "fichier" : "fichiers"}`);
+  }
+  if (folderCount > 0) {
+    parts.push(
+      `${folderCount} ${
+        folderCount === 1 ? "dossier sélectionné" : "dossiers sélectionnés"
+      }`,
+    );
+  }
+  return parts.join(" · ");
+}
+
 
 /** The whole folder tree is fetched in one request (`?all=true`); the hierarchy
  * is rebuilt client-side from parent_id for breadcrumbs and the move pickers. */
@@ -377,6 +401,14 @@ export function ObjectsPage() {
   // Mirror of the live cascade state, read/written by the async run loop where
   // a state updater would otherwise close over a stale render.
   const cascadeRef = useRef<CascadeState | null>(null);
+  // Jeton de génération : un scan lent lancé avant la fermeture ne doit jamais
+  // écraser le plan du flux rouvert ensuite (même première racine).
+  const cascadeTokenRef = useRef(0);
+  // Fichiers sélectionnés hors des dossiers visés : ajoutés aux opérations de
+  // la cascade pour que « Supprimer la sélection » traite toute la sélection.
+  const cascadeExtraFilesRef = useRef<
+    { id: string; name: string; path: string }[]
+  >([]);
   const cascadeCancelRef = useRef(false);
   const cascadeDialogRef = useRef<HTMLDialogElement | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -445,6 +477,7 @@ export function ObjectsPage() {
   const [packsOpen, setPacksOpen] = useState(false);
   const [tagFilter, setTagFilter] = useState("");
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [zippingSelection, setZippingSelection] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // The import panel opens on demand (header button) and stays open while it
   // holds pending files, a queue or an error; a drop anywhere also opens it.
@@ -1132,6 +1165,14 @@ export function ObjectsPage() {
     },
     onSuccess: (_data, id) => {
       setDetails(null);
+      // L'id ne doit pas rester fantôme dans la sélection : il n'existe plus
+      // dans la liste, mais « Suppr » le compterait encore.
+      setSelectedIds((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
       notify("ok", "Objet marqué comme supprimé. Les octets restent jusqu'à une purge.", {
         label: "Annuler",
         onClick: () => restoreMutation.mutate(id),
@@ -1144,13 +1185,29 @@ export function ObjectsPage() {
   // Bulk delete reuses the audited single-object endpoint once per selected
   // file (no bulk API surface): sequential, per-file outcome, server truth.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Les ids de fichiers figés à l'ouverture de la confirmation : le texte et
+  // la boucle portent sur exactement le même ensemble, même si un refetch
+  // change le statut ou la pagination entre-temps.
+  const [bulkDeleteIds, setBulkDeleteIds] = useState<string[]>([]);
+  // La sélection appartient au dossier courant : changer de dossier la vide.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [currentFolderId]);
   const deleteManyMutation = useMutation({
     mutationFn: async (ids: string[]) => {
       if (!csrf) throw new Error("Session expirée.");
+      // Un id de dossier ne doit JAMAIS atteindre l'endpoint objet : seuls les
+      // fichiers réellement supprimables (et non les dossiers de l'arbre)
+      // participent à la boucle.
+      const objectIds = ids.filter(
+        (id) =>
+          !byId.has(id) &&
+          items.some((item) => item.id === id && isDeletable(item)),
+      );
       const failed: string[] = [];
       let deleted = 0;
-      setDeleteManyProgress({ done: 0, total: ids.length });
-      for (const id of ids) {
+      setDeleteManyProgress({ done: 0, total: objectIds.length });
+      for (const id of objectIds) {
         try {
           await api.deleteObject(id, csrf);
           deleted += 1;
@@ -1158,27 +1215,37 @@ export function ObjectsPage() {
           const target = items.find((item) => item.id === id);
           failed.push(target?.display_name ?? id);
         } finally {
-          setDeleteManyProgress({ done: deleted + failed.length, total: ids.length });
+          setDeleteManyProgress({
+            done: deleted + failed.length,
+            total: objectIds.length,
+          });
         }
       }
-      return { deleted, failed };
+      const ignored = ids.length - objectIds.length;
+      return { deleted, failed, objectIds, ignored };
     },
-    onSuccess: ({ deleted, failed }, ids) => {
+    onSuccess: ({ deleted, failed, objectIds, ignored }) => {
       setBulkDeleteOpen(false);
+      setBulkDeleteIds([]);
       setDeleteManyProgress(null);
       setSelectedIds(new Set());
       setDetails(null);
+      const ignoredLabel =
+        ignored > 0
+          ? ` ${ignored} ${ignored === 1 ? "ignoré" : "ignorés"} (déjà traités ou plus supprimables).`
+          : "";
       if (failed.length === 0) {
         notify(
           "ok",
-          deleted === 1
+          (deleted === 1
             ? "1 objet marqué comme supprimé. Les octets restent jusqu'à une purge."
-            : `${deleted} objets marqués comme supprimés. Les octets restent jusqu'à une purge.`,
+            : `${deleted} objets marqués comme supprimés. Les octets restent jusqu'à une purge.`) +
+            ignoredLabel,
           {
             label: "Annuler",
             onClick: () => {
               if (!csrf) return;
-              for (const id of ids) {
+              for (const id of objectIds) {
                 void restoreMutation.mutate(id);
               }
             },
@@ -1190,44 +1257,18 @@ export function ObjectsPage() {
           failed.length === 1 ? "1 échec" : `${failed.length} échecs`;
         notify(
           "error",
-          `${deletedLabel}, ${failedLabel} : ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`,
+          `${deletedLabel}, ${failedLabel} : ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}${ignoredLabel}`,
         );
       }
       invalidateLibrary();
     },
     onError: (err) => {
       setBulkDeleteOpen(false);
+      setBulkDeleteIds([]);
       setDeleteManyProgress(null);
       reportError(err, "Suppression en masse impossible.");
     },
   });
-
-  // Raccourcis clavier globaux (P1.1): `?` ouvre la légende et `Suppr`
-  // prépare la suppression de la sélection. Ignorés dans les champs de
-  // saisie et quand un dialogue est ouvert (il a déjà son propre clavier).
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (isTextEntryTarget(event.target)) return;
-      if (document.querySelector("dialog[open]")) return;
-      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
-        // "? peut arriver tel quel (clavier réel) ou comme "/" + Shift
-        // (événement synthétique, claviers où ? exige une autre touche).
-        event.preventDefault();
-        setShortcutsOpen(true);
-        return;
-      }
-      if (
-        event.key === "Delete" &&
-        selectedIds.size > 0 &&
-        !deleteManyMutation.isPending
-      ) {
-        event.preventDefault();
-        setBulkDeleteOpen(true);
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedIds.size, deleteManyMutation.isPending]);
 
   const restoreMutation = useMutation({
     mutationFn: (id: string) => {
@@ -1855,6 +1896,136 @@ export function ObjectsPage() {
   );
   const selectableIds = new Set(selectableItems.map((item) => item.id));
 
+  // La barre de sélection ne compte que les identifiants connus : dossiers de
+  // l'arbre et fichiers réellement sélectionnables.
+  const selectedFolderIds = [...selectedIds].filter((id) => byId.has(id));
+  const selectedFileIds = [...selectedIds].filter((id) => selectableIds.has(id));
+  const selectedFolderCount = selectedFolderIds.length;
+  const selectedFileCount = selectedFileIds.length;
+  const selectedKnownCount = selectedFolderCount + selectedFileCount;
+
+  // Un changement de filtre change la population affichée : garder une
+  // sélection devenue invisible produirait des comptes faux et une suppression
+  // partielle silencieuse. Le tri, lui, ne change pas la population.
+  const filterSignature = [
+    debouncedSearch,
+    statusFilter,
+    typeFilter,
+    minSize,
+    maxSize,
+    fromDate,
+    toDate,
+    tagFilter,
+  ].join("\u0000");
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [filterSignature]);
+
+  // Élague les identifiants qui ne correspondent plus à rien (objet supprimé
+  // ailleurs, dossier retiré, page rechargée) sans toucher au reste.
+  useEffect(() => {
+    setSelectedIds((current) => {
+      if (current.size === 0) return current;
+      const known = new Set<string>(items.map((item) => item.id));
+      for (const folder of tree) known.add(folder.id);
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of current) {
+        if (known.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [items, tree]);
+
+  const selectionBusy =
+    deleteManyMutation.isPending ||
+    bulkPurgeMutation.isPending ||
+    zippingSelection ||
+    cascade?.phase === "scanning" ||
+    cascade?.phase === "deleting";
+
+  /** Télécharge toute la sélection (fichiers seuls ou dossiers complets). */
+  async function handleDownloadSelection() {
+    if (!csrf) {
+      notify("error", "Session expirée. Reconnectez-vous pour télécharger.");
+      return;
+    }
+    setZippingSelection(true);
+    try {
+      await downloadSelectionAsZip(
+        {
+          files: selectedFileIds
+            .map((id) => {
+              const item = items.find((entry) => entry.id === id);
+              return item
+                ? { id: item.id, name: item.display_name, status: item.status }
+                : null;
+            })
+            .filter(
+              (entry): entry is { id: string; name: string; status: string } =>
+                entry !== null,
+            ),
+          folders: selectedFolderIds.map((id) => ({
+            id,
+            name: byId.get(id)?.name ?? id,
+          })),
+        },
+        csrf,
+      );
+      notify("ok", "Archive ZIP téléchargée.");
+    } catch (err) {
+      notify("error", describeError(err, "Impossible de créer l'archive ZIP."));
+    } finally {
+      setZippingSelection(false);
+    }
+  }
+
+  /** Dossier(s) sélectionné(s) : flux cascade ; fichiers seuls : confirmation. */
+  function requestBulkDelete() {
+    if (selectedFolderIds.length > 0) {
+      openBatchCascade(
+        selectedFolderIds.map((id) => ({ id, name: byId.get(id)?.name ?? id })),
+      );
+      return;
+    }
+    const fileIds = selectedFileIds.filter((id) => {
+      const item = items.find((entry) => entry.id === id);
+      return item !== undefined && isDeletable(item);
+    });
+    if (fileIds.length === 0) return;
+    setBulkDeleteIds(fileIds);
+    setBulkDeleteOpen(true);
+  }
+
+  // Raccourcis clavier globaux (P1.1): `?` ouvre la légende et `Suppr`
+  // prépare la suppression de la sélection. Ignorés dans les champs de
+  // saisie et quand un dialogue est ouvert (il a déjà son propre clavier).
+  // Déclaré après la sélection : le handler lit items/arbre à jour.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (isTextEntryTarget(event.target)) return;
+      if (document.querySelector("dialog[open]")) return;
+      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
+        // "? peut arriver tel quel (clavier réel) ou comme "/" + Shift
+        // (événement synthétique, claviers où ? exige une autre touche).
+        event.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      if (
+        event.key === "Delete" &&
+        selectedIds.size > 0 &&
+        !deleteManyMutation.isPending
+      ) {
+        event.preventDefault();
+        requestBulkDelete();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedIds, selectedFileIds, selectedFolderIds, items, byId, deleteManyMutation.isPending]);
+
   const currentName = currentFolderId ? byId.get(currentFolderId)?.name : null;
 
   const moveBlocked = moveTarget ? forbiddenTargets(moveTarget.id) : new Set<string>();
@@ -1882,14 +2053,17 @@ export function ObjectsPage() {
 
   /** Open the cascade flow for `target`: scan its real content first. */
   function openCascade(target: { id: string; name: string }) {
+    cascadeTokenRef.current += 1;
     setPendingConfirm(null);
     setFolderDeleteError(null);
     setFolderDeleteWithContent(false);
     setCascadeConfirmText("");
     cascadeCancelRef.current = false;
+    cascadeExtraFilesRef.current = [];
     applyCascade({
       rootId: target.id,
       rootName: target.name,
+      roots: [target],
       phase: "scanning",
       plan: null,
       ops: [],
@@ -1899,22 +2073,133 @@ export function ObjectsPage() {
       cancelled: false,
       scanError: null,
     });
-    void runCascadeScan(target.id, target.name);
+    void runCascadeScan([target]);
+  }
+
+  /**
+   * Ouvre le flux cascade pour plusieurs dossiers sélectionnés. Les racines
+   * déjà contenues dans une autre sont retirées avant le scan : leur contenu
+   * sera supprimé une seule fois, avec leur ancêtre.
+   */
+  function openBatchCascade(folders: { id: string; name: string }[]) {
+    if (folders.length === 0) return;
+    const unique = dedupeCascadeRoots(folders, tree);
+    if (unique.length === 0) return;
+    // Les fichiers sélectionnés en dehors des dossiers visés sont ajoutés au
+    // plan pour ne pas laisser une partie de la sélection derrière.
+    const extraFiles = selectedFileIds
+      .map((id) => {
+        const item = items.find((entry) => entry.id === id);
+        return item && isDeletable(item)
+          ? {
+              id: item.id,
+              name: item.display_name,
+              path: folderPath(currentFolderId),
+            }
+          : null;
+      })
+      .filter(
+        (entry): entry is { id: string; name: string; path: string } =>
+          entry !== null,
+      );
+    if (unique.length === 1) {
+      const only = unique[0] as CascadeRoot;
+      openCascade(only);
+      // openCascade réinitialise la référence : on la restaure après coup, le
+      // scan asynchrone lira la valeur au moment de construire les opérations.
+      cascadeExtraFilesRef.current = extraFiles;
+      return;
+    }
+    cascadeExtraFilesRef.current = extraFiles;
+    cascadeTokenRef.current += 1;
+    setPendingConfirm(null);
+    setFolderDeleteError(null);
+    setFolderDeleteWithContent(false);
+    setCascadeConfirmText("");
+    cascadeCancelRef.current = false;
+    applyCascade({
+      rootId: unique[0]?.id ?? "",
+      rootName: `${unique.length} dossiers`,
+      roots: unique,
+      phase: "scanning",
+      plan: null,
+      ops: [],
+      done: 0,
+      current: null,
+      failures: [],
+      cancelled: false,
+      scanError: null,
+    });
+    void runCascadeScan(unique);
   }
 
   /** List (never guess) the target's content; failure is surfaced, not hidden. */
-  async function runCascadeScan(rootId: string, rootName: string) {
+  async function runCascadeScan(roots: CascadeRoot[]) {
     const current = cascadeRef.current;
-    if (!current) return;
+    if (!current || roots.length === 0) return;
+    const rootId = roots[0]?.id ?? "";
+    // Le jeton est capturé avant l'attente : un flux fermé puis rouvert ne
+    // peut pas recevoir le plan de l'ancien scan, même avec la même racine.
+    const token = cascadeTokenRef.current;
     applyCascade({ ...current, phase: "scanning", plan: null, scanError: null });
     try {
-      const plan = await scanCascade(rootId, rootName);
+      const plan =
+        roots.length > 1
+          ? await scanCascadeMany(roots)
+          : await scanCascade(rootId, roots[0]?.name ?? "");
       const live = cascadeRef.current;
-      if (!live || live.rootId !== rootId || live.phase !== "scanning") return;
-      applyCascade({ ...live, phase: "confirm", plan, ops: planCascadeOps(plan) });
+      if (
+        token !== cascadeTokenRef.current ||
+        !live ||
+        live.rootId !== rootId ||
+        live.phase !== "scanning"
+      ) {
+        return;
+      }
+      // Les fichiers sélectionnés hors dossiers sont traités après le contenu
+      // des dossiers (ils sont indépendants de leur arborescence).
+      const plannedObjectIds = new Set(plan.objects.map((object) => object.id));
+      const extraOps: CascadeOp[] = cascadeExtraFilesRef.current
+        .filter((file) => !plannedObjectIds.has(file.id))
+        .map((file) => ({
+          kind: "object",
+          id: file.id,
+          label: file.name,
+          path: file.path,
+        }));
+      const ops = [...planCascadeOpsForRoots(plan), ...extraOps];
+      // Rien à supprimer (dossiers disparus entre-temps) : inutile de faire
+      // taper une confirmation pour un flux qui ne ferait rien.
+      if (ops.length === 0) {
+        applyCascade({
+          ...live,
+          phase: "confirm",
+          plan: { ...plan, fileCount: 0, extraFileCount: 0 },
+          ops: [],
+          scanError: "Ces dossiers n'existent plus ou ne contiennent plus rien.",
+        });
+        return;
+      }
+      applyCascade({
+        ...live,
+        phase: "confirm",
+        plan: {
+          ...plan,
+          fileCount: plan.fileCount + extraOps.length,
+          extraFileCount: extraOps.length,
+        },
+        ops,
+      });
     } catch (err) {
       const live = cascadeRef.current;
-      if (!live || live.rootId !== rootId || live.phase !== "scanning") return;
+      if (
+        token !== cascadeTokenRef.current ||
+        !live ||
+        live.rootId !== rootId ||
+        live.phase !== "scanning"
+      ) {
+        return;
+      }
       applyCascade({
         ...live,
         phase: "confirm",
@@ -1954,6 +2239,7 @@ export function ObjectsPage() {
     cascadeCancelRef.current = false;
     let done = start.done;
     let failures = start.failures;
+    let sessionLost = false;
     applyCascade({ ...start, phase: "deleting", current: null, cancelled: false });
 
     for (const op of opsToRun) {
@@ -1977,11 +2263,22 @@ export function ObjectsPage() {
         done += 1;
         failures = failures.filter((failure) => failure.key !== key);
       } catch (err) {
-        const detail = describeError(err, "Échec de suppression.");
-        failures = [
-          ...failures.filter((failure) => failure.key !== key),
-          { key, kind: op.kind, id: op.id, label: op.label, path: op.path, error: detail },
-        ];
+        // Session expirée ou scope retiré : inutile d'enchaîner N refus.
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          sessionLost = true;
+          break;
+        }
+        // Un objet déjà absent a atteint l'état voulu : ce n'est pas un échec.
+        if (err instanceof ApiError && err.status === 404 && op.kind === "object") {
+          done += 1;
+          failures = failures.filter((failure) => failure.key !== key);
+        } else {
+          const detail = describeError(err, "Échec de suppression.");
+          failures = [
+            ...failures.filter((failure) => failure.key !== key),
+            { key, kind: op.kind, id: op.id, label: op.label, path: op.path, error: detail },
+          ];
+        }
       }
       applyCascade({
         ...(cascadeRef.current ?? start),
@@ -1991,19 +2288,49 @@ export function ObjectsPage() {
       });
     }
 
+    if (sessionLost) {
+      const live = cascadeRef.current ?? start;
+      invalidateLibrary();
+      setSelectedIds(new Set());
+      cascadeExtraFilesRef.current = [];
+      applyCascade({
+        ...live,
+        phase: "done",
+        done,
+        failures,
+        current: null,
+        scanError: "Session expirée. Reconnectez-vous pour reprendre.",
+      });
+      notify(
+        "error",
+        "Session expirée : suppression interrompue. Reconnectez-vous puis réessayez.",
+      );
+      return;
+    }
+
     const end = cascadeRef.current ?? start;
     invalidateLibrary();
     applyCascade({ ...end, phase: "done", current: null });
+    // La sélection a été traitée (ou interrompue) : on ne garde pas des ids
+    // dont une partie n'existe plus.
+    setSelectedIds(new Set());
+    cascadeExtraFilesRef.current = [];
 
     const final = cascadeRef.current;
     if (!final) return;
+    const manyRoots = (final.plan?.roots?.length ?? final.roots.length) > 1;
     if (final.cancelled) {
       notify(
         "info",
         `Suppression interrompue : ${final.done} élément(s) supprimé(s), ${final.failures.length} échec(s).`,
       );
     } else if (final.failures.length === 0) {
-      notify("ok", `Dossier et contenu supprimés : ${final.done} élément(s).`);
+      notify(
+        "ok",
+        manyRoots
+          ? `Sélection supprimée : ${final.done} élément(s).`
+          : `Dossier et contenu supprimés : ${final.done} élément(s).`,
+      );
     } else {
       notify(
         "error",
@@ -2052,6 +2379,7 @@ export function ObjectsPage() {
       cascadeCancelRef.current = true;
       return;
     }
+    cascadeExtraFilesRef.current = [];
     applyCascade(null);
   }
 
@@ -2094,6 +2422,21 @@ export function ObjectsPage() {
   // Subfolders are listed first in the register, like any file browser; a
   // search or filter narrows files only, so folders step aside meanwhile.
   const visibleFolders = hasActiveFilters ? [] : subfolders;
+
+  // Ensembles identiques pour les deux « Tout sélectionner » (grille et ledger) :
+  // fichiers sélectionnables + dossiers visibles.
+  const allSelectableIds = [
+    ...selectableItems.map((item) => item.id),
+    ...visibleFolders.map((folder) => folder.id),
+  ];
+  const allSelected =
+    allSelectableIds.length > 0 &&
+    allSelectableIds.every((id) => selectedIds.has(id));
+  const selectAllDisabled =
+    allSelectableIds.length === 0 || deleteManyMutation.isPending || selectionBusy;
+  function toggleSelectAll(checked: boolean) {
+    setSelectedIds(checked ? new Set(allSelectableIds) : new Set());
+  }
 
   const [zippingFolderId, setZippingFolderId] = useState<string | null>(null);
 
@@ -2197,11 +2540,21 @@ export function ObjectsPage() {
     );
   }
 
+  const cascadeRoots = cascade?.plan?.roots ?? cascade?.roots ?? [];
+  const cascadeMany = cascadeRoots.length > 1;
+  const cascadeExtraFiles = cascade?.plan?.extraFileCount ?? 0;
+  const cascadeBlocked = cascade?.plan?.blockedCount ?? 0;
+  // Des fichiers hors dossiers sont aussi détruits : le nom du dossier ne
+  // suffit plus à couvrir l'ensemble, on demande le mot explicite.
+  const cascadeConfirmTarget =
+    cascadeMany || cascadeExtraFiles > 0
+      ? "SUPPRIMER"
+      : (cascadeRoots[0]?.name ?? cascade?.rootName ?? "");
   const cascadeConfirmed =
     cascade !== null &&
     cascade.plan !== null &&
-    cascade.rootName.trim() !== "" &&
-    cascadeConfirmText.trim() === cascade.rootName.trim();
+    cascadeConfirmTarget.trim() !== "" &&
+    cascadeConfirmText.trim() === cascadeConfirmTarget.trim();
 
   return (
     <div
@@ -2221,35 +2574,22 @@ export function ObjectsPage() {
         void handleDrop(e);
       }}
     >
-      <nav className="breadcrumb" aria-label="Fil d'Ariane">
-        <button
-          type="button"
-          className={currentFolderId === null ? "crumb crumb-current" : "crumb"}
-          aria-current={currentFolderId === null ? "page" : undefined}
-          onClick={() => setCurrentFolderId(null)}
-        >
-          <span className="crumb-icon">🏠</span>
-          <span className="crumb-label">Mes fichiers</span>
-        </button>
-        {breadcrumb.map((folder, index) => (
-          <span key={folder.id} className="crumb-item">
-            <span className="crumb-sep" aria-hidden="true">
-              /
-            </span>
-            <button
-              type="button"
-              className={
-                index === breadcrumb.length - 1 ? "crumb crumb-current" : "crumb"
-              }
-              aria-current={index === breadcrumb.length - 1 ? "page" : undefined}
-              onClick={() => setCurrentFolderId(folder.id)}
-            >
-              <span className="crumb-icon">📁</span>
-              <span className="crumb-label">{folder.name}</span>
-            </button>
-          </span>
-        ))}
-      </nav>
+      <Breadcrumb
+        ariaLabel="Fil d’Ariane"
+        onSelect={(id) => setCurrentFolderId(id)}
+        items={[
+          {
+            id: null,
+            label: "Mes fichiers",
+            icon: <span>🏠</span>,
+          },
+          ...breadcrumb.map((folder) => ({
+            id: folder.id,
+            label: folder.name,
+            icon: <span>📁</span>,
+          })),
+        ]}
+      />
 
       <div className="page-head">
         <div className="page-title">
@@ -2905,22 +3245,23 @@ export function ObjectsPage() {
             ))}
           </div>
         ) : items.length === 0 && visibleFolders.length === 0 ? (
-          <div className="empty empty-rich">
-            <span className="empty-mark" aria-hidden="true">
+          <EmptyState
+            className="empty empty-rich"
+            icon={
               <FileTypeIcon contentType={hasActiveFilters ? "" : "application/pdf"} />
-            </span>
-            <p className="empty-title">
-              {hasActiveFilters
+            }
+            title={
+              hasActiveFilters
                 ? "Aucun fichier ne correspond à ces critères."
-                : "Aucun fichier dans ce dossier."}
-            </p>
-            {!hasActiveFilters ? (
+                : "Aucun fichier dans ce dossier."
+            }
+            description={
+              hasActiveFilters
+                ? "Aucun objet ne correspond aux filtres actuellement appliqués."
+                : "Glissez des fichiers ou des dossiers n'importe où sur la page. Chaque fichier n'est déclaré disponible qu'une fois sa taille et son empreinte SHA-256 vérifiées par le serveur."
+            }
+            actions={
               <>
-                <p className="muted empty-help">
-                  Glissez des fichiers ou des dossiers n'importe où sur la page. Chaque
-                  fichier n'est déclaré disponible qu'une fois sa taille et son empreinte
-                  SHA-256 vérifiées par le serveur.
-                </p>
                 {canCreate ? (
                   <button
                     type="button"
@@ -2930,145 +3271,211 @@ export function ObjectsPage() {
                     Importer des fichiers
                   </button>
                 ) : null}
-              </>
-            ) : (
-              <>
-                <p className="muted empty-help">
-                  Aucun objet ne correspond aux filtres actuellement appliqués.
-                </p>
-                {canCreate ? (
+                {hasActiveFilters ? (
                   <button
                     type="button"
-                    className="btn btn-primary"
-                    onClick={() => setIntakeOpen(true)}
+                    className="btn btn-small btn-ghost"
+                    onClick={() => {
+                      setSearch("");
+                      setStatusFilter("");
+                      setTypeFilter("");
+                      setMinSize("");
+                      setMaxSize("");
+                      setFromDate("");
+                      setToDate("");
+                      setSortField("created_at");
+                      setSortOrder("desc");
+                      void queryClient.invalidateQueries({ queryKey: ["objects"] });
+                      void queryClient.invalidateQueries({ queryKey: ["folders"] });
+                    }}
                   >
-                    Importer des fichiers
+                    Réinitialiser les filtres
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  className="btn btn-small btn-ghost"
-                  onClick={() => {
-                    setSearch("");
-                    setStatusFilter("");
-                    setTypeFilter("");
-                    setMinSize("");
-                    setMaxSize("");
-                    setFromDate("");
-                    setToDate("");
-                    setSortField("created_at");
-                    setSortOrder("desc");
-                    void queryClient.invalidateQueries({ queryKey: ["objects"] });
-                    void queryClient.invalidateQueries({ queryKey: ["folders"] });
-                  }}
-                >
-                  Réinitialiser les filtres
-                </button>
               </>
-            )}
-          </div>
+            }
+          />
         ) : (
           <>
-            {selectedIds.size > 0 ? (
-              <p role="status" className="alert">
-                {selectedIds.size === 1
-                  ? "1 objet sélectionné."
-                  : `${selectedIds.size} objets sélectionnés.`}{" "}
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-small"
-                  disabled={deleteManyMutation.isPending}
-                  onClick={() => setSelectedIds(new Set())}
+            {selectedKnownCount > 0 ? (
+              <div
+                className="selection-bar"
+                role="group"
+                aria-label="Actions sur la sélection"
+              >
+                <span
+                  className="selection-bar-count"
+                  role="status"
+                  aria-live="polite"
                 >
-                  Tout désélectionner
-                </button>{" "}
-                {master.active ? (
-                  <>
+                  {selectionSummary(selectedFileCount, selectedFolderCount)}
+                </span>
+                <div className="selection-bar-actions">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-small"
+                    disabled={selectionBusy}
+                    onClick={() => setSelectedIds(new Set())}
+                  >
+                    Tout désélectionner
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    disabled={selectionBusy}
+                    onClick={() => void handleDownloadSelection()}
+                  >
+                    {zippingSelection ? "Préparation du ZIP…" : "Télécharger en ZIP"}
+                  </button>
+                  {master.active ? (
                     <button
                       type="button"
                       className="btn btn-danger btn-small"
-                      disabled={bulkPurgeMutation.isPending}
-                      onClick={() => bulkPurgeMutation.mutate([...selectedIds])}
+                      disabled={selectionBusy || selectedFileCount === 0}
+                      onClick={() => bulkPurgeMutation.mutate(selectedFileIds)}
                     >
                       {bulkPurgeMutation.isPending ? (
                         <span className="spinner" aria-hidden="true" />
                       ) : null}
                       {bulkPurgeMutation.isPending
                         ? "Purge…"
-                        : `Purger définitivement (${selectedIds.size})`}
-                    </button>{" "}
-                  </>
-                ) : null}
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  disabled={deleteManyMutation.isPending}
-                  onClick={() => setBulkDeleteOpen(true)}
-                >
-                  {deleteManyMutation.isPending && deleteManyProgress
-                    ? `Suppression ${deleteManyProgress.done}/${deleteManyProgress.total}…`
-                    : "Supprimer la sélection"}
-                </button>
-                {deleteManyProgress ? (
-                  <span role="status" className="muted">
-                    {" "}
-                    Suppression {deleteManyProgress.done}/
-                    {deleteManyProgress.total}…
-                  </span>
-                ) : null}
-              </p>
+                        : `Purger définitivement (${selectedFileCount})`}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    disabled={selectionBusy}
+                    onClick={requestBulkDelete}
+                  >
+                    {deleteManyMutation.isPending && deleteManyProgress
+                      ? `Suppression ${deleteManyProgress.done}/${deleteManyProgress.total}…`
+                      : `Supprimer la sélection (${selectedKnownCount})`}
+                  </button>
+                  {deleteManyProgress ? (
+                    <span role="status" className="muted">
+                      Suppression {deleteManyProgress.done}/
+                      {deleteManyProgress.total}…
+                    </span>
+                  ) : null}
+                </div>
+              </div>
             ) : null}
             {viewMode === "grid" ? (
-              <div className="object-grid" role="list">
-                {items.map((item) => (
-                  <div className="object-card" key={item.id} role="listitem">
+              <>
+                <div className="grid-select-bar">
+                  <label>
                     <input
                       type="checkbox"
-                      className="object-card-check"
-                      aria-label={`Sélectionner ${item.display_name}`}
-                      checked={selectedIds.has(item.id)}
-                      onChange={(e) =>
-                        setSelectedIds((current) => {
-                          const next = new Set(current);
-                          if (e.target.checked) next.add(item.id);
-                          else next.delete(item.id);
-                          return next;
-                        })
-                      }
-                    />
-                    <button
-                      type="button"
-                      className="object-card-open"
-                      onClick={() => setDetails(item)}
-                      aria-label={`Détails de ${item.display_name}`}
+                      aria-label="Tout sélectionner"
+                      checked={allSelected}
+                      disabled={selectAllDisabled}
+                      onChange={(e) => toggleSelectAll(e.target.checked)}
+                    />{" "}
+                    Tout sélectionner
+                  </label>
+                </div>
+                <div className="object-grid" role="list">
+                  {visibleFolders.map((folder) => (
+                    <div
+                      className="object-card object-card-folder"
+                      role="listitem"
+                      key={folder.id}
                     >
-                      <span className={`object-card-media file-tile-${fileKind(item.content_type)}`}>
-                        <FileTypeIcon contentType={item.content_type} />
-                        {item.thumbnail ? (
-                          <img
-                            src={`/api/v1/objects/${item.id}/thumbnail`}
-                            alt=""
-                            loading="lazy"
-                            onError={(e) => {
-                              e.currentTarget.style.display = "none";
-                            }}
-                          />
-                        ) : null}
-                        {item.duration_seconds ? (
-                          <span className="object-card-duration">
-                            {formatDuration(item.duration_seconds)}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="object-card-name">{item.display_name}</span>
-                      <span className="muted object-card-meta">
-                        {typeLabel(item.content_type)} ·{" "}
-                        {formatBytes(item.size_bytes)}
-                      </span>
-                    </button>
-                  </div>
-                ))}
-              </div>
+                      <input
+                        type="checkbox"
+                        className="object-card-check"
+                        aria-label={`Sélectionner le dossier ${folder.name}`}
+                        checked={selectedIds.has(folder.id)}
+                        disabled={deleteManyMutation.isPending}
+                        onChange={(e) =>
+                          setSelectedIds((current) => {
+                            const next = new Set(current);
+                            if (e.target.checked) next.add(folder.id);
+                            else next.delete(folder.id);
+                            return next;
+                          })
+                        }
+                      />
+                      <div className="object-card-menu">
+                        <RowMenu
+                          label={`Actions pour le dossier ${folder.name}`}
+                          items={folderMenuItems(folder)}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="object-card-open"
+                        onClick={() => setCurrentFolderId(folder.id)}
+                        aria-label={`Ouvrir le dossier ${folder.name}`}
+                      >
+                        <span className="object-card-media folder-card-media">
+                          <FolderMark />
+                        </span>
+                        <span className="object-card-name">{folder.name}</span>
+                        <span className="muted object-card-meta">
+                          Dossier ·{" "}
+                          {folder.size_bytes != null
+                            ? formatBytes(folder.size_bytes)
+                            : "taille indisponible"}
+                        </span>
+                      </button>
+                    </div>
+                  ))}
+                  {items.map((item) => (
+                    <div className="object-card" key={item.id} role="listitem">
+                      <input
+                        type="checkbox"
+                        className="object-card-check"
+                        aria-label={`Sélectionner ${item.display_name}`}
+                        checked={selectedIds.has(item.id)}
+                        disabled={
+                          !selectableIds.has(item.id) ||
+                          deleteManyMutation.isPending
+                        }
+                        onChange={(e) =>
+                          setSelectedIds((current) => {
+                            const next = new Set(current);
+                            if (e.target.checked) next.add(item.id);
+                            else next.delete(item.id);
+                            return next;
+                          })
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="object-card-open"
+                        onClick={() => setDetails(item)}
+                        aria-label={`Détails de ${item.display_name}`}
+                      >
+                        <span className={`object-card-media file-tile-${fileKind(item.content_type)}`}>
+                          <FileTypeIcon contentType={item.content_type} />
+                          {item.thumbnail ? (
+                            <img
+                              src={`/api/v1/objects/${item.id}/thumbnail`}
+                              alt=""
+                              loading="lazy"
+                              onError={(e) => {
+                                e.currentTarget.style.display = "none";
+                              }}
+                            />
+                          ) : null}
+                          {item.duration_seconds ? (
+                            <span className="object-card-duration">
+                              {formatDuration(item.duration_seconds)}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="object-card-name">{item.display_name}</span>
+                        <span className="muted object-card-meta">
+                          {typeLabel(item.content_type)} ·{" "}
+                          {formatBytes(item.size_bytes)}
+                        </span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
             ) : null}
             <div className="ledger" role="list" hidden={viewMode === "grid"}>
             <div className="ledger-head" role="listitem">
@@ -3076,27 +3483,9 @@ export function ObjectsPage() {
                 <input
                   type="checkbox"
                   aria-label="Tout sélectionner"
-                  checked={
-                    (selectableItems.length + visibleFolders.length) > 0 &&
-                    selectableItems.every((item) => selectedIds.has(item.id)) &&
-                    visibleFolders.every((folder) => selectedIds.has(folder.id))
-                  }
-                  disabled={
-                    (selectableItems.length + visibleFolders.length) === 0 ||
-                    deleteManyMutation.isPending
-                  }
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setSelectedIds(
-                        new Set([
-                          ...selectableItems.map((item) => item.id),
-                          ...visibleFolders.map((folder) => folder.id),
-                        ]),
-                      );
-                    } else {
-                      setSelectedIds(new Set());
-                    }
-                  }}
+                  checked={allSelected}
+                  disabled={selectAllDisabled}
+                  onChange={(e) => toggleSelectAll(e.target.checked)}
                 />{" "}
                 {sortHeader("display_name")}
               </span>
@@ -3140,10 +3529,13 @@ export function ObjectsPage() {
                   </div>
                   <div className="ledger-meta">
                     <span className="ledger-type">Dossier</span>
-                    <span className="ledger-size num">
+                    <span
+                      className="ledger-size num"
+                      title="Taille totale du dossier (fichiers disponibles, sous-dossiers inclus)"
+                    >
                       {folder.size_bytes != null
                         ? formatBytes(folder.size_bytes)
-                        : "—"}
+                        : "taille indisponible"}
                     </span>
                     <span className="ledger-status" />
                     <span className="ledger-date num">
@@ -3827,14 +4219,19 @@ export function ObjectsPage() {
       <Dialog
         open={bulkDeleteOpen}
         title="Supprimer la sélection"
-        onClose={() => setBulkDeleteOpen(false)}
+        onClose={() => {
+          setBulkDeleteOpen(false);
+          setBulkDeleteIds([]);
+        }}
       >
         <div className="dialog-text">
           Marquer{" "}
           <strong>
-            {selectedIds.size === 1 ? "1 objet" : `${selectedIds.size} objets`}
+            {bulkDeleteIds.length === 1
+              ? "1 fichier"
+              : `${bulkDeleteIds.length} fichiers`}
           </strong>{" "}
-          comme {selectedIds.size === 1 ? "supprimé" : "supprimés"} ?
+          comme {bulkDeleteIds.length === 1 ? "supprimé" : "supprimés"} ?
           Chaque fichier est supprimé individuellement et le résultat est
           rapporté par fichier. Les octets restent jusqu'à une purge.
         </div>
@@ -3871,17 +4268,18 @@ export function ObjectsPage() {
             type="button"
             className="btn"
             disabled={deleteManyMutation.isPending}
-            onClick={() => setBulkDeleteOpen(false)}
+            onClick={() => {
+              setBulkDeleteOpen(false);
+              setBulkDeleteIds([]);
+            }}
           >
             Annuler
           </button>
           <button
             type="button"
             className="btn btn-danger"
-            disabled={
-              deleteManyMutation.isPending || selectedIds.size === 0
-            }
-            onClick={() => deleteManyMutation.mutate([...selectedIds])}
+            disabled={deleteManyMutation.isPending || bulkDeleteIds.length === 0}
+            onClick={() => deleteManyMutation.mutate(bulkDeleteIds)}
           >
             {deleteManyMutation.isPending ? "Suppression…" : "Supprimer"}
           </button>
@@ -3971,7 +4369,7 @@ export function ObjectsPage() {
       <PacksDialog
         open={packsOpen}
         csrf={csrf}
-        selectedIds={selectedIds}
+        selectedIds={new Set(selectedFileIds)}
         objects={items}
         onClose={() => setPacksOpen(false)}
         onNotify={notify}
@@ -4008,7 +4406,11 @@ export function ObjectsPage() {
           }}
         >
           <div className="dialog-head">
-            <h2 id="cascade-title">Supprimer le dossier et son contenu</h2>
+            <h2 id="cascade-title">
+              {cascadeMany
+                ? "Supprimer la sélection et son contenu"
+                : "Supprimer le dossier et son contenu"}
+            </h2>
             {cascade.phase === "scanning" || cascade.phase === "confirm" ? (
               <button
                 type="button"
@@ -4023,7 +4425,9 @@ export function ObjectsPage() {
           <div className="dialog-body">
             {cascade.phase === "scanning" ? (
               <p className="muted" role="status">
-                Analyse du contenu réel du dossier…
+                {cascadeMany
+                  ? "Analyse du contenu réel des dossiers…"
+                  : "Analyse du contenu réel du dossier…"}
               </p>
             ) : null}
 
@@ -4034,9 +4438,7 @@ export function ObjectsPage() {
                   <button
                     type="button"
                     className="btn btn-ghost btn-small"
-                    onClick={() =>
-                      void runCascadeScan(cascade.rootId, cascade.rootName)
-                    }
+                    onClick={() => void runCascadeScan(cascadeRoots)}
                   >
                     Réessayer
                   </button>
@@ -4044,17 +4446,50 @@ export function ObjectsPage() {
               ) : cascade.plan ? (
                 <>
                   <p className="dialog-text">
-                    Le dossier <strong>{cascade.rootName}</strong> contient{" "}
-                    <strong>{cascade.plan.fileCount} fichier(s)</strong> et{" "}
-                    <strong>{cascade.plan.folderCount} sous-dossier(s)</strong>.
+                    {cascadeMany ? (
+                      <>
+                        Les <strong>{cascadeRoots.length} dossiers sélectionnés</strong>{" "}
+                        contiennent{" "}
+                        <strong>
+                          {cascade.plan.fileCount - cascadeExtraFiles} fichier(s)
+                        </strong>{" "}
+                        et <strong>{cascade.plan.folderCount} sous-dossier(s)</strong>.
+                      </>
+                    ) : (
+                      <>
+                        Le dossier <strong>{cascade.rootName}</strong> contient{" "}
+                        <strong>
+                          {cascade.plan.fileCount - cascadeExtraFiles} fichier(s)
+                        </strong>{" "}
+                        et <strong>{cascade.plan.folderCount} sous-dossier(s)</strong>.
+                      </>
+                    )}
+                    {cascadeExtraFiles > 0 ? (
+                      <>
+                        {" "}
+                        Plus{" "}
+                        <strong>
+                          {cascadeExtraFiles} fichier(s) sélectionné(s) hors dossier
+                        </strong>
+                        .
+                      </>
+                    ) : null}
                   </p>
+                  {cascadeBlocked > 0 ? (
+                    <p role="alert" className="alert alert-warn">
+                      {cascadeBlocked} fichier(s) en cours de vérification ne
+                      peuvent pas encore être supprimés et empêchent la
+                      suppression du dossier. Attendez la fin de la vérification,
+                      puis réessayez.
+                    </p>
+                  ) : null}
                   <p role="alert" className="alert alert-error">
                     Suppression du contenu : chaque fichier est marqué supprimé
                     (les octets restent jusqu'à une purge), puis chaque dossier
                     vidé est supprimé, des feuilles vers la racine.
                   </p>
                   <label className="field cascade-confirm-field">
-                    <span>Recopiez «&nbsp;{cascade.rootName}&nbsp;» pour confirmer</span>
+                    <span>Recopiez «&nbsp;{cascadeConfirmTarget}&nbsp;» pour confirmer</span>
                     <input
                       type="text"
                       value={cascadeConfirmText}
@@ -4072,10 +4507,12 @@ export function ObjectsPage() {
                     <button
                       type="button"
                       className="btn btn-danger"
-                      disabled={!cascadeConfirmed}
+                      disabled={!cascadeConfirmed || cascadeBlocked > 0}
                       onClick={startCascade}
                     >
-                      Supprimer le contenu et le dossier
+                      {cascadeMany || cascadeExtraFiles > 0
+                        ? "Supprimer la sélection et son contenu"
+                        : "Supprimer le contenu et le dossier"}
                     </button>
                   </div>
                 </>
@@ -4099,7 +4536,11 @@ export function ObjectsPage() {
                     : cascade.cancelled
                       ? `Suppression interrompue — ${cascade.done}/${cascade.ops.length}`
                       : cascade.failures.length === 0
-                        ? `Contenu supprimé et dossier supprimé — ${cascade.done}/${cascade.ops.length}`
+                        ? `${
+                            cascadeMany || cascadeExtraFiles > 0
+                              ? "Sélection supprimée"
+                              : "Contenu supprimé et dossier supprimé"
+                          } — ${cascade.done}/${cascade.ops.length}`
                         : `Suppression terminée avec échecs — ${cascade.done}/${cascade.ops.length}`}
                 </p>
                 <div

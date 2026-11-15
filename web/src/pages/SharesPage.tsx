@@ -6,6 +6,7 @@ import { describeError } from "../lib/errors";
 import { VaultMark } from "../components/VaultMark";
 import { ShareDialog, type ShareTarget } from "../components/ShareDialog";
 import { ToastStack, makeToast, type Toast } from "../components/Toasts";
+import { EmptyState } from "../components/EmptyState";
 
 interface ShareEntry {
   kind: "object" | "folder";
@@ -57,15 +58,8 @@ export function SharesPage() {
     };
   }, []);
 
-  if (loading) {
-    return (
-      <div className="shares-page" data-testid="shares-page">
-        <VaultMark />
-        <p>Chargement des partages&hellip;</p>
-      </div>
-    );
-  }
-
+  // Every hook must run before the loading branch returns: an early return
+  // changes the hook order between the first and the next render (React #310).
   const allEntries = useMemo<ShareEntry[]>(() => {
     const entries: ShareEntry[] = [];
     for (const o of objects) {
@@ -76,6 +70,23 @@ export function SharesPage() {
     }
     return entries.sort((a, b) => a.name.localeCompare(b.name));
   }, [objects, folders]);
+
+  if (loading) {
+    return (
+      <div className="shares-page" data-testid="shares-page">
+        <div className="shares-shell">
+          <VaultMark />
+          <div className="shares-header">
+            <h1>Partages publics</h1>
+            <p className="shares-subtitle muted">Chargement des ressources partageables…</p>
+          </div>
+          <p className="muted" role="status" aria-live="polite">
+            Chargement des partages…
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="shares-page" data-testid="shares-page">
@@ -92,29 +103,25 @@ export function SharesPage() {
         </div>
 
         {error && (
-          <div className="shares-error" role="alert">
-            {error}
+          <div className="alert alert-error shares-error" role="alert">
+            <span>{error}</span>
             <button
               type="button"
               className="btn btn-small"
               onClick={() => window.location.reload()}
             >
-              Rafra&icirc;chir
+              Rafraîchir
             </button>
           </div>
         )}
 
         {allEntries.length === 0 ? (
-          <section className="shares-empty">
-            <span className="shares-empty-icon" aria-hidden="true">
-              📂
-            </span>
-            <h2>Aucun fichier ni dossier</h2>
-            <p>
-              Vous n'avez aucun objet à partager. Importez des fichiers depuis la
-              page Fichiers, puis revenez ici pour cr&eacute;er des liens publics.
-            </p>
-            <div className="shares-empty-actions">
+          <EmptyState
+            className="shares-empty"
+            icon="📂"
+            title="Aucun fichier ni dossier"
+            description="Vous n'avez aucun objet à partager. Importez des fichiers depuis la page Fichiers, puis revenez ici pour créer des liens publics."
+            actions={
               <button
                 type="button"
                 className="btn btn-primary"
@@ -122,8 +129,8 @@ export function SharesPage() {
               >
                 Aller aux fichiers
               </button>
-            </div>
-          </section>
+            }
+          />
         ) : null}
 
         {allEntries.length > 0 ? (
@@ -132,22 +139,21 @@ export function SharesPage() {
             <table aria-label="Liste des ressources">
               <thead>
                 <tr>
-                  <th>Ressource</th>
-                  <th>Type</th>
-                  <th>Action</th>
+                  <th scope="col">Ressource</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {allEntries.map((entry) => (
                   <tr key={entry.id}>
                     <td>{entry.name}</td>
-                    <td>
-                      {entry.kind === "object" ? "Fichier" : "Dossier"}
-                    </td>
+                    <td>{entry.kind === "object" ? "Fichier" : "Dossier"}</td>
                     <td>
                       <button
                         type="button"
                         className="btn btn-small"
+                        aria-label={`Partager ou gérer ${entry.name}`}
                         onClick={() => {
                           const target: ShareTarget =
                             entry.kind === "object"
@@ -162,7 +168,7 @@ export function SharesPage() {
                           setOpenShare(target);
                         }}
                       >
-                        Partager / G&eacute;rer
+                        Partager / Gérer
                       </button>
                     </td>
                   </tr>
@@ -183,12 +189,13 @@ export function SharesPage() {
           <button
             type="button"
             className="btn btn-small btn-ghost"
+            aria-label="Se déconnecter d'AURA Vault"
             onClick={() => {
               void logout();
               navigate({ to: "/login" });
             }}
           >
-            D&eacute;connexion
+            Déconnexion
           </button>
         </div>
       </div>

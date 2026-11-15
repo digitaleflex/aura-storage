@@ -47,7 +47,13 @@ from .authz import (
 from .config import settings
 from . import media_worker
 from .identity import fingerprint, format_token, new_secret
-from .lifecycle import purge_object, reconcile_pending, reconcile_terminal, reconcile_reverse
+from .lifecycle import (
+    purge_object,
+    purge_transfer_history,
+    reconcile_pending,
+    reconcile_terminal,
+    reconcile_reverse,
+)
 from .avscan import INFECTED as AV_INFECTED, TIMEOUT as AV_TIMEOUT, scan_object as av_scan_object
 from .s3 import (
     SSE_ALGORITHM,
@@ -438,6 +444,7 @@ ObjectStatus = Literal[
 ]
 ObjectSort = Literal["created_at", "display_name", "size_bytes"]
 SortOrder = Literal["asc", "desc"]
+TransferStatus = Literal["available", "failed", "aborted", "expired"]
 
 
 def _object_scope(principal: dict) -> dict:
@@ -542,6 +549,34 @@ def _object_public(row, tags: list | None = None) -> dict:
         "hls_status": row.get("hls_status"),
         "subtitle": bool(row.get("subtitle_object_id")),
         "tags": list(tags or []),
+    }
+
+
+def _transfer_public(row) -> dict:
+    """Safe projection of a terminal transfer journal row (#246).
+
+    Deliberately no bucket, object key, storage path, presigned URL or token:
+    the journal never stores them, and this projection cannot invent them.
+    """
+    row = _as_dict(row)
+    return {
+        "id": row["id"],
+        "transfer_session_id": row.get("transfer_session_id"),
+        "object_id": row.get("object_id"),
+        "space_id": row.get("space_id"),
+        "owner_id": row.get("owner_id"),
+        "actor_id": row.get("actor_id"),
+        "actor_kind": row.get("actor_kind"),
+        "display_name": row.get("display_name") or "",
+        "content_type": row.get("content_type") or "",
+        "expected_size_bytes": row.get("expected_size_bytes"),
+        "final_size_bytes": row.get("final_size_bytes"),
+        "status": row.get("status"),
+        "failure_kind": row.get("failure_kind"),
+        "error_message": row.get("error_message"),
+        "checksum_sha256": row.get("checksum_sha256") or "",
+        "created_at": row.get("created_at"),
+        "terminal_at": row.get("terminal_at"),
     }
 
 
@@ -667,6 +702,10 @@ class UploadIntentIn(BaseModel):
     size_bytes: int = Field(ge=0)
     folder_id: Uuid4 | None = None
     content_encoding: str | None = Field(default=None, max_length=16)
+    # Optional client-generated UUID identifying one upload batch/session
+    # (#246). It is carried to the terminal transfer journal only; no storage
+    # key, URL or credential is derived from it. Omitted keeps the old shape.
+    transfer_session_id: Uuid4 | None = None
 
 
 class ShareIn(BaseModel):
@@ -1553,6 +1592,12 @@ def upload_intent(
         )
         if existing is not None:
             existing = _as_dict(existing)
+            # A replay may be the first request to carry the batch id (older
+            # client/row): attach it now so the terminal journal can still
+            # correlate the attempt. Never overwrite an existing session id.
+            if body.transfer_session_id and not existing.get("transfer_session_id"):
+                repo.set_transfer_session(existing["id"], body.transfer_session_id)
+                existing["transfer_session_id"] = body.transfer_session_id
             expires_at = existing.get("intent_expires_at")
             now_ts = int(time.time())
             grace_deadline = int(expires_at) + settings.intent_grace_s if expires_at else now_ts
@@ -1564,7 +1609,11 @@ def upload_intent(
                     s3ops.delete_object(Bucket=existing["bucket"], Key=existing["object_key"])
                 except Exception:
                     pass
-                repo.set_status(existing["id"], EXPIRED)
+                repo.set_status(
+                    existing["id"], EXPIRED,
+                    failure_kind="expired",
+                    error_message="upload intent expired before replay",
+                )
                 # fall through: create a new intent below
             elif not expires_at or now_ts <= grace_deadline:
                 if existing.get("multipart_upload_id"):
@@ -1591,6 +1640,7 @@ def upload_intent(
                     "content_type": existing["content_type"],
                     "size_bytes": expected, "expires_in": settings.intent_ttl,
                     "expires_at": expires_at, "idempotent_replay": True,
+                    "transfer_session_id": existing.get("transfer_session_id"),
                 }
             # Retired above (or past grace): fall through to mint a fresh intent.
 
@@ -1608,6 +1658,7 @@ def upload_intent(
                 "content_type": done["content_type"],
                 "size_bytes": done.get("expected_size_bytes"),
                 "expires_in": 0, "expires_at": None, "idempotent_replay": True,
+                "transfer_session_id": done.get("transfer_session_id"),
             }
 
     # Only live intents count: an expired row (whose bytes the sweep has not
@@ -1659,13 +1710,18 @@ def upload_intent(
         intent_expires_at=intent_expires_at, folder_id=body.folder_id,
         expected_size_bytes=body.size_bytes, idempotency_key=idem_key,
         content_encoding=content_encoding,
+        transfer_session_id=body.transfer_session_id,
     )
     if multipart:
         part_bytes, _ = plan_parts(body.size_bytes, settings.multipart_part_bytes)
         try:
             upload_id = create_multipart(s3ops, bucket, key, content_type)
         except Exception:
-            repo.set_status(oid, "failed")
+            repo.set_status(
+                oid, "failed",
+                failure_kind="storage_unavailable",
+                error_message="storage unavailable while starting multipart upload",
+            )
             audit_event("upload-intent", principal["id"], "storage_failure", {
                 "object_id": oid, "bucket": bucket,
             })
@@ -1691,6 +1747,7 @@ def upload_intent(
         "content_type": content_type, "size_bytes": body.size_bytes,
         "expires_in": settings.intent_ttl, "expires_at": intent_expires_at,
         "idempotent_replay": False,
+        "transfer_session_id": body.transfer_session_id,
     }
 
 
@@ -1745,6 +1802,7 @@ def _multipart_intent_response(row: dict, *, replay: bool) -> dict:
         },
         "expires_in": max(0, int(row["intent_expires_at"]) - int(time.time())),
         "expires_at": row["intent_expires_at"], "idempotent_replay": replay,
+        "transfer_session_id": row.get("transfer_session_id"),
     }
 
 
@@ -1966,7 +2024,11 @@ def commit_object(
 
     expires_at = row.get("intent_expires_at")
     if expires_at and int(time.time()) > int(expires_at) + settings.intent_grace_s:
-        repo.set_status(oid, "expired")
+        repo.set_status(
+            oid, "expired",
+            failure_kind="expired",
+            error_message="upload intent expired before commit",
+        )
         audit_event("commit", principal["id"], "expired", {"object_id": oid})
         raise HTTPException(status_code=410, detail="upload intent expired")
 
@@ -1987,12 +2049,20 @@ def commit_object(
     if size < 0:
         raise HTTPException(status_code=422, detail="upload size unknown")
     if size > max_bytes:
-        repo.set_status(oid, "failed")
+        repo.set_status(
+            oid, "failed",
+            failure_kind="size_limit",
+            error_message="object exceeds maximum allowed size",
+        )
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
     if settings.require_sse and head.get("ServerSideEncryption") != SSE_ALGORITHM:
         # Never mark plaintext-at-rest bytes available; drop them best-effort
         # (the reconciliation sweep retries a failed delete).
-        repo.set_status(oid, "failed")
+        repo.set_status(
+            oid, "failed",
+            failure_kind="not_encrypted",
+            error_message="object not encrypted at rest",
+        )
         try:
             s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
         except Exception:
@@ -2007,7 +2077,11 @@ def commit_object(
     except (TypeError, ValueError):
         expected_declared = None
     if expected_declared is not None and expected_declared >= 0 and size != expected_declared:
-        repo.set_status(oid, "failed")
+        repo.set_status(
+            oid, "failed",
+            failure_kind="size_mismatch",
+            error_message="uploaded size does not match declared size",
+        )
         try:
             s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
         except Exception:
@@ -2030,7 +2104,11 @@ def commit_object(
         deadline = time.monotonic() + settings.commit_deadline_s if settings.commit_deadline_s is not None else None
         total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes, deadline=deadline)
     except ObjectTooLarge:
-        repo.set_status(oid, "failed")
+        repo.set_status(
+            oid, "failed",
+            failure_kind="size_limit",
+            error_message="object exceeds maximum allowed size",
+        )
         raise HTTPException(status_code=413, detail="object exceeds maximum allowed size")
     except CommitDeadlineExceeded:
         return _defer_slow_commit(oid, size, head, principal)
@@ -2040,7 +2118,11 @@ def commit_object(
 
     if total != size or (expected_declared is not None and expected_declared >= 0 and total != expected_declared):
         # Truncated or mismatched upload is never marked available (#37).
-        repo.set_status(oid, "failed")
+        repo.set_status(
+            oid, "failed",
+            failure_kind="size_mismatch",
+            error_message="uploaded size does not match storage",
+        )
         try:
             s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
         except Exception:
@@ -2054,7 +2136,11 @@ def commit_object(
         except Exception:
             raise HTTPException(status_code=422, detail="upload not readable at storage")
         if verdict == AV_INFECTED:
-            repo.set_status(oid, "failed")
+            repo.set_status(
+                oid, "failed",
+                failure_kind="av_infected",
+                error_message="object failed av scan",
+            )
             try:
                 s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
             except Exception:
@@ -2216,6 +2302,56 @@ def get_object(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
     if row is None:
         raise HTTPException(status_code=404, detail="object not found")
     return _object_public(row, repo.get_object_tags(oid))
+
+
+@app.get("/api/v1/transfers")
+def list_transfers(
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    status: TransferStatus | None = None,
+    session_id: str | None = Query(default=None, max_length=64),
+    created_after: int | None = Query(default=None, ge=0),
+    created_before: int | None = Query(default=None, ge=0),
+    from_ts: int | None = Query(default=None, ge=0),
+    to_ts: int | None = Query(default=None, ge=0),
+    date_from: int | None = Query(default=None, ge=0, alias="from"),
+    date_to: int | None = Query(default=None, ge=0, alias="to"),
+):
+    """Read-only terminal transfer history for the caller's scope (#246).
+
+    Same isolation as the object catalogue: a plain user sees only their own
+    transfers, while an operator/administrator sees the whole space. A service
+    identity sees its space (machine-created objects have no human owner).
+    Dates are unix epoch seconds, matching ``GET /objects``; ``from``/``to``,
+    ``from_ts``/``to_ts`` and ``created_after``/``created_before`` are accepted
+    aliases so a client can use whichever vocabulary it already has.
+    """
+    session = (
+        _canonical_id(session_id, "transfer session id")
+        if session_id else None
+    )
+    lower_bounds = [v for v in (created_after, from_ts, date_from) if v is not None]
+    upper_bounds = [v for v in (created_before, to_ts, date_to) if v is not None]
+    rows = repo.list_transfer_records(
+        **_object_scope(principal), status=status,
+        transfer_session_id=session,
+        created_after=max(lower_bounds) if lower_bounds else None,
+        created_before=min(upper_bounds) if upper_bounds else None,
+        limit=limit, offset=offset,
+    )
+    return {"items": [_transfer_public(row) for row in rows]}
+
+
+@app.get("/api/v1/transfers/{tid}")
+def get_transfer(tid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    """One terminal transfer record, scoped exactly like a catalogue read."""
+    tid = _canonical_id(tid, "transfer id")
+    row = repo.get_transfer_record(tid, **_object_scope(principal))
+    if row is None:
+        # 404 (not 403) so a caller cannot probe another owner's/space's ids.
+        raise HTTPException(status_code=404, detail="transfer not found")
+    return _transfer_public(row)
 
 
 @app.get("/api/v1/objects/{oid}/analytics")
@@ -3459,6 +3595,11 @@ def reconcile(limit: int = 500,
     # Finish purges a crashed process left half-done (two-phase purge).
     from .lifecycle import resume_purges
     out.update(resume_purges(repo, s3ops, limit=limit))
+    # Retention window for the append-only transfer journal (#246).
+    out.update(purge_transfer_history(
+        repo, retention_days=settings.transfer_history_retention_days,
+        limit=limit,
+    ))
     audit_event("admin.reconcile", principal["id"], "success", out)
     return out
 

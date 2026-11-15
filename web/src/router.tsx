@@ -18,7 +18,7 @@ import { HelpPage } from "./pages/HelpPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
 import { lazy, Suspense } from "react";
 import { Loading } from "./components/Loading";
-import { RouteError } from "./components/RouteError";
+import { RouteError, RouteNotFound } from "./components/RouteError";
 import { TransfersProvider } from "./lib/transferContext";
 
 const AdminPage = lazy(() => import("./pages/AdminPage").then((m) => ({ default: m.AdminPage })));
@@ -188,7 +188,8 @@ const basepath = import.meta.env.VITE_SUBPATH
 export const router = createRouter({
   routeTree,
   basepath,
-  defaultErrorComponent: ({ error }) => <RouteError error={error} />,
+  defaultErrorComponent: ({ error, reset }) => <RouteError error={error} reset={reset} />,
+  defaultNotFoundComponent: () => <RouteNotFound />,
 });
 
 declare module "@tanstack/react-router" {

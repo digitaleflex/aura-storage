@@ -69,6 +69,11 @@
   --line-2: #d3d8df;
   --field-line: #7b8594;
 
+  /* Alias de surface utilisés par certains composants (ex. fil d’Ariane). */
+  --surface-raised: var(--steel-raised);
+  --surface-light: var(--steel-1);
+  --border-light: var(--line);
+
   /* Accent : la seule couleur d'action du produit. TEINTE dorée demandée
      (#A96B13) assombrie à #9d660d : la proposition brute ne passait pas
      4.5:1 avec le blanc de texte des boutons primaires (4.38:1). */
@@ -218,7 +223,7 @@ h1 {
 }
 
 h2 {
-  font-size: 15px;
+  font-size: var(--fs-lg);
   font-weight: 600;
   letter-spacing: 0.01em;
   line-height: 1.3;
@@ -226,14 +231,14 @@ h2 {
 }
 
 h3 {
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 600;
   margin: 0 0 6px;
 }
 
 /* Section titles are plain sentence-case headings. */
 .section-head h2 {
-  font-size: 16px;
+  font-size: var(--fs-lg);
   font-weight: 600;
   color: var(--ink);
 }
@@ -550,9 +555,6 @@ h3 {
 .nav a svg {
   flex: none;
 }
-
-.sidebar a:focus-visible,
-.sidebar button:focus-visible {
   outline-color: var(--signal-bright);
   box-shadow: none;
 }
@@ -869,7 +871,7 @@ select:focus-visible {
 
 .page-sub {
   margin: 4px 0 0;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .control-bar {
@@ -3728,6 +3730,13 @@ body.density-compact .overview-tile {
   padding: 24px;
   background: var(--steel-0);
 }
+/* In-shell variant: rendered inside .content so the sidebar and top bar stay
+   visible and usable instead of covering the whole viewport. */
+.route-error-inline {
+  min-height: auto;
+  padding: 24px 0;
+  background: transparent;
+}
 .route-error-card {
   width: min(520px, 100%);
   padding: 32px;
@@ -4332,4 +4341,134 @@ html {
   color: var(--ink-2);
   font-size: 13px;
   text-align: center;
+}
+
+/* -- Files: dossiers en grille + sélection en bloc ------------------------ */
+/* La carte dossier reprend la géométrie d'une carte fichier : seule la
+   surface média change (icône dossier centrée sur un fond signal doux). */
+.object-card-folder .folder-card-media {
+  display: grid;
+  place-items: center;
+  background: var(--signal-soft);
+  color: var(--signal);
+}
+
+.object-card-folder .folder-card-media svg {
+  width: 44px;
+  height: 44px;
+}
+
+/* Le menu d'actions ne doit jamais recouvrir la case de sélection. */
+.object-card-menu {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  line-height: 0;
+}
+
+.grid-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.grid-select-bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: var(--bw) solid var(--line);
+  border-radius: var(--radius);
+  background: var(--steel-1);
+}
+
+.selection-bar-count {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.selection-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.selection-summary {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--signal);
+  border-radius: var(--radius-small);
+  background: var(--steel-1);
+  font-size: 13.5px;
+}
+
+.selection-summary-list {
+  margin: 6px 0 0 18px;
+  padding: 0;
+}
+
+.selection-warning {
+  margin: 6px 0 0;
+  color: var(--warn);
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .selection-bar {
+    align-items: stretch;
+  }
+
+  .selection-bar-actions {
+    width: 100%;
+  }
+
+  .selection-bar-actions .btn {
+    flex: 1 1 auto;
+  }
+}
+
+/* Shared empty state pattern */
+.empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 28px 12px;
+  text-align: center;
+  color: var(--ink-2);
+}
+.empty-state h2 {
+  font-size: var(--fs-lg);
+  color: var(--ink);
+}
+.empty-state p {
+  margin: 0;
+  max-width: 52ch;
+}
+.empty-state-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+.empty-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
 }

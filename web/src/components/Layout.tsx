@@ -9,6 +9,8 @@ import { useTransfers } from "../lib/transferContext";
 import { readStorage, writeStorage } from "../lib/safeStorage";
 import { hasSeenOnboarding } from "../lib/onboarding";
 import { SearchBar } from "./SearchBar";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { PageError } from "./PageError";
 
 /** Local copy of formatBytes to avoid circular import with ObjectsPage. */
 function formatBytes(size: number): string {
@@ -252,7 +254,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             to="/"
             activeOptions={{ exact: true }}
             className={isFilesPage ? "nav-link nav-link-active" : "nav-link"}
-            onClick={() => toggleSidebar(false)}
           >
             <svg
               aria-hidden="true"
@@ -276,7 +277,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             className={
               isTransfersPage ? "nav-link nav-link-active" : "nav-link"
             }
-            onClick={() => toggleSidebar(false)}
           >
             <svg
               aria-hidden="true"
@@ -308,7 +308,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 ? "nav-link nav-link-active"
                 : "nav-link"
             }
-            onClick={() => toggleSidebar(false)}
           >
             <svg
               aria-hidden="true"
@@ -335,7 +334,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 ? "nav-link nav-link-active"
                 : "nav-link"
             }
-            onClick={() => toggleSidebar(false)}
           >
             <svg
               aria-hidden="true"
@@ -363,7 +361,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 ? "nav-link nav-link-active"
                 : "nav-link"
             }
-            onClick={() => toggleSidebar(false)}
           >
             <svg
               aria-hidden="true"
@@ -385,7 +382,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             to="/diagnostic"
             activeOptions={{ exact: true }}
             className={isDiagPage ? "nav-link nav-link-active" : "nav-link"}
-            onClick={() => toggleSidebar(false)}
           >
             <svg
               aria-hidden="true"
@@ -409,7 +405,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
               className={
                 location.pathname === "/admin" ? "nav-link nav-link-active" : "nav-link"
               }
-              onClick={() => toggleSidebar(false)}
             >
               <svg
                 aria-hidden="true"
@@ -434,7 +429,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 ? "nav-link nav-link-active"
                 : "nav-link"
             }
-            onClick={() => toggleSidebar(false)}
           >
             <svg
               aria-hidden="true"
@@ -461,7 +455,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 ? "nav-link nav-link-active"
                 : "nav-link"
             }
-            onClick={() => toggleSidebar(false)}
           >
             <svg
               aria-hidden="true"
@@ -863,7 +856,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
         <main id="main-content" className="content" tabIndex={-1}>
-          {children}
+          {/* A crash stays inside the page area: the sidebar and top bar keep
+              working, and any navigation clears the error (resetKey). */}
+          <ErrorBoundary
+            resetKey={location.href}
+            fallback={(error, reset) => <PageError error={error} onReset={reset} />}
+          >
+            {children}
+          </ErrorBoundary>
         </main>
       </div>
     </div>

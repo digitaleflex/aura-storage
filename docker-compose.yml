@@ -214,11 +214,11 @@ services:
       AURA_API_ADMIN_PASSWORD: ${AURA_API_ADMIN_PASSWORD:?Set AURA_API_ADMIN_PASSWORD in .env}
       AURA_S3_ENDPOINT: https://${S3_DOMAIN:?Set S3_DOMAIN in .env}
       AURA_S3_INTERNAL_ENDPOINT: http://seaweed-filer:8333
-      # Dedicated least-privilege identity (Read/Write/List, no Admin). Falls
-      # back to the legacy bootstrap key until the operator migrates: create
-      # the `aura-api` credentials in s3.json and set S3_API_* in .env.
-      AURA_S3_ACCESS_KEY: ${S3_API_ACCESS_KEY:-${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}}
-      AURA_S3_SECRET_KEY: ${S3_API_SECRET_KEY:-${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}}
+      # Dedicated least-privilege identity (Read/Write/List, no Admin). There is
+      # deliberately no fallback to the bootstrap Admin key: scripts/bootstrap.sh
+      # generates S3_API_* in .env and scripts/generate-config.sh requires them.
+      AURA_S3_ACCESS_KEY: ${S3_API_ACCESS_KEY:?Set S3_API_ACCESS_KEY in .env (see docs/SECURITY.md)}
+      AURA_S3_SECRET_KEY: ${S3_API_SECRET_KEY:?Set S3_API_SECRET_KEY in .env (see docs/SECURITY.md)}
       AURA_S3_REGION: ${AURA_S3_REGION:-us-east-1}
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
@@ -385,7 +385,7 @@ services:
     container_name: ${AURA_INSTANCE_ID:-aura-001}-app
     restart: unless-stopped
     volumes:
-      - ./web/dist:/usr/share/nginx/html:ro
+      - ${AURA_WEB_DIST_DIR:-./web/dist}:/usr/share/nginx/html:ro
       # Rendered by the nginx image's envsubst step into conf.d/default.conf, so
       # the CSP can name the S3 host that receives direct presigned uploads.
       - ./app/nginx.conf:/etc/nginx/templates/default.conf.template:ro
@@ -490,7 +490,7 @@ services:
     command: ["/bin/sh", "/opt/aura-landing/entrypoint.sh"]
     volumes:
       - ./landing:/opt/aura-landing:ro
-      - ./web/dist/fonts:/opt/aura-landing-fonts:ro
+      - ${AURA_WEB_DIST_DIR:-./web/dist}/fonts:/opt/aura-landing-fonts:ro
     networks:
       - edge
     healthcheck:

@@ -20,6 +20,15 @@ async function login(page: import("@playwright/test").Page) {
   await expect(page.getByRole("heading", { level: 1, name: "Mes fichiers" })).toBeVisible();
 }
 
+async function createFolder(page: import("@playwright/test").Page, name: string) {
+  await page.getByRole("button", { name: "Nouveau dossier" }).click();
+  await page.getByRole("dialog").getByLabel("Nom").fill(name);
+  await page.getByRole("dialog").getByRole("button", { name: "Créer" }).click();
+  await expect(
+    page.getByRole("button", { name: `Ouvrir le dossier ${name}` }),
+  ).toBeVisible();
+}
+
 test("create, rename, open and delete a folder", async ({ page }) => {
   const name = `Dossier E2E ${Date.now()}`;
   const renamed = `${name} renomme`;
@@ -67,4 +76,59 @@ test("create, rename, open and delete a folder", async ({ page }) => {
     .getByRole("button", { name: "Supprimer" })
     .click();
   await expect(open(renamed)).toHaveCount(0);
+});
+
+test("selects several folders and deletes them with their content flow", async ({
+  page,
+}) => {
+  const stamp = Date.now();
+  const names = [`Bulk A ${stamp}`, `Bulk B ${stamp}`];
+
+  await login(page);
+  for (const name of names) await createFolder(page, name);
+
+  // The unified selection bar counts folders, not only files.
+  for (const name of names) {
+    await page.getByLabel(`Sélectionner le dossier ${name}`).check();
+  }
+  await expect(page.getByText("2 dossiers sélectionnés")).toBeVisible();
+
+  await page
+    .getByRole("button", { name: /Supprimer la sélection/ })
+    .click();
+
+  // Folders route through the recursive confirmation, never the single-file
+  // dialog: the typed word is SUPPRIMER for a multi-folder selection.
+  const dialog = page.getByRole("dialog");
+  await expect(
+    dialog.getByRole("heading", { name: "Supprimer la sélection et son contenu" }),
+  ).toBeVisible();
+  await dialog.getByLabel("Confirmation par recopie du nom").fill("SUPPRIMER");
+  await dialog
+    .getByRole("button", { name: "Supprimer la sélection et son contenu" })
+    .click();
+
+  for (const name of names) {
+    await expect(
+      page.getByRole("button", { name: `Ouvrir le dossier ${name}` }),
+    ).toHaveCount(0);
+  }
+});
+
+test("grid view shows folders with a selection checkbox and their size", async ({
+  page,
+}) => {
+  const name = `Grille E2E ${Date.now()}`;
+  await login(page);
+  await createFolder(page, name);
+
+  await page.getByRole("button", { name: "Grille", exact: true }).click();
+
+  const card = page.getByRole("listitem").filter({ hasText: name });
+  await expect(
+    card.getByRole("checkbox", { name: `Sélectionner le dossier ${name}` }),
+  ).toBeVisible();
+  await expect(card.getByText(/^Dossier · /)).toBeVisible();
+  // 0 o comes from the real recursive folder size, never a placeholder.
+  await expect(card.getByText("Dossier · 0 o")).toBeVisible();
 });

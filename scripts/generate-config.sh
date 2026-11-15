@@ -14,9 +14,31 @@ set +a
 
 : "${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}"
 : "${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}"
+: "${S3_API_ACCESS_KEY:?Set S3_API_ACCESS_KEY in .env (run scripts/bootstrap.sh to generate dedicated aura-api credentials)}"
+: "${S3_API_SECRET_KEY:?Set S3_API_SECRET_KEY in .env (run scripts/bootstrap.sh to generate dedicated aura-api credentials)}"
 
 if [[ "$S3_ACCESS_KEY" == *REPLACE* || "$S3_SECRET_KEY" == *REPLACE* ]]; then
   echo "ERROR: Replace S3 credential placeholders in .env before generating config." >&2
+  exit 1
+fi
+
+if [[ "$S3_API_ACCESS_KEY" == *REPLACE* || "$S3_API_SECRET_KEY" == *REPLACE* ]]; then
+  echo "ERROR: Replace S3_API_* placeholders in .env (run scripts/bootstrap.sh to generate dedicated aura-api credentials)." >&2
+  exit 1
+fi
+
+if [[ "$S3_API_ACCESS_KEY" =~ [[:space:]] || "$S3_API_SECRET_KEY" =~ [[:space:]] ]]; then
+  echo "ERROR: S3_API_* must not contain whitespace: bash and Python would read different values, causing runtime 403s." >&2
+  exit 1
+fi
+
+if [[ ${#S3_API_ACCESS_KEY} -lt 16 || ${#S3_API_SECRET_KEY} -lt 32 ]]; then
+  echo "ERROR: S3_API_ACCESS_KEY must be at least 16 chars and S3_API_SECRET_KEY at least 32 chars (run scripts/bootstrap.sh to generate dedicated credentials)." >&2
+  exit 1
+fi
+
+if [[ "$S3_API_ACCESS_KEY" == "$S3_ACCESS_KEY" || "$S3_API_SECRET_KEY" == "$S3_SECRET_KEY" ]]; then
+  echo "ERROR: S3_API_* must differ from the bootstrap S3_* keys (run scripts/bootstrap.sh to generate dedicated credentials)." >&2
   exit 1
 fi
 
@@ -31,40 +53,52 @@ data = json.loads(source.read_text(encoding="utf-8"))
 access_key = os.environ["S3_ACCESS_KEY"]
 secret_key = os.environ["S3_SECRET_KEY"]
 
-api_access_key = os.environ.get("S3_API_ACCESS_KEY", "").strip()
-api_secret_key = os.environ.get("S3_API_SECRET_KEY", "").strip()
+api_access_key = os.environ["S3_API_ACCESS_KEY"].strip()
+api_secret_key = os.environ["S3_API_SECRET_KEY"].strip()
+if api_access_key == access_key or api_secret_key == secret_key:
+    raise SystemExit("ERROR: S3_API_* must differ from the bootstrap S3_* keys.")
 
 for identity in data.get("identities", []):
     is_api = identity.get("name") == "aura-api"
     for credential in identity.get("credentials", []):
         if is_api:
-            # The API must not run as the bootstrap Admin identity. Stay on the
-            # legacy key until the operator provides dedicated credentials.
-            if api_access_key and api_secret_key:
-                if api_access_key == access_key or api_secret_key == secret_key:
-                    raise SystemExit(
-                        "ERROR: S3_API_* must differ from the bootstrap S3_* keys."
-                    )
-                credential["accessKey"] = api_access_key
-                credential["secretKey"] = api_secret_key
-            else:
-                credential["accessKey"] = ""
-                credential["secretKey"] = ""
+            # The API always runs with its dedicated least-privilege identity.
+            # There is no fallback to the bootstrap Admin key.
+            credential["accessKey"] = api_access_key
+            credential["secretKey"] = api_secret_key
         else:
             if credential.get("accessKey", "").startswith("REPLACE_"):
                 credential["accessKey"] = access_key
             if credential.get("secretKey", "").startswith("REPLACE_"):
                 credential["secretKey"] = secret_key
 
-# Drop an unconfigured dedicated identity entirely: a blank credential would
-# either fail SeaweedFS startup or create a keyless identity.
-data["identities"] = [
-    identity for identity in data.get("identities", [])
-    if not (
-        identity.get("name") == "aura-api"
-        and not api_access_key
-    )
+# The dedicated identity is mandatory: never emit a config without it, and
+# never let it regain administrative rights.
+api_identities = [
+    identity
+    for identity in data.get("identities", [])
+    if identity.get("name") == "aura-api"
 ]
+if not api_identities:
+    raise SystemExit(
+        "ERROR: s3.json.example must define the dedicated aura-api identity."
+    )
+
+allowed_actions = {"Read", "Write", "List"}
+for identity in api_identities:
+    actions = identity.get("actions", [])
+    if not isinstance(actions, list):
+        raise SystemExit("ERROR: aura-api actions must be a list.")
+    if "Admin" in actions:
+        raise SystemExit(
+            "ERROR: aura-api must not have the Admin action; use Read/Write/List only."
+        )
+    unexpected = [action for action in actions if action not in allowed_actions]
+    if unexpected:
+        raise SystemExit(
+            "ERROR: aura-api actions must be a subset of Read/Write/List; "
+            f"unexpected: {unexpected}"
+        )
 
 if not data.get("identities"):
     raise SystemExit("ERROR: s3.json.example contains no identities.")

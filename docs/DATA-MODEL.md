@@ -140,6 +140,31 @@ so the format is enforced in code, not in DDL.
   pending intent (see `docs/TRANSFER-ENGINE.md`); `failed` and `expired` are terminal
   too and are never downloadable.
 
+### TransferRecord (implemented, #246)
+- `id` (canonical UUID v4), `transfer_session_id` (nullable, client-generated
+  UUID v4 supplied at upload intent), `object_id`, `space_id`, `owner_id`
+  (nullable for service-created objects), `actor_id`, `actor_kind`,
+  `display_name`, `content_type`, `expected_size_bytes`, `final_size_bytes`
+  (BIGINT), `status`, `failure_kind`, `error_message`, `checksum_sha256`,
+  `created_at` (intent start, epoch seconds) and `terminal_at` (epoch seconds).
+- `status` is terminal-only: `available`, `failed`, `aborted` or `expired`.
+  Catalogue/retention states such as `deleted`, `purging` and `suspect` are not
+  transfer outcomes and are never journaled.
+- Append-only journal, **not** the source of truth: `objects` stays
+  authoritative, so rows can be purged after the retention window. One immutable
+  row per object is enforced by a partial unique index on `object_id`; a
+  replayed terminal event is a no-op.
+- **No foreign key on `object_id` on purpose:** the journal must outlive an
+  object purge and remain readable as history. It stores no bucket, object key,
+  storage path, presigned URL, token, credential or blob. `error_message` is
+  bounded (300 characters) and URL-redacted before insertion.
+- Reads are scoped like the object catalogue: a plain user sees only their own
+  transfers, an operator/administrator sees the whole space; a detail outside
+  the caller's scope answers 404.
+- Retention: `AURA_TRANSFER_HISTORY_RETENTION_DAYS` (default 90, minimum 1).
+  Rows whose `terminal_at` is older than the cutoff are purged by the
+  reconciliation sweep and by the admin reconcile route, in bounded batches.
+
 ### Folder
 - `id`, `owner_id`, `parent_id`, `name`, `created_at`.
 
@@ -191,6 +216,12 @@ S3 upload and PostgreSQL metadata writes are not one atomic transaction. Use a l
 3. Verify upload completion and object metadata/checksum.
 4. Mark the catalogue object available.
 5. Reconcile expired pending uploads and orphaned objects after a safe grace period.
+
+Each terminal upload transition (available, failed, aborted, expired) also
+appends to `transfer_records`. The journal write is best-effort and idempotent:
+it never blocks or undoes the catalogue transition, and a replayed terminal
+event does not create a second row. Because `objects` is the source of truth,
+retention can purge old journal rows without affecting the catalogue.
 
 Deletion should first mark an object as deleting/deleted and retain a recoverable window. A separate purge job can permanently delete bytes after policy checks. Log all destructive operations.
 

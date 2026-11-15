@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS objects (
   status TEXT NOT NULL DEFAULT 'pending',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  -- Optional client-generated upload session id (#246). Carried from the upload
+  -- intent to the terminal transfer journal so a batch can be correlated
+  -- without storing any storage key, URL or credential.
+  transfer_session_id TEXT,
   -- Publication (admin Publish panel): a stable slug the operator can keep
   -- across content replacements, and its publication timestamp.
   public_slug TEXT,
@@ -310,3 +314,41 @@ CREATE TABLE IF NOT EXISTS import_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_import_jobs_space ON import_jobs(space_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_import_jobs_status ON import_jobs(status, created_at);
+
+-- Append-only transfer history journal (#246). One terminal row per upload
+-- attempt, written only after the object reached a terminal state. It is a
+-- journal, not a source of truth: `objects` remains authoritative, and a row
+-- here may outlive its object (no foreign key) so retention/audit history is
+-- preserved after a purge. Deliberately stores no bucket, object key, path,
+-- presigned URL, token or blob: only metadata, final byte count and checksum.
+CREATE TABLE IF NOT EXISTS transfer_records (
+  id TEXT PRIMARY KEY,
+  transfer_session_id TEXT,
+  object_id TEXT,
+  space_id TEXT,
+  owner_id TEXT,
+  actor_id TEXT,
+  actor_kind TEXT,
+  display_name TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT '',
+  expected_size_bytes BIGINT,
+  final_size_bytes BIGINT,
+  status TEXT NOT NULL,                -- available | failed | aborted | expired
+  failure_kind TEXT,
+  error_message TEXT,
+  checksum_sha256 TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,         -- when the transfer started (intent)
+  terminal_at INTEGER NOT NULL         -- when the terminal state was reached
+);
+-- One journal row per object: a replayed terminal event is a no-op, not a
+-- duplicate. Read paths are owner/space scoped and newest-first.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transfer_records_object
+  ON transfer_records(object_id) WHERE object_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_transfer_records_owner
+  ON transfer_records(owner_id, terminal_at);
+CREATE INDEX IF NOT EXISTS idx_transfer_records_space
+  ON transfer_records(space_id, terminal_at);
+CREATE INDEX IF NOT EXISTS idx_transfer_records_session
+  ON transfer_records(transfer_session_id);
+CREATE INDEX IF NOT EXISTS idx_transfer_records_terminal
+  ON transfer_records(terminal_at);

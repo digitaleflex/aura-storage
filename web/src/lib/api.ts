@@ -113,6 +113,115 @@ export interface ObjectQuery {
   offset?: number;
 }
 
+/**
+ * Terminal state of a persisted transfer (issue #246). A history record only
+ * exists once the transfer cannot change any more; the live queue is the only
+ * place a transfer in flight is visible.
+ */
+export type TransferHistoryStatus = "available" | "failed" | "aborted" | "expired";
+
+/** One read-only transfer history row. No presigned URL or storage key. */
+export interface TransferHistoryRecord {
+  id: string;
+  /** Terminal state; the history never contains a live transfer. */
+  status: TransferHistoryStatus;
+  /** Client UUID sent with the upload intents of one session. */
+  transfer_session_id?: string | null;
+  object_id?: string | null;
+  display_name: string;
+  content_type?: string | null;
+  expected_size_bytes?: number | null;
+  final_size_bytes?: number | null;
+  failure_kind?: string | null;
+  error_message?: string | null;
+  checksum_sha256?: string | null;
+  /** Epoch seconds, like every other catalogue timestamp. */
+  created_at: number;
+  /** Epoch seconds when the transfer reached its terminal state. */
+  terminal_at?: number | null;
+}
+
+/** Filters for `GET /api/v1/transfers` (read-only server-side history). */
+export interface TransferHistoryQuery {
+  status?: TransferHistoryStatus;
+  /**
+   * Inclusive bounds. Sent as `from`/`to`; the UI produces ISO dates
+   * (`YYYY-MM-DD`) because the controls are day pickers.
+   */
+  from?: string;
+  to?: string;
+  /** Restrict to one upload session (the client-generated UUID). */
+  sessionId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Normalized page of history. The server may return a bare array or an
+ * envelope (`items`/`transfers`/`results`, optional `total`/`next_offset`/
+ * `has_more`); `api.listTransferHistory` accepts either and always returns this
+ * shape so pagination stays explicit in the UI.
+ */
+export interface TransferHistoryPage {
+  items: TransferHistoryRecord[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  next_offset?: number | null;
+  has_more?: boolean;
+}
+
+function numberOf(
+  source: Record<string, unknown>,
+  ...names: string[]
+): number | undefined {
+  for (const name of names) {
+    const value = source[name];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function normalizeTransferHistoryPage(raw: unknown): TransferHistoryPage {
+  if (Array.isArray(raw)) {
+    return { items: raw as TransferHistoryRecord[] };
+  }
+  if (!raw || typeof raw !== "object") return { items: [] };
+  const record = raw as Record<string, unknown>;
+  const pagination = (
+    record.pagination && typeof record.pagination === "object"
+      ? record.pagination
+      : record.page && typeof record.page === "object"
+        ? record.page
+        : {}
+  ) as Record<string, unknown>;
+  const items = [record.items, record.transfers, record.results, record.records]
+    .find((value) => Array.isArray(value)) as TransferHistoryRecord[] | undefined;
+  const nextRaw = record.next_offset ?? record.next ?? pagination.next_offset;
+  const total =
+    numberOf(record, "total", "count") ?? numberOf(pagination, "total", "count");
+  const limit =
+    numberOf(record, "limit", "page_size") ??
+    numberOf(pagination, "limit", "page_size");
+  const offset = numberOf(record, "offset") ?? numberOf(pagination, "offset");
+  const hasMore =
+    typeof record.has_more === "boolean"
+      ? record.has_more
+      : typeof pagination.has_more === "boolean"
+        ? pagination.has_more
+        : undefined;
+  return {
+    items: items ?? [],
+    ...(total !== undefined ? { total } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(offset !== undefined ? { offset } : {}),
+    ...(typeof nextRaw === "number" || nextRaw === null
+      ? { next_offset: nextRaw }
+      : {}),
+    ...(hasMore !== undefined ? { has_more: hasMore } : {}),
+  };
+}
+
 /** A logical folder owned by the signed-in human user (#61). */
 export interface FolderItem {
   id: string;
@@ -368,6 +477,11 @@ export interface UploadIntentRequest {
   /** Exact object size in bytes; the API signs it into the presigned URL. */
   size_bytes: number;
   folder_id?: string | null;
+  /**
+   * Optional client UUID grouping every intent of one import session (#246).
+   * The server persists it on the transfer history row; it is not a secret.
+   */
+  transfer_session_id?: string;
 }
 
 export interface UploadIntentResponse {
@@ -846,6 +960,52 @@ export const api = {
     const query2 = params.toString();
     return request<ObjectsListResponse>(
       `/api/v1/objects${query2 ? `?${query2}` : ""}`,
+    );
+  },
+
+  /**
+   * Read-only transfer history (#246). The endpoint may not be deployed yet;
+   * callers must treat a rejection as "history unavailable", never as an empty
+   * history. The response envelope is normalized by `normalizeTransferHistoryPage`.
+   */
+  listTransferHistory(
+    query: TransferHistoryQuery = {},
+    options?: { signal?: AbortSignal },
+  ): Promise<TransferHistoryPage> {
+    const params = new URLSearchParams();
+    if (query.status) params.set("status", query.status);
+    // The backend expects unix epoch seconds for `from`/`to` (inclusive bounds
+    // on terminal time). The UI date pickers produce `YYYY-MM-DD`; convert them
+    // so a filter never 422s against the integer query params.
+    const toEpochBound = (value: string, endOfDay: boolean): string => {
+      if (/^\d+$/.test(value)) return value;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const ms = endOfDay
+          ? Date.parse(`${value}T23:59:59.999Z`)
+          : Date.parse(`${value}T00:00:00.000Z`);
+        if (Number.isFinite(ms)) return String(Math.floor(ms / 1000));
+      }
+      return value;
+    };
+    if (query.from) params.set("from", toEpochBound(query.from, false));
+    if (query.to) params.set("to", toEpochBound(query.to, true));
+    if (query.sessionId) params.set("session_id", query.sessionId);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return request<unknown>(`/api/v1/transfers${suffix}`, {
+      signal: options?.signal,
+    }).then(normalizeTransferHistoryPage);
+  },
+
+  /** One terminal transfer history record, without its (never-sent) keys. */
+  getTransferHistory(
+    id: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<TransferHistoryRecord> {
+    return request<TransferHistoryRecord>(
+      `/api/v1/transfers/${encodeURIComponent(id)}`,
+      { signal: options?.signal },
     );
   },
 

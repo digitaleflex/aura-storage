@@ -55,8 +55,16 @@ export function DashboardPage() {
   if (loading) {
     return (
       <div className="dashboard-page" data-testid="dashboard-page">
-        <VaultMark size={32} />
-        <p>Chargement du tableau de bord&hellip;</p>
+        <div className="dashboard-shell">
+          <VaultMark size={32} />
+          <div className="dashboard-header">
+            <h1>Tableau de bord</h1>
+            <p className="dashboard-subtitle muted">Chargement de votre espace…</p>
+          </div>
+          <p className="muted" role="status" aria-live="polite">
+            Chargement du tableau de bord…
+          </p>
+        </div>
       </div>
     );
   }
@@ -88,14 +96,14 @@ export function DashboardPage() {
         </div>
 
         {error && (
-          <div className="dashboard-error" role="alert">
-            {error}
+          <div className="alert alert-error dashboard-error" role="alert">
+            <span>{error}</span>
             <button
               type="button"
               className="btn btn-small"
               onClick={() => window.location.reload()}
             >
-              Rafra&icirc;chir
+              Rafraîchir
             </button>
           </div>
         )}
@@ -203,7 +211,7 @@ export function DashboardPage() {
           {isAdmin && (
             <button
               type="button"
-              className="btn btn-small"
+              className="btn"
               onClick={() => navigate({ to: "/admin" })}
             >
               Administration
@@ -212,12 +220,13 @@ export function DashboardPage() {
           <button
             type="button"
             className="btn btn-small btn-ghost"
+            aria-label="Se déconnecter d'AURA Vault"
             onClick={() => {
               void logout();
               navigate({ to: "/login" });
             }}
           >
-            D&eacute;connexion
+            Déconnexion
           </button>
         </div>
       </div>

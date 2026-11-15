@@ -23,6 +23,11 @@ DELETED = "deleted"
 # downloadable; a row left in this state by a crash is finished by the sweep.
 PURGING = "purging"
 
+# Terminal states recorded in the append-only transfer journal (#246). They are
+# a strict subset of the object lifecycle: `deleted`, `purging` and `suspect`
+# are catalogue/retention states, not transfer outcomes.
+TRANSFER_RECORD_STATUSES = (AVAILABLE, FAILED, ABORTED, EXPIRED)
+
 # Conservative RFC 6838 media-type shape. Parameters (everything after ``;``)
 # are allowed but ignored for the allow-list comparison.
 _MEDIA_TYPE_RE = re.compile(
@@ -113,3 +118,60 @@ def valid_idempotency_key(value: str, *, max_length: int) -> bool:
     if not value or len(value) > max_length:
         return False
     return not any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+
+
+# A terminal error string is bounded and redacted before it may enter the
+# transfer journal: the journal is readable by space members and must never
+# become a hiding place for a URL, token or storage path.
+TRANSFER_ERROR_MAX = 300
+_REDACT_URL_RE = re.compile(
+    r"(?:[a-z][a-z0-9+.-]*://\S+|s3://\S+)", re.IGNORECASE
+)
+
+
+def sanitize_transfer_error(value) -> str | None:
+    """Collapse whitespace, redact URLs and bound a terminal error message."""
+    if value is None:
+        return None
+    cleaned = " ".join(str(value).split())
+    if not cleaned:
+        return None
+    cleaned = _REDACT_URL_RE.sub("[redacted]", cleaned)
+    return cleaned[:TRANSFER_ERROR_MAX]
+
+
+def build_transfer_where(
+    *,
+    ph: str = "?",
+    space_id: str,
+    owner_id=None,
+    status=None,
+    transfer_session_id=None,
+    created_after=None,
+    created_before=None,
+):
+    """Return ``(where_sql, params)`` for a transfer-history list query.
+
+    Shared by both repositories so the SQLite and PostgreSQL filters cannot
+    drift. Dates are unix epoch seconds and match the object catalogue style
+    (``created_after``/``created_before``), applied to ``terminal_at`` because a
+    journal row only exists once the transfer is terminal.
+    """
+    clauses = [f"space_id = {ph}"]
+    params: list = [space_id]
+    if owner_id is not None:
+        clauses.append(f"owner_id = {ph}")
+        params.append(owner_id)
+    if status is not None:
+        clauses.append(f"status = {ph}")
+        params.append(status)
+    if transfer_session_id is not None:
+        clauses.append(f"transfer_session_id = {ph}")
+        params.append(transfer_session_id)
+    if created_after is not None:
+        clauses.append(f"terminal_at >= {ph}")
+        params.append(created_after)
+    if created_before is not None:
+        clauses.append(f"terminal_at <= {ph}")
+        params.append(created_before)
+    return " AND ".join(clauses), params

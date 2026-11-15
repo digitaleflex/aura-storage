@@ -27,15 +27,31 @@ export interface CascadeFolder {
   path: string;
 }
 
+/** Une racine sélectionnée pour une suppression en cascade. */
+export interface CascadeRoot {
+  id: string;
+  name: string;
+}
+
 /** The real content snapshot of a folder (never guessed, always listed). */
 export interface CascadePlan {
+  /** Première racine, conservé pour la compatibilité mono-dossier. */
   rootId: string;
+  /** Nom de la racine unique, ou « N dossiers » pour une sélection multiple. */
   rootName: string;
+  /** Racines réellement scannées (dédoublonnées : pas de dossier imbriqué).
+   * Optionnel pour rester compatible avec d'anciens plans construits à la main. */
+  roots?: CascadeRoot[];
   objects: CascadeObject[];
   folders: CascadeFolder[];
   fileCount: number;
   /** Descendant folders only: the target is not its own "subfolder". */
   folderCount: number;
+  /** Objets vivants mais non supprimables (vérification en cours) : ils
+   * bloquent la suppression du dossier côté serveur. */
+  blockedCount?: number;
+  /** Fichiers de la sélection situés hors des dossiers visés (flux batch). */
+  extraFileCount?: number;
 }
 
 /** One delete step, ordered so a folder is emptied before it is removed. */
@@ -61,6 +77,8 @@ export type CascadePhase = "scanning" | "confirm" | "deleting" | "done";
 export interface CascadeState {
   rootId: string;
   rootName: string;
+  /** Racines visées par le flux (une seule pour le cas mono-dossier). */
+  roots: CascadeRoot[];
   phase: CascadePhase;
   plan: CascadePlan | null;
   ops: CascadeOp[];
@@ -85,9 +103,16 @@ export const SCAN_CONCURRENCY = 4;
 /** Wait before the 2nd and 3rd attempt of one folder listing (3 total). */
 const RETRY_DELAYS_MS = [250, 750] as const;
 
-/** Statuses the API accepts for `DELETE /objects/{id}` (server also releases
- * aborted/failed/expired leftovers on folder delete, so those are not ours). */
-const DELETABLE_STATUSES = new Set(["available", "pending", "verifying"]);
+/** Statuses the API accepts for `DELETE /objects/{id}` (api/main.py:2255).
+ * `verifying` is still a live object that blocks a folder delete, but the
+ * endpoint refuses it: those files are counted as blocked, never planned. */
+const DELETABLE_STATUSES = new Set(["available", "pending"]);
+
+/** L'API refuse tout autre statut ; un statut absent (ancienne API) est
+ * traité comme supprimable, comme avant. */
+export function isDeletableStatus(status: string | undefined): boolean {
+  return status === undefined || DELETABLE_STATUSES.has(status);
+}
 
 /**
  * A scan that could not be completed: carries the folder path so the dialog
@@ -189,8 +214,45 @@ async function fetchFolderObjectsResilient(
   }
 }
 
-/** Build the real content snapshot of `rootId`: descendant folders + files. */
-export async function scanCascade(rootId: string, rootName: string): Promise<CascadePlan> {
+/**
+ * Retire les racines déjà contenues dans une autre racine sélectionnée : un
+ * dossier dont un ancêtre est aussi sélectionné ne doit être scanné qu'une fois.
+ * La fonction est pure (hors réseau) pour être testable directement.
+ */
+export function dedupeCascadeRoots(
+  roots: readonly CascadeRoot[],
+  folders: readonly Pick<FolderItem, "id" | "parent_id">[],
+): CascadeRoot[] {
+  const parentOf = new Map(folders.map((folder) => [folder.id, folder.parent_id]));
+  const selected = new Set(roots.map((root) => root.id));
+  const seen = new Set<string>();
+  const out: CascadeRoot[] = [];
+  for (const root of roots) {
+    if (seen.has(root.id)) continue;
+    seen.add(root.id);
+    // Remonte la chaîne des parents : un ancêtre sélectionné rend la racine
+    // courante redondante (son contenu sera déjà scanné par cet ancêtre).
+    let cursor = parentOf.get(root.id) ?? null;
+    let nested = false;
+    let guard = 0;
+    while (cursor && guard < 64) {
+      if (selected.has(cursor)) {
+        nested = true;
+        break;
+      }
+      cursor = parentOf.get(cursor) ?? null;
+      guard += 1;
+    }
+    if (!nested) out.push(root);
+  }
+  return out;
+}
+
+/** Build the real content snapshot of one or many folders: descendant folders
+ * and files, deduplicated when a root is already covered by another root. */
+export async function scanCascadeMany(
+  roots: readonly CascadeRoot[],
+): Promise<CascadePlan> {
   const all = await api.listAllFolders();
   const byId = new Map(all.items.map((folder) => [folder.id, folder]));
   const childMap = new Map<string | null, FolderItem[]>();
@@ -213,35 +275,51 @@ export async function scanCascade(rootId: string, rootName: string): Promise<Cas
     }
     return ["Racine", ...names].join(" / ");
   };
+  // Une racine supprimée entre la sélection et le scan ne doit ni gonfler le
+  // décompte, ni demander une confirmation pour zéro opération.
+  const uniqueRoots = dedupeCascadeRoots(roots, all.items).filter((root) =>
+    byId.has(root.id),
+  );
   const folders: CascadeFolder[] = [];
   const seen = new Set<string>();
-  const stack: string[] = [rootId];
-  while (stack.length > 0) {
-    const id = stack.pop();
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    const folder = byId.get(id);
-    if (!folder) continue;
-    folders.push({
-      id,
-      name: folder.name,
-      parentId: folder.parent_id,
-      path: pathOf(id),
-    });
-    for (const child of childMap.get(id) ?? []) stack.push(child.id);
+  for (const root of uniqueRoots) {
+    const stack: string[] = [root.id];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const folder = byId.get(id);
+      if (!folder) continue;
+      folders.push({
+        id,
+        name: folder.name,
+        parentId: folder.parent_id,
+        path: pathOf(id),
+      });
+      for (const child of childMap.get(id) ?? []) stack.push(child.id);
+    }
   }
   const lists = await mapLimit(folders, SCAN_CONCURRENCY, (folder) =>
     fetchFolderObjectsResilient(folder.id, folder.path),
   );
   const objects: CascadeObject[] = [];
+  const seenObjects = new Set<string>();
+  let blockedCount = 0;
   for (let index = 0; index < folders.length; index += 1) {
     const folder = folders[index] as CascadeFolder;
     for (const item of lists[index] ?? []) {
-      // The API refuses to delete aborted/failed/expired/deleted leftovers;
-      // planning them would abort the cascade on a 409 forever.
-      if (item.status !== undefined && !DELETABLE_STATUSES.has(item.status)) {
+      // `verifying` reste vivant côté serveur (il empêche la suppression du
+      // dossier) mais l'API refuse de le supprimer : on le compte comme
+      // bloquant au lieu de fabriquer deux 409 garantis.
+      if (item.status === "verifying") {
+        blockedCount += 1;
         continue;
       }
+      // The API refuses to delete aborted/failed/expired/deleted leftovers;
+      // planning them would abort the cascade on a 409 forever.
+      if (!isDeletableStatus(item.status)) continue;
+      if (seenObjects.has(item.id)) continue;
+      seenObjects.add(item.id);
       objects.push({
         id: item.id,
         name: item.display_name,
@@ -252,23 +330,33 @@ export async function scanCascade(rootId: string, rootName: string): Promise<Cas
     }
   }
   return {
-    rootId,
-    rootName,
+    rootId: uniqueRoots[0]?.id ?? "",
+    rootName:
+      uniqueRoots.length === 1
+        ? uniqueRoots[0]?.name ?? ""
+        : `${uniqueRoots.length} dossiers`,
+    roots: uniqueRoots,
     objects,
     folders,
     fileCount: objects.length,
-    folderCount: Math.max(0, folders.length - 1),
+    folderCount: Math.max(0, folders.length - uniqueRoots.length),
+    blockedCount,
   };
+}
+
+/** Build the real content snapshot of `rootId`: descendant folders + files. */
+export async function scanCascade(rootId: string, rootName: string): Promise<CascadePlan> {
+  return scanCascadeMany([{ id: rootId, name: rootName }]);
 }
 
 /** Flatten the snapshot into a leaf-first (post-order) list of delete steps:
  * a folder's files, its subfolders (recursively), then the folder itself, so
- * every folder is empty by the time its own DELETE is issued. */
-export function planCascadeOps(plan: CascadePlan): CascadeOp[] {
+ * every folder is empty by the time its own DELETE is issued. Handles several
+ * roots without visiting a shared subtree twice. */
+export function planCascadeOpsForRoots(plan: CascadePlan): CascadeOp[] {
   const inTree = new Set(plan.folders.map((folder) => folder.id));
   const children = new Map<string, CascadeFolder[]>();
   for (const folder of plan.folders) {
-    if (folder.id === plan.rootId) continue;
     const parent = folder.parentId;
     if (!parent || !inTree.has(parent)) continue;
     const bucket = children.get(parent);
@@ -283,8 +371,14 @@ export function planCascadeOps(plan: CascadePlan): CascadeOp[] {
   }
   const byId = new Map(plan.folders.map((folder) => [folder.id, folder]));
   const ops: CascadeOp[] = [];
+  const visitedFolders = new Set<string>();
+  const visitedObjects = new Set<string>();
   const visit = (folderId: string) => {
+    if (visitedFolders.has(folderId)) return;
+    visitedFolders.add(folderId);
     for (const object of objectsByFolder.get(folderId) ?? []) {
+      if (visitedObjects.has(object.id)) continue;
+      visitedObjects.add(object.id);
       ops.push({
         kind: "object",
         id: object.id,
@@ -298,8 +392,17 @@ export function planCascadeOps(plan: CascadePlan): CascadeOp[] {
       ops.push({ kind: "folder", id: self.id, label: self.name, path: self.path });
     }
   };
-  visit(plan.rootId);
+  const roots: CascadeRoot[] =
+    plan.roots && plan.roots.length > 0
+      ? plan.roots
+      : [{ id: plan.rootId, name: plan.rootName }];
+  for (const root of roots) visit(root.id);
   return ops;
+}
+
+/** Compatibilité mono-dossier : même ordre post-ordre, une seule racine. */
+export function planCascadeOps(plan: CascadePlan): CascadeOp[] {
+  return planCascadeOpsForRoots(plan);
 }
 
 /** Stable identity of a step, so a successful retry clears its failure entry. */

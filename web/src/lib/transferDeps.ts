@@ -9,7 +9,11 @@ import type { TransferDeps } from "./transfer";
  * driven by the files page and read by the transfers page without duplicating
  * network logic.
  */
-export function transferDeps(activeCsrf: string): TransferDeps {
+export function transferDeps(
+  activeCsrf: string,
+  /** Client UUID grouping every intent of this page-load/import session. */
+  transferSessionId?: string,
+): TransferDeps {
   return {
     requestIntent: (input) =>
       api.createUploadIntent(
@@ -18,6 +22,9 @@ export function transferDeps(activeCsrf: string): TransferDeps {
           content_type: input.contentType,
           size_bytes: input.sizeBytes,
           folder_id: input.folderId,
+          ...(transferSessionId
+            ? { transfer_session_id: transferSessionId }
+            : {}),
         },
         activeCsrf,
         { idempotencyKey: input.idempotencyKey },

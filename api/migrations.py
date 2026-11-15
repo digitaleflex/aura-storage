@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0013_import_jobs"
+SCHEMA_VERSION = "0014_transfer_records"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -73,6 +73,10 @@ ADDED_COLUMNS = {
         # sent (cleared once completed) and the server-chosen part size.
         ("multipart_upload_id", "TEXT"),
         ("multipart_part_bytes", "INTEGER"),
+        # Optional client-generated upload session id (#246). Copied to the
+        # terminal transfer journal so a restored batch can be correlated
+        # without persisting any storage key, URL or credential.
+        ("transfer_session_id", "TEXT"),
         # Transfer booster S5: optional zstd compression (never transparent).
         ("content_encoding", "TEXT"),
         # Asynchronous integrity check (N5): the object waits in 'verifying'
@@ -418,6 +422,49 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_import_jobs_status "
         "ON import_jobs(status, created_at)"
+    )
+    # Append-only transfer history journal (#246). Additive table for upgraded
+    # catalogues; kept semantically identical to schema.sql. No foreign keys:
+    # the journal must outlive an object purge, and it stores no storage path.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS transfer_records ("
+        "id TEXT PRIMARY KEY, "
+        "transfer_session_id TEXT, "
+        "object_id TEXT, "
+        "space_id TEXT, "
+        "owner_id TEXT, "
+        "actor_id TEXT, "
+        "actor_kind TEXT, "
+        "display_name TEXT NOT NULL DEFAULT '', "
+        "content_type TEXT NOT NULL DEFAULT '', "
+        "expected_size_bytes BIGINT, "
+        "final_size_bytes BIGINT, "
+        "status TEXT NOT NULL, "
+        "failure_kind TEXT, "
+        "error_message TEXT, "
+        "checksum_sha256 TEXT NOT NULL DEFAULT '', "
+        "created_at INTEGER NOT NULL, "
+        "terminal_at INTEGER NOT NULL)"
+    )
+    runner.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_transfer_records_object "
+        "ON transfer_records(object_id) WHERE object_id IS NOT NULL"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_transfer_records_owner "
+        "ON transfer_records(owner_id, terminal_at)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_transfer_records_space "
+        "ON transfer_records(space_id, terminal_at)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_transfer_records_session "
+        "ON transfer_records(transfer_session_id)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_transfer_records_terminal "
+        "ON transfer_records(terminal_at)"
     )
     # Byte counts must be 64-bit: a 5 GiB object already overflows PostgreSQL's
     # INTEGER (2 147 483 647), and quotas are set in TiB. SQLite INTEGER is

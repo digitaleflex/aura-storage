@@ -63,6 +63,7 @@ Edit `.env` locally:
 - Confirm exact pinned Traefik and SeaweedFS image versions.
 - Set `AURA_DATA_DIR` to the intended directory on the verified large filesystem.
 - Generate unique random S3 credentials. Prefer alphanumeric/hex values so they can safely be read by the shell-based environment scripts; never reuse production credentials elsewhere.
+- `S3_API_ACCESS_KEY`/`S3_API_SECRET_KEY` are the dedicated least-privilege credentials used by the API. `scripts/bootstrap.sh` generates them automatically when they are absent, empty, placeholder or too short; they must differ from the bootstrap `S3_*` keys. There is no fallback to the bootstrap `Admin` identity.
 - Never commit or share `.env`.
 
 The current sample uses `/srv/aura-storage`. Before running bootstrap as a non-root Docker administrator, create the directory and grant ownership to the chosen deployment user, for example after verifying the actual username and mounted filesystem:
@@ -75,14 +76,15 @@ chmod 700 /srv/aura-storage
 
 Do not run those ownership commands blindly if the directory already contains data or is shared with another service.
 
-Generate the local SeaweedFS S3 configuration from `.env`:
+Generate the local SeaweedFS S3 configuration. `bootstrap.sh` validates `.env` and generates the dedicated `S3_API_*` credentials required by the generator:
 
 ```bash
+bash ./scripts/bootstrap.sh
 bash ./scripts/generate-config.sh
 chmod 600 config/seaweedfs/s3.json
 ```
 
-The generator creates `config/seaweedfs/s3.json` from the tracked example and injects the S3 credentials. Review the identity's permissions and validate policy/action names against the exact SeaweedFS release. Do not use a broad Admin identity for routine application traffic.
+The generator creates `config/seaweedfs/s3.json` from the tracked example and injects the S3 credentials. It requires both `S3_API_*` values, refuses placeholders or values equal to the bootstrap keys, and never falls back to the Admin identity. Review the identity's permissions and validate policy/action names against the exact SeaweedFS release. Do not use a broad Admin identity for routine application traffic.
 
 Confirm both sensitive files are ignored by Git:
 
@@ -122,7 +124,9 @@ docker compose ps
 docker compose logs --tail=150 traefik seaweed-master seaweed-volume seaweed-filer
 ```
 
-`deploy.sh` rebuilds the static frontend (`web/dist`) before starting the stack. `web/dist` is git-ignored and bind-mounted read-only into the `app` container, so it is produced on the host by `npm ci && npm run build` inside `web/` (Node.js/npm required, see §1). A deploy that skips this step silently serves a stale bundle. The API image is rebuilt from `api/` and registry images are pulled, skipping locally-built images.
+`deploy.sh` rebuilds the static frontend (`web/dist`) before starting the stack. `web/dist` is git-ignored and produced on the host by `npm ci && npm run build` inside `web/` (Node.js/npm required, see §1). A deploy that skips this step silently serves a stale bundle. The API image is rebuilt from `api/` and registry images are pulled, skipping locally-built images.
+
+Each deploy then publishes the build as an immutable release outside the worktree: `scripts/deploy.sh` copies `web/dist` into `${AURA_RELEASES_DIR:-${AURA_DATA_DIR}/releases}/web-<git-sha>-<timestamp>`, atomically repoints the `current` symlink, exports `AURA_WEB_DIST_DIR` to that target, and runs Compose. The `app` and `s3-landing` services mount `${AURA_WEB_DIST_DIR}` (Compose still defaults to `./web/dist` for local development). Old releases are pruned to the newest `AURA_KEEP_RELEASES` (default `5`). A rebuild or checkout change therefore cannot mutate the bundle a running release serves, and the postflight hash check compares against the served release directory.
 
 Check that Traefik starts, ACME can reach Let's Encrypt, the S3 hostname receives a valid certificate, SeaweedFS services remain healthy, no unexpected port is public, the data directory is on the intended filesystem, and services survive a controlled container restart.
 
@@ -145,6 +149,18 @@ A running container is not proof that S3 authentication or durability works.
 
 - Do not delete persistent data directories or Docker volumes as a troubleshooting shortcut.
 - Before upgrades, record image versions and follow SeaweedFS release-specific backup guidance.
+- Frontend rollback uses the immutable releases kept under `${AURA_RELEASES_DIR:-${AURA_DATA_DIR}/releases}`. List them, repoint `current` to the previous `web-*` directory, then recreate the services so the bind mount is refreshed:
+
+  ```bash
+  RELEASES_DIR="${AURA_RELEASES_DIR:-${AURA_DATA_DIR}/releases}"
+  ls -1dt "$RELEASES_DIR"/web-*
+  ln -sfn "$RELEASES_DIR/web-<sha>-<timestamp>" "$RELEASES_DIR/current.tmp"
+  mv -Tf "$RELEASES_DIR/current.tmp" "$RELEASES_DIR/current"
+  AURA_WEB_DIST_DIR="$(readlink -f "$RELEASES_DIR/current")" \
+    docker compose up -d --force-recreate --no-deps app s3-landing
+  ```
+
+  Do not edit a release directory in place; roll forward with a new deploy instead (`AURA_KEEP_RELEASES` controls how many are retained).
 - If TLS fails, inspect DNS, firewall, port 80 reachability and Traefik ACME logs.
 - If S3 fails, isolate DNS/TLS/routing/authentication/SeaweedFS/disk causes before restarting all services.
 - If the disk is near full, pause bulk imports and inspect capacity; never delete SeaweedFS files manually.
@@ -171,4 +187,4 @@ The sample now pins SeaweedFS 4.48, which is newer than the previous 3.80 pin an
 5. If the test fails, do not import the actual PDF/audio collection. Inspect logs and image support; never assume encryption is active merely because the environment variable exists.
 6. Keep all originals locally. This test is not a backup test; no original may be deleted until an independent backup has been restored successfully.
 
-The smoke test uses the configured bootstrap S3 identity, which currently has broad permissions. Treat it as a controlled deployment test only; implement and verify a least-privilege runtime identity before multi-user production use.
+The smoke test uses the configured bootstrap S3 identity, which currently has broad permissions. Treat it as a controlled deployment test only. The API itself uses the dedicated non-Admin `aura-api` identity; validate its action/policy semantics against the pinned SeaweedFS image before multi-user production use.

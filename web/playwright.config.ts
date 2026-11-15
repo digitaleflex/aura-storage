@@ -15,6 +15,19 @@ export default defineConfig({
   retries: 0,
   use: {
     baseURL: "http://127.0.0.1:5173",
+    // The onboarding tour opens once per browser profile (localStorage
+    // `aura_onboarding_seen`). Seed it for every test: otherwise the first
+    // navigation after login is redirected to /onboarding and every spec that
+    // expects "Mes fichiers" fails on a fresh context.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: "http://127.0.0.1:5173",
+          localStorage: [{ name: "aura_onboarding_seen", value: "1" }],
+        },
+      ],
+    },
     launchOptions: {
       // Headless environments without GPU: avoid the gpu-process sandbox
       // crash seen with the default flags.

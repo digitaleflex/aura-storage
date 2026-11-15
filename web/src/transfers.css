@@ -1352,6 +1352,92 @@
 }
 
 /* ------------------------------------------------------------------ */
+/* Server-side history (#246)                                          */
+/* ------------------------------------------------------------------ */
+.transfers-history {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.transfers-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.transfers-section-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--aura-text);
+}
+
+.transfers-history-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, var(--aura-info) 38%, transparent);
+  border-left: 3px solid var(--aura-info);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--aura-info) 10%, var(--aura-surface));
+}
+
+.transfers-history-note.is-unavailable {
+  border-color: color-mix(in srgb, var(--aura-warning) 40%, var(--aura-border));
+  border-left-color: var(--aura-warning);
+  background: color-mix(in srgb, var(--aura-warning) 10%, var(--aura-surface));
+}
+
+.transfers-history-note-icon {
+  display: flex;
+  flex: none;
+  margin-top: 1px;
+  color: var(--aura-info);
+}
+
+.transfers-history-note.is-unavailable .transfers-history-note-icon {
+  color: var(--aura-warning);
+}
+
+.transfers-history-note-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.transfers-history-note-copy strong {
+  display: block;
+  font-size: 13px;
+  color: var(--aura-text);
+}
+
+.transfers-history-note-copy p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--aura-text-secondary);
+  line-height: 1.55;
+}
+
+.transfers-history-note .btn {
+  flex: none;
+  align-self: center;
+}
+
+.transfers-history-date {
+  flex: 0 1 150px;
+}
+
+.transfers-history-session {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--aura-text-muted);
+}
+
+/* ------------------------------------------------------------------ */
 /* Details dialog                                                      */
 /* ------------------------------------------------------------------ */
 .shell-transfers .dialog {
@@ -1642,6 +1728,10 @@
 
 @media (max-width: 1000px) {
   .transfers-col-size {
+    display: none;
+  }
+
+  .transfers-col-session {
     display: none;
   }
 
