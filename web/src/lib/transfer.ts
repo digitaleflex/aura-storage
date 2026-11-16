@@ -124,6 +124,16 @@ export interface TransferDeps {
     folderId: string | null;
     idempotencyKey: string;
   }) => Promise<UploadIntentResponse>;
+  requestReplaceIntent?: (
+    targetId: string,
+    input: {
+      fileName: string;
+      contentType: string;
+      sizeBytes: number;
+      folderId: string | null;
+      idempotencyKey: string;
+    },
+  ) => Promise<UploadIntentResponse>;
   upload: (
     url: string,
     file: Blob,
@@ -883,6 +893,8 @@ export interface QueueInput {
    * across retries and page reloads. Omitted: a fresh key per run.
    */
   idempotencyKey?: string;
+  /** When set, uploads bytes as a replacement for this existing object id. */
+  replaceTargetId?: string;
 }
 
 export function startUploadQueue(
@@ -988,6 +1000,7 @@ export function startUploadQueue(
     idempotencyKey: string | undefined;
     file: File;
     folderId: string | null;
+    replaceTargetId: string | undefined;
     state: TransferState;
     controller: AbortController | null;
     settled: boolean;
@@ -1007,6 +1020,7 @@ export function startUploadQueue(
       id: queueItemId(),
       key: input.key,
       idempotencyKey: input.idempotencyKey,
+      replaceTargetId: input.replaceTargetId,
       file: input.file,
       folderId: input.folderId !== undefined ? input.folderId : defaultFolder,
       state: idleTransfer(input.file),
@@ -1162,6 +1176,9 @@ export function startUploadQueue(
       ...deps,
       requestIntent: async (input) => {
         try {
+          if (item.replaceTargetId && deps.requestReplaceIntent) {
+            return await deps.requestReplaceIntent(item.replaceTargetId, input);
+          }
           return await deps.requestIntent(input);
         } catch (err) {
           lastError = err;

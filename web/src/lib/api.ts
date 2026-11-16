@@ -82,6 +82,40 @@ export interface ObjectAnalytics {
   last_access_at: number | null;
 }
 
+export interface RevisionRecord {
+  id: string;
+  object_id: string;
+  revision_number: number;
+  size_bytes: number;
+  checksum_sha256: string;
+  checksum_algorithm?: string;
+  content_type: string;
+  created_at: number;
+  created_by_id?: string | null;
+  created_by_kind?: string | null;
+  keep_forever: boolean;
+  purged_at?: number | null;
+}
+
+export interface RevisionsListResponse {
+  object_id: string;
+  items: RevisionRecord[];
+}
+
+export interface RevisionDownloadIntentResponse {
+  object_id: string;
+  revision_id: string;
+  revision_number: number;
+  download_url: string;
+  method: "GET";
+  expires_in: number;
+  expires_at: number;
+  content_type: string;
+  size_bytes: number;
+  checksum_sha256: string;
+  checksum_algorithm?: string;
+}
+
 export interface ObjectsListResponse {
   items: ObjectItem[];
 }
@@ -1606,6 +1640,68 @@ export const api = {
     return request<{ id: string; revoked: boolean }>(
       `/api/v1/admin/identities/${encodeURIComponent(id)}/revoke`,
       { method: "POST", csrf },
+    );
+  },
+
+  // --- Revisions ---
+  listRevisions(oid: string): Promise<RevisionsListResponse> {
+    return request<RevisionsListResponse>(`/api/v1/objects/${encodeURIComponent(oid)}/revisions`);
+  },
+
+  downloadRevisionIntent(oid: string, rid: string): Promise<RevisionDownloadIntentResponse> {
+    return request<RevisionDownloadIntentResponse>(
+      `/api/v1/objects/${encodeURIComponent(oid)}/revisions/${encodeURIComponent(rid)}/download-intent`,
+    );
+  },
+
+  restoreRevision(
+    oid: string,
+    rid: string,
+    csrf: string,
+  ): Promise<{ object_id: string; restored_revision_id: string; status: string; [k: string]: unknown }> {
+    return request(`/api/v1/objects/${encodeURIComponent(oid)}/revisions/${encodeURIComponent(rid)}/restore`, {
+      method: "POST",
+      csrf,
+    });
+  },
+
+  deleteRevision(
+    oid: string,
+    rid: string,
+    csrf: string,
+  ): Promise<{ object_id: string; revision_id: string; deleted: boolean }> {
+    return request(`/api/v1/objects/${encodeURIComponent(oid)}/revisions/${encodeURIComponent(rid)}`, {
+      method: "DELETE",
+      csrf,
+    });
+  },
+
+  setRevisionKeepForever(
+    oid: string,
+    rid: string,
+    keepForever: boolean,
+    csrf: string,
+  ): Promise<{ object_id: string; revision_id: string; keep_forever: boolean }> {
+    const base = `/api/v1/objects/${encodeURIComponent(oid)}/revisions/${encodeURIComponent(rid)}/keep-forever`;
+    return request(base, { method: keepForever ? "PUT" : "DELETE", csrf });
+  },
+
+  createReplaceIntent(
+    oid: string,
+    input: UploadIntentRequest,
+    csrf: string,
+    options?: { idempotencyKey?: string },
+  ): Promise<UploadIntentResponse> {
+    return request<UploadIntentResponse>(
+      `/api/v1/objects/${encodeURIComponent(oid)}/replace-intents`,
+      {
+        method: "POST",
+        body: input,
+        csrf,
+        headers: options?.idempotencyKey
+          ? { "idempotency-key": options.idempotencyKey }
+          : undefined,
+      },
     );
   },
 };

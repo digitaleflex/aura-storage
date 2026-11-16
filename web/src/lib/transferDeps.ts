@@ -29,6 +29,21 @@ export function transferDeps(
         activeCsrf,
         { idempotencyKey: input.idempotencyKey },
       ),
+    requestReplaceIntent: (targetId, input) =>
+      api.createReplaceIntent(
+        targetId,
+        {
+          display_name: input.fileName,
+          content_type: input.contentType,
+          size_bytes: input.sizeBytes,
+          folder_id: input.folderId,
+          ...(transferSessionId
+            ? { transfer_session_id: transferSessionId }
+            : {}),
+        },
+        activeCsrf,
+        { idempotencyKey: input.idempotencyKey },
+      ),
     upload: (url, selected, opts) =>
       putToPresignedUrl(url, selected, {
         headers: opts.headers,

@@ -409,6 +409,14 @@ export function ObjectsPage() {
   const [moveTarget, setMoveTarget] = useState<FolderItem | null>(null);
   const [moveObjectTarget, setMoveObjectTarget] = useState<ObjectItem | null>(null);
   const [details, setDetails] = useState<ObjectItem | null>(null);
+  const revisionsQuery = useQuery({
+    queryKey: ["revisions", details?.id],
+    queryFn: () => api.listRevisions(details!.id),
+    enabled: !!details?.id,
+  });
+  const replaceFileInputRef = useRef<HTMLInputElement | null>(null);
+  const replaceMenuInputRef = useRef<HTMLInputElement | null>(null);
+  const replaceMenuTargetRef = useRef<ObjectItem | null>(null);
   const [previewTarget, setPreviewTarget] = useState<ObjectItem | null>(null);
   const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null);
   const [publishTarget, setPublishTarget] = useState<ObjectItem | null>(null);
@@ -3148,6 +3156,17 @@ export function ObjectsPage() {
                       label={`Actions pour ${item.display_name}`}
                       items={[
                         { label: "Détails", onSelect: () => setDetails(item), title: `Voir les détails de "${item.display_name}"` },
+                        ...(item.status === "available"
+                          ? [{
+                              label: "Remplacer la version",
+                              disabled: objectBusy || !csrf,
+                              onSelect: () => {
+                                replaceMenuTargetRef.current = item;
+                                replaceMenuInputRef.current?.click();
+                              },
+                              title: `Remplacer "${item.display_name}" par une nouvelle version (archivage)`,
+                            }]
+                          : []),
                         ...(item.status === "available" && isPreviewable(item.content_type)
                           ? [{ label: "Aperçu", onSelect: () => setPreviewTarget(item), title: `Aperçu de "${item.display_name}"` }]
                           : []),
@@ -3387,6 +3406,47 @@ export function ObjectsPage() {
                 </button>
               </>
             ) : null}
+            {details.status === "available" ? (
+              <>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={objectBusy || !csrf}
+                  onClick={() => replaceFileInputRef.current?.click()}
+                  title="Importer une nouvelle version (l’ancienne sera archivée)"
+                >
+                  Remplacer la version
+                </button>
+                <input
+                  ref={replaceFileInputRef}
+                  type="file"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file || !csrf) return;
+                    try {
+                      transfers.start(
+                        [{ file, folderId: details.folder_id ?? null, replaceTargetId: details.id }],
+                        {
+                          csrf,
+                          folderId: details.folder_id ?? null,
+                          onUpdate: (q) => {
+                            if (q.finished) {
+                              void revisionsQuery.refetch();
+                              void objectsQuery.refetch();
+                            }
+                          },
+                        },
+                      );
+                      notify("ok", `Remplacement lancé : ${file.name}`);
+                    } catch {
+                      notify("error", "Impossible de lancer le remplacement.");
+                    }
+                  }}
+                />
+              </>
+            ) : null}
             {isRestorable(details) ? (
               <button
                 type="button"
@@ -3469,6 +3529,100 @@ export function ObjectsPage() {
               </button>
             </dd>
           </dl>
+          <section className="detail-section" aria-labelledby="revisions-title">
+            <h3 id="revisions-title">Révisions</h3>
+            {revisionsQuery.isLoading ? (
+              <p className="muted">Chargement des révisions…</p>
+            ) : revisionsQuery.isError ? (
+              <p className="muted">Impossible de charger les révisions.</p>
+            ) : (revisionsQuery.data?.items?.length ?? 0) === 0 ? (
+              <p className="muted">Aucune révision disponible.</p>
+            ) : (
+              <ul className="revisions-list">
+                {revisionsQuery.data!.items.map((rev) => (
+                  <li key={rev.id} className="revision-item">
+                    <div className="revision-meta">
+                      <strong>v{rev.revision_number}</strong>
+                      <span className="muted">{formatDateTime(rev.created_at)}</span>
+                      <span className="muted">{formatBytes(rev.size_bytes)}</span>
+                      {rev.keep_forever ? <span className="badge">Conservée</span> : null}
+                    </div>
+                    <div className="revision-actions">
+                      <button
+                        type="button"
+                        className="btn btn-small"
+                        onClick={async () => {
+                          try {
+                            const intent = await api.downloadRevisionIntent(details.id, rev.id);
+                            window.open(intent.download_url, "_blank", "noopener,noreferrer");
+                          } catch {
+                            notify("error", "Impossible de télécharger cette révision.");
+                          }
+                        }}
+                      >
+                        Télécharger
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-small"
+                        disabled={!csrf}
+                        onClick={async () => {
+                          if (!csrf) return;
+                          if (!window.confirm(`Restaurer la révision v${rev.revision_number} comme version courante ?`)) return;
+                          try {
+                            await api.restoreRevision(details.id, rev.id, csrf);
+                            notify("ok", `Révision v${rev.revision_number} restaurée.`);
+                            await revisionsQuery.refetch();
+                            await objectsQuery.refetch();
+                          } catch {
+                            notify("error", "Impossible de restaurer cette révision.");
+                          }
+                        }}
+                      >
+                        Restaurer
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-small"
+                        disabled={!csrf}
+                        onClick={async () => {
+                          if (!csrf) return;
+                          try {
+                            await api.setRevisionKeepForever(details.id, rev.id, !rev.keep_forever, csrf);
+                            notify("ok", rev.keep_forever ? "Révision désépinglée." : "Révision conservée.");
+                            await revisionsQuery.refetch();
+                          } catch {
+                            notify("error", "Impossible de modifier la conservation.");
+                          }
+                        }}
+                      >
+                        {rev.keep_forever ? "Désépingler" : "Conserver"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-small btn-danger-outline"
+                        disabled={!csrf || rev.keep_forever}
+                        title={rev.keep_forever ? "Désépingler avant suppression" : undefined}
+                        onClick={async () => {
+                          if (!csrf) return;
+                          if (!window.confirm(`Supprimer définitivement la révision v${rev.revision_number} ?`)) return;
+                          try {
+                            await api.deleteRevision(details.id, rev.id, csrf);
+                            notify("ok", "Révision supprimée.");
+                            await revisionsQuery.refetch();
+                          } catch {
+                            notify("error", "Impossible de supprimer cette révision.");
+                          }
+                        }}
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
           <div className="drawer-danger">
             <h3>Zone sensible</h3>
             <div className="drawer-actions">
@@ -3514,6 +3668,37 @@ export function ObjectsPage() {
           </aside>
         </>
       ) : null}
+
+      <input
+                    ref={replaceMenuInputRef}
+                    type="file"
+                    hidden
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      const target = replaceMenuTargetRef.current;
+                      replaceMenuTargetRef.current = null;
+                      e.target.value = "";
+                      if (!file || !csrf || !target) return;
+                      try {
+                        transfers.start(
+                          [{ file, folderId: target.folder_id ?? null, replaceTargetId: target.id }],
+                          {
+                            csrf,
+                            folderId: target.folder_id ?? null,
+                            onUpdate: (q) => {
+                              if (q.finished) {
+                                void revisionsQuery.refetch();
+                                void objectsQuery.refetch();
+                              }
+                            },
+                          },
+                        );
+                        notify("ok", `Remplacement lancé : ${file.name}`);
+                      } catch {
+                        notify("error", "Impossible de lancer le remplacement.");
+                      }
+                    }}
+                  />
 
       {/* New folder */}
       <Dialog
