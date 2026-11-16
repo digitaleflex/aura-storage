@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0014_transfer_records"
+SCHEMA_VERSION = "0016_replace_target"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -102,6 +102,8 @@ ADDED_COLUMNS = {
         ("revision_count", "INTEGER DEFAULT 0"),
         ("current_revision_id", "TEXT"),
         ("replaced_at", "INTEGER"),
+        # Pending replacement intent targets this existing object id (Lot 3.3.2).
+        ("replace_target_id", "TEXT"),
     ],
     # Master mode: a session-bound, short-lived elevation for bulk destructive
     # actions, granted only after re-entering the password (step-up).
@@ -112,6 +114,14 @@ ADDED_COLUMNS = {
     # backfilled to 'active' in `_seed`.
     "spaces": [
         ("status", "TEXT DEFAULT 'active'"),
+    ],
+    # Import jobs worker: lease/attempt tracking for crash-safe background
+    # processing (Lot 3). Additive for upgraded catalogues.
+    "import_jobs": [
+        ("attempts", "INTEGER DEFAULT 0"),
+        ("lease_until", "INTEGER"),
+        ("started_at", "INTEGER"),
+        ("worker_error", "TEXT"),
     ],
 }
 
@@ -406,14 +416,16 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
         "ON space_usage_monthly(period)"
     )
     # Import jobs: bulk import tracking for operators. Additive table for
-    # upgraded catalogues; byte-identical to schema.sql.
+    # upgraded catalogues; kept semantically aligned with schema.sql.
     runner.exec(
         "CREATE TABLE IF NOT EXISTS import_jobs ("
         "id TEXT PRIMARY KEY, space_id TEXT NOT NULL, "
         "application_id TEXT NOT NULL, created_by TEXT NOT NULL, "
         "status TEXT NOT NULL DEFAULT 'queued', total_items INTEGER NOT NULL DEFAULT 0, "
         "processed_items INTEGER NOT NULL DEFAULT 0, failed_items INTEGER NOT NULL DEFAULT 0, "
-        "summary TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+        "summary TEXT, attempts INTEGER NOT NULL DEFAULT 0, lease_until INTEGER, "
+        "started_at INTEGER, worker_error TEXT, "
+        "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
     )
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_import_jobs_space "

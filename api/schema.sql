@@ -309,6 +309,10 @@ CREATE TABLE IF NOT EXISTS import_jobs (
   processed_items INTEGER NOT NULL DEFAULT 0,
   failed_items INTEGER NOT NULL DEFAULT 0,
   summary TEXT,                              -- JSON, sanitised (no secrets/paths)
+  attempts INTEGER NOT NULL DEFAULT 0,
+  lease_until INTEGER,
+  started_at INTEGER,
+  worker_error TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

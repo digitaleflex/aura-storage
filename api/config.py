@@ -177,6 +177,14 @@ class Settings:
     reconcile_interval_s: int = _int("AURA_RECONCILE_INTERVAL_S", 300)
     reconcile_limit: int = _int("AURA_RECONCILE_LIMIT", 500)
     reconcile_extra_grace_s: int = _int("AURA_RECONCILE_EXTRA_GRACE_SECONDS", 3600)
+
+    # Import jobs worker (api/import_worker.py): processes queued bulk-import
+    # jobs booked by the API. The current contract carries no per-item payload,
+    # so the worker completes booked batches as a stub (marking items processed)
+    # while providing lease/claim, cancellation handling and crash recovery.
+    import_worker_enabled: bool = os.environ.get("AURA_IMPORT_WORKER_ENABLED", "1") == "1"
+    import_worker_poll_s: int = _int("AURA_IMPORT_WORKER_POLL_SECONDS", 2)
+    import_worker_lease_s: int = _int("AURA_IMPORT_WORKER_LEASE_SECONDS", 300)
     # Append-only terminal transfer journal (#246). Rows older than this are
     # purged by the reconciliation sweep; the journal is a retention window,
     # never the source of truth (that stays `objects`).

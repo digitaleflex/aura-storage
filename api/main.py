@@ -62,6 +62,7 @@ from .s3 import (
     ObjectTooLarge,
     abort_multipart,
     complete_multipart,
+    copy_object,
     create_multipart,
     is_no_such_upload,
     is_valid_bucket_name,
@@ -256,6 +257,10 @@ def _start_verifier() -> None:
     if settings.reconcile_enabled:
         from .reconciler import start_background as start_reconciler
         start_reconciler(repo, s3ops, settings, audit=audit_event)
+    # Bulk import jobs booked by the API are processed in the background.
+    if settings.import_worker_enabled:
+        from .import_worker import start_background as start_import_worker
+        start_import_worker(repo, settings, audit=audit_event)
 
 
 @app.middleware("http")
@@ -939,7 +944,7 @@ class ImportJobIn(BaseModel):
 
 
 class ImportJobOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     id: str
     space_id: str
     application_id: str
@@ -1474,7 +1479,7 @@ class BulkIdsIn(BaseModel):
 
 
 def _bulk_purge(ids: list[str], principal: dict) -> dict:
-    from .lifecycle import StorageDeleteError
+    from .lifecycle import PurgeBlockedError, StorageDeleteError
     purged: list[str] = []
     not_found: list[str] = []
     failed: list[str] = []
@@ -1486,7 +1491,7 @@ def _bulk_purge(ids: list[str], principal: dict) -> dict:
             continue
         try:
             done = purge_object(repo, s3ops, oid, **_object_scope(principal))
-        except StorageDeleteError:
+        except (StorageDeleteError, PurgeBlockedError):
             failed.append(oid)
             continue
         (purged if done else not_found).append(oid)
@@ -1751,6 +1756,126 @@ def upload_intent(
     }
 
 
+@app.post("/api/v1/objects/{oid}/replace-intents")
+def create_replace_intent(
+    oid: str,
+    body: UploadIntentIn, request: Request,
+    principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Create an upload intent whose committed bytes replace an existing object.
+
+    Lot 3.3.2: the new bytes are uploaded to a fresh key; on commit the target's
+    current head is archived as a content revision and the target adopts the new
+    bytes. This is the archive-on-replace path (no in-place overwrite).
+    """
+    target_id = _canonical_id(oid, "object id")
+    target = repo.get_object(target_id, **_object_scope(principal))
+    if target is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    target = _as_dict(target)
+    if target.get("status") != AVAILABLE:
+        raise HTTPException(status_code=409, detail="object not available")
+
+    space_id = principal["space_id"]
+    if not space_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    if principal.get("space_status") not in (None, "active"):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    try:
+        content_type = validate_upload_policy(
+            body.content_type, body.size_bytes,
+            max_bytes=_upload_ceiling(),
+            allow_empty=settings.allow_empty_objects,
+            allowed_types=settings.allowed_content_types,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    content_encoding = body.content_encoding
+    if content_encoding is not None:
+        if content_encoding not in ("zstd",):
+            raise HTTPException(status_code=422, detail="unsupported content encoding")
+        from .transfer import NON_COMPRESSIBLE_TYPES
+        bare = content_type.split(";", 1)[0].strip().lower()
+        if bare in NON_COMPRESSIBLE_TYPES:
+            raise HTTPException(status_code=422, detail="content type must not be compressed")
+
+    idem_key = request.headers.get("idempotency-key")
+    if idem_key is not None and not valid_idempotency_key(
+        idem_key, max_length=settings.idempotency_key_max
+    ):
+        raise HTTPException(status_code=422, detail="invalid idempotency key")
+
+    # Replacement stays in the target's bucket/space.
+    bucket = target["bucket"]
+    owner_id = principal["id"] if principal["kind"] == "user" else None
+    live_since = int(time.time()) - settings.intent_grace_s
+    with repo._lock:
+        if repo.count_pending(
+            **_object_scope(principal), min_expires_at=live_since
+        ) >= settings.max_pending_intents:
+            raise HTTPException(status_code=429, detail="too many pending uploads")
+        if settings.max_pending_bytes_per_owner > 0:
+            reserved = repo.reserved_bytes_for(space_id=space_id, owner_id=owner_id)
+            if reserved + body.size_bytes > settings.max_pending_bytes_per_owner:
+                raise HTTPException(status_code=429, detail="too many pending bytes")
+        _check_capacity(body.size_bytes)
+        _check_storage_quota(space_id, body.size_bytes)
+    _charge_quota(space_id, body.size_bytes)
+
+    key = f"aura/{space_id}/{principal['id']}/{ids.new_id()}"
+    multipart = (
+        settings.multipart_enabled
+        and body.size_bytes >= settings.multipart_threshold_bytes
+    )
+    intent_expires_at = int(time.time()) + (
+        settings.multipart_session_ttl if multipart else settings.intent_ttl
+    )
+    intent_oid = repo.create_pending_object(
+        space_id=space_id, application_id=principal["application_id"],
+        environment=principal["environment"], bucket=bucket, object_key=key,
+        display_name=body.display_name or target.get("display_name") or "file",
+        content_type=content_type,
+        owner_id=owner_id, actor_id=principal["id"], actor_kind=principal["kind"],
+        intent_expires_at=intent_expires_at, folder_id=target.get("folder_id"),
+        expected_size_bytes=body.size_bytes, idempotency_key=idem_key,
+        content_encoding=content_encoding,
+        transfer_session_id=body.transfer_session_id,
+        replace_target_id=target_id,
+    )
+    if multipart:
+        part_bytes, _ = plan_parts(body.size_bytes, settings.multipart_part_bytes)
+        try:
+            upload_id = create_multipart(s3ops, bucket, key, content_type)
+        except Exception:
+            repo.set_status(intent_oid, "failed", failure_kind="storage_unavailable",
+                            error_message="storage unavailable while starting multipart upload")
+            raise HTTPException(status_code=502, detail="storage unavailable")
+        repo.set_multipart(intent_oid, upload_id, part_bytes)
+        audit_event("replace-intent", principal["id"], "success", {
+            "object_id": target_id, "intent_id": intent_oid, "bucket": bucket,
+            "size_bytes": body.size_bytes, "multipart": True,
+        })
+        return _multipart_intent_response(
+            _as_dict(repo.get_object(intent_oid, **_object_scope(principal))), replay=False,
+        )
+    url = presigned_put(s3, bucket, key, content_type, settings.intent_ttl, body.size_bytes)
+    audit_event("replace-intent", principal["id"], "success", {
+        "object_id": target_id, "intent_id": intent_oid, "bucket": bucket,
+        "size_bytes": body.size_bytes,
+    })
+    return {
+        "id": intent_oid, "status": PENDING, "method": "PUT", "upload_url": url,
+        "headers": _upload_headers(content_type),
+        "content_type": content_type, "size_bytes": body.size_bytes,
+        "expires_in": settings.intent_ttl, "expires_at": intent_expires_at,
+        "idempotent_replay": False,
+        "transfer_session_id": body.transfer_session_id,
+        "replace_target_id": target_id,
+    }
+
+
 def _capacity() -> dict | None:
     """Fill level of the object store against the configured capacity."""
     if settings.storage_capacity_bytes <= 0:
@@ -1982,6 +2107,146 @@ def _defer_slow_commit(oid, size, head, principal):
     })
 
 
+def _finalize_replacement_commit(intent: dict, size: int, digest: str, principal: dict) -> dict:
+    """Archive target head as revision and adopt committed intent bytes (Lot 3.3.2).
+
+    Hardened for idempotent replay: if the target already reflects this intent's
+    bytes, return success (and clean up a stray intent row). Archive/swap is
+    ordered for recoverability and uses a CAS on target status/version.
+    """
+    target_id = intent.get("replace_target_id")
+    intent_oid = intent.get("id")
+    if not target_id:
+        raise HTTPException(status_code=500, detail="replacement target missing")
+
+    target = repo.get_object(target_id, space_id=intent.get("space_id"))
+    if target is None:
+        raise HTTPException(status_code=404, detail="replacement target not found")
+    target = _as_dict(target)
+
+    # Idempotent replay: target already adopted this intent's committed bytes.
+    if (
+        target.get("status") == AVAILABLE
+        and target.get("object_key") == intent.get("object_key")
+        and target.get("checksum_sha256") == digest
+        and int(target.get("size_bytes") or 0) == int(size)
+    ):
+        # Best-effort cleanup of a leftover intent row from a partial previous run.
+        try:
+            if intent_oid:
+                if hasattr(repo, "_run"):
+                    repo._run("DELETE FROM objects WHERE id = %s", (intent_oid,))
+                else:
+                    repo.conn.execute("DELETE FROM objects WHERE id = ?", (intent_oid,))
+                    repo.conn.commit()
+        except Exception:
+            pass
+        return {
+            "id": target_id, "status": "available", "size_bytes": int(target.get("size_bytes") or size),
+            "checksum_sha256": target.get("checksum_sha256") or digest,
+            "checksum_algorithm": "sha256",
+        }
+
+    if target.get("status") != AVAILABLE:
+        raise HTTPException(status_code=409, detail="replacement target not available")
+
+    target_version = target.get("version")
+    existing = repo.list_revisions(target_id)
+    next_no = (max((int(r.get("revision_number") or 0) for r in existing), default=0) + 1)
+    # Reuse an archive revision for this exact head if a prior attempt partially completed.
+    old_key = target.get("object_key")
+    archive = None
+    for r in existing:
+        if (
+            r.get("storage_key") == old_key
+            and r.get("checksum_sha256") == (target.get("checksum_sha256") or "")
+            and int(r.get("size_bytes") or 0) == int(target.get("size_bytes") or 0)
+        ):
+            archive = r
+            break
+    if archive is not None:
+        archive_rid = archive["id"]
+        archive_no = int(archive.get("revision_number") or next_no)
+    else:
+        archive_key = f"aura/{intent['space_id']}/revisions/{target_id}/{ids.new_id()}"
+        copy_object(s3ops, target["bucket"], target["object_key"], archive_key, target.get("content_type"))
+        archive_rid = repo.create_revision(
+            object_id=target_id, revision_number=next_no, bucket=target["bucket"],
+            storage_key=archive_key, size_bytes=int(target.get("size_bytes") or 0),
+            checksum_sha256=target.get("checksum_sha256") or "",
+            content_type=target.get("content_type") or "application/octet-stream",
+            created_by_id=principal["id"], created_by_kind=principal.get("kind"),
+            keep_forever=False,
+        )
+        archive_no = next_no
+
+    # 2) Swap with CAS: only if target still at the same head/version.
+    # Free intent's (bucket,object_key) uniqueness before adopting it on target.
+    now = int(time.time())
+    if hasattr(repo, "_run"):
+        if intent_oid:
+            repo._run("DELETE FROM objects WHERE id = %s", (intent_oid,))
+        res = repo._run(
+            "UPDATE objects SET bucket = %s, object_key = %s, size_bytes = %s, "
+            "checksum_sha256 = %s, content_type = %s, expected_size_bytes = %s, "
+            "content_encoding = %s, version = COALESCE(version,0)+1, "
+            "revision_count = %s, current_revision_id = %s, replaced_at = %s, "
+            "status = 'available', updated_at = %s, scrubbed_at = %s, scrub_result = 'ok' "
+            "WHERE id = %s AND status = 'available' AND COALESCE(version,0) = COALESCE(%s,0) AND object_key = %s",
+            (intent["bucket"], intent["object_key"], size, digest,
+             intent.get("content_type") or target.get("content_type"),
+             intent.get("expected_size_bytes"),
+             intent.get("content_encoding"),
+             max(int(target.get("revision_count") or 0), archive_no), archive_rid, now, now, now,
+             target_id, target_version, old_key),
+        )
+        updated = int(getattr(res, "rowcount", 0) or 0)
+        if updated == 0:
+            fresh = repo.get_object(target_id, space_id=intent.get("space_id"))
+            fresh = _as_dict(fresh) if fresh else None
+            if fresh and fresh.get("status") == AVAILABLE and fresh.get("object_key") == intent.get("object_key") and fresh.get("checksum_sha256") == digest:
+                return {"id": target_id, "status": "available", "size_bytes": int(fresh.get("size_bytes") or size),
+                        "checksum_sha256": digest, "checksum_algorithm": "sha256"}
+            raise HTTPException(status_code=409, detail="replacement target changed concurrently")
+    else:
+        if intent_oid:
+            repo.conn.execute("DELETE FROM objects WHERE id = ?", (intent_oid,))
+        cur = repo.conn.execute(
+            "UPDATE objects SET bucket = ?, object_key = ?, size_bytes = ?, "
+            "checksum_sha256 = ?, content_type = ?, expected_size_bytes = ?, "
+            "content_encoding = ?, version = COALESCE(version,0)+1, "
+            "revision_count = ?, current_revision_id = ?, replaced_at = ?, "
+            "status = 'available', updated_at = ?, scrubbed_at = ?, scrub_result = 'ok' "
+            "WHERE id = ? AND status = 'available' AND COALESCE(version,0) = COALESCE(?,0) AND object_key = ?",
+            (intent["bucket"], intent["object_key"], size, digest,
+             intent.get("content_type") or target.get("content_type"),
+             intent.get("expected_size_bytes"),
+             intent.get("content_encoding"),
+             max(int(target.get("revision_count") or 0), archive_no), archive_rid, now, now, now,
+             target_id, target_version, old_key),
+        )
+        updated = int(getattr(cur, "rowcount", 0) or 0)
+        if updated == 0:
+            fresh = repo.get_object(target_id, space_id=intent.get("space_id"))
+            fresh = _as_dict(fresh) if fresh else None
+            if fresh and fresh.get("status") == AVAILABLE and fresh.get("object_key") == intent.get("object_key") and fresh.get("checksum_sha256") == digest:
+                repo.conn.commit()
+                return {"id": target_id, "status": "available", "size_bytes": int(fresh.get("size_bytes") or size),
+                        "checksum_sha256": digest, "checksum_algorithm": "sha256"}
+            repo.conn.rollback() if hasattr(repo.conn, "rollback") else None
+            raise HTTPException(status_code=409, detail="replacement target changed concurrently")
+        repo.conn.commit()
+
+    audit_event("object.replace", principal["id"], "success", {
+        "object_id": target_id, "intent_id": intent_oid,
+        "archived_revision_id": archive_rid, "revision_number": archive_no,
+        "size_bytes": size,
+    })
+    return {"id": target_id, "status": "available", "size_bytes": size,
+            "checksum_sha256": digest, "checksum_algorithm": "sha256"}
+
+
+
 @app.post("/api/v1/objects/{oid}/commit")
 def commit_object(
     oid: str, response: Response, request: Request,
@@ -1995,16 +2260,14 @@ def commit_object(
     oid = _canonical_id(oid, "object id")
     idem = request.headers.get("idempotency-key")
     ck = _cache_key("commit", oid, idem, principal["id"])
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    # D2: serve a cached result for a retried commit with the same key, only
-    # after the caller's access to the object is established.
     cached = _cache_get(ck)
     if cached is not None:
         status, body = cached
         response.status_code = status
         return body
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
     row = _as_dict(row)
 
     if row["status"] == "available":
@@ -2090,6 +2353,9 @@ def commit_object(
         raise HTTPException(status_code=422, detail="uploaded size does not match declared size")
 
     if size >= settings.verify_async_threshold_bytes:
+        # Replacement intents with async verification are not yet supported.
+        if row.get("replace_target_id"):
+            raise HTTPException(status_code=422, detail="replacement of large objects requires synchronous verification")
         # Large object: hand it to the verification worker instead of hashing
         # gigabytes inside this request (N5). The client follows the status.
         repo.mark_verifying(oid, head.get("ETag"))
@@ -2153,7 +2419,36 @@ def commit_object(
 
     # Hard deadline guard for the synchronous commit path.
     if settings.commit_deadline_s and (time.perf_counter() - started) > settings.commit_deadline_s:
+        if row.get("replace_target_id"):
+            # Replacement finalization is a synchronous archive+swap; do not defer
+            # to async verification in this cut (would risk partial/inconsistent state).
+            raise HTTPException(status_code=504, detail="commit deadline exceeded for replacement")
         return _defer_slow_commit(oid, size, head, principal)
+
+    # Replacement intent: archive target head and swap target to the verified bytes.
+    if row.get("replace_target_id"):
+        result = _finalize_replacement_commit(row, size, digest, principal)
+        audit_event("commit", principal["id"], "success", {"object_id": result.get("id", oid), "size_bytes": size})
+        try:
+            _THUMBNAIL_POOL.submit(_safe_generate_thumbnail, dict(row, id=result.get("id", oid)))
+        except Exception:
+            pass
+        total_s = time.perf_counter() - started
+        head_ms = head_s * 1000.0
+        hash_ms = hash_s * 1000.0
+        total_ms = total_s * 1000.0
+        response.headers["Server-Timing"] = (
+            f"head;dur={head_ms:.1f}, hash;dur={hash_ms:.1f}, total;dur={total_ms:.1f}"
+        )
+        log.info("commit timings oid=%s bytes=%d head_ms=%.1f hash_ms=%.1f total_ms=%.1f",
+                 result.get("id", oid), size, head_ms, hash_ms, total_ms)
+        result["commit_timing"] = {
+            "head_ms": round(head_ms, 3),
+            "hash_ms": round(hash_ms, 3),
+            "total_ms": round(total_ms, 3),
+        }
+        _cache_set(ck, 200, result)
+        return result
 
     row_version = row.get("version")
     n = repo.mark_available(oid, size, digest, expected_version=row_version)
@@ -2580,10 +2875,13 @@ def purge(oid: str, principal: dict = Depends(authorize(OBJECTS_PURGE))):
     # Destructive: requires objects:purge (operator/admin), not merely a session.
     # A storage failure keeps the catalogue row and surfaces 502 (M06): the
     # reference is never dropped on a failed backend delete.
-    from .lifecycle import StorageDeleteError
+    from .lifecycle import PurgeBlockedError, StorageDeleteError
     oid = _canonical_id(oid, "object id")
     try:
         purged = purge_object(repo, s3ops, oid, **_object_scope(principal))
+    except PurgeBlockedError:
+        audit_event("purge", principal["id"], "blocked", {"object_id": oid})
+        raise HTTPException(status_code=409, detail="purge blocked by keep-forever revisions")
     except StorageDeleteError:
         audit_event("purge", principal["id"], "storage_failure", {"object_id": oid})
         raise HTTPException(status_code=502, detail="storage delete failed")
@@ -4514,3 +4812,251 @@ def cancel_import_job(
     })
     row = repo.get_import_job(jid, space_id=space_id)
     return ImportJobOut(**row)
+
+
+# --- Content revisions (Lot 3, additive read/manage API; no replace/restore flow yet) ---
+
+_REVISION_KEEP_FOREVER_MAX_PER_OWNER = 200
+
+
+def _revision_public(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "object_id": row["object_id"],
+        "revision_number": int(row["revision_number"]),
+        "size_bytes": int(row["size_bytes"]),
+        "checksum_sha256": row.get("checksum_sha256") or "",
+        "checksum_algorithm": "sha256",
+        "content_type": row.get("content_type") or "application/octet-stream",
+        "created_at": row["created_at"],
+        "created_by_id": row.get("created_by_id"),
+        "created_by_kind": row.get("created_by_kind"),
+        "keep_forever": bool(row.get("keep_forever")),
+        "purged_at": row.get("purged_at"),
+    }
+
+
+def _load_scoped_object(oid: str, principal: dict) -> dict:
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    return _as_dict(row)
+
+
+def _load_scoped_revision(oid: str, rid: str, principal: dict) -> tuple[dict, dict]:
+    obj = _load_scoped_object(oid, principal)
+    rid = _canonical_id(rid, "revision id")
+    rev = repo.get_revision(obj["id"], rid)
+    if rev is None:
+        raise HTTPException(status_code=404, detail="revision not found")
+    rev = _as_dict(rev)
+    if rev.get("purged_at") is not None:
+        raise HTTPException(status_code=404, detail="revision not found")
+    return obj, rev
+
+
+@app.get("/api/v1/objects/{oid}/revisions")
+def list_object_revisions(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    """List archived revisions for an object, newest generation first.
+
+    Revisions are exposed without storage keys. This endpoint is additive and
+    does not require any replace/archive flow to have run.
+    """
+    obj = _load_scoped_object(oid, principal)
+    rows = repo.list_revisions(obj["id"])
+    items = [_revision_public(_as_dict(r)) for r in rows if _as_dict(r).get("purged_at") is None]
+    return {"object_id": obj["id"], "items": items}
+
+
+@app.get("/api/v1/objects/{oid}/revisions/{rid}")
+def get_object_revision(oid: str, rid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    obj, rev = _load_scoped_revision(oid, rid, principal)
+    return _revision_public(rev)
+
+
+@app.get("/api/v1/objects/{oid}/revisions/{rid}/download-intent")
+def download_revision_intent(
+    oid: str, rid: str, principal: dict = Depends(authorize(OBJECTS_READ)),
+):
+    """Return a short-lived presigned GET for a specific revision's bytes.
+
+    Served as an attachment to avoid rendering user-controlled content inline on
+    the storage origin. Storage keys are never exposed.
+    """
+    obj, rev = _load_scoped_revision(oid, rid, principal)
+    # Revisions are historical bytes: they are downloadable even if the current
+    # head is no longer available, provided they have not been purged.
+    name = obj.get("display_name") or "download"
+    url = presigned_get(
+        s3, rev["bucket"], rev["storage_key"], settings.intent_ttl,
+        content_disposition=shares.content_disposition_header(
+            "attachment", f"{name}.rev{int(rev['revision_number'])}"
+        ),
+    )
+    audit_event("revision.download_intent", principal["id"], "success", {
+        "object_id": obj["id"], "revision_id": rev["id"],
+    })
+    return {
+        "object_id": obj["id"],
+        "revision_id": rev["id"],
+        "revision_number": int(rev["revision_number"]),
+        "download_url": url,
+        "method": "GET",
+        "expires_in": settings.intent_ttl,
+        "expires_at": int(time.time()) + settings.intent_ttl,
+        "content_type": rev.get("content_type") or "application/octet-stream",
+        "size_bytes": int(rev["size_bytes"]),
+        "checksum_sha256": rev.get("checksum_sha256") or "",
+        "checksum_algorithm": "sha256",
+    }
+
+
+@app.delete("/api/v1/objects/{oid}/revisions/{rid}")
+def delete_object_revision(
+    oid: str, rid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Delete a revision record and its stored bytes.
+
+    Revisions marked keep-forever must be unpinned first. Best-effort storage
+    deletion: if the bytes are already gone, the catalogue record is still
+    removed so the state is consistent.
+    """
+    obj, rev = _load_scoped_revision(oid, rid, principal)
+    if rev.get("keep_forever"):
+        raise HTTPException(
+            status_code=409,
+            detail="revision is marked keep-forever; unpin it before deletion",
+        )
+    try:
+        s3ops.delete_object(Bucket=rev["bucket"], Key=rev["storage_key"])
+    except Exception:
+        # Best-effort: a missing/failed backend delete must not strand the
+        # catalogue row. Orphan reconciliation can clean up leftovers.
+        pass
+    deleted = repo.delete_revision(rev["id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="revision not found")
+    audit_event("revision.delete", principal["id"], "success", {
+        "object_id": obj["id"], "revision_id": rev["id"],
+    })
+    return {"object_id": obj["id"], "revision_id": rev["id"], "deleted": True}
+
+
+@app.put("/api/v1/objects/{oid}/revisions/{rid}/keep-forever")
+def set_revision_keep_forever(
+    oid: str, rid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    obj, rev = _load_scoped_revision(oid, rid, principal)
+    if not rev.get("keep_forever"):
+        owner_id = obj.get("owner_id")
+        if owner_id:
+            current = repo.count_keep_forever(owner_id)
+            if current >= _REVISION_KEEP_FOREVER_MAX_PER_OWNER:
+                raise HTTPException(
+                    status_code=409,
+                    detail="keep-forever limit reached for this owner",
+                )
+    updated = repo.set_revision_keep_forever(rev["id"], True)
+    if not updated:
+        raise HTTPException(status_code=404, detail="revision not found")
+    audit_event("revision.keep_forever", principal["id"], "success", {
+        "object_id": obj["id"], "revision_id": rev["id"], "keep_forever": True,
+    })
+    return {"object_id": obj["id"], "revision_id": rev["id"], "keep_forever": True}
+
+
+@app.delete("/api/v1/objects/{oid}/revisions/{rid}/keep-forever")
+def unset_revision_keep_forever(
+    oid: str, rid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    obj, rev = _load_scoped_revision(oid, rid, principal)
+    updated = repo.set_revision_keep_forever(rev["id"], False)
+    if not updated:
+        raise HTTPException(status_code=404, detail="revision not found")
+    audit_event("revision.keep_forever", principal["id"], "success", {
+        "object_id": obj["id"], "revision_id": rev["id"], "keep_forever": False,
+    })
+    return {"object_id": obj["id"], "revision_id": rev["id"], "keep_forever": False}
+
+
+@app.post("/api/v1/objects/{oid}/revisions/{rid}/restore")
+def restore_object_revision(
+    oid: str, rid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Restore a revision as the new head.
+
+    Pragmatic implementation (Lot 3): archives the current head bytes as a new
+    revision (copy-on-write to a revision key) then copies the selected
+    revision bytes to a fresh head object key and updates the object. This
+    preserves history without moving bytes in place. Best-effort toward the
+    crash-recovery invariant described in docs/CONTENT-REVISIONS.md.
+    """
+    obj, rev = _load_scoped_revision(oid, rid, principal)
+    if obj.get("status") != "available":
+        raise HTTPException(status_code=409, detail="object not available")
+    if int(rev.get("size_bytes", -1)) < 0:
+        raise HTTPException(status_code=409, detail="revision bytes unavailable")
+
+    now = int(time.time())
+    space_id = obj["space_id"]
+    # 1) Archive current head as a new revision (copy bytes to a revision key).
+    existing = repo.list_revisions(obj["id"])
+    next_no = (max((int(r.get("revision_number") or 0) for r in existing), default=0) + 1)
+    archive_key = f"aura/{space_id}/revisions/{obj['id']}/{ids.new_id()}"
+    copy_object(s3ops, obj["bucket"], obj["object_key"], archive_key, obj.get("content_type"))
+    archive_rid = repo.create_revision(
+        object_id=obj["id"], revision_number=next_no, bucket=obj["bucket"],
+        storage_key=archive_key, size_bytes=int(obj.get("size_bytes") or 0),
+        checksum_sha256=obj.get("checksum_sha256") or "",
+        content_type=obj.get("content_type") or "application/octet-stream",
+        created_by_id=principal["id"], created_by_kind=principal.get("kind"),
+        keep_forever=False,
+    )
+    # 2) Promote restored revision bytes to a fresh head key.
+    new_head_key = f"aura/{space_id}/{principal['id']}/{ids.new_id()}"
+    copy_object(s3ops, obj["bucket"], rev["storage_key"], new_head_key, rev.get("content_type"))
+    repo.conn.execute if False else None  # keep linters calm in generated contexts
+    # Update object head fields (SQLite/PG repos share a .conn for sqlite; PG path
+    # handled via repo._run fallback below).
+    try:
+        if hasattr(repo, "_run"):
+            repo._run(
+                "UPDATE objects SET bucket = %s, object_key = %s, size_bytes = %s, "
+                "checksum_sha256 = %s, content_type = %s, version = COALESCE(version,0)+1, "
+                "revision_count = %s, current_revision_id = %s, replaced_at = %s, "
+                "status = 'available', updated_at = %s WHERE id = %s",
+                (rev["bucket"], new_head_key, int(rev["size_bytes"]),
+                 rev.get("checksum_sha256") or "",
+                 rev.get("content_type") or "application/octet-stream",
+                 next_no, archive_rid, now, now, obj["id"]),
+            )
+        else:
+            repo.conn.execute(
+                "UPDATE objects SET bucket = ?, object_key = ?, size_bytes = ?, "
+                "checksum_sha256 = ?, content_type = ?, version = COALESCE(version,0)+1, "
+                "revision_count = ?, current_revision_id = ?, replaced_at = ?, "
+                "status = 'available', updated_at = ? WHERE id = ?",
+                (rev["bucket"], new_head_key, int(rev["size_bytes"]),
+                 rev.get("checksum_sha256") or "",
+                 rev.get("content_type") or "application/octet-stream",
+                 next_no, archive_rid, now, now, obj["id"]),
+            )
+            repo.conn.commit()
+    except Exception:
+        # Do not lose the archived revision: surface a conflict so operators can
+        # inspect; the object may need manual reconciliation.
+        raise HTTPException(status_code=500, detail="failed to update object head after restore")
+
+    audit_event("revision.restore", principal["id"], "success", {
+        "object_id": obj["id"], "revision_id": rev["id"],
+        "archived_revision_id": archive_rid, "new_revision_number": next_no,
+    })
+    return {
+        "object_id": obj["id"],
+        "restored_revision_id": rev["id"],
+        "archived_revision_id": archive_rid,
+        "revision_number": int(rev["revision_number"]),
+        "head_revision_number": next_no,
+        "status": "available",
+    }

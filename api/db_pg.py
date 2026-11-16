@@ -475,6 +475,21 @@ class Repository:
             (object_id,),
         )
 
+    def count_object_keep_forever_revisions(self, object_id: str) -> int:
+        row = self._one(
+            "SELECT COUNT(*) AS n FROM object_revisions WHERE object_id = %s AND keep_forever = 1",
+            (object_id,),
+        )
+        return int(row["n"]) if row else 0
+
+    def delete_revisions_for_object(self, object_id: str) -> list[dict]:
+        rows = self._all(
+            "SELECT id, bucket, storage_key FROM object_revisions WHERE object_id = %s",
+            (object_id,),
+        )
+        self._run("DELETE FROM object_revisions WHERE object_id = %s", (object_id,))
+        return rows
+
     def get_revision(self, object_id: str, revision_id: str) -> Optional[dict]:
         return self._one(
             "SELECT * FROM object_revisions WHERE object_id = %s AND id = %s",
@@ -583,6 +598,7 @@ class Repository:
         idempotency_key: Optional[str] = None,
         content_encoding: Optional[str] = None,
         transfer_session_id: Optional[str] = None,
+        replace_target_id: Optional[str] = None,
     ) -> str:
         oid = self.new_id()
         now = self.now()
@@ -591,13 +607,13 @@ class Repository:
                size_bytes, checksum_sha256, folder_id, owner_id, visibility, status,
                created_at, updated_at, actor_kind, actor_id, application_id, space_id,
                environment, intent_expires_at, expected_size_bytes, idempotency_key,
-               content_encoding, transfer_session_id)
+               content_encoding, transfer_session_id, replace_target_id)
                VALUES (%s, %s, %s, %s, %s, -1, '', %s, %s, 'private', 'pending', %s, %s,
-                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (oid, bucket, object_key, display_name, content_type, folder_id, owner_id,
              now, now, actor_kind, actor_id, application_id, space_id, environment,
              intent_expires_at, expected_size_bytes, idempotency_key, content_encoding,
-             transfer_session_id),
+             transfer_session_id, replace_target_id),
         )
         return oid
 
@@ -946,6 +962,29 @@ class Repository:
                 "multipart_upload_id": r["multipart_upload_id"],
             }
         return out
+
+    def revision_keys(self, bucket: str, keys: list) -> set[str]:
+        """Storage keys that belong to unpurged content revisions.
+
+        These bytes are accounted for by ``object_revisions`` and must never be
+        treated as storage orphans, even though no live object row owns them.
+        """
+        if not keys:
+            return set()
+        rows = self._all(
+            "SELECT storage_key FROM object_revisions "
+            "WHERE bucket = %s AND purged_at IS NULL AND storage_key = ANY(%s)",
+            (bucket, list(keys)),
+        )
+        return {r["storage_key"] for r in rows}
+
+    def has_revision_key(self, bucket: str, key: str) -> bool:
+        row = self._one(
+            "SELECT 1 AS n FROM object_revisions WHERE bucket = %s AND storage_key = %s "
+            "AND purged_at IS NULL LIMIT 1",
+            (bucket, key),
+        )
+        return row is not None
 
     TERMINAL_STATUSES = {"failed", "expired", "aborted", "deleted"}
 
@@ -1522,6 +1561,7 @@ class Repository:
         processed_items: Optional[int] = None,
         failed_items: Optional[int] = None,
         summary: Optional[str] = None,
+        worker_error: Optional[str] = None,
     ) -> None:
         fields = []
         params: list = []
@@ -1537,6 +1577,9 @@ class Repository:
         if summary is not None:
             fields.append("summary = %s")
             params.append(summary)
+        if worker_error is not None:
+            fields.append("worker_error = %s")
+            params.append(worker_error)
         if not fields:
             return
         fields.append("updated_at = %s")
@@ -1558,10 +1601,35 @@ class Repository:
             return False
         if row["status"] == "cancelled":
             return True  # already cancelled: idempotent
-        # _run renvoie déjà le nombre de lignes modifiées (et non un curseur).
         updated = self._run(
-            "UPDATE import_jobs SET status = 'cancelled', updated_at = %s "
+            "UPDATE import_jobs SET status = 'cancelled', updated_at = %s, lease_until = NULL "
             "WHERE id = %s AND space_id = %s AND status IN ('queued', 'running')",
             (self.now(), jid, space_id),
         )
         return updated > 0
+
+    def claim_import_job(self, now: int, lease_until: int) -> Optional[dict]:
+        """Claim the oldest queued job, or a running job whose lease expired."""
+        return self._one(
+            "UPDATE import_jobs SET status = 'running', "
+            "attempts = COALESCE(attempts, 0) + 1, "
+            "started_at = COALESCE(started_at, %s), "
+            "lease_until = %s, worker_error = NULL, updated_at = %s "
+            "WHERE id = (SELECT id FROM import_jobs WHERE "
+            "status = 'queued' OR (status = 'running' AND "
+            "(lease_until IS NULL OR lease_until < %s)) "
+            "ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED) "
+            "RETURNING *",
+            (now, lease_until, now, now),
+        )
+
+    def renew_import_job_lease(self, jid: str, lease_until: int) -> bool:
+        updated = self._run(
+            "UPDATE import_jobs SET lease_until = %s, updated_at = %s "
+            "WHERE id = %s AND status = 'running'",
+            (lease_until, self.now(), jid),
+        )
+        return updated == 1
+
+    def get_import_job_by_id(self, jid: str) -> Optional[dict]:
+        return self._one("SELECT * FROM import_jobs WHERE id = %s", (jid,))

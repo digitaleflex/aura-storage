@@ -268,6 +268,21 @@ def abort_multipart(client, bucket: str, key: str, upload_id: str) -> None:
     client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
 
 
+def copy_object(client, bucket: str, source_key: str, dest_key: str,
+                 content_type: str | None = None) -> None:
+    """Server-side copy within a bucket, preserving SSE-S3 for AURA objects."""
+    params = {
+        "Bucket": bucket,
+        "CopySource": {"Bucket": bucket, "Key": source_key},
+        "Key": dest_key,
+        "ServerSideEncryption": SSE_ALGORITHM,
+    }
+    if content_type:
+        params["ContentType"] = content_type
+        params["MetadataDirective"] = "REPLACE"
+    client.copy_object(**params)
+
+
 def is_no_such_upload(exc: Exception) -> bool:
     """True when the backend no longer knows the multipart session.
 

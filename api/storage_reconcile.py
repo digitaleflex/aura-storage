@@ -59,11 +59,14 @@ def scan_bucket(repo, s3ops, bucket: str, *, grace_s: int, max_keys: int,
             truncated = False
             break
         states = repo.object_states_for_keys(bucket, [o["Key"] for o in contents])
+        rev_keys = repo.revision_keys(bucket, [o["Key"] for o in contents]) if hasattr(repo, "revision_keys") else set()
         for obj in contents:
             scanned += 1
             last_key = obj["Key"]
             modified = _epoch(obj.get("LastModified"))
             if modified > cutoff:
+                continue
+            if obj["Key"] in rev_keys:
                 continue
             state = states.get(obj["Key"])
             reason = _reason(state)
@@ -121,9 +124,13 @@ def remove_orphans(repo, s3ops, bucket: str, keys: list, uploads: list, *,
     aborted: list[str] = []
     skipped: list[dict] = []
     states = repo.object_states_for_keys(bucket, list(keys) + [u["key"] for u in uploads])
+    rev_keys = repo.revision_keys(bucket, list(keys)) if hasattr(repo, "revision_keys") else set()
     for key in keys:
         if not key.startswith(KEY_PREFIX):
             skipped.append({"key": key, "reason": "outside the AURA prefix"})
+            continue
+        if key in rev_keys:
+            skipped.append({"key": key, "reason": "revision key"})
             continue
         if _reason(states.get(key)) is None:
             skipped.append({"key": key, "reason": "now accounted for"})

@@ -81,6 +81,11 @@ def sweep(repo, s3ops, settings, *, now=time.time, audit=None) -> dict:
         repo, retention_days=settings.transfer_history_retention_days,
         limit=limit, now=now,
     ))
+    try:
+        from .lifecycle import reconcile_revisions
+        out.update(reconcile_revisions(repo, s3ops, limit=limit, now=now))
+    except Exception:
+        out["revision_prune_failures"] = out.get("revision_prune_failures", 0) + 1
     out["at"] = started_at
     out["duration_ms"] = int((time.monotonic() - monotonic_start) * 1000)
     _record(out)
