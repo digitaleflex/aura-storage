@@ -4,7 +4,6 @@ import {
   bytesPercent,
   countTransfers,
   estimatedRemainingSeconds,
-  filesPercent,
   scopeBytes,
 } from "./model";
 import { TransferIcon } from "./TransferIcon";
@@ -16,23 +15,19 @@ import {
   formatRemaining,
 } from "../../lib/format";
 
-const RING_SIZE = 132;
-const RING_STROKE = 9;
-const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-
-interface Metric {
+interface LiveStat {
   key: string;
   label: string;
   value: string;
-  tone: "primary" | "success" | "info" | "warning" | "danger" | "muted";
+  tone: "muted" | "success" | "info" | "warning" | "danger";
   icon: TransferIconName;
 }
 
 /**
- * Session summary: where the import stands (files + volume), how fast it runs,
- * what remains, and how many files sit in each operational bucket. Every figure
- * comes from the live queue snapshot; nothing is simulated.
+ * Live console band: the one thing to read at a glance is the current rate.
+ * Everything else — state, volume, ETA and operational counters — stays in the
+ * same band so the eye never has to jump between a ring and a grid of tiles.
+ * Every figure comes from the live queue snapshot; nothing is simulated.
  */
 export function TransfersOverview({
   queue,
@@ -53,7 +48,6 @@ export function TransfersOverview({
 }) {
   const counts = useMemo(() => countTransfers(queue), [queue]);
   const { totalBytes, transferredBytes } = useMemo(() => scopeBytes(queue), [queue]);
-  const filePercent = filesPercent(counts);
   const volumePercent = bytesPercent(totalBytes, transferredBytes);
   const etaRate = smoothedThroughput > 0 ? smoothedThroughput : 0;
   const remainingSeconds = estimatedRemainingSeconds(queue, etaRate);
@@ -104,12 +98,11 @@ export function TransfersOverview({
     return "—";
   })();
 
-  const metrics: Metric[] = [
-    { key: "rate", label: "Débit actuel", value: rateValue, tone: "primary", icon: "gauge" },
+  const stats: LiveStat[] = [
     { key: "eta", label: "Temps restant", value: etaValue, tone: "muted", icon: "clock" },
     {
       key: "active",
-      label: "Transferts actifs",
+      label: "Actifs",
       value: String(counts.active),
       tone: "info",
       icon: "queue",
@@ -137,72 +130,51 @@ export function TransfersOverview({
     },
   ];
 
-  const dashOffset = RING_CIRCUMFERENCE * (1 - filePercent / 100);
-
   return (
     <section
-      className="transfers-overview"
+      className="transfers-live"
       aria-labelledby="transfers-overview-title"
       data-testid="transfer-overview"
     >
-      <div className="transfers-overview-main">
-        <div
-          className="transfers-ring"
-          role="img"
-          aria-label={`${filePercent} % des fichiers terminés`}
-        >
-          <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`} aria-hidden="true">
-            <circle
-              className="transfers-ring-track"
-              cx={RING_SIZE / 2}
-              cy={RING_SIZE / 2}
-              r={RING_RADIUS}
-              fill="none"
-              strokeWidth={RING_STROKE}
-            />
-            <circle
-              className="transfers-ring-value"
-              cx={RING_SIZE / 2}
-              cy={RING_SIZE / 2}
-              r={RING_RADIUS}
-              fill="none"
-              strokeWidth={RING_STROKE}
-              strokeLinecap="round"
-              strokeDasharray={RING_CIRCUMFERENCE}
-              strokeDashoffset={dashOffset}
-              transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
-            />
-          </svg>
-          <span className="transfers-ring-label">{filePercent} %</span>
-        </div>
-
-        <div className="transfers-overview-copy">
+      <div className="transfers-live-top">
+        <div className="transfers-live-copy">
+          <p className="transfers-live-kicker">Session courante · temps réel</p>
           <h2 id="transfers-overview-title">{title}</h2>
           <p className="transfers-overview-files">
             {counts.completed} sur {counts.denominator} fichiers terminés
             {counts.paused > 0 ? ` · ${counts.paused} en pause` : ""}
           </p>
+        </div>
+
+        <div className="transfers-live-rate">
+          <span className="transfers-live-rate-label">Débit actuel</span>
+          <strong className="transfers-live-rate-value">{rateValue}</strong>
+          {rateHistory.length > 1 ? <RateSparkline values={rateHistory} /> : null}
+        </div>
+      </div>
+
+      <div className="transfers-live-progress">
+        <div
+          className="transfers-volume-bar"
+          role="progressbar"
+          aria-label="Progression du volume transféré"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={volumePercent}
+          aria-valuetext={`${volumePercent} %`}
+        >
+          <span
+            className="transfers-volume-fill"
+            style={{ width: `${volumePercent}%` }}
+          />
+        </div>
+        <div className="transfers-live-progress-meta">
           <p className="transfers-overview-volume">
             {formatBytes(transferredBytes)} sur {formatBytes(totalBytes)} transférés
           </p>
-          <div
-            className="transfers-volume-bar"
-            role="progressbar"
-            aria-label="Progression du volume transféré"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={volumePercent}
-            aria-valuetext={`${volumePercent} %`}
-          >
-            <span
-              className="transfers-volume-fill"
-              style={{ width: `${volumePercent}%` }}
-            />
-          </div>
           {counts.total > 0 && startedAt !== null ? (
             <p className="transfers-overview-timing">
-              Durée {formatDuration(elapsedSeconds)} · Débit moyen{" "}
-              {formatRate(averageRate)}
+              Durée {formatDuration(elapsedSeconds)} · Débit moyen {formatRate(averageRate)}
             </p>
           ) : null}
           <p className="transfers-overview-hint">
@@ -215,20 +187,17 @@ export function TransfersOverview({
         </div>
       </div>
 
-      <div className="transfers-metrics" data-testid="transfer-metrics">
-        {metrics.map((metric) => (
+      <div className="transfers-live-stats" data-testid="transfer-metrics">
+        {stats.map((stat) => (
           <div
-            key={metric.key}
-            className={`transfers-metric transfers-metric--${metric.tone}`}
+            key={stat.key}
+            className={`transfers-live-stat transfers-live-stat--${stat.tone}`}
           >
-            <span className="transfers-metric-icon" aria-hidden="true">
-              <TransferIcon name={metric.icon} size={17} />
+            <span className="transfers-live-stat-icon" aria-hidden="true">
+              <TransferIcon name={stat.icon} size={15} />
             </span>
-            <span className="transfers-metric-label">{metric.label}</span>
-            <span className="transfers-metric-value">{metric.value}</span>
-            {metric.key === "rate" && rateHistory.length > 1 ? (
-              <RateSparkline values={rateHistory} />
-            ) : null}
+            <span className="transfers-live-stat-label">{stat.label}</span>
+            <span className="transfers-live-stat-value">{stat.value}</span>
           </div>
         ))}
       </div>
@@ -236,7 +205,7 @@ export function TransfersOverview({
   );
 }
 
-/** Last-60-second rate trend rendered inside the "Débit actuel" tile. */
+/** Last-60-second rate trend rendered beside the live rate figure. */
 function RateSparkline({ values }: { values: readonly number[] }) {
   const max = Math.max(...values, 1);
   const width = 100;

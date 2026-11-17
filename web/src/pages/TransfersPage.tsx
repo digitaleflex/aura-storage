@@ -893,6 +893,7 @@ export function TransfersPage() {
         exportCount={filtered.length}
         onExport={handleExport}
         onDownloadSessionDiagnostic={handleDownloadSessionDiagnostic}
+        onExportReport={handleExportReport}
         onPauseAll={handlePauseAll}
         onResumeAll={handleResumeAll}
         onCancelAll={requestCancelAll}
@@ -901,16 +902,6 @@ export function TransfersPage() {
         onResetFilters={resetFilters}
         onRetryFailed={handleRetryFailed}
       />
-
-      <div className="transfers-report">
-        <button
-          type="button"
-          className="btn btn-small"
-          onClick={handleExportReport}
-        >
-          📄 Exporter le rapport complet
-        </button>
-      </div>
 
       <TransfersFilters
         counts={counts}

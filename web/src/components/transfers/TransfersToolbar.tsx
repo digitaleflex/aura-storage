@@ -2,8 +2,10 @@ import { RowMenu } from "../RowMenu";
 import { TransferIcon } from "./TransferIcon";
 
 /**
- * Primary controls for the import session. Pause and cancel map to the
- * engine's own queue actions; nothing here fakes a server-side outcome.
+ * One contextual action bar. The only permanent action is "Ajouter des fichiers";
+ * session-wide controls appear only when they can actually do something, so a
+ * disabled button never needs an explanation and actions are not repeated here,
+ * in the bulk bar and in the row menu at the same time.
  */
 export function TransfersToolbar({
   canPause,
@@ -19,6 +21,7 @@ export function TransfersToolbar({
   exportCount,
   onExport,
   onDownloadSessionDiagnostic,
+  onExportReport,
   onPauseAll,
   onResumeAll,
   onCancelAll,
@@ -40,6 +43,7 @@ export function TransfersToolbar({
   exportCount: number;
   onExport: () => void;
   onDownloadSessionDiagnostic: () => void;
+  onExportReport: () => void;
   onPauseAll: () => void;
   onResumeAll: () => void;
   onCancelAll: () => void;
@@ -49,58 +53,38 @@ export function TransfersToolbar({
   onRetryFailed: () => void;
 }) {
   return (
-    <div className="transfers-toolbar">
-      <div className="transfers-toolbar-actions">
-        {/* Le nom accessible reste le libellé visible (WCAG 2.5.3 « Label in
-            Name ») : l'explication d'un bouton désactivé passe par `title`. */}
+    <div className="transfers-actionbar">
+      <div className="transfers-actionbar-actions">
         <button
           type="button"
-          className="btn btn-primary transfers-toolbar-primary"
-          onClick={onPauseAll}
-          disabled={!canPause}
-          title={
-            canPause ? undefined : "Aucun transfert en attente à suspendre."
-          }
+          className="btn btn-primary transfers-actionbar-primary"
+          onClick={onAddFiles}
+          aria-label="Ajouter des fichiers"
         >
-          <TransferIcon name="pause" size={16} />
-          Pause tous les transferts
-        </button>
-        <button
-          type="button"
-          className="btn"
-          onClick={onResumeAll}
-          disabled={!canResume}
-          title={
-            canResume
-              ? undefined
-              : "Aucun transfert en pause ou suspendu à reprendre."
-          }
-        >
-          <TransferIcon name="play" size={16} />
-          Reprendre
-        </button>
-        <button type="button" className="btn" onClick={onAddFiles} aria-label="Ajouter des fichiers">
           <TransferIcon name="plus" size={16} />
           Ajouter des fichiers
         </button>
-        <button
-          type="button"
-          className="btn btn-danger transfers-toolbar-cancel"
-          onClick={onCancelAll}
-          disabled={!canCancel}
-          title={
-            canCancel
-              ? undefined
-              : "Aucun transfert en cours ou en attente à annuler."
-          }
-        >
-          <TransferIcon name="close" size={16} />
-          Annuler tout
-        </button>
-        <span
-          className="transfers-menu-wrap"
-          title="Plus d'actions sur les transferts"
-        >
+
+        {canPause ? (
+          <button type="button" className="btn" onClick={onPauseAll}>
+            <TransferIcon name="pause" size={16} />
+            Pause tous les transferts
+          </button>
+        ) : null}
+        {canResume ? (
+          <button type="button" className="btn" onClick={onResumeAll}>
+            <TransferIcon name="play" size={16} />
+            Reprendre
+          </button>
+        ) : null}
+        {canCancel ? (
+          <button type="button" className="btn btn-danger" onClick={onCancelAll}>
+            <TransferIcon name="close" size={16} />
+            Annuler tout
+          </button>
+        ) : null}
+
+        <span className="transfers-menu-wrap" title="Plus d'actions sur les transferts">
           <RowMenu
             label="Plus d'actions sur les transferts"
             items={[
@@ -130,6 +114,11 @@ export function TransfersToolbar({
                 disabled: exportCount === 0,
               },
               {
+                label: "Exporter le rapport complet",
+                onSelect: onExportReport,
+                disabled: exportCount === 0,
+              },
+              {
                 label: "Télécharger le diagnostic de session",
                 onSelect: onDownloadSessionDiagnostic,
                 disabled: exportCount === 0,
@@ -144,10 +133,11 @@ export function TransfersToolbar({
           />
         </span>
       </div>
+
       {activeCount > 0 && canPause ? (
-        <p className="transfers-toolbar-hint">
-          La pause suspend les fichiers qui n'ont pas encore démarré ; un envoi
-          déjà commencé n'est pas interrompu.
+        <p className="transfers-actionbar-hint">
+          La pause suspend les fichiers qui n'ont pas encore démarré ; un envoi déjà
+          commencé n'est pas interrompu.
         </p>
       ) : null}
     </div>

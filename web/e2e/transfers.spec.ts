@@ -735,7 +735,7 @@ test("visual baseline — completed session", async ({ page }) => {
 
   const masks = [
     page.locator(".transfers-file-meta"),
-    page.locator(".transfers-toolbar-hint"),
+    page.locator(".transfers-actionbar-hint"),
     page.locator(".visually-hidden"),
   ];
 
