@@ -225,6 +225,7 @@ class AccessFacts:
     rights: tuple[RightsWindowFact, ...] = ()
     entitlements: tuple[EntitlementFact, ...] = ()
     asset_ready: bool = False
+    device_authorized: bool | None = None
     decision_ttl_seconds: int = 60
     policy_version: str = "lot1-2026-11"
 
@@ -241,11 +242,10 @@ class AccessDecision:
     edition_id: UUID
 
 
-def _active_rights(
+def _candidate_rights(
     rights: Iterable[RightsWindowFact],
     *,
     action: str,
-    territory: str,
     now: datetime,
 ) -> list[RightsWindowFact]:
     result: list[RightsWindowFact] = []
@@ -254,12 +254,24 @@ def _active_rights(
             continue
         if not (window.starts_at <= now < window.ends_at):
             continue
-        if window.territory_code not in {"WORLD", territory}:
-            continue
         if window.channel not in {action, "stream"}:
             continue
         result.append(window)
     return result
+
+
+def _active_rights(
+    rights: Iterable[RightsWindowFact],
+    *,
+    action: str,
+    territory: str,
+    now: datetime,
+) -> list[RightsWindowFact]:
+    return [
+        window
+        for window in _candidate_rights(rights, action=action, now=now)
+        if window.territory_code in {"WORLD", territory}
+    ]
 
 
 def _active_entitlements(
@@ -319,16 +331,22 @@ def decide_access(facts: AccessFacts) -> AccessDecision:
         # D-06 (offline grants) is not part of Lot 1. Refuse rather than leak a
         # long-lived URL through a generic "stream" path.
         return deny("DOWNLOAD_NOT_ENABLED")
-    rights = _active_rights(
-        facts.rights,
-        action=facts.action,
-        territory=facts.territory_code,
-        now=facts.now,
+    candidates = _candidate_rights(
+        facts.rights, action=facts.action, now=facts.now
     )
+    rights = [
+        window
+        for window in candidates
+        if window.territory_code in {"WORLD", facts.territory_code}
+    ]
     if not rights:
+        if candidates:
+            return deny("TERRITORY_RESTRICTED")
         return deny("NO_ACTIVE_RIGHTS")
     if not facts.asset_ready:
         return deny("ASSET_UNAVAILABLE")
+    if facts.device_authorized is False:
+        return deny("DEVICE_NOT_AUTHORIZED")
 
     sources: list[str] = [f"rights:{rights[0].id}"]
     entitlements: list[EntitlementFact] = []

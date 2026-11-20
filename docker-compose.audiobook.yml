@@ -1,0 +1,55 @@
+# Optional overlay for the audiobook bounded-context service (Lot 1).
+# Usage (example):
+#   docker compose -f docker-compose.yml -f docker-compose.audiobook.yml --profile audiobook up -d --build audiobook-api
+#
+# This file is intentionally separate to avoid modifying the existing stack.
+# Configure secrets/env in .env or your deployment environment. Do not enable
+# AUDIOBOOK_DEV_AUTH in production.
+
+services:
+  audiobook-api:
+    profiles: ["audiobook"]
+    build:
+      context: .
+      dockerfile: audiobook/Dockerfile
+    image: aura-audiobook-api:local
+    container_name: ${AURA_INSTANCE_ID:-aura-001}-audiobook-api
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Africa/Porto-Novo}
+      AUDIOBOOK_DSN: ${AUDIOBOOK_DSN:-postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}}
+      AUDIOBOOK_SCHEMA: ${AUDIOBOOK_SCHEMA:-audiobook}
+      AUDIOBOOK_PUBLIC_BASE_URL: ${AUDIOBOOK_PUBLIC_BASE_URL:-https://${APP_DOMAIN:?Set APP_DOMAIN in .env}}
+      AUDIOBOOK_POST_LOGIN_REDIRECT: ${AUDIOBOOK_POST_LOGIN_REDIRECT:-/}
+      AUDIOBOOK_COOKIE_SECURE: ${AUDIOBOOK_COOKIE_SECURE:-1}
+      AUDIOBOOK_COOKIE_DOMAIN: ${AUDIOBOOK_COOKIE_DOMAIN:-}
+      AUDIOBOOK_DEV_AUTH: ${AUDIOBOOK_DEV_AUTH:-0}
+      AUDIOBOOK_ADMIN_TOKEN: ${AUDIOBOOK_ADMIN_TOKEN:-}
+      AUDIOBOOK_MAX_DEVICES: ${AUDIOBOOK_MAX_DEVICES:-3}
+      AUDIOBOOK_MAX_SIMULTANEOUS_SESSIONS: ${AUDIOBOOK_MAX_SIMULTANEOUS_SESSIONS:-2}
+      AUDIOBOOK_ACCESS_DECISION_TTL_SECONDS: ${AUDIOBOOK_ACCESS_DECISION_TTL_SECONDS:-60}
+      AUDIOBOOK_PLAYBACK_LEASE_SECONDS: ${AUDIOBOOK_PLAYBACK_LEASE_SECONDS:-120}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      AURA_API_BASE_URL: ${AURA_API_BASE_URL:-http://api:8000}
+      AURA_SERVICE_TOKEN: ${AURA_SERVICE_TOKEN:-}
+      AUDIOBOOK_CORS_ORIGINS: ${AUDIOBOOK_CORS_ORIGINS:-}
+      AUDIOBOOK_LOG_LEVEL: ${AUDIOBOOK_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - storage
+      # `oauth` is required only for Google token exchange in production.
+      - oauth
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+    # No Traefik labels/ports by default: wire routing explicitly for your
+    # deployment (separate domain/path) and keep `/m/{slug}` paid access retired.

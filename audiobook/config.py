@@ -62,6 +62,9 @@ class Settings:
     access_decision_ttl_seconds: int = 60
     playback_lease_seconds: int = 120
     heartbeat_timeout_seconds: int = 90
+    max_devices_per_listener: int = 3
+    max_simultaneous_playback_sessions: int = 2
+    deletion_grace_days: int = 30
     dev_auth: bool = False
     admin_token: str = ""
     aura_api_base_url: str = ""
@@ -89,6 +92,12 @@ class Settings:
             raise ConfigError("playback lease must be positive")
         if self.access_decision_ttl_seconds <= 0:
             raise ConfigError("access decision TTL must be positive")
+        if self.max_devices_per_listener <= 0:
+            raise ConfigError("max_devices_per_listener must be positive")
+        if self.max_simultaneous_playback_sessions <= 0:
+            raise ConfigError("max_simultaneous_playback_sessions must be positive")
+        if self.deletion_grace_days < 0:
+            raise ConfigError("deletion_grace_days must be non-negative")
         if self.cookie_secure and urlparse(self.public_base_url).scheme != "https":
             # Never silently insecure: a secure session cookie on an HTTP base
             # URL means sign-in can never work. Local development must opt out
@@ -137,6 +146,11 @@ class Settings:
             heartbeat_timeout_seconds=_int(
                 "AUDIOBOOK_HEARTBEAT_TIMEOUT_SECONDS", 90
             ),
+            max_devices_per_listener=_int("AUDIOBOOK_MAX_DEVICES", 3),
+            max_simultaneous_playback_sessions=_int(
+                "AUDIOBOOK_MAX_SIMULTANEOUS_SESSIONS", 2
+            ),
+            deletion_grace_days=_int("AUDIOBOOK_DELETION_GRACE_DAYS", 30),
             dev_auth=_bool("AUDIOBOOK_DEV_AUTH", False),
             admin_token=_env("AUDIOBOOK_ADMIN_TOKEN"),
             aura_api_base_url=_env("AURA_API_BASE_URL").rstrip("/"),

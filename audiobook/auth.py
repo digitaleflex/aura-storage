@@ -79,6 +79,7 @@ def authenticate(
         "status": row["listener_status"],
         "locale": row["locale"],
         "timezone": row["timezone"],
+        "territory_code": row.get("territory_code") or "WORLD",
     }
     if listener["status"] != "active":
         raise ForbiddenError(
