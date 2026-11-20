@@ -320,6 +320,9 @@ async def request_context(request: Request, call_next):
 # Only *failed* attempts are counted, so a burst of legitimate logins cannot
 # lock out everyone sharing a proxy/NAT address.
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+# The public portal has its own failure budget: a flood of invalid Google
+# callbacks must never lock an operator out of /api/v1/login (and vice versa).
+_PUBLIC_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 # A distributed brute force (or spoofed X-Forwarded-For) must not grow the
 # table without bound. Only enforced above this size to keep the common path
 # free of work.
@@ -369,8 +372,29 @@ def _login_clear(client_ip: str) -> None:
     _LOGIN_ATTEMPTS.pop(client_ip, None)
 
 
+def _public_login_blocked(client_ip: str, now: float | None = None) -> bool:
+    now = time.time() if now is None else now
+    window = settings.login_rate_window
+    attempts = [t for t in _PUBLIC_LOGIN_ATTEMPTS.get(client_ip, []) if now - t < window]
+    if attempts:
+        _PUBLIC_LOGIN_ATTEMPTS[client_ip] = attempts
+    else:
+        _PUBLIC_LOGIN_ATTEMPTS.pop(client_ip, None)
+    return len(attempts) >= settings.login_rate_limit
+
+
+def _public_login_record_failure(client_ip: str) -> None:
+    _PUBLIC_LOGIN_ATTEMPTS.setdefault(client_ip, []).append(time.time())
+    _prune_attempt_table(_PUBLIC_LOGIN_ATTEMPTS, settings.login_rate_window)
+
+
+def _public_login_clear(client_ip: str) -> None:
+    _PUBLIC_LOGIN_ATTEMPTS.pop(client_ip, None)
+
+
 def reset_login_attempts() -> None:
     _LOGIN_ATTEMPTS.clear()
+    _PUBLIC_LOGIN_ATTEMPTS.clear()
 
 s3, s3ops = make_clients(
     settings.s3_endpoint, settings.s3_internal_endpoint,
@@ -1459,7 +1483,7 @@ def _public_host_ok(request: Request) -> bool:
 
 def _public_auth_failed(request: Request, reason: str) -> JSONResponse:
     # The reason goes to the audit log only; the client gets one generic error.
-    _login_record_failure(_client_ip(request))
+    _public_login_record_failure(_client_ip(request))
     audit_event("google-login", None, "failure", {"reason": reason})
     out = JSONResponse(
         {"detail": "google sign-in failed"}, status_code=401,
@@ -1474,7 +1498,7 @@ def public_auth_google(request: Request):
     """Start Google sign-in with a one-time state and PKCE verifier."""
     if not google_oauth.is_configured():
         raise HTTPException(status_code=503, detail="public portal not configured")
-    if _login_blocked(_client_ip(request)):
+    if _public_login_blocked(_client_ip(request)):
         raise HTTPException(
             status_code=429, detail="too many login attempts",
             headers={"Retry-After": str(settings.login_rate_window)},
@@ -1504,7 +1528,7 @@ def public_auth_callback(
     """Verify Google's answer, create the portal user and set its own cookie."""
     if not google_oauth.is_configured():
         raise HTTPException(status_code=503, detail="public portal not configured")
-    if _login_blocked(_client_ip(request)):
+    if _public_login_blocked(_client_ip(request)):
         raise HTTPException(
             status_code=429, detail="too many login attempts",
             headers={"Retry-After": str(settings.login_rate_window)},
@@ -1546,7 +1570,7 @@ def public_auth_callback(
     sid = repo.create_session(
         user_id, csrf, int(time.time()) + settings.public_session_ttl
     )
-    _login_clear(_client_ip(request))
+    _public_login_clear(_client_ip(request))
     audit_event("google-login", user_id, "success", {"user_id": user_id})
     out = RedirectResponse("/", status_code=302, headers={
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",

@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import api.main as main  # noqa: E402
 from api.auth import hash_password  # noqa: E402
 from api import google_oauth  # noqa: E402
+from api.google_oauth import verify_id_token as real_verify_id_token  # noqa: E402
 
 CLIENT_ID = "test-client.apps.googleusercontent.com"
 SUBJECT = "google-subject-123456"
@@ -184,6 +185,62 @@ def test_listening_progress_is_saved_for_the_visitor_only():
         assert other_item["progress_seconds"] == 0
     finally:
         globals()["SUBJECT"] = monkeypatch_sub
+
+
+def test_chapters_are_exposed_in_the_player_html():
+    _published_pack()
+    c = _sign_in(TestClient(main.app))
+    item = c.get("/api/public/library").json()["collections"][0]["items"][0]
+    main.repo.replace_audio_chapters(item["id"], [
+        {"index": 0, "title": "Ouverture", "start": 12.5, "end": 90.0},
+    ])
+    page = c.get("/?vue=grille").text
+    assert "Ouverture" in page
+    assert '"start_seconds": 12.5' in page or '"start_seconds":12.5' in page
+
+
+def test_progress_and_logout_require_csrf():
+    _published_pack()
+    c = _sign_in(TestClient(main.app))
+    item = c.get("/api/public/library").json()["collections"][0]["items"][0]
+    assert c.post("/api/public/progress", json={
+        "object_id": item["id"], "position_seconds": 5,
+    }).status_code == 403
+    assert c.post("/api/public/logout").status_code == 403
+
+
+def test_id_token_validation_rejects_bad_claims(monkeypatch):
+    import io
+    class Response:
+        def __init__(self, claims):
+            self._body = io.BytesIO(__import__("json").dumps(claims).encode())
+        def read(self):
+            return self._body.read()
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+
+    def fake(claims):
+        monkeypatch.setattr(google_oauth, "urlopen", lambda *a, **k: Response(claims))
+
+    base = {
+        "sub": "s", "email": "a@example.com", "email_verified": True,
+        "aud": CLIENT_ID, "iss": "https://accounts.google.com", "exp": 4102444800,
+    }
+    fake(base)
+    assert real_verify_id_token("token")["sub"] == "s"
+
+    for change in (
+        {"aud": "another-client"},
+        {"iss": "https://evil.example"},
+        {"exp": 1},
+        {"email_verified": False},
+        {"email": ""},
+    ):
+        fake({**base, **change})
+        with pytest.raises(google_oauth.OAuthError):
+            real_verify_id_token("token")
 
 
 def test_progress_rejects_unpublished_objects():

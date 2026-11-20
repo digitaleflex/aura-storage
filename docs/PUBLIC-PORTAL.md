@@ -23,7 +23,9 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 Les fichiers eux-mêmes sont servis par les liens `/m/{slug}` déjà existants :
 une redirection 302 vers une URL S3 présignée de courte durée, avec `Range`
 (seek). Aucun octet ne traverse l'API. Le lecteur HTML pointe directement sur
-ces URL ; la CSP du bord n'impose pas de `media-src` restrictive.
+ces URL. Les pages du portail n'ont pas de CSP dédiée pour l'instant : le middleware
+`api-secure-headers` pose HSTS/nosniff/frame/referrer, mais pas de `Content-Security-Policy`.
+Le JS du lecteur est donc inline et doit être pris en compte si une CSP est ajoutée.
 
 `/api/v1/*`, `/s/*`, `/f/*`, `/p/*` et la console React restent sur `APP_DOMAIN`.
 
@@ -57,12 +59,14 @@ Aucun service externe de métadonnées n'est contacté. Sans artwork intégré, 
 couverture typographique deterministe reste affichée.
 
 La position est enregistrée via `/api/public/progress` (table `listen_progress`,
-migration `0018`) et restaurée à la sélection du livre. Le filtre `?q=` permet de
-rechercher un titre ou un auteur sans JavaScript, côté serveur.
+ajoutée par la migration cumulative `0018`, aujourd'hui `0020_audio_chapters`)
+et restaurée à la sélection du livre. Le filtre `?q=` permet de rechercher un
+titre ou un auteur côté serveur.
 
 Les URL `/m/{slug}` utilisent un TTL dédié (`AURA_PUBLIC_MEDIA_TTL`, 12 h par
 défaut) : le TTL de 15 min des intentions d'upload coupait la lecture d'un livre
-long. Le lecteur tente aussi une fois de renouveler l'URL en cas d'erreur 403.
+long. Le lecteur tente jusqu'à **trois fois** de renouveler l'URL en cas d'erreur,
+avec un message d'état dans la barre de lecture.
 
 ## Modèle d'identité
 
@@ -140,9 +144,11 @@ L'opérateur doit s'assurer des droits de diffusion des œuvres avant publicatio
   verifier d'origine. Pas de compteur serveur pour le `state` : un `state` volé
   seul ne suffit pas à obtenir une session. Échecs comptés dans le rate-limit
   de login, audit `google-login`.
-- La page ne contient aucun JavaScript ; le token CSRF est injecté dans le
-  formulaire de déconnexion (le backend l'accepte en champ de formulaire ou en
-  en-tête `X-CSRF-Token`).
+- La page de connexion ne contient aucun JavaScript. La page du catalogue, elle,
+  embarque un script inline pour le lecteur (pas de framework, pas de CDN) ; le
+  token CSRF est injecté dans le formulaire de déconnexion et lu par le script
+  pour `/api/public/progress` (le backend accepte champ de formulaire ou en-tête
+  `X-CSRF-Token`). Aucune CSP dédiée n'est posée sur ces pages aujourd'hui.
 - Pas d'upload public dans cette version. Le dépôt de fichiers par les visiteurs
   reste une phase ultérieure, avec quarantaine, quota et antivirus.
 - Le portail dépend des gates de production du README (notamment le test de

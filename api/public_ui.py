@@ -359,6 +359,14 @@ _PLAYER_JS = """
   const playerCover = document.getElementById('player-cover');
   let index = -1, lastSaved = 0, retries = 0, sleepTimer = null;
   const chapterData = JSON.parse(document.getElementById('chapters-data').textContent);
+  function resumeAt(start, expected){
+    audio.addEventListener('loadedmetadata', function ready(){
+      if(index !== expected) return;
+      if(isFinite(start) && start > 0 && start < (audio.duration || Infinity)){
+        audio.currentTime = start;
+      }
+    }, {once:true});
+  }
 
   function fmt(value){
     if(!isFinite(value) || value < 0) value = 0;
@@ -390,7 +398,14 @@ _PLAYER_JS = """
     timeTotal.textContent = fmt(audio.duration);
     const bigCover = document.getElementById('immersive-cover-host');
     if(bigCover && track.dataset.cover){
-      bigCover.src = track.dataset.cover;
+      let bigImg = bigCover.querySelector('img');
+      if(!bigImg){
+        bigImg = document.createElement('img');
+        bigImg.alt = '';
+        bigImg.onerror = function(){ this.remove(); };
+        bigCover.appendChild(bigImg);
+      }
+      bigImg.src = track.dataset.cover;
     }
     if(playerCover){
       playerCover.innerHTML = '';
@@ -427,12 +442,7 @@ _PLAYER_JS = """
     audio.src = track.dataset.url;
     audio.load();
     const start = parseFloat(track.dataset.progress || '0');
-    audio.addEventListener('loadedmetadata', function ready(){
-      if(isFinite(start) && start > 0 && start < (audio.duration || Infinity)){
-        audio.currentTime = start;
-      }
-      audio.removeEventListener('loadedmetadata', ready);
-    });
+    resumeAt(start, i);
     bar.hidden = false;
     nowPlaying();
     if(autoplay) audio.play().catch(function(){});
@@ -448,7 +458,12 @@ _PLAYER_JS = """
     else { save(true); audio.pause(); }
     playToggle.textContent = audio.paused ? 'Lecture' : 'Pause';
   }
+  function clearSleepTimer(){
+    if(sleepTimer){ clearTimeout(sleepTimer); sleepTimer = null; }
+    if(sleepSelect) sleepSelect.value = '0';
+  }
   function stop(){
+    clearSleepTimer();
     save(true); audio.pause(); audio.removeAttribute('src'); audio.load();
     if(index >= 0) tracks[index].classList.remove('playing');
     if(queueList){
@@ -486,6 +501,7 @@ _PLAYER_JS = """
   });
   audio.addEventListener('loadedmetadata', nowPlaying);
   audio.addEventListener('ended', function(){
+    clearSleepTimer();
     save(true);
     if(index + 1 < tracks.length) play(index + 1); else stop();
   });
@@ -499,10 +515,7 @@ _PLAYER_JS = """
     setTimeout(function(){
       audio.src = track.dataset.url + '?refresh=' + Date.now();
       audio.load();
-      audio.addEventListener('loadedmetadata', function ready(){
-        audio.currentTime = position;
-        audio.removeEventListener('loadedmetadata', ready);
-      });
+      resumeAt(position, index);
       audio.play().catch(function(){
         if(statusLine && retries >= 3){
           statusLine.textContent = 'Lecture indisponible. Réessayez plus tard.';
@@ -542,9 +555,10 @@ _PLAYER_JS = """
     list.forEach(function(chapter){
       const item = document.createElement('button');
       item.type = 'button';
-      item.textContent = chapter.title + ' · ' + fmt(chapter.start);
+      const start = chapter.start_seconds;
+      item.textContent = chapter.title + ' · ' + fmt(start);
       item.addEventListener('click', function(){
-        audio.currentTime = chapter.start;
+        audio.currentTime = start;
         audio.play().catch(function(){});
       });
       chaptersList.appendChild(item);
@@ -789,7 +803,7 @@ def catalog_page(
         item["id"]: item.get("chapters") or []
         for col in collections for item in col["items"]
     }
-    chapters_json = json.dumps(chapter_map, ensure_ascii=False).replace("</", "<\\/")
+    chapters_json = json.dumps(chapter_map, ensure_ascii=False).replace("<", "\\u003c")
     parts.append(
         '<script type="application/json" id="chapters-data">'
         + chapters_json + '</script>'

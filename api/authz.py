@@ -159,7 +159,9 @@ def authenticate(request: Request) -> dict:
     if session is None:
         raise HTTPException(status_code=401, detail="authentication required")
     user = repo.get_user(session["user_id"])
-    if user is None:
+    if user is None or (_row_get(user, "role") or "") == PUBLIC_ROLE:
+        # Defence in depth: a public portal principal must never authenticate
+        # on the private API, even if a cookie were presented on that host.
         raise HTTPException(status_code=401, detail="authentication required")
     space = repo.get_space(user["space_id"]) if user["space_id"] else None
     return {
