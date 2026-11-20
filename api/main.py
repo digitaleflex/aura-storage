@@ -4,9 +4,12 @@ Catalogue metadata lives here; object bytes travel directly between the client
 and S3 through short-lived presigned URLs. The API never stores a browser session
 token in the response body and never puts S3 credentials in the frontend.
 """
+import hashlib
+import html
 import logging
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import threading
@@ -19,7 +22,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, folder_shares, ids, netinfo, shares
+from . import authz, folder_shares, google_oauth, ids, netinfo, shares
 from .audit import (
     audit_event,
     audit_path,
@@ -39,10 +42,13 @@ from .authz import (
     OBJECTS_PURGE,
     OBJECTS_READ,
     OBJECTS_WRITE,
+    PUBLIC_ROLE,
     SERVICE_SCOPES,
     authorize,
+    authenticate_public,
     effective_scopes,
     master_mode_active,
+    require_public,
 )
 from .config import settings
 from . import media_worker
@@ -1425,6 +1431,260 @@ def me(principal: dict = Depends(authorize())):
         # Master mode expiry (epoch seconds) while active on this session, else null.
         "master_until": principal["master_until"] if master_mode_active(principal) else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Public portal: Google sign-in on a dedicated subdomain.
+#
+# The portal never uses the admin cookie and never gets an object capability.
+# Its role is absent from ROLE_SCOPES (default-deny), and the only routes on the
+# public host are the HTML root and /api/public/* (see docker-compose.yml).
+# ---------------------------------------------------------------------------
+_PUBLIC_OAUTH_COOKIE = "aura_public_oauth"
+
+
+def _public_host_ok(request: Request) -> bool:
+    configured = (settings.public_domain or "").lower()
+    if not configured:
+        return True  # dev/tests: no public domain configured
+    host = request.headers.get("host", "").split(":", 1)[0].lower()
+    return host == configured
+
+
+def _public_auth_failed(request: Request, reason: str) -> JSONResponse:
+    # The reason goes to the audit log only; the client gets one generic error.
+    _login_record_failure(_client_ip(request))
+    audit_event("google-login", None, "failure", {"reason": reason})
+    out = JSONResponse(
+        {"detail": "google sign-in failed"}, status_code=401,
+        headers={"Cache-Control": "no-store"},
+    )
+    out.delete_cookie(_PUBLIC_OAUTH_COOKIE, path="/api/public/auth")
+    return out
+
+
+@app.get("/api/public/auth/google")
+def public_auth_google(request: Request):
+    """Start Google sign-in with a one-time state and PKCE verifier."""
+    if not google_oauth.is_configured():
+        raise HTTPException(status_code=503, detail="public portal not configured")
+    if _login_blocked(_client_ip(request)):
+        raise HTTPException(
+            status_code=429, detail="too many login attempts",
+            headers={"Retry-After": str(settings.login_rate_window)},
+        )
+    state = new_token(32)
+    verifier, challenge = google_oauth.new_pkce()
+    out = RedirectResponse(
+        google_oauth.authorization_url(state, challenge), status_code=302,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                 "X-Content-Type-Options": "nosniff"},
+    )
+    out.set_cookie(
+        _PUBLIC_OAUTH_COOKIE, f"{state}.{verifier}", httponly=True,
+        secure=settings.cookie_secure, samesite="lax", max_age=600,
+        path="/api/public/auth",
+    )
+    return out
+
+
+@app.get("/api/public/auth/callback")
+def public_auth_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+):
+    """Verify Google's answer, create the portal user and set its own cookie."""
+    if not google_oauth.is_configured():
+        raise HTTPException(status_code=503, detail="public portal not configured")
+    if _login_blocked(_client_ip(request)):
+        raise HTTPException(
+            status_code=429, detail="too many login attempts",
+            headers={"Retry-After": str(settings.login_rate_window)},
+        )
+    raw = request.cookies.get(_PUBLIC_OAUTH_COOKIE, "")
+    expected_state, sep, verifier = raw.partition(".")
+    if not sep or not state or not secrets.compare_digest(str(state), str(expected_state)):
+        return _public_auth_failed(request, "bad_state")
+    if error or not code or len(code) > 512:
+        return _public_auth_failed(request, "provider_error")
+    try:
+        tokens = google_oauth.exchange_code(code, verifier)
+        claims = google_oauth.verify_id_token(tokens["id_token"])
+    except google_oauth.OAuthError as exc:
+        return _public_auth_failed(request, str(exc))
+    email = str(claims["email"]).strip().lower()
+    allowed = settings.google_allowed_email_domains
+    if allowed and email.rsplit("@", 1)[-1] not in allowed:
+        return _public_auth_failed(request, "domain_not_allowed")
+
+    subject = str(claims["sub"])
+    user = repo.get_user_by_oauth("google", subject)
+    if user is None:
+        # The username is derived from the stable subject, never from the email
+        # (which can change) or from a Google display name (which is user data).
+        suffix = hashlib.sha256(subject.encode("utf-8")).hexdigest()[:24]
+        username = f"google-{suffix}"
+        # Passwords are never used by these accounts: store an argon2 hash of a
+        # random secret so the NOT NULL column cannot become a login path.
+        from .auth import hash_password
+        user_id = repo.create_oauth_user(
+            username, hash_password(new_token(32)), "google", subject, email,
+            role=PUBLIC_ROLE,
+        )
+    else:
+        user_id = user["id"]
+
+    csrf = new_token(16)
+    sid = repo.create_session(
+        user_id, csrf, int(time.time()) + settings.public_session_ttl
+    )
+    _login_clear(_client_ip(request))
+    audit_event("google-login", user_id, "success", {"user_id": user_id})
+    out = RedirectResponse("/", status_code=302, headers={
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
+    })
+    out.set_cookie(
+        settings.public_session_cookie, sid, httponly=True,
+        secure=settings.cookie_secure, samesite="lax",
+        max_age=settings.public_session_ttl, path="/",
+    )
+    out.delete_cookie(_PUBLIC_OAUTH_COOKIE, path="/api/public/auth")
+    return out
+
+
+@app.get("/api/public/me")
+def public_me(principal: dict = Depends(require_public)):
+    return {
+        "id": principal["id"], "name": principal.get("name"),
+        "email": principal.get("email"), "role": principal["role"],
+        "csrf_token": principal["csrf"],
+    }
+
+
+@app.post("/api/public/logout")
+def public_logout(principal: dict = Depends(require_public)):
+    repo.delete_session(principal["session_id"])
+    audit_event("public-logout", principal["id"], "success")
+    out = JSONResponse({"status": "logged out"})
+    out.delete_cookie(settings.public_session_cookie, path="/")
+    return out
+
+
+def _library_items(col: dict, only_published: bool = False) -> list:
+    """Items of a published pack, with their public media URL when available."""
+    items = []
+    for pos, row in enumerate(repo.get_collection_items(col["id"])):
+        row = _as_dict(row)
+        if row["status"] != AVAILABLE:
+            continue
+        published = bool(row.get("published_at") and row.get("public_slug"))
+        if only_published and not published:
+            continue
+        items.append({
+            "position": pos,
+            "id": row["id"],
+            "display_name": row["display_name"],
+            "content_type": row["content_type"],
+            "size_bytes": row["size_bytes"],
+            "duration_seconds": row.get("duration_seconds"),
+            "published_slug": row.get("public_slug"),
+            "url": f"/m/{row['public_slug']}" if published else None,
+        })
+    return items
+
+
+@app.get("/api/public/library")
+def public_library(principal: dict = Depends(require_public)):
+    """Published catalogue for signed-in visitors (no object capability)."""
+    collections = []
+    for col in repo.list_published_collections():
+        col = _as_dict(col)
+        collections.append({
+            "slug": col["slug"], "title": col["title"],
+            "description": col.get("description") or "",
+            "updated_at": col["updated_at"],
+            "items": _library_items(col, only_published=True),
+        })
+    set_request_principal(principal.get("space_id"), principal.get("application_id"))
+    audit_event("public-library", principal["id"], "success")
+    return {"collections": collections}
+
+
+@app.get("/", response_class=HTMLResponse)
+def public_portal(request: Request):
+    """No-JavaScript catalogue page, served only on the public host.
+
+    Anonymous visitors get a sign-in page instead of a JSON 401: the portal is
+    the browser entry point, while /api/public/* stays strictly authenticated.
+    """
+    if not _public_host_ok(request):
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        principal = authenticate_public(request)
+    except HTTPException:
+        principal = None
+    if principal is None:
+        login = (
+            "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">",
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+            "<title>Bibliothèque AURA — Connexion</title><style>",
+            "body{font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;text-align:center}",
+            "a{display:inline-block;font:inherit;padding:.7rem 1.2rem;border:1px solid #2563eb;",
+            "border-radius:8px;color:#2563eb;text-decoration:none}</style></head><body>",
+            "<h1>Bibliothèque AURA</h1><p>Connectez-vous avec votre compte Google pour écouter les livres publiés.</p>",
+            "<a href=\"/api/public/auth/google\">Se connecter avec Google</a></body></html>",
+        )
+        return HTMLResponse("".join(login), headers={
+            "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
+        })
+    collections = []
+    for col in repo.list_published_collections():
+        col = _as_dict(col)
+        items = _library_items(col, only_published=True)
+        if not items:
+            continue
+        collections.append((col, items))
+    esc = lambda value: html.escape(str(value if value is not None else ""), quote=True)
+    parts = [
+        "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">",
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        "<title>Bibliothèque AURA</title><style>",
+        "body{font-family:system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem;color:#1c2430}",
+        "header{display:flex;justify-content:space-between;align-items:center;gap:1rem}",
+        "article{border:1px solid #d9dee6;border-radius:10px;padding:1rem;margin:1.25rem 0}",
+        "audio{width:100%;margin:.5rem 0 1rem}button{font:inherit;padding:.4rem .8rem}",
+        ".muted{color:#5b6675;font-size:.9rem}</style></head><body><header><h1>Bibliothèque AURA</h1>",
+        "<form method=\"post\" action=\"/api/public/logout\">",
+        f"<input type=\"hidden\" name=\"csrf_token\" value=\"{esc(principal['csrf'])}\">",
+        f"<span class=\"muted\">{esc(principal.get('email') or principal.get('name'))}</span> ",
+        "<button type=\"submit\">Déconnexion</button></form></header>",
+    ]
+    if not collections:
+        parts.append("<p class=\"muted\">Aucun livre publié pour le moment.</p>")
+    for col, items in collections:
+        parts.append(f"<article><h2>{esc(col['title'])}</h2>")
+        if col.get("description"):
+            parts.append(f"<p>{esc(col['description'])}</p>")
+        for item in items:
+            parts.append(f"<p><strong>{esc(item['display_name'])}</strong>")
+            duration = item.get("duration_seconds")
+            if duration:
+                minutes, seconds = divmod(int(duration), 60)
+                parts.append(f" <span class=\"muted\">{minutes} min {seconds:02d} s</span>")
+            parts.append("</p>")
+            parts.append(
+                f"<audio controls preload=\"metadata\" src=\"{esc(item['url'])}\"></audio>"
+            )
+        parts.append("</article>")
+    parts.append("</body></html>")
+    return HTMLResponse("".join(parts), headers={
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -3552,20 +3812,7 @@ def public_collection_manifest(slug: str):
     if col is None or not col.get("published_at"):
         raise HTTPException(status_code=404, detail="not found")
     set_request_principal(col["space_id"], None)
-    items = []
-    for pos, row in enumerate(repo.get_collection_items(col["id"])):
-        if row["status"] != AVAILABLE:
-            continue
-        items.append({
-            "position": pos,
-            "id": row["id"],
-            "display_name": row["display_name"],
-            "content_type": row["content_type"],
-            "size_bytes": row["size_bytes"],
-            "duration_seconds": row.get("duration_seconds"),
-            "published_slug": row.get("public_slug"),
-            "url": f"/m/{row['public_slug']}" if row.get("published_at") else None,
-        })
+    items = _library_items(col)
     audit_event("collection.access", None, "success", {
         "collection_id": col["id"], "slug": slug,
     })

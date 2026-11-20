@@ -71,6 +71,28 @@ class Repository:
     def get_user(self, uid: str) -> Optional[dict]:
         return self._one("SELECT * FROM users WHERE id = %s", (uid,))
 
+    def get_user_by_oauth(self, provider: str, subject: str) -> Optional[dict]:
+        return self._one(
+            "SELECT * FROM users WHERE oauth_provider = %s AND oauth_sub = %s",
+            (provider, subject),
+        )
+
+    def create_oauth_user(
+        self, username: str, pass_hash: str, provider: str, subject: str,
+        email: str, role: str = "public",
+    ) -> str:
+        """PostgreSQL mirror of the SQLite public-portal user creation."""
+        uid = self.new_id()
+        application_id, space_id = self.default_scope()
+        self._run(
+            "INSERT INTO users (id, username, pass_hash, created_at, role, "
+            "application_id, space_id, oauth_provider, oauth_sub, email) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (uid, username, pass_hash, self.now(), role, application_id,
+             space_id, provider, subject, email),
+        )
+        return uid
+
     def create_user(
         self, username: str, pass_hash: str, role: str = "user",
         space_id: Optional[str] = None, application_id: Optional[str] = None,
@@ -1365,6 +1387,19 @@ class Repository:
             params.append(owner_id)
         sql += " ORDER BY c.created_at DESC"
         return self._all(sql, tuple(params))
+
+    def list_published_collections(self) -> list:
+        """Published collections for the public portal, newest first.
+
+        Deliberately not scoped to a space: publication is an explicit act and
+        the portal must show every pack the operators chose to publish.
+        """
+        return self._all(
+            "SELECT c.*, (SELECT COUNT(*) FROM collection_items i "
+            "WHERE i.collection_id = c.id) AS item_count "
+            "FROM collections c WHERE c.published_at IS NOT NULL "
+            "ORDER BY c.updated_at DESC"
+        )
 
     def get_collection(self, cid: str):
         return self._one("SELECT * FROM collections WHERE id = %s", (cid,))

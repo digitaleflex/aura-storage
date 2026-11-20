@@ -236,6 +236,25 @@ class Settings:
     # Cookie security.
     cookie_secure: bool = os.environ.get("AURA_COOKIE_SECURE", "1") == "1"
 
+    # Public portal (dedicated subdomain). The domain is configuration, never
+    # derived from a client-supplied Host header: it builds the OAuth redirect
+    # URI and guards the HTML root. Empty = portal disabled (routes answer 503).
+    public_domain: str = os.environ.get("PUBLIC_DOMAIN", "").strip().lower()
+    # Separate cookie from the admin console: host-only on the public domain,
+    # SameSite=Lax is required for the redirect back from Google (Strict would
+    # drop the cookie on a cross-site top-level navigation).
+    public_session_cookie: str = "aura_public_session"
+    public_session_ttl: int = _int("AURA_PUBLIC_SESSION_TTL", 7 * 24 * 3600)
+    # Google OAuth 2.0 Authorization Code + PKCE. No secret is hard-coded; both
+    # values come from .env and are passed to the API container explicitly.
+    google_client_id: str = os.environ.get("GOOGLE_CLIENT_ID", "")
+    google_client_secret: str = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    google_allowed_email_domains: tuple[str, ...] = tuple(
+        part.strip().lower()
+        for part in os.environ.get("GOOGLE_ALLOWED_EMAIL_DOMAINS", "").split(",")
+        if part.strip()
+    )
+
 
 settings = Settings()
 

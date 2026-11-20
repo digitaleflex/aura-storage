@@ -223,6 +223,14 @@ services:
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
       AURA_COOKIE_SECURE: "1"
+      # Public portal on its own subdomain. The domain is configuration (never
+      # a client Host header): it builds the OAuth redirect URI and guards the
+      # HTML root. Google credentials are passed explicitly, never via env_file.
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN in .env}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      AURA_PUBLIC_SESSION_TTL: ${AURA_PUBLIC_SESSION_TTL:-604800}
+      GOOGLE_ALLOWED_EMAIL_DOMAINS: ${GOOGLE_ALLOWED_EMAIL_DOMAINS:-}
       # Human session cookie lifetime (seconds), overridable from .env. The
       # code default is 8 h (api/config.py); 90 days was a stale literal that
       # made a stolen cookie valid for three months. Expiry is fixed at login
@@ -367,6 +375,18 @@ services:
       # answers with index.html instead of the API's 302/404.
       - traefik.http.routers.aura-share.service=aura-share
       - traefik.http.services.aura-share.loadbalancer.server.port=8000
+      # Public portal: dedicated subdomain. Only the HTML root, /api/public/*
+      # and the public media redirects /m/* reach the API here. /api/v1/* stays
+      # on the private app host, so a portal visitor can never reach object,
+      # folder or administration endpoints.
+      - traefik.http.routers.aura-public.rule=Host(`${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN in .env}`) && (Path(`/`) || PathPrefix(`/api/public/`) || PathPrefix(`/m/`))
+      - traefik.http.routers.aura-public.priority=210
+      - traefik.http.routers.aura-public.entrypoints=websecure
+      - traefik.http.routers.aura-public.tls=true
+      - traefik.http.routers.aura-public.tls.certresolver=le
+      - traefik.http.routers.aura-public.middlewares=api-ratelimit,api-secure-headers
+      - traefik.http.routers.aura-public.service=aura-public
+      - traefik.http.services.aura-public.loadbalancer.server.port=8000
     depends_on:
       postgres:
         condition: service_healthy

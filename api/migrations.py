@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0016_replace_target"
+SCHEMA_VERSION = "0017_public_portal"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -47,6 +47,11 @@ ADDED_COLUMNS = {
         ("role", "TEXT"),
         ("application_id", "TEXT"),
         ("space_id", "TEXT"),
+        # Google OAuth public portal. Only the stable provider subject is
+        # required to recognize a returning user; no Google token is stored.
+        ("oauth_provider", "TEXT"),
+        ("oauth_sub", "TEXT"),
+        ("email", "TEXT"),
     ],
     "objects": [
         ("actor_kind", "TEXT"),
@@ -264,6 +269,13 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_slug "
         "ON objects(public_slug) WHERE public_slug IS NOT NULL"
+    )
+    # One Google account maps to at most one AURA user. The index is partial:
+    # password-only admin rows keep both columns NULL and never conflict.
+    runner.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oauth "
+        "ON users(oauth_provider, oauth_sub) "
+        "WHERE oauth_provider IS NOT NULL AND oauth_sub IS NOT NULL"
     )
     # Every upload intent looks up its Idempotency-Key; without this index that
     # is a scan of the whole catalogue (14.8 ms at 100k rows, growing linearly).

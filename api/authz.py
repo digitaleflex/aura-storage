@@ -58,6 +58,12 @@ ROLE_SCOPES = {
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
+# The public portal has its own host-only cookie and its own role. A public
+# principal is deliberately absent from ROLE_SCOPES: default-deny means it can
+# read the catalogue but cannot touch any object, folder or admin resource.
+PUBLIC_COOKIE = "aura_public_session"
+PUBLIC_ROLE = "public"
+
 # Machine-to-machine authentication failure rate limiter: {client_ip: [ts, ...]}.
 _M2M_ATTEMPTS: dict[str, list[float]] = {}
 # Bound the table: a distributed/spoofed-IP attack must not exhaust memory.
@@ -230,3 +236,61 @@ def authorize(scope: str | None = None, human: bool = False):
         return principal
 
     return dependency
+
+
+def authenticate_public(request: Request) -> dict:
+    """Authenticate a public-portal session cookie (never the admin cookie).
+
+    Only rows with the ``public`` role are accepted: even if an admin cookie
+    were somehow presented on this host, it cannot grant portal access.
+    """
+    sid = request.cookies.get(PUBLIC_COOKIE)
+    session = repo.get_session(sid) if sid else None
+    if session is None:
+        raise HTTPException(status_code=401, detail="authentication required")
+    user = repo.get_user(session["user_id"])
+    if user is None or (_row_get(user, "role") or "") != PUBLIC_ROLE:
+        raise HTTPException(status_code=401, detail="authentication required")
+    space_id = _row_get(user, "space_id")
+    space = repo.get_space(space_id) if space_id else None
+    principal = {
+        "kind": "user",
+        "id": user["id"],
+        "name": user["username"],
+        "role": PUBLIC_ROLE,
+        "scopes": set(),
+        "space_id": space_id,
+        "application_id": _row_get(user, "application_id"),
+        "session_id": session["id"],
+        "csrf": session["csrf"],
+        "email": _row_get(user, "email"),
+        "environment": _row_get(space, "environment") if space else None,
+    }
+    from . import audit as audit_log
+    audit_log.set_request_principal(
+        principal.get("space_id"), principal.get("application_id")
+    )
+    return principal
+
+
+async def require_public(
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+) -> dict:
+    """Public-portal dependency with CSRF on mutations.
+
+    The no-JavaScript HTML page posts its CSRF token as a form field, while a
+    future SPA can keep using the X-CSRF-Token header. Both go through the same
+    constant-time comparison; GET/HEAD/OPTIONS need neither.
+    """
+    principal = authenticate_public(request)
+    if request.method not in SAFE_METHODS:
+        supplied = x_csrf_token
+        if not supplied and request.headers.get("content-type", "").startswith(
+            "application/x-www-form-urlencoded"
+        ):
+            form = await request.form()
+            supplied = form.get("csrf_token")
+        if not supplied or not secrets.compare_digest(str(supplied), principal["csrf"]):
+            raise HTTPException(status_code=403, detail="csrf validation failed")
+    return principal

@@ -27,6 +27,7 @@ Les écarts constatés entre documentation et code sont listés en fin de docume
 | Principal | Authentification | CSRF | Capacités effectives |
 |---|---|---|---|
 | **user** (humain) | cookie `aura_session` (HttpOnly, `SameSite=Strict`, `Secure` si `AURA_COOKIE_SECURE=1`) | requis sur les méthodes non sûres | rôle → capacités (table ci-dessous) |
+| **public** (portail) | cookie `aura_public_session` obtenu via Google OAuth + PKCE, `SameSite=Lax`, host-only sur `PUBLIC_DOMAIN` | requis sur les méthodes non sûres | **aucune** — catalogue et lecture seulement |
 | **service** (machine) | `Authorization: Bearer aura_<id>_<secret>` — **unique** canal | non applicable | scopes explicites stockés sur l'identité |
 
 - L'alias d'authentification machine `X-AURA-Key` a été **retiré** (M06) : seul le
@@ -41,14 +42,17 @@ Les écarts constatés entre documentation et code sont listés en fin de docume
 
 ### Rôles humains (default-deny, implémenté)
 
-| Capacité | `user` | `operator` | `admin` |
-|---|:--:|:--:|:--:|
-| `objects:read` | ✅ | ✅ | ✅ |
-| `objects:write` | ✅ | ✅ | ✅ |
-| `objects:delete` | ✅ | ✅ | ✅ |
-| `objects:purge` | ❌ | ✅ | ✅ |
-| `admin:read` | ❌ | ✅ | ✅ |
-| `admin:write` | ❌ | ❌ | ✅ |
+| Capacité | `public` | `user` | `operator` | `admin` |
+|---|:--:|:--:|:--:|:--:|
+| `objects:read` | ❌ | ✅ | ✅ | ✅ |
+| `objects:write` | ❌ | ✅ | ✅ | ✅ |
+| `objects:delete` | ❌ | ✅ | ✅ | ✅ |
+| `objects:purge` | ❌ | ❌ | ✅ | ✅ |
+| `admin:read` | ❌ | ❌ | ✅ | ✅ |
+| `admin:write` | ❌ | ❌ | ❌ | ✅ |
+
+Le rôle `public` est absent de `ROLE_SCOPES` : capacités effectives vides, même
+si une route privée était atteinte. Détail : `docs/PUBLIC-PORTAL.md`.
 
 ### Scopes machine (implémenté)
 

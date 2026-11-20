@@ -11,6 +11,7 @@ AURA has two kinds of caller. Every request resolves to exactly one principal.
 | Principal | Authenticates with | CSRF | Capabilities |
 |---|---|---|---|
 | **user** (human) | HttpOnly `aura_session` cookie | required on non-GET | role map below |
+| **public** (portal visitor) | HttpOnly `aura_public_session` cookie, obtained through Google OAuth + PKCE; host-only on `PUBLIC_DOMAIN` | required on non-GET (header or form field) | **none** — no object capability |
 | **service** (machine-to-machine) | `Authorization: Bearer aura_<id>_<secret>` (**only** channel; M06) | not applicable | explicit scopes stored on the identity |
 
 A service identity is scoped to one space and one application/environment. It never
@@ -23,14 +24,20 @@ credential channel with one scope check.
 
 Default-deny: a role only holds the capabilities listed here; anything else is refused.
 
-| Capability | `user` | `operator` | `admin` |
-|---|:--:|:--:|:--:|
-| `objects:read` | ✅ | ✅ | ✅ |
-| `objects:write` | ✅ | ✅ | ✅ |
-| `objects:delete` | ✅ | ✅ | ✅ |
-| `objects:purge` | ❌ | ✅ | ✅ |
-| `admin:read` | ❌ | ✅ | ✅ |
-| `admin:write` | ❌ | ❌ | ✅ |
+| Capability | `public` | `user` | `operator` | `admin` |
+|---|:--:|:--:|:--:|:--:|
+| `objects:read` | ❌ | ✅ | ✅ | ✅ |
+| `objects:write` | ❌ | ✅ | ✅ | ✅ |
+| `objects:delete` | ❌ | ✅ | ✅ | ✅ |
+| `objects:purge` | ❌ | ❌ | ✅ | ✅ |
+| `admin:read` | ❌ | ❌ | ✅ | ✅ |
+| `admin:write` | ❌ | ❌ | ❌ | ✅ |
+
+The `public` role is intentionally absent from `ROLE_SCOPES`: default-deny gives
+it zero effective capabilities. It can only reach `/api/public/*` (catalogue and
+session) on the public subdomain; Traefik does not route `/api/v1/*` there, and
+`require_public` refuses any session whose role is not `public`. Audio playback
+uses the already-public `/m/{slug}` 302, not an object capability.
 
 ### Capabilities (service identities)
 

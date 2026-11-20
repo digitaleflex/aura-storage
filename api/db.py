@@ -58,6 +58,34 @@ class Repository:
     def get_user(self, uid: str) -> Optional[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
 
+    def get_user_by_oauth(self, provider: str, subject: str) -> Optional[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM users WHERE oauth_provider = ? AND oauth_sub = ?",
+            (provider, subject),
+        ).fetchone()
+
+    def create_oauth_user(
+        self, username: str, pass_hash: str, provider: str, subject: str,
+        email: str, role: str = "public",
+    ) -> str:
+        """Create a public-portal user from a verified OAuth identity.
+
+        ``pass_hash`` is an argon2 hash of a random secret: the account has no
+        usable password and can only be entered through the OAuth callback.
+        The role defaults to ``public``, which carries no object capability.
+        """
+        uid = self.new_id()
+        application_id, space_id = self.default_scope()
+        self.conn.execute(
+            "INSERT INTO users (id, username, pass_hash, created_at, role, "
+            "application_id, space_id, oauth_provider, oauth_sub, email) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (uid, username, pass_hash, self.now(), role, application_id,
+             space_id, provider, subject, email),
+        )
+        self.conn.commit()
+        return uid
+
     def create_user(
         self, username: str, pass_hash: str, role: str = "user",
         space_id: Optional[str] = None, application_id: Optional[str] = None,
@@ -1547,6 +1575,19 @@ class Repository:
             params.append(owner_id)
         sql += " ORDER BY c.created_at DESC"
         return [_as_dict(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    def list_published_collections(self) -> list:
+        """Published collections for the public portal, newest first.
+
+        Deliberately not scoped to a space: publication is an explicit act and
+        the portal must show every pack the operators chose to publish.
+        """
+        return [_as_dict(r) for r in self.conn.execute(
+            "SELECT c.*, (SELECT COUNT(*) FROM collection_items i "
+            "WHERE i.collection_id = c.id) AS item_count "
+            "FROM collections c WHERE c.published_at IS NOT NULL "
+            "ORDER BY c.updated_at DESC"
+        ).fetchall()]
 
     def get_collection(self, cid: str) -> Optional[dict]:
         return _as_dict(self.conn.execute(

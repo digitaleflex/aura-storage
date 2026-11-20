@@ -64,6 +64,7 @@
 | Miniatures | Implémenté | `/thumbnail`, génération et redirection |
 | HLS et sous-titres | Implémenté | Packaging ffmpeg, playlist, segments, WebVTT |
 | Téléchargement | Implémenté | `download-intent`, URL présignée courte, `Content-Disposition: attachment` |
+| Portail public (sous-domaine) | Implémenté (tests hors-ligne) | Connexion Google OAuth + PKCE, rôle `public` sans capacité objet, catalogue HTML et lecteur `<audio>` ; voir `PUBLIC-PORTAL.md` |
 
 ### 2.4 Dossiers
 

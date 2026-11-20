@@ -84,3 +84,23 @@ def test_share_router_is_reachable_past_the_spa(
     assert "PathPrefix(`/f/`)" in share.get("rule", "")
     assert share.get("service") == "aura-share"
     assert int(share.get("priority", "0")) > 0
+
+
+def test_public_router_exposes_only_portal_paths(
+    services: dict[str, list[str]],
+) -> None:
+    labels = next(
+        (lbl for lbl in services.values() if any(f"{ROUTER}aura-public." in x for x in lbl)),
+        None,
+    )
+    assert labels is not None, "the public portal router disappeared"
+    public = _index(labels, ROUTER)["aura-public"]
+    rule = public.get("rule", "")
+    assert "PUBLIC_DOMAIN" in rule
+    assert "Path(`/`)" in rule
+    assert "PathPrefix(`/api/public/`)" in rule
+    # The HTML player uses relative /m/<slug> URLs: the media redirect must be
+    # reachable on this host or every <audio> element returns 404 at the edge.
+    assert "PathPrefix(`/m/`)" in rule
+    assert "PathPrefix(`/api/v1/`)" not in rule
+    assert public.get("service") == "aura-public"
