@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(os.environ.get("AURA_REPO_ROOT", str(Path(__file__).resolve().parents[1])))
@@ -88,7 +89,7 @@ def main() -> int:
     marks = ",".join(ph for _ in AUDIO_TYPES)
     rows = repo.conn.execute(
         "SELECT * FROM objects WHERE status = 'available' AND published_at IS NOT NULL "
-        f"AND duration_seconds IS NULL AND content_type IN ({marks}) "
+        f"AND duration_seconds IS NULL AND chapters_probe_at IS NULL AND content_type IN ({marks}) "
         "ORDER BY created_at ASC LIMIT " + ph,
         (*AUDIO_TYPES, args.limit),
     ).fetchall()
@@ -113,17 +114,20 @@ def main() -> int:
                 capture_output=True, timeout=TIMEOUT_S, check=False,
             )
         except (subprocess.TimeoutExpired, OSError):
+            result = None
+        duration, chapters = parse_probe(result.stdout) if result else (None, [])
+        if result is None or result.returncode != 0 or duration is None or duration <= 0:
             failed += 1
-            continue
-        duration, chapters = parse_probe(result.stdout)
-        if result.returncode != 0 or duration is None or duration <= 0:
-            failed += 1
-            continue
-        print(f"  {obj['display_name']} | {duration:.0f} s | {len(chapters)} chapitres")
+        else:
+            print(f"  {obj['display_name']} | {duration:.0f} s | {len(chapters)} chapitres")
+            if args.apply:
+                repo.set_object_duration(obj["id"], duration)
+                repo.replace_audio_chapters(obj["id"], chapters)
+            done += 1
+        # Mark every attempt, successful or not, so the cron does not retry the
+        # same unreadable file on every run.
         if args.apply:
-            repo.set_object_duration(obj["id"], duration)
-            repo.replace_audio_chapters(obj["id"], chapters)
-        done += 1
+            repo.mark_media_probe(obj["id"], "chapters", int(time.time()))
     print(f"analysés: {done}, ignorés: {failed} ({'APPLIQUE' if args.apply else 'DRY-RUN'})")
     return 0
 

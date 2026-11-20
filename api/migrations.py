@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0020_audio_chapters"
+SCHEMA_VERSION = "0021_media_probe_marks"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -77,6 +77,10 @@ ADDED_COLUMNS = {
         # Locally extracted cover art (embedded in the audio file), stored next
         # to the object in S3. Never fetched from an external cover API.
         ("cover_key", "TEXT"),
+        # Bounded admin scripts mark every attempt, successful or not, so a
+        # periodic refresh never retries the same un-enrichable file forever.
+        ("cover_probe_at", "INTEGER"),
+        ("chapters_probe_at", "INTEGER"),
         # Multipart session (#72): backend upload id while parts are being
         # sent (cleared once completed) and the server-chosen part size.
         ("multipart_upload_id", "TEXT"),

@@ -799,6 +799,10 @@ class Repository:
             (float(duration_seconds), oid),
         )
 
+    def mark_media_probe(self, oid: str, kind: str, now: int) -> None:
+        column = {"cover": "cover_probe_at", "chapters": "chapters_probe_at"}[kind]
+        self._run(f"UPDATE objects SET {column} = %s WHERE id = %s", (now, oid))
+
     def replace_audio_chapters(self, oid: str, chapters: list[dict]) -> None:
         with self.conn.transaction():
             self._run("DELETE FROM audio_chapters WHERE object_id = %s", (oid,))

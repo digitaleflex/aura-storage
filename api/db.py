@@ -914,6 +914,13 @@ class Repository:
         )
         self.conn.commit()
 
+    def mark_media_probe(self, oid: str, kind: str, now: int) -> None:
+        column = {"cover": "cover_probe_at", "chapters": "chapters_probe_at"}[kind]
+        self.conn.execute(
+            f"UPDATE objects SET {column} = ? WHERE id = ?", (now, oid)
+        )
+        self.conn.commit()
+
     def replace_audio_chapters(self, oid: str, chapters: list[dict]) -> None:
         self.conn.execute("DELETE FROM audio_chapters WHERE object_id = ?", (oid,))
         self.conn.executemany(

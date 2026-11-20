@@ -65,7 +65,7 @@ def main() -> int:
     marks = ",".join(ph for _ in AUDIO_TYPES)
     rows = repo.conn.execute(
         "SELECT * FROM objects WHERE status = 'available' AND published_at IS NOT NULL "
-        f"AND cover_key IS NULL AND content_type IN ({marks}) "
+        f"AND cover_key IS NULL AND cover_probe_at IS NULL AND content_type IN ({marks}) "
         "ORDER BY created_at ASC LIMIT " + ph,
         (*AUDIO_TYPES, args.limit),
     ).fetchall()
@@ -93,24 +93,29 @@ def main() -> int:
                 args_ffmpeg, capture_output=True, timeout=TIMEOUT_S, check=False
             )
         except (subprocess.TimeoutExpired, OSError):
-            skipped += 1
-            continue
-        jpeg = result.stdout or b""
-        if result.returncode != 0 or len(jpeg) < 1024 or not jpeg.startswith(b"\xff\xd8"):
-            skipped += 1
-            continue
-        key = f"{obj['object_key']}.cover.jpg"
-        print(f"  couverture: {obj['display_name']}")
-        if not args.apply:
-            made += 1
-            continue
-        extra = {"ServerSideEncryption": SSE_ALGORITHM} if settings.require_sse else {}
-        s3.put_object(
-            Bucket=obj["bucket"], Key=key, Body=jpeg,
-            ContentType="image/jpeg", **extra,
+            result = None
+        jpeg = (result.stdout or b"") if result else b""
+        success = bool(
+            result and result.returncode == 0 and len(jpeg) >= 1024
+            and jpeg.startswith(b"\xff\xd8")
         )
-        repo.set_object_cover(obj["id"], key)
-        made += 1
+        if success:
+            key = f"{obj['object_key']}.cover.jpg"
+            print(f"  couverture: {obj['display_name']}")
+            if args.apply:
+                extra = {"ServerSideEncryption": SSE_ALGORITHM} if settings.require_sse else {}
+                s3.put_object(
+                    Bucket=obj["bucket"], Key=key, Body=jpeg,
+                    ContentType="image/jpeg", **extra,
+                )
+                repo.set_object_cover(obj["id"], key)
+            made += 1
+        else:
+            skipped += 1
+        # Mark every attempt so a periodic cron never retries an un-enrichable
+        # file forever. Dry-run does not write anything.
+        if args.apply:
+            repo.mark_media_probe(obj["id"], "cover", int(time.time()))
     print(f"couvertures: {made} traitees, {skipped} sans art integre "
           f"({'APPLIQUE' if args.apply else 'DRY-RUN'})")
     return 0

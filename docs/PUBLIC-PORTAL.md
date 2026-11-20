@@ -116,6 +116,28 @@ publiées. Depuis la console privée : sélectionner les fichiers audio →
 `PacksDialog` → **Publier le manifest**. Chaque piste doit aussi avoir une URL
 stable `/m/{slug}` (`PUT /api/v1/objects/{oid}/publication`).
 
+### 3bis. Mise à jour périodique (cron contrôlé)
+
+Le portail **ne publie rien automatiquement** : ajouter un fichier au bucket ou
+même l'uploader via AURA ne le rend pas visible. La publication reste une
+décision manuelle (`PacksDialog` ou `scripts/publish_audiobooks.py --apply`).
+
+En revanche, l'enrichissement des livres **déjà publiés** est planifié :
+`scripts/refresh_public_library.sh` relance les extractions de couvertures,
+durées et chapitres avec une limite de 20 objets par passe, sous `flock`, et
+marque chaque tentative (`cover_probe_at` / `chapters_probe_at`, migration
+`0021`) pour ne jamais retraiter indéfiniment un fichier sans art intégré.
+Une entrée cron est installée à 03:17 chaque jour et écrit dans
+`/srv/aura-storage/audit/public-refresh.log` :
+
+```
+17 3 * * * cd /home/aura-admin/aura-storage && ./scripts/refresh_public_library.sh >> /srv/aura-storage/audit/public-refresh.log 2>&1
+```
+
+Un livre publié manuellement apparaît donc dès le rechargement suivant ; sa
+pochette, sa durée et ses chapitres arrivent au plus tard au passage suivant
+du cron.
+
 ### 4. Fichiers déjà présents dans le bucket
 Les clés S3 sont des UUID générés par l'API : un préfixe de bucket ne permet pas
 de reconnaître des livres audio. Le catalogue est la source de vérité. Pour
