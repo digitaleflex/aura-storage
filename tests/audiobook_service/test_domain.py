@@ -239,7 +239,7 @@ def test_paid_access_requires_matching_entitlement():
 def test_territory_restriction_and_account_status_are_deny_reasons():
     restricted = _access(rights=(_rights(territory_code="US"),))
     denied = decide_access(restricted)
-    assert denied.reason_code == "NO_ACTIVE_RIGHTS"
+    assert denied.reason_code == "TERRITORY_RESTRICTED"
     suspended = decide_access(_access(listener_status="suspended"))
     assert suspended.reason_code == "ACCOUNT_SUSPENDED"
 
