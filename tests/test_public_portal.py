@@ -154,7 +154,7 @@ def test_anonymous_and_admin_cookies_cannot_enter_the_portal():
     anonymous = TestClient(main.app)
     page = anonymous.get("/")
     assert page.status_code == 200
-    assert "Se connecter avec Google" in page.text
+    assert "Continuer avec Google" in page.text
     assert "<audio" not in page.text
     assert anonymous.get("/api/public/me").status_code == 401
 
@@ -162,7 +162,7 @@ def test_anonymous_and_admin_cookies_cannot_enter_the_portal():
     assert admin.get("/api/public/me").status_code == 401
     admin_page = admin.get("/")
     assert admin_page.status_code == 200
-    assert "Se connecter avec Google" in admin_page.text
+    assert "Continuer avec Google" in admin_page.text
 
 
 def test_unconfigured_portal_fails_closed(monkeypatch):

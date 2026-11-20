@@ -1,5 +1,7 @@
 # Portail public (livres audio)
 
+Direction visuelle et décisions de l'interface : [PUBLIC-PORTAL-UI.md](PUBLIC-PORTAL-UI.md).
+
 Le portail public est un sous-domaine dédié, `PUBLIC_DOMAIN` (pilote :
 `public.aura-storage.eurinhash.com`). Il permet à un visiteur connecté avec son
 compte Google de parcourir les packs publiés et d'écouter leurs pistes audio.

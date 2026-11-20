@@ -5,7 +5,6 @@ and S3 through short-lived presigned URLs. The API never stores a browser sessio
 token in the response body and never puts S3 credentials in the frontend.
 """
 import hashlib
-import html
 import logging
 import os
 import re
@@ -22,7 +21,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, folder_shares, google_oauth, ids, netinfo, shares
+from . import authz, folder_shares, google_oauth, ids, netinfo, public_ui, shares
 from .audit import (
     audit_event,
     audit_path,
@@ -1626,65 +1625,25 @@ def public_portal(request: Request):
         principal = authenticate_public(request)
     except HTTPException:
         principal = None
+    page_headers = {
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
+    }
     if principal is None:
-        login = (
-            "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">",
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-            "<title>Bibliothèque AURA — Connexion</title><style>",
-            "body{font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;text-align:center}",
-            "a{display:inline-block;font:inherit;padding:.7rem 1.2rem;border:1px solid #2563eb;",
-            "border-radius:8px;color:#2563eb;text-decoration:none}</style></head><body>",
-            "<h1>Bibliothèque AURA</h1><p>Connectez-vous avec votre compte Google pour écouter les livres publiés.</p>",
-            "<a href=\"/api/public/auth/google\">Se connecter avec Google</a></body></html>",
-        )
-        return HTMLResponse("".join(login), headers={
-            "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
-            "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
-        })
+        return HTMLResponse(public_ui.login_page(), headers=page_headers)
     collections = []
     for col in repo.list_published_collections():
         col = _as_dict(col)
         items = _library_items(col, only_published=True)
         if not items:
             continue
-        collections.append((col, items))
-    esc = lambda value: html.escape(str(value if value is not None else ""), quote=True)
-    parts = [
-        "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">",
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-        "<title>Bibliothèque AURA</title><style>",
-        "body{font-family:system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem;color:#1c2430}",
-        "header{display:flex;justify-content:space-between;align-items:center;gap:1rem}",
-        "article{border:1px solid #d9dee6;border-radius:10px;padding:1rem;margin:1.25rem 0}",
-        "audio{width:100%;margin:.5rem 0 1rem}button{font:inherit;padding:.4rem .8rem}",
-        ".muted{color:#5b6675;font-size:.9rem}</style></head><body><header><h1>Bibliothèque AURA</h1>",
-        "<form method=\"post\" action=\"/api/public/logout\">",
-        f"<input type=\"hidden\" name=\"csrf_token\" value=\"{esc(principal['csrf'])}\">",
-        f"<span class=\"muted\">{esc(principal.get('email') or principal.get('name'))}</span> ",
-        "<button type=\"submit\">Déconnexion</button></form></header>",
-    ]
-    if not collections:
-        parts.append("<p class=\"muted\">Aucun livre publié pour le moment.</p>")
-    for col, items in collections:
-        parts.append(f"<article><h2>{esc(col['title'])}</h2>")
-        if col.get("description"):
-            parts.append(f"<p>{esc(col['description'])}</p>")
-        for item in items:
-            parts.append(f"<p><strong>{esc(item['display_name'])}</strong>")
-            duration = item.get("duration_seconds")
-            if duration:
-                minutes, seconds = divmod(int(duration), 60)
-                parts.append(f" <span class=\"muted\">{minutes} min {seconds:02d} s</span>")
-            parts.append("</p>")
-            parts.append(
-                f"<audio controls preload=\"metadata\" src=\"{esc(item['url'])}\"></audio>"
-            )
-        parts.append("</article>")
-    parts.append("</body></html>")
-    return HTMLResponse("".join(parts), headers={
-        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
-        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
-    })
+        collections.append({
+            "title": col["title"], "description": col.get("description") or "",
+            "items": items,
+        })
+    return HTMLResponse(
+        public_ui.catalog_page(principal, collections), headers=page_headers
+    )
 
 
 # ---------------------------------------------------------------------------
