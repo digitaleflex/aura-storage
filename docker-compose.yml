@@ -15,9 +15,14 @@ services:
       - --entrypoints.websecure.address=:443
       # Uploads are direct presigned PUTs whose entire body is one request. The
       # Traefik default readTimeout (60s) cut large uploads mid-body -> HTTP 502
-      # and the UI reported "Réseau interrompu.". 1200s is bounded (slowloris
-      # protection stays), yet covers the 900s presigned-URL/intent TTL.
+      # and the UI reported "Réseau interrompu.". 7200s covers the 900s
+      # presigned-URL/intent TTL and slow clients.
       - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=7200s
+      # Large/slow S3 downloads and multipart uploads must not be cut by write or
+      # idle deadlines. Keep a bounded write timeout so slowloris/resource
+      # protection stays; align it with the read timeout.
+      - --entrypoints.websecure.transport.respondingTimeouts.writeTimeout=7200s
+      - --entrypoints.websecure.transport.respondingTimeouts.idleTimeout=7200s
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?Set ACME_EMAIL in .env}
