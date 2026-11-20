@@ -31,6 +31,8 @@ backups/
 *.dump
 *.tar.gz
 *.sql
+# Versioned schema migrations are the exception: they are code, not data dumps.
+!audiobook/migrations/*.sql
 # User-uploaded files must never be committed.
 userfiles/
 
