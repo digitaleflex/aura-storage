@@ -1,9 +1,10 @@
 # 09 — Revue de conception, audit et décisions ouvertes
 
-**Version :** 0.1
-**Statut :** **prêt pour revue, non approuvé.**
+**Version :** 0.2
+**Statut :** **conception revue ; recommandations D-01 à D-12 acceptées par l'utilisateur (2026-11-20).** Fondation Lot 1 implémentée dans `audiobook/` (voir [`10-lot1-implementation.md`](10-lot1-implementation.md)).
 **But :** exposer honnêtement l'écart entre l'existant et la cible, vérifier la
-cohérence du dossier, et lister les décisions qui conditionnent l'implémentation.
+cohérence du dossier, tracer les décisions de conception et les conditions
+restantes avant déploiement/ouverture.
 
 ---
 
@@ -327,32 +328,35 @@ Ces choix sont **proposés** et doivent être confirmés ou infirmés :
 
 ## 8. Gate de validation
 
-**État actuel :** dossier de conception complet, **non approuvé**.
+**État actuel :** recommandations de conception **acceptées** (D-01 à D-12, options recommandées) ; **Lots 1 et 2 implémentés et testés** dans `audiobook/` (schéma PostgreSQL/migrations, domaine, services, API, 31 tests). Lot 1 : catalogue gratuit, bibliothèque, accès audité, écoute multi-appareils/conflits, admin de base. Lot 2 : droits/territoires/contrats, entitlements manuels/révocation, résolveur d'accès renforcé, historique/stats personnels de base, tableau de bord des refus. L'acceptation des décisions de conception n'équivaut pas à une autorisation de déploiement commercial.
 
-**Conditions d'approbation :**
+**Décisions de conception :**
 
-- [ ] D-01 tranchée
-- [ ] D-02 tranchée (au moins le principe)
-- [ ] D-03 tranchée
-- [ ] D-04 tranchée (avant Lot 3)
-- [ ] D-05 tranchée
-- [ ] D-06 tranchée (avant Lot 4)
-- [ ] D-07 tranchée (avant Lot 2)
-- [ ] D-08 tranchée
-- [ ] D-09 tranchée
-- [ ] D-10 tranchée (principes validés)
-- [ ] D-11 tranchée
-- [ ] D-12 tranchée
+- [x] D-01 tranchée — service séparé, AURA via `StoragePort`
+- [x] D-02 tranchée (principe MVP) — gratuit + abonnement + achat + previews
+- [x] D-03 tranchée — Google OIDC (MVP), identité auditeur séparée
+- [x] D-04 tranchée (principe, avant Lot 3) — Stripe + Stripe Tax, EUR/UE (MVP)
+- [x] D-05 tranchée — imports personnels privés, quota, jamais publics
+- [x] D-06 tranchée (avant Lot 4) — leases/offline sans DRM fort au MVP
+- [x] D-07 tranchée (avant Lot 2) — mondial au lancement, modèle de restrictions prêt
+- [x] D-08 tranchée — geler/migrer le prototype, retirer `/m/` payant
+- [x] D-09 tranchée — PostgreSQL dédié/schéma dédié, migrations versionnées
+- [x] D-10 tranchée (principes validés) — rétention/suppression configurable, écritures financières immuables
+- [x] D-11 tranchée — 3 appareils, 2 sessions, 1 bail (paramétrable)
+- [x] D-12 tranchée — VPS pilote, sauvegarde indépendante + restauration testée avant ouverture payante
+
+**Conditions restantes avant déploiement/ouverture :**
+
 - [ ] Threat model revu
-- [ ] Inventaire de migration mesuré
-- [ ] Revue juridique planifiée
-- [ ] Prestataire de paiement testé en sandbox
+- [ ] Inventaire de migration mesuré (portail/progressions/slugs)
+- [ ] Revue juridique planifiée (droits, RGPD, CGV, TVA, contenu importé)
+- [ ] Prestataire de paiement testé en sandbox (avant Lot 3)
+- [ ] Sauvegarde indépendante et test de restauration validés (avant ouverture payante)
+- [ ] Identité de service AURA dédiée et configuration production
+- [ ] Retrait effectif de l'accès public payant via `/m/{slug}` (D-08)
 - [ ] Budget/équipe confirmés
 
-**Après approbation :** démarrer le Lot 1 par une tranche verticale
-« publier un livre gratuit → l'écouter sur deux appareils → résoudre un conflit
-de progression → auditer les décisions ». Aucun paiement, aucun offline, aucun
-import public.
+**Prochaine tranche :** compléter le Lot 1 (intégration AURA réelle, politique D-11 globale, retrait `/m/` payant/migration, durcissement auth/SSO admin) puis Lot 2 (droits/territoires avancés, lecture enrichie, limites configurables). Aucun paiement, aucun offline fort, aucun import public avant leurs lots/gates.
 
 ---
 

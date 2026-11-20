@@ -12,7 +12,7 @@
 - [File transfer contract: API + presigned S3 URLs, FTPS boundaries](docs/FILE-TRANSFER.md)
 - [Public share links](docs/OBJECT-SHARING.md), [public folder links](docs/FOLDER-SHARING.md), [embedding media on another site](docs/EMBEDDING-MEDIA.md) and [stable media URLs for a course site](docs/STABLE-MEDIA-URLS.md)
 - [Public audiobook portal on a dedicated subdomain (Google sign-in)](docs/PUBLIC-PORTAL.md)
-- [Audiobook platform — business design package (design only, not implemented)](docs/audiobook/README.md)
+- [Audiobook platform — business design package (accepted) and Lot 1 foundation](docs/audiobook/README.md) (service in `audiobook/`, not yet deployed/integrated)
 - [Vault transfer engine: upload state machine, progress, retries, cancellation, integrity](docs/TRANSFER-ENGINE.md)
 - [S3 multipart upload for large objects (implemented, `AURA_MULTIPART_ENABLED=0` by default; 4.48 compatibility gate closed for items 1–6 across three runs on 2026-10-25/26 — two documented UNKNOWNs: disk reclaim after abort, and a real 10,000-part completion)](docs/MULTIPART-UPLOAD-PLAN.md)
 - [Secure and efficient bulk transfers: security, resumability, multipart, compression and benchmarks](docs/SECURE-BULK-TRANSFERS.md)

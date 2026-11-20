@@ -1,14 +1,11 @@
 # Plateforme de livres audio — dossier de conception
 
-**Version :** 0.1 — proposition de conception
+**Version :** 0.2 — conception acceptée, fondation Lot 1 implémentée
 **Date :** 2026-11-20
-**Statut :** conception documentée ; un **prototype Lot 1** existe dans `audiobook/`
-(domaine, services, repository SQL, API FastAPI, tests unitaires). Il n'est **ni
-déployé, ni intégré** à la stack Compose et ne remplace pas le portail public AURA.
-Les décisions D-01 à D-10 restent à trancher avant toute mise en production.
+**Statut :** **recommandations D-01 à D-12 acceptées par l'utilisateur** ; une **fondation Lot 1** est implémentée dans `audiobook/` (domaine, services, repository PostgreSQL, API FastAPI, tests). Le service n'est **pas encore déployé/intégré** à la stack Compose et ne remplace pas le portail public AURA en production.
 **Périmètre :** les 12 domaines du brief, leurs règles, invariants, cycles de vie,
-scénarios de défaillance, permissions, tests d'acceptation, plan de réalisation et
-registre des risques.
+scénarios de défaillance, permissions, tests d'acceptation, plan de réalisation,
+registre des risques, revue de conception et état d'implémentation Lot 1.
 
 ---
 
@@ -142,10 +139,13 @@ protégée.
 | 06 | [Scénarios de défaillance](06-failure-scenarios.md) | Doublons, désordre, concurrence, pannes, récupération |
 | 07 | [Tests d'acceptation](07-acceptance-tests.md) | Matrice Given/When/Then, tests de concurrence, sécurité, migration |
 | 08 | [Plan de réalisation et risques](08-delivery-plan-and-risks.md) | Lots, gates, migration du portail, registre des risques |
-| 09 | [Revue de conception et décisions](09-design-review-and-decisions.md) | Résultats de revue, décisions ouvertes, traçabilité, gate |
+| 09 | [Revue de conception et décisions](09-design-review-and-decisions.md) | Résultats de revue, décisions acceptées, traçabilité, gate |
+| 10 | [Implémentation Lot 1](10-lot1-implementation.md) | Périmètre livré, exécution, limites, conditions restantes |
+| 11 | [Implémentation Lot 2](11-lot2-implementation.md) | Droits/territoires/contrats, entitlements, résolveur d'accès, historique/stats, refus |
+| — | [Runbook & administration](RUNBOOK.md) | Configuration, bootstrap, opérations, sécurité, incidents |
 
-**Ordre de lecture recommandé :** 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09.
-Pour une revue rapide : ce README, puis 09.
+**Ordre de lecture recommandé :** 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11.
+Pour une revue rapide : ce README, puis 09, 10 et 11. Pour l'exploitation : 10/11 puis le runbook.
 
 ---
 
@@ -163,20 +163,23 @@ Pour une revue rapide : ce README, puis 09.
 
 ## 6. Condition de passage au déploiement
 
-Le prototype Lot 1 est implémenté, mais **ne doit pas être déployé** avant que
-les décisions **D-01 à D-10** de
-[`09-design-review-and-decisions.md`](09-design-review-and-decisions.md)
-soient tranchées, au minimum :
+Les recommandations **D-01 à D-12** sont acceptées et une **fondation Lot 1** est
+implémentée (voir [`10-lot1-implementation.md`](10-lot1-implementation.md)),
+mais le service **ne doit pas être exposé en production** tant que les conditions
+opérationnelles, sécurité et conformité ne sont pas satisfaites :
 
-1. frontière AURA / Audiobook et mode de déploiement ;
-2. modèle commercial du MVP ;
-3. identité et fournisseur d'authentification ;
-4. prestataire de paiement et fiscalité ;
-5. politique de contenus personnels ;
-6. politique hors ligne / DRM ;
-7. territoires et restrictions de droits ;
-8. reprise du portail existant et sort de `/m/{slug}`.
+1. **Intégration AURA réelle** : identité de service dédiée, privilèges minimaux,
+   `AURA_API_BASE_URL`/jeton configurés (pas de fake storage hors dev).
+2. **D-08 effectif** : migration/gel du prototype, retrait de tout accès payant
+   via `/m/{slug}`, gestion des slugs/previews.
+3. **Auth durcie** : `AUDIOBOOK_DEV_AUTH` désactivé, Google OIDC configuré,
+   admin bootstrap remplacé par un contrôle d'accès conforme.
+4. **D-11 complet** : limites globales appareils/sessions appliquées et auditables.
+5. **D-10/D-12** : rétention/anonymisation paramétrées, sauvegarde indépendante
+   et **test de restauration** validés avant toute ouverture payante.
+6. **Revue sécurité/juridique** : threat model, inventaire de migration, CGV/RGPD,
+   droits d'auteur/contenu importé, fiscalité/paiement sandbox avant Lot 3.
 
-Une fois ces décisions prises, le premier lot peut démarrer avec un périmètre
-vertical : **identité auditeur + catalogue + actifs + bibliothèque + écoute
-gratuite + progression événementielle**, sans paiement.
+Le périmètre vertical livré couvre : **identité auditeur + catalogue publié +
+bibliothèque + décision d'accès auditée + écoute/progression multi-appareils
+avec résolution de conflits**, sans paiement ni offline téléchargeable.
