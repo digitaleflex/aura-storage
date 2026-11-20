@@ -74,6 +74,27 @@ publiées. Depuis la console privée : sélectionner les fichiers audio →
 `PacksDialog` → **Publier le manifest**. Chaque piste doit aussi avoir une URL
 stable `/m/{slug}` (`PUT /api/v1/objects/{oid}/publication`).
 
+### 4. Fichiers déjà présents dans le bucket
+Les clés S3 sont des UUID générés par l'API : un préfixe de bucket ne permet pas
+de reconnaître des livres audio. Le catalogue est la source de vérité. Pour
+finaliser des intentions abandonnées, normaliser les types `audio/x-m4a` en
+`audio/mp4` (seuls les types inline sont lisibles), attribuer les slugs et
+publier un pack en une seule opération :
+
+```bash
+# aperçu, aucune écriture
+AURA_REPO_ROOT=/srv/api docker compose exec -T -e AURA_REPO_ROOT=/srv/api \
+  api python - --limit 50 < scripts/publish_audiobooks.py
+# publication
+AURA_REPO_ROOT=/srv/api docker compose exec -T -e AURA_REPO_ROOT=/srv/api \
+  api python - --apply --limit 50 < scripts/publish_audiobooks.py
+```
+
+Le script ignore les objets dont les octets sont absents de S3 et exige SSE-S3
+quand `AURA_REQUIRE_SSE=1`. Le manifeste JSON reste servi sur `APP_DOMAIN`
+(`/p/<slug>.json`) ; le portail lit son propre catalogue via `/api/public/library`.
+L'opérateur doit s'assurer des droits de diffusion des œuvres avant publication.
+
 ## Sécurité et limites connues
 
 - `state` aléatoire lié à un cookie courte durée et supprimé après succès ;
