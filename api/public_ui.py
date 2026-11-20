@@ -5,6 +5,7 @@ with no JavaScript bundle and no external font/CDN. The visual direction is a
 warm library — cream paper, night-ink text, serif display, one clear action.
 """
 import html
+import json
 from urllib.parse import urlencode
 
 ESC = lambda value: html.escape(str(value if value is not None else ""), quote=True)
@@ -231,6 +232,26 @@ a{color:inherit}
   padding:.5rem;border:0;background:none;color:var(--ink);cursor:pointer;border-radius:2px}
 .queue-panel button:hover{background:var(--paper-deep)}
 .queue-panel button.playing{background:var(--paper-deep);font-weight:600}
+.player-cover{display:none;width:72px;height:72px;border-radius:4px;position:relative;
+  overflow:hidden;background:var(--paper-deep);font-family:Georgia,serif;font-size:2rem;
+  place-items:center;color:var(--brass)}
+.player-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.player-status{grid-column:1/-1;font-size:.8rem;color:var(--brass);text-align:center;min-height:1.1em}
+.player-status:empty{display:none}
+.full-player .player-bar{position:fixed;inset:0;border:0;padding:clamp(1.5rem,5vw,4rem);
+  grid-template-columns:1fr;grid-template-rows:auto auto auto auto auto;
+  gap:1.5rem;justify-items:center;align-content:center;z-index:20}
+.full-player .player-cover{display:grid;width:min(45vw,22rem);height:min(45vw,22rem);
+  font-size:5rem}
+.full-player .now-title{font-family:Georgia,serif;font-size:clamp(1.6rem,4vw,2.6rem);
+  text-align:center;white-space:normal}
+.full-player .now-author{text-align:center;font-size:1rem}
+.full-player .player-bar>div:first-child{display:grid;justify-items:center;gap:.4rem}
+.full-player .transport{gap:1rem}
+.full-player .icon-button{min-width:52px;min-height:52px}
+.full-player .icon-button.main{min-width:64px;min-height:64px}
+.full-player .seek-row{grid-row:auto;width:min(100%,40rem)}
+.full-player .player-right{grid-row:auto;justify-content:center;flex-wrap:wrap}
 
 @media (max-width:820px){
   .player-bar{grid-template-columns:1fr auto;gap:.6rem .8rem}
@@ -331,8 +352,13 @@ _PLAYER_JS = """
   const playToggle = document.getElementById('play-toggle');
   const queuePanel = document.getElementById('queue-panel');
   const queueList = document.getElementById('queue-list');
+  const chaptersPanel = document.getElementById('chapters-panel');
+  const chaptersList = document.getElementById('chapters-list');
   const sleepSelect = document.getElementById('sleep');
-  let index = -1, lastSaved = 0, retried = false, sleepTimer = null;
+  const statusLine = document.getElementById('player-status');
+  const playerCover = document.getElementById('player-cover');
+  let index = -1, lastSaved = 0, retries = 0, sleepTimer = null;
+  const chapterData = JSON.parse(document.getElementById('chapters-data').textContent);
 
   function fmt(value){
     if(!isFinite(value) || value < 0) value = 0;
@@ -366,17 +392,31 @@ _PLAYER_JS = """
     if(bigCover && track.dataset.cover){
       bigCover.src = track.dataset.cover;
     }
+    if(playerCover){
+      playerCover.innerHTML = '';
+      const initial = document.createElement('span');
+      initial.textContent = (track.dataset.title || 'A').slice(0, 1).toUpperCase();
+      playerCover.appendChild(initial);
+      if(track.dataset.cover){
+        const img = document.createElement('img');
+        img.src = track.dataset.cover;
+        img.alt = '';
+        img.onerror = function(){ this.remove(); };
+        playerCover.appendChild(img);
+      }
+    }
+    buildChapters();
     if('mediaSession' in navigator){
       navigator.mediaSession.metadata = new MediaMetadata({
         title: track.dataset.title, artist: track.dataset.author || 'AURA'
       });
     }
   }
-  function play(i){
+  function selectTrack(i, autoplay){
     if(i < 0 || i >= tracks.length) return;
-    if(i === index){ toggle(); return; }
     if(index >= 0) tracks[index].classList.remove('playing');
-    index = i; retried = false; lastSaved = 0;
+    index = i; retries = 0; lastSaved = 0;
+    if(statusLine) statusLine.textContent = '';
     const track = tracks[i];
     track.classList.add('playing');
     if(queueList){
@@ -393,9 +433,14 @@ _PLAYER_JS = """
       }
       audio.removeEventListener('loadedmetadata', ready);
     });
-    audio.play().catch(function(){});
     bar.hidden = false;
     nowPlaying();
+    if(autoplay) audio.play().catch(function(){});
+  }
+  function play(i){
+    if(i < 0 || i >= tracks.length) return;
+    if(i === index){ toggle(); return; }
+    selectTrack(i, true);
   }
   function toggle(){
     if(index < 0 && tracks.length){ play(0); return; }
@@ -445,14 +490,29 @@ _PLAYER_JS = """
     if(index + 1 < tracks.length) play(index + 1); else stop();
   });
   audio.addEventListener('error', function(){
-    if(index < 0 || retried) return;
-    retried = true;
+    if(index < 0 || retries >= 3) return;
+    retries += 1;
+    if(statusLine) statusLine.textContent = 'Connexion interrompue, reprise en cours…';
     const track = tracks[index];
     const position = audio.currentTime || 0;
-    audio.src = track.dataset.url + '?refresh=' + Date.now();
-    audio.load();
-    audio.currentTime = position;
-    audio.play().catch(function(){});
+    const wait = 400 * retries;
+    setTimeout(function(){
+      audio.src = track.dataset.url + '?refresh=' + Date.now();
+      audio.load();
+      audio.addEventListener('loadedmetadata', function ready(){
+        audio.currentTime = position;
+        audio.removeEventListener('loadedmetadata', ready);
+      });
+      audio.play().catch(function(){
+        if(statusLine && retries >= 3){
+          statusLine.textContent = 'Lecture indisponible. Réessayez plus tard.';
+        }
+      });
+    }, wait);
+  });
+  audio.addEventListener('playing', function(){
+    retries = 0;
+    if(statusLine) statusLine.textContent = '';
   });
   tracks.forEach(function(button, i){
     button.addEventListener('click', function(){ play(i); });
@@ -468,11 +528,46 @@ _PLAYER_JS = """
       queueList.appendChild(item);
     });
   }
+  function buildChapters(){
+    if(!chaptersList || index < 0) return;
+    chaptersList.innerHTML = '';
+    const list = chapterData[tracks[index].dataset.objectId] || [];
+    if(!list.length){
+      const empty = document.createElement('p');
+      empty.className = 'track-author';
+      empty.textContent = 'Aucun chapitre détecté dans ce fichier.';
+      chaptersList.appendChild(empty);
+      return;
+    }
+    list.forEach(function(chapter){
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.textContent = chapter.title + ' · ' + fmt(chapter.start);
+      item.addEventListener('click', function(){
+        audio.currentTime = chapter.start;
+        audio.play().catch(function(){});
+      });
+      chaptersList.appendChild(item);
+    });
+  }
   buildQueue();
   const queueToggle = document.getElementById('queue-toggle');
   if(queueToggle && queuePanel){
     queueToggle.addEventListener('click', function(){
       queuePanel.hidden = !queuePanel.hidden;
+    });
+  }
+  const chaptersToggle = document.getElementById('chapters-toggle');
+  if(chaptersToggle && chaptersPanel){
+    chaptersToggle.addEventListener('click', function(){
+      chaptersPanel.hidden = !chaptersPanel.hidden;
+      if(!chaptersPanel.hidden) buildChapters();
+    });
+  }
+  const fullButton = document.getElementById('fullscreen');
+  if(fullButton){
+    fullButton.addEventListener('click', function(){
+      document.body.classList.toggle('full-player');
     });
   }
   const launch = document.getElementById('launch');
@@ -486,6 +581,13 @@ _PLAYER_JS = """
       }
     });
   }
+  let best = -1, bestProgress = 0;
+  tracks.forEach(function(track, i){
+    const value = parseFloat(track.dataset.progress || '0');
+    if(value > bestProgress){ bestProgress = value; best = i; }
+  });
+  if(best >= 0) selectTrack(best, false);
+
   window.addEventListener('beforeunload', function(){ save(true); });
   document.addEventListener('visibilitychange', function(){
     if(document.hidden) save(true);
@@ -495,7 +597,11 @@ _PLAYER_JS = """
     if(e.code === 'Space'){ e.preventDefault(); toggle(); }
     else if(e.key === 'ArrowRight'){ e.preventDefault(); audio.currentTime = (audio.currentTime||0) + 15; }
     else if(e.key === 'ArrowLeft'){ e.preventDefault(); audio.currentTime = Math.max(0,(audio.currentTime||0) - 15); }
-    else if(e.key === 'Escape'){ stop(); }
+    else if(e.key === 'Escape'){
+      if(document.body.classList.contains('full-player')){
+        document.body.classList.remove('full-player');
+      } else { stop(); }
+    }
   });
   if('mediaSession' in navigator){
     navigator.mediaSession.setActionHandler('play', function(){ audio.play().catch(function(){}); });
@@ -679,10 +785,20 @@ def catalog_page(
     for col in collections:
         shelf("tous", col.get("title") or "Bibliothèque", col["items"])
 
+    chapter_map = {
+        item["id"]: item.get("chapters") or []
+        for col in collections for item in col["items"]
+    }
+    chapters_json = json.dumps(chapter_map, ensure_ascii=False).replace("</", "<\\/")
+    parts.append(
+        '<script type="application/json" id="chapters-data">'
+        + chapters_json + '</script>'
+    )
     parts.extend([
         '<audio id="player" preload="none"></audio>',
         '<div class="player-bar" id="player-bar" hidden role="region" '
         'aria-label="Lecteur audio">',
+        '<div class="player-cover" id="player-cover" aria-hidden="true"></div>',
         '<div><p class="now-title" id="now-title" aria-live="polite"></p>',
         '<p class="now-author" id="now-author"></p></div>',
         '<div class="transport">',
@@ -691,14 +807,17 @@ def catalog_page(
         '<button type="button" class="icon-button main" id="play-toggle" aria-label="Lecture ou pause">Lecture</button>',
         '<button type="button" class="icon-button" id="fwd15" aria-label="Avancer de 15 secondes">+15 s</button>',
         '<button type="button" class="icon-button" id="next" aria-label="Titre suivant">Suiv.</button>',
+        '<button type="button" class="icon-button" id="chapters-toggle" aria-label="Afficher les chapitres">Chapitres</button>',
+        '<button type="button" class="icon-button" id="fullscreen" aria-label="Plein écran">Agrandir</button>',
         '</div>',
         '<div class="player-right">',
         '<label for="speed">Vitesse</label>',
         '<select id="speed" aria-label="Vitesse de lecture">',
-        '<option value="0.75">0,75×</option><option value="1" selected>1×</option>',
-        '<option value="1.25">1,25×</option><option value="1.5">1,5×</option>',
-        '<option value="1.75">1,75×</option><option value="2">2×</option>',
-        '</select>',
+        '<option value="0.5">0,5×</option><option value="0.75">0,75×</option>',
+        '<option value="1" selected>1×</option><option value="1.25">1,25×</option>',
+        '<option value="1.5">1,5×</option><option value="1.75">1,75×</option>',
+        '<option value="2">2×</option><option value="2.5">2,5×</option>',
+        '<option value="3">3×</option></select>',
         '<label for="sleep">Sommeil</label>',
         '<select id="sleep" aria-label="Minuteur de sommeil">',
         '<option value="0">Off</option><option value="5">5 min</option>',
@@ -713,9 +832,12 @@ def catalog_page(
         '<input class="seek" id="seek" type="range" min="0" max="100" value="0" '
         'step="0.1" aria-label="Position dans le livre">',
         '<span class="time" id="time-total">0:00</span></div>',
+        '<p class="player-status" id="player-status" role="status"></p>',
         '</div>',
         '<aside class="queue-panel" id="queue-panel" hidden aria-label="File d\'attente">',
         '<h3>Dans la file</h3><div id="queue-list"></div></aside>',
+        '<aside class="queue-panel" id="chapters-panel" hidden aria-label="Chapitres">',
+        '<h3>Chapitres</h3><div id="chapters-list"></div></aside>',
         _PLAYER_JS.replace("__CSRF__", ESC(csrf)),
         '</main></body></html>',
     ])

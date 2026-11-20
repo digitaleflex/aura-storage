@@ -369,3 +369,15 @@ CREATE TABLE IF NOT EXISTS listen_progress (
 );
 CREATE INDEX IF NOT EXISTS idx_listen_progress_user
   ON listen_progress(user_id, updated_at);
+
+-- Locally extracted chapter markers (ffprobe). Ordered by chapter_index.
+CREATE TABLE IF NOT EXISTS audio_chapters (
+  object_id TEXT NOT NULL REFERENCES objects(id),
+  chapter_index INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  start_seconds REAL NOT NULL,
+  end_seconds REAL,
+  PRIMARY KEY (object_id, chapter_index)
+);
+CREATE INDEX IF NOT EXISTS idx_audio_chapters_object
+  ON audio_chapters(object_id, chapter_index);

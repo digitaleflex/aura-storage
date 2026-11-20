@@ -907,6 +907,36 @@ class Repository:
         )
         self.conn.commit()
 
+    def set_object_duration(self, oid: str, duration_seconds: float) -> None:
+        self.conn.execute(
+            "UPDATE objects SET duration_seconds = ? WHERE id = ?",
+            (float(duration_seconds), oid),
+        )
+        self.conn.commit()
+
+    def replace_audio_chapters(self, oid: str, chapters: list[dict]) -> None:
+        self.conn.execute("DELETE FROM audio_chapters WHERE object_id = ?", (oid,))
+        self.conn.executemany(
+            "INSERT INTO audio_chapters "
+            "(object_id, chapter_index, title, start_seconds, end_seconds) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                (oid, int(c["index"]), str(c.get("title") or ""),
+                 float(c["start"]), c.get("end"))
+                for c in chapters
+            ],
+        )
+        self.conn.commit()
+
+    def get_audio_chapters(self, oid: str) -> list:
+        return [
+            dict(r) for r in self.conn.execute(
+                "SELECT chapter_index, title, start_seconds, end_seconds "
+                "FROM audio_chapters WHERE object_id = ? ORDER BY chapter_index",
+                (oid,),
+            ).fetchall()
+        ]
+
     def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
         """Point ``target_id`` at ``source_id``'s bytes, keeping id and slug.
 

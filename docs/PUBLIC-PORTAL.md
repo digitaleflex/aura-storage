@@ -32,10 +32,17 @@ ces URL ; la CSP du bord n'impose pas de `media-src` restrictive.
 La page du catalogue affiche une seule barre de lecture persistante au lieu de
 97 lecteurs natifs empilés. Contrôles : lecture/pause, titre précédent/suivant,
 recule et avance de 15 s, barre de progression à glisser, vitesse de 0,75× à 2×,
-volume, **minuteur de sommeil** (5/15/30/60 min), **file d'attente** cliquable,
+volume (0,5× à 3×), **minuteur de sommeil** (5/15/30/60 min), **file d'attente**
+cliquable, **panneau de chapitres**, **lecteur plein écran**, reprise automatique
+du dernier livre écouté, reconnexion jusqu'à 3 fois en cas de coupure réseau,
 raccourcis clavier (Espace, ←/→, Échap) et Media Session (contrôles
 système/mobile). Un seul `<audio preload="none">` existe dans la page : plus de
 97 requêtes `Range` au chargement.
+
+Les chapitres et la durée sont extraits **localement** avec ffprobe par
+`scripts/extract_audio_chapters.py` (dry-run puis `--apply`, lot borné), stockés
+dans `audio_chapters` et `objects.duration_seconds` (migration `0020`), puis
+exposés dans `/api/public/library`.
 
 Trois modes d'affichage sont disponibles via `?vue=liste|grille|immersif` :
 liste compacte, grille de cartes avec pochettes, et vue immersive avec une

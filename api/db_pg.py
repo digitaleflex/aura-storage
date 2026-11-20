@@ -793,6 +793,33 @@ class Repository:
     def set_object_cover(self, oid: str, cover_key: Optional[str]) -> None:
         self._run("UPDATE objects SET cover_key = %s WHERE id = %s", (cover_key, oid))
 
+    def set_object_duration(self, oid: str, duration_seconds: float) -> None:
+        self._run(
+            "UPDATE objects SET duration_seconds = %s WHERE id = %s",
+            (float(duration_seconds), oid),
+        )
+
+    def replace_audio_chapters(self, oid: str, chapters: list[dict]) -> None:
+        with self.conn.transaction():
+            self._run("DELETE FROM audio_chapters WHERE object_id = %s", (oid,))
+            self._run_many(
+                "INSERT INTO audio_chapters "
+                "(object_id, chapter_index, title, start_seconds, end_seconds) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                [
+                    (oid, int(c["index"]), str(c.get("title") or ""),
+                     float(c["start"]), c.get("end"))
+                    for c in chapters
+                ],
+            )
+
+    def get_audio_chapters(self, oid: str) -> list:
+        return self._all(
+            "SELECT chapter_index, title, start_seconds, end_seconds "
+            "FROM audio_chapters WHERE object_id = %s ORDER BY chapter_index",
+            (oid,),
+        )
+
     def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
         with self.conn.transaction():
             self._run("DELETE FROM objects WHERE id = %s", (source_id,))

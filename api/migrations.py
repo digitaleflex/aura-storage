@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0019_audio_covers"
+SCHEMA_VERSION = "0020_audio_chapters"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -267,6 +267,17 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
                 runner.exec(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
     runner.commit()
     runner.exec("CREATE INDEX IF NOT EXISTS idx_objects_space ON objects(space_id, status)")
+    # Chapters extracted locally with ffprobe. One row per chapter, ordered by
+    # start time; no chapter data is fetched from an external metadata service.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS audio_chapters ("
+        "object_id TEXT NOT NULL REFERENCES objects(id), "
+        "chapter_index INTEGER NOT NULL, "
+        "title TEXT NOT NULL DEFAULT '', "
+        "start_seconds REAL NOT NULL, "
+        "end_seconds REAL, "
+        "PRIMARY KEY (object_id, chapter_index))"
+    )
     # Public portal playback position (additive: an existing catalogue has no
     # such table until this version is applied).
     runner.exec(

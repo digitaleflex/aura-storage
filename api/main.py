@@ -1609,6 +1609,7 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             "content_type": row["content_type"],
             "size_bytes": row["size_bytes"],
             "duration_seconds": row.get("duration_seconds"),
+            "chapters": repo.get_audio_chapters(row["id"]),
             "published_slug": row.get("public_slug"),
             "cover_url": f"/covers/{row['id']}.jpg" if row.get("cover_key") else None,
             "url": f"/m/{row['public_slug']}" if published else None,

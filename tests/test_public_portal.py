@@ -146,6 +146,10 @@ def test_view_modes_facets_and_cover_route():
     assert "class=\"hero\"" in c.get("/?vue=immersif").text
     assert "Chapitre 1" in c.get("/?q=chapitre").text
     assert c.get("/?vue=bogus").status_code == 200
+    assert "id=\"fullscreen\"" in page
+    assert "id=\"chapters-toggle\"" in page
+    assert "chapters-data" in page
+    assert "0,5×" in page and "3×" in page
 
 
 def test_cover_route_is_404_without_extracted_art():
