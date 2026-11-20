@@ -1,0 +1,554 @@
+<!doctype html>
+<html lang="fr" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AudioLivre — Tableau de bord</title>
+<style>
+/* ============================================================
+   DESIGN TOKENS
+   ============================================================ */
+:root{
+  --radius-lg:20px; --radius-md:15px; --radius-sm:12px; --radius-pill:999px;
+  --sidebar-w:278px; --right-w:372px; --player-h:94px; --gap:24px;
+  --font: Inter, "Geist Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: "Instrument Serif", Georgia, serif;
+}
+:root[data-theme="dark"]{
+  --bg:#0B0C12; --sidebar:#11111B; --surface:#151521; --elev:#1B1B29;
+  --sec:#232333; --border:#303044; --border-soft:#292938;
+  --text:#F5F3FA; --text2:#B5B2C3; --muted:#858195; --disabled:#656174;
+  --primary:#7752D6; --primary2:#9B72F1; --primary3:#C39AFF;
+  --active:#5141A5; --gold:#E6BC72; --success:#69C99A; --danger:#FF4D59;
+  --grad-btn:linear-gradient(110deg,#7953D9,#9864ED);
+  --grad-glow:linear-gradient(135deg,#A879F3,#7046CC);
+  --grad-premium:linear-gradient(135deg,#32251E,#49301F);
+  --cover-1:linear-gradient(145deg,#2E1B4A,#6C3FB5);
+  --cover-2:linear-gradient(145deg,#123A5E,#2E7FB8);
+  --cover-3:linear-gradient(145deg,#3D1F3D,#A4478F);
+  --cover-4:linear-gradient(145deg,#1E3B2E,#4E9B6E);
+  --cover-5:linear-gradient(145deg,#4A3318,#C08B3C);
+  --cover-6:linear-gradient(145deg,#163A45,#3E9BAE);
+}
+:root[data-theme="light"]{
+  --bg:#F8F7F3; --sidebar:#FFFFFF; --surface:#FFFFFF; --elev:#F0EEE8;
+  --sec:#F0EEE8; --border:#E7E4DC; --border-soft:#EAE7E0;
+  --text:#24231F; --text2:#77756F; --muted:#8A8882; --disabled:#B0AEA8;
+  --primary:#92734E; --primary2:#A8865E; --primary3:#C0A37C;
+  --active:#EDE3D4; --gold:#8A6531; --success:#2F8C63; --danger:#D93F4C;
+  --grad-btn:linear-gradient(110deg,#92734E,#B08E60);
+  --grad-glow:linear-gradient(135deg,#A8865E,#7A5C39);
+  --grad-premium:linear-gradient(135deg,#F4E9D8,#E8D4B2);
+  --cover-1:linear-gradient(145deg,#C9B8EA,#8D6BC7);
+  --cover-2:linear-gradient(145deg,#BBD9EE,#6FA8CC);
+  --cover-3:linear-gradient(145deg,#E7C6E1,#C77FB4);
+  --cover-4:linear-gradient(145deg,#C6DFCE,#7FB392);
+  --cover-5:linear-gradient(145deg,#EEDDBE,#D2A862);
+  --cover-6:linear-gradient(145deg,#C8E2E8,#7FB7C6);
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:15px;
+  line-height:1.5;overflow-x:hidden}
+button{font:inherit;color:inherit}
+a{color:inherit;text-decoration:none}
+.ic{width:22px;height:22px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round}
+
+/* ============================================================
+   APP SHELL
+   ============================================================ */
+.app{
+  display:grid;
+  grid-template-columns:var(--sidebar-w) minmax(0,1fr) var(--right-w);
+  grid-template-rows:80px minmax(0,1fr);
+  grid-template-areas:"sidebar topbar topbar" "sidebar main right";
+  gap:var(--gap);
+  min-height:100vh;
+  padding:0 var(--gap) calc(var(--player-h) + 24px);
+}
+
+/* ============================================================
+   SIDEBAR
+   ============================================================ */
+.sidebar{grid-area:sidebar;background:var(--sidebar);border-right:1px solid var(--border-soft);
+  padding:0 17px;display:flex;flex-direction:column;min-height:calc(100vh - var(--player-h))}
+.brand{height:82px;display:flex;align-items:center;gap:12px}
+.brand-mark{width:34px;height:34px;display:grid;place-items:center;border-radius:10px;
+  background:var(--grad-glow);color:#fff}
+.brand-mark svg{width:22px;height:22px}
+.brand-name{font-size:25px;font-weight:750;letter-spacing:-.02em;color:var(--text)}
+.nav{display:flex;flex-direction:column;gap:4px}
+.nav-item{height:48px;display:flex;align-items:center;gap:18px;padding:0 14px;
+  border-radius:var(--radius-sm);color:var(--text2);font-weight:580;cursor:pointer;
+  background:transparent;border:0;width:100%;text-align:left}
+.nav-item:hover{background:var(--sec)}
+.nav-item.active{background:var(--active);color:#fff}
+:root[data-theme="light"] .nav-item.active{color:var(--text)}
+.divider{height:1px;background:var(--border-soft);margin:18px 0}
+.collections-head{display:flex;align-items:center;justify-content:space-between;
+  padding:0 10px;margin-bottom:8px}
+.collections-head span{font-size:12px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);font-weight:700}
+.collections-head button{border:0;background:none;color:var(--muted);cursor:pointer;
+  display:grid;place-items:center;width:24px;height:24px;border-radius:6px}
+.collections-head button:hover{background:var(--sec);color:var(--text)}
+.collection-item{height:38px;display:flex;align-items:center;gap:12px;padding:0 12px;
+  color:var(--text2);font-size:15px;border-radius:10px}
+.collection-item .dot{width:8px;height:8px;border-radius:3px;flex:none}
+.premium{margin-top:auto;margin-bottom:22px;width:251px;min-height:152px;
+  border-radius:var(--radius-md);padding:17px;background:var(--grad-premium);
+  border:1px solid #775A3C;display:flex;flex-direction:column;gap:9px}
+.premium-icon{color:var(--gold)}
+.premium h3{margin:0;font-size:17px;font-weight:700}
+.premium p{margin:0;font-size:12.5px;color:var(--text2);line-height:1.45}
+.premium button{margin-top:auto;height:36px;border-radius:var(--radius-pill);border:0;
+  background:#F3DDB0;color:#221A10;font-weight:750;cursor:pointer;width:100%}
+:root[data-theme="light"] .premium button{background:var(--gold);color:#fff}
+
+/* ============================================================
+   TOPBAR
+   ============================================================ */
+.topbar{grid-area:topbar;display:flex;align-items:center;gap:18px;padding-right:6px}
+.search{width:min(725px,100%);height:46px;display:flex;align-items:center;gap:12px;
+  padding:0 16px;background:var(--sec);border:1px solid var(--border);border-radius:13px;
+  color:var(--muted)}
+.search input{flex:1;min-width:0;border:0;outline:0;background:none;color:var(--text);
+  font:inherit;font-size:15px}
+.search input::placeholder{color:var(--muted)}
+.theme-switch{display:flex;gap:2px;padding:3px;background:var(--sec);border:1px solid var(--border);
+  border-radius:999px}
+.theme-switch button{width:34px;height:34px;border-radius:999px;border:0;background:none;
+  color:var(--muted);display:grid;place-items:center;cursor:pointer}
+.theme-switch button[aria-pressed="true"]{background:var(--elev);color:var(--text)}
+.bell{position:relative;width:40px;height:40px;display:grid;place-items:center;border:0;
+  background:none;color:var(--text);cursor:pointer}
+.bell::after{content:"";position:absolute;top:8px;right:8px;width:8px;height:8px;
+  border-radius:50%;background:var(--danger);border:2px solid var(--bg)}
+.profile{display:flex;align-items:center;gap:10px;margin-left:auto}
+.avatar{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;
+  background:var(--grad-glow);color:#fff;font-weight:750;font-size:15px}
+.profile-name{font-size:14px;font-weight:600;white-space:nowrap}
+
+/* ============================================================
+   MAIN
+   ============================================================ */
+.main{grid-area:main;min-width:0;padding:0 22px}
+.greeting h1{font-size:35px;font-weight:750;margin:0;letter-spacing:-.025em}
+.greeting p{margin:5px 0 20px;font-size:19px;color:var(--text2)}
+
+/* featured */
+.featured{position:relative;height:257px;border-radius:var(--radius-lg);overflow:hidden;
+  border:1px solid #393444;display:grid;grid-template-columns:210px minmax(0,1fr);
+  align-items:center;gap:24px;padding:20px;background:var(--elev)}
+.featured::before{content:"";position:absolute;inset:0;
+  background-image:
+    linear-gradient(90deg,rgba(11,12,18,.96) 0%,rgba(11,12,18,.86) 42%,rgba(11,12,18,.18) 100%),
+    repeating-conic-gradient(from 45deg,#2A2419 0% 25%,#17150F 0% 50%) 0 0/72px 72px;
+  opacity:.9}
+:root[data-theme="light"] .featured::before{background-image:
+  linear-gradient(90deg,rgba(248,247,243,.97) 0%,rgba(248,247,243,.88) 45%,rgba(248,247,243,.2) 100%),
+  repeating-conic-gradient(from 45deg,#E3D8C2 0% 25%,#CBB994 0% 50%) 0 0/72px 72px}
+.featured-piece{position:absolute;right:12%;top:50%;transform:translateY(-50%);
+  width:150px;height:170px;opacity:.5;color:var(--gold)}
+.featured>*{position:relative;z-index:1}
+.cover-featured{width:168px;height:216px;border-radius:9px;overflow:hidden;
+  box-shadow:0 18px 30px -18px rgba(0,0,0,.8)}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;
+  background:rgba(155,114,241,.18);color:var(--primary3);font-size:12px;font-weight:700;
+  letter-spacing:.03em;text-transform:uppercase}
+.featured-info h2{font-size:27px;font-weight:750;margin:10px 0 4px;letter-spacing:-.02em}
+.meta{color:var(--text2);font-size:14px}
+.progress-copy{margin:16px 0 8px;font-size:13px;color:var(--text2)}
+.progress-copy b{color:var(--text)}
+.bar{height:8px;border-radius:999px;background:#45404E;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:999px;background:var(--primary2)}
+.featured-actions{display:flex;gap:14px;margin-top:18px}
+.btn-primary{height:46px;padding:0 24px;border-radius:var(--radius-pill);border:0;
+  background:var(--grad-btn);color:#fff;font-weight:700;cursor:pointer;
+  display:inline-flex;align-items:center;gap:9px}
+.btn-ghost{height:46px;padding:0 18px;border-radius:var(--radius-pill);
+  border:1px solid var(--border);background:transparent;color:var(--text);
+  font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+
+/* sections */
+.section-head{display:flex;align-items:center;justify-content:space-between;margin:26px 0 14px}
+.section-head h2{font-size:24px;font-weight:700;margin:0}
+.see-all{color:var(--primary3);font-size:14px;font-weight:600;display:inline-flex;gap:6px;align-items:center}
+.book-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px}
+.book-card{min-width:0}
+.book-cover{width:100%;aspect-ratio:140/163;border-radius:12px;overflow:hidden;position:relative;
+  display:grid;place-items:center;padding:12px;text-align:center;color:#fff}
+.book-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.book-cover .title{position:relative;font-family:var(--serif);font-size:15px;line-height:1.15;
+  font-weight:700;text-shadow:0 1px 6px rgba(0,0,0,.35);max-width:90%}
+.book-cover .author{position:absolute;bottom:10px;left:0;right:0;font-size:9px;
+  letter-spacing:.08em;text-transform:uppercase;opacity:.85}
+.book-title{font-size:13px;font-weight:600;margin:9px 0 2px;overflow:hidden;
+  white-space:nowrap;text-overflow:ellipsis}
+.book-meta{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+
+/* categories */
+.category-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+.category{height:62px;border-radius:12px;padding:12px;display:flex;align-items:center;gap:10px;
+  border:1px solid var(--border);font-size:13px;font-weight:600;line-height:1.2}
+.category .ic{width:24px;height:24px}
+.cat-1{background:rgba(168,64,145,.14);color:#E7A5D6}
+.cat-2{background:rgba(64,124,190,.14);color:#9CCBEF}
+.cat-3{background:rgba(64,160,110,.13);color:#9ED9B8}
+.cat-4{background:rgba(190,140,60,.14);color:#E5C68D}
+.cat-5{background:rgba(130,90,200,.14);color:#C8AEFA}
+.cat-6{background:rgba(60,160,175,.13);color:#9AD8E0}
+
+/* ============================================================
+   RIGHT PANEL
+   ============================================================ */
+.right{grid-area:right;display:flex;flex-direction:column;gap:20px;min-width:0}
+.card{background:var(--elev);border:1px solid var(--border);border-radius:var(--radius-md);
+  padding:18px}
+.card h3{margin:0 0 14px;font-size:16px;font-weight:650}
+.progress-card{height:223px;display:grid;grid-template-columns:140px 1fr;gap:12px;align-items:center}
+.ring{width:140px;height:140px;border-radius:50%;display:grid;place-items:center;
+  background:conic-gradient(var(--primary2) 0 72%,var(--sec) 72% 100%)}
+.ring::before{content:"";position:absolute;width:112px;height:112px;border-radius:50%;background:var(--elev)}
+.ring-inner{position:relative;text-align:center}
+.ring-inner b{display:block;font-size:34px;line-height:1}
+.ring-inner span{font-size:11px;color:var(--muted)}
+.stats{display:flex;flex-direction:column;gap:14px}
+.stat{display:flex;align-items:center;gap:10px}
+.stat .ic{width:18px;height:18px;color:var(--primary3)}
+.stat b{display:block;font-size:15px}
+.stat span{font-size:11px;color:var(--muted)}
+.goal-card{height:111px}
+.goal-card .row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.goal-card .ic{color:var(--primary3)}
+.goal-card p{margin:0;font-size:13px;color:var(--text2)}
+.goal-card .goal-num{font-size:13px;font-weight:700;color:var(--text)}
+.quick-card{min-height:285px}
+.quick{display:grid;grid-template-columns:50px minmax(0,1fr) 34px;gap:10px;align-items:center;
+  padding:11px 0;border-top:1px solid var(--border)}
+.quick:first-of-type{border-top:0}
+.quick-cover{width:50px;height:58px;border-radius:6px;display:grid;place-items:center;
+  font-family:var(--serif);font-size:10px;text-align:center;color:#fff;padding:4px}
+.quick-title{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.quick-author{font-size:11px;color:var(--muted)}
+.quick-dur{font-size:11px;color:var(--muted)}
+.play-sm{width:32px;height:32px;border-radius:50%;border:0;background:var(--grad-btn);
+  color:#fff;display:grid;place-items:center;cursor:pointer}
+.play-sm svg{width:14px;height:14px;fill:currentColor}
+
+/* ============================================================
+   PLAYER
+   ============================================================ */
+.player{position:fixed;left:0;right:0;bottom:0;height:var(--player-h);z-index:30;
+  background:color-mix(in srgb,var(--surface) 94%,transparent);
+  border-top:1px solid #514365;border-radius:18px 18px 0 0;
+  display:grid;grid-template-columns:minmax(220px,1fr) minmax(320px,1.6fr) minmax(220px,1fr);
+  align-items:center;gap:18px;padding:0 24px;backdrop-filter:blur(12px)}
+.now{display:flex;align-items:center;gap:12px;min-width:0}
+.now-cover{width:64px;height:72px;border-radius:8px;overflow:hidden;flex:none;
+  display:grid;place-items:center;font-family:var(--serif);font-size:10px;text-align:center;color:#fff}
+.now-cover img{width:100%;height:100%;object-fit:cover}
+.now-title{font-size:14px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.now-author{font-size:12px;color:var(--muted)}
+.now .ic{width:18px;height:18px;color:var(--muted);margin-left:6px}
+.center-player{display:flex;flex-direction:column;gap:7px}
+.controls{display:flex;align-items:center;justify-content:center;gap:14px}
+.ctrl{border:0;background:none;color:var(--text2);cursor:pointer;display:grid;place-items:center}
+.ctrl .ic{width:19px;height:19px}
+.ctrl.main{width:48px;height:48px;border-radius:50%;background:#fff;color:#15121D}
+.ctrl.main .ic{width:22px;height:22px;fill:currentColor;stroke:none}
+.time-row{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--muted)}
+.time-row .bar{flex:1;height:5px;background:var(--sec)}
+.time-row .bar i{width:38%;background:var(--primary2)}
+.player-right{display:flex;align-items:center;justify-content:flex-end;gap:12px}
+.speed{padding:6px 9px;border-radius:8px;border:1px solid var(--border);background:var(--sec);
+  font-size:12px;color:var(--text);cursor:pointer}
+.volume{display:flex;align-items:center;gap:8px;color:var(--text2)}
+.volume input{width:90px;accent-color:var(--primary2)}
+
+/* ============================================================
+   MOBILE NAV (hidden on desktop)
+   ============================================================ */
+.mobile-nav{display:none}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width:1199px){
+  .app{grid-template-columns:var(--sidebar-w) minmax(0,1fr);
+    grid-template-areas:"sidebar topbar" "sidebar main"}
+  .right{display:none}
+  .book-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .category-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .search{width:100%}
+}
+@media (max-width:767px){
+  .app{display:block;padding:0 14px calc(var(--player-h) + 66px)}
+  .sidebar{display:none}
+  .topbar{height:70px;gap:10px}
+  .brand-mobile{display:flex;align-items:center;gap:8px;font-weight:750;font-size:18px}
+  .theme-switch,.profile-name{display:none}
+  .search{height:42px}
+  .greeting h1{font-size:26px}
+  .greeting p{font-size:15px}
+  .featured{height:auto;min-height:400px;grid-template-columns:1fr;justify-items:center;
+    text-align:center;padding:24px 18px;gap:16px}
+  .cover-featured{width:140px;height:182px}
+  .featured-actions{flex-wrap:wrap;justify-content:center}
+  .book-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .category-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .player{height:var(--player-h);grid-template-columns:1fr auto;padding:0 14px;
+    border-radius:14px 14px 0 0}
+  .center-player,.player-right{display:none}
+  .mobile-nav{display:flex;position:fixed;left:0;right:0;bottom:0;height:64px;z-index:40;
+    background:var(--sidebar);border-top:1px solid var(--border-soft);
+    align-items:center;justify-content:space-around}
+  .mobile-nav button{border:0;background:none;color:var(--muted);display:grid;
+    place-items:center;gap:3px;font-size:10px;cursor:pointer}
+  .mobile-nav button.active{color:var(--primary3)}
+}
+@media (min-width:768px){.brand-mobile{display:none}}
+</style>
+</head>
+<body>
+
+<!-- icon sprite -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h14V10"/></symbol>
+  <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5 5-2Z"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5h6a3 3 0 0 1 3 3v11a3 3 0 0 0-3-3H4V5Zm16 0h-6a3 3 0 0 0-3 3v11a3 3 0 0 1 3-3h6V5Z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3V7Z"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.6-7 9-7 9Z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-crown" viewBox="0 0 24 24"><path d="M3 18h18M4 15l2-8 5 4 3-6 3 6 3-4 2 8H4Z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 16V11a6 6 0 0 0-12 0v5l-2 3h16l-2-3ZM10 22h4"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7-11-7Z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M6 5v14M19 5 9 12l10 7V5Z"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M18 5v14M5 5l10 7-10 7V5Z"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M4 7h4l8 10h4M4 17h4l3-4M15 7h5M17 4l3 3-3 3M17 14l3 3-3 3"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 3l3 3-3 3M7 21l-3-3 3-3M4 12v-2a4 4 0 0 1 4-4h12M20 12v2a4 4 0 0 1-4 4H4"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+  <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4ZM17 9a4 4 0 0 1 0 6"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></symbol>
+  <symbol id="i-head" viewBox="0 0 24 24"><path d="M4 14v-2a8 8 0 0 1 16 0v2M4 14h4v6H5a1 1 0 0 1-1-1v-5Zm16 0h-4v6h3a1 1 0 0 0 1-1v-5Z"/></symbol>
+  <symbol id="i-brief" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5h6v2"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+  <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M20 4C10 4 4 9 4 16c0 2 1 4 1 4s9-1 13-7c2-3 2-9 2-9Z"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2l2 7 7 2-7 2-2 7-2-7-7-2 7-2 2-7Z"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></symbol>
+  <symbol id="i-grad" viewBox="0 0 24 24"><path d="M3 9l9-5 9 5-9 5-9-5ZM5 11v5c0 1.5 3 3 7 3s7-1.5 7-3v-5"/></symbol>
+</svg>
+
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark"><svg class="ic"><use href="#i-wave"/></svg></span>
+      <span class="brand-name">AudioLivre</span>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active"><svg class="ic"><use href="#i-home"/></svg>Accueil</button>
+      <button class="nav-item"><svg class="ic"><use href="#i-compass"/></svg>Découvrir</button>
+      <button class="nav-item"><svg class="ic"><use href="#i-book"/></svg>Ma bibliothèque</button>
+      <button class="nav-item"><svg class="ic"><use href="#i-folder"/></svg>Mes fichiers</button>
+      <button class="nav-item"><svg class="ic"><use href="#i-heart"/></svg>Mes favoris</button>
+      <button class="nav-item"><svg class="ic"><use href="#i-chart"/></svg>Mon activité</button>
+    </nav>
+    <div class="divider"></div>
+    <div class="collections-head"><span>Collections</span><button aria-label="Ajouter"><svg class="ic" style="width:16px;height:16px"><use href="#i-plus"/></svg></button></div>
+    <div class="collection-item"><span class="dot" style="background:#B17DF5"></span>Business &amp; Leadership</div>
+    <div class="collection-item"><span class="dot" style="background:#6FA8CC"></span>Tech &amp; IA</div>
+    <div class="collection-item"><span class="dot" style="background:#7FB392"></span>Développement perso</div>
+    <div class="collection-item"><span class="dot" style="background:#D2A862"></span>Philosophie</div>
+    <div class="collection-item"><span class="dot" style="background:#9ED8E0"></span>À écouter plus tard</div>
+    <div class="premium">
+      <svg class="ic premium-icon" style="width:26px;height:26px"><use href="#i-crown"/></svg>
+      <h3>Pass Premium</h3>
+      <p>Accédez à tout le catalogue, sans limite et hors ligne.</p>
+      <button>Passer Premium</button>
+    </div>
+  </aside>
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="brand-mobile"><svg class="ic" style="color:var(--primary3)"><use href="#i-wave"/></svg>AudioLivre</div>
+    <label class="search"><svg class="ic" style="width:19px;height:19px"><use href="#i-search"/></svg>
+      <input placeholder="Rechercher un livre, un auteur, un thème..." aria-label="Rechercher"></label>
+    <div class="theme-switch" role="group" aria-label="Thème">
+      <button id="theme-dark" aria-pressed="true" aria-label="Thème sombre"><svg class="ic" style="width:18px;height:18px"><use href="#i-moon"/></svg></button>
+      <button id="theme-light" aria-pressed="false" aria-label="Thème clair"><svg class="ic" style="width:18px;height:18px"><use href="#i-sun"/></svg></button>
+    </div>
+    <button class="bell" aria-label="Notifications"><svg class="ic"><use href="#i-bell"/></svg></button>
+    <div class="profile"><span class="avatar">EH</span><span class="profile-name">Eurin HASH</span>
+      <svg class="ic" style="width:16px;height:16px;color:var(--muted)"><path d="m6 9 6 6 6-6"/></svg></div>
+  </header>
+
+  <!-- MAIN -->
+  <main class="main">
+    <div class="greeting"><h1>Bonjour, Eurin 👋</h1><p>Qu'aimeriez-vous écouter aujourd'hui ?</p></div>
+
+    <section class="featured" aria-label="Reprendre l'écoute">
+      <svg class="featured-piece" viewBox="0 0 150 170" aria-hidden="true">
+        <path d="M55 10h40v18h-8v22c14 6 24 18 24 34 0 20-16 36-36 36S39 104 39 84c0-16 10-28 24-34V28h-8V10Z" fill="currentColor"/>
+        <rect x="35" y="126" width="80" height="12" rx="4" fill="currentColor"/>
+        <rect x="28" y="142" width="94" height="14" rx="5" fill="currentColor"/>
+      </svg>
+      <div class="cover-featured">
+        <div class="book-cover" style="background:var(--cover-5)">
+          <span class="title">LES 48 LOIS<br>DU POUVOIR</span><span class="author">ROBERT GREENE</span>
+        </div>
+      </div>
+      <div class="featured-info">
+        <span class="badge"><svg class="ic" style="width:13px;height:13px"><use href="#i-head"/></svg> En cours d'écoute</span>
+        <h2>Les 48 lois du pouvoir</h2>
+        <div class="meta">Robert Greene · 11 h 33 min</div>
+        <div class="progress-copy">Chapitre 8 sur 24 · <b>38 %</b></div>
+        <div class="bar"><i style="width:38%"></i></div>
+        <div class="featured-actions">
+          <button class="btn-primary"><svg class="ic" style="width:18px;height:18px"><use href="#i-play"/></svg> Reprendre</button>
+          <button class="btn-ghost"><svg class="ic" style="width:18px;height:18px"><use href="#i-heart"/></svg> Ajouter aux favoris</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="section-head"><h2>Pour vous</h2><a class="see-all" href="#">Voir tout <span>→</span></a></div>
+    <div class="book-grid">
+      <!-- 6 vrais livres du catalogue, couvertures extraites localement -->
+      <article class="book-card"><div class="book-cover" style="background:var(--cover-5)">
+        <img src="https://public.aura-storage.eurinhash.com/covers/99dae84c-65ae-4600-b54d-a3dfa6f881a6.jpg" alt="Une seconde chance" onerror="this.remove()">
+        <span class="title">UNE SECONDE CHANCE</span><span class="author">ROBERT KIYOSAKI</span></div>
+        <div class="book-title">Une seconde chance</div><div class="book-meta"><svg class="ic" style="width:13px;height:13px"><use href="#i-head"/></svg> 8 h 13 min</div></article>
+
+      <article class="book-card"><div class="book-cover" style="background:var(--cover-1)">
+        <img src="https://public.aura-storage.eurinhash.com/covers/33f1929d-2fd5-4b6b-9977-09815447d6c3.jpg" alt="Le Quadrant du Cashflow" onerror="this.remove()">
+        <span class="title">LE QUADRANT DU CASHFLOW</span><span class="author">ROBERT KIYOSAKI</span></div>
+        <div class="book-title">Le Quadrant du Cashflow</div><div class="book-meta"><svg class="ic" style="width:13px;height:13px"><use href="#i-head"/></svg> 8 h 03 min</div></article>
+
+      <article class="book-card"><div class="book-cover" style="background:var(--cover-4)">
+        <img src="https://public.aura-storage.eurinhash.com/covers/2cc21fd6-8408-461b-9cb9-621d7e5a80c3.jpg" alt="La richesse" onerror="this.remove()">
+        <span class="title">LA RICHESSE</span><span class="author">R. W. EMERSON</span></div>
+        <div class="book-title">La richesse</div><div class="book-meta"><svg class="ic" style="width:13px;height:13px"><use href="#i-head"/></svg> 1 h 00 min</div></article>
+
+      <article class="book-card"><div class="book-cover" style="background:var(--cover-3)">
+        <img src="https://public.aura-storage.eurinhash.com/covers/194a7d89-06a2-47d1-a205-bb0a61db7c96.jpg" alt="Moi riche, pourquoi pas" onerror="this.remove()">
+        <span class="title">MOI RICHE,<br>POURQUOI PAS</span><span class="author">DAVID DEMAIRE</span></div>
+        <div class="book-title">Moi riche, pourquoi pas</div><div class="book-meta"><svg class="ic" style="width:13px;height:13px"><use href="#i-head"/></svg> 5 h 26 min</div></article>
+
+      <article class="book-card"><div class="book-cover" style="background:var(--cover-6)">
+        <img src="https://public.aura-storage.eurinhash.com/covers/cd8ea394-83af-49f6-abf1-48d018a23d1f.jpg" alt="La semaine de 4 heures" onerror="this.remove()">
+        <span class="title">LA SEMAINE DE 4 HEURES</span><span class="author">TIM FERRISS</span></div>
+        <div class="book-title">La semaine de 4 heures</div><div class="book-meta"><svg class="ic" style="width:13px;height:13px"><use href="#i-head"/></svg> 9 h 24 min</div></article>
+
+      <article class="book-card"><div class="book-cover" style="background:var(--cover-2)">
+        <img src="https://public.aura-storage.eurinhash.com/covers/a5fc7825-c097-4774-8ae4-976c79bb432d.jpg" alt="Boostez votre mémoire" onerror="this.remove()">
+        <span class="title">BOOSTEZ VOTRE MÉMOIRE</span><span class="author">J.-Y. PONCE</span></div>
+        <div class="book-title">Boostez votre mémoire</div><div class="book-meta"><svg class="ic" style="width:13px;height:13px"><use href="#i-head"/></svg> 8 h 18 min</div></article>
+    </div>
+
+    <div class="section-head"><h2>Explorer par catégorie</h2><a class="see-all" href="#">Voir toutes les catégories →</a></div>
+    <div class="category-grid">
+      <div class="category cat-1"><svg class="ic"><use href="#i-brief"/></svg>Business &amp; Leadership</div>
+      <div class="category cat-2"><svg class="ic"><use href="#i-cpu"/></svg>Technologie &amp; IA</div>
+      <div class="category cat-3"><svg class="ic"><use href="#i-leaf"/></svg>Développement personnel</div>
+      <div class="category cat-4"><svg class="ic"><use href="#i-spark"/></svg>Philosophie &amp; Spiritualité</div>
+      <div class="category cat-5"><svg class="ic"><use href="#i-globe"/></svg>Histoire &amp; Société</div>
+      <div class="category cat-6"><svg class="ic"><use href="#i-grad"/></svg>Éducation &amp; Formation</div>
+    </div>
+  </main>
+
+  <!-- RIGHT PANEL -->
+  <aside class="right">
+    <section class="card progress-card">
+      <div class="ring" style="position:relative"><div class="ring-inner"><b>12</b><span>livres écoutés</span></div></div>
+      <div class="stats">
+        <div class="stat"><svg class="ic"><use href="#i-head"/></svg><div><b>68 h 24 min</b><span>Temps d'écoute</span></div></div>
+        <div class="stat"><svg class="ic"><use href="#i-book"/></svg><div><b>3</b><span>En cours</span></div></div>
+        <div class="stat"><svg class="ic"><use href="#i-check"/></svg><div><b>12</b><span>Terminés</span></div></div>
+      </div>
+    </section>
+    <section class="card goal-card">
+      <div class="row"><svg class="ic"><use href="#i-target"/></svg><h3>Mon objectif</h3></div>
+      <p>Écouter 5 livres ce mois.</p>
+      <div class="bar" style="margin:10px 0 6px"><i style="width:60%"></i></div>
+      <div class="goal-num">3 / 5 livres</div>
+    </section>
+    <section class="card quick-card">
+      <h3>Reprendre rapidement</h3>
+      <div class="quick">
+        <div class="quick-cover" style="background:var(--cover-5)">L'ART<br>DE LA<br>GUERRE</div>
+        <div><div class="quick-title">L'Art de la Guerre</div><div class="quick-author">Sun Tzu</div><div class="quick-dur">1 h 29 min</div></div>
+        <button class="play-sm" aria-label="Écouter"><svg><use href="#i-play"/></svg></button>
+      </div>
+      <div class="quick">
+        <div class="quick-cover" style="background:var(--cover-1)">UN RIEN<br>PEUT TOUT<br>CHANGER</div>
+        <div><div class="quick-title">Un rien peut tout changer</div><div class="quick-author">James Clear</div><div class="quick-dur">1 h 26 min</div></div>
+        <button class="play-sm" aria-label="Écouter"><svg><use href="#i-play"/></svg></button>
+      </div>
+      <div class="quick">
+        <div class="quick-cover" style="background:var(--cover-2)">SPRINT</div>
+        <div><div class="quick-title">Sprint</div><div class="quick-author">Knapp &amp; Zeratsky</div><div class="quick-dur">1 h 22 min</div></div>
+        <button class="play-sm" aria-label="Écouter"><svg><use href="#i-play"/></svg></button>
+      </div>
+    </section>
+  </aside>
+</div>
+
+<!-- PLAYER -->
+<div class="player" role="region" aria-label="Lecteur audio">
+  <div class="now">
+    <div class="now-cover" style="background:var(--cover-5)">48 LOIS</div>
+    <div style="min-width:0"><div class="now-title">Les 48 lois du pouvoir</div><div class="now-author">Robert Greene</div></div>
+    <svg class="ic"><use href="#i-heart"/></svg>
+  </div>
+  <div class="center-player">
+    <div class="controls">
+      <button class="ctrl" aria-label="Aléatoire"><svg class="ic"><use href="#i-shuffle"/></svg></button>
+      <button class="ctrl" aria-label="Précédent"><svg class="ic"><use href="#i-prev"/></svg></button>
+      <button class="ctrl main" aria-label="Pause"><svg class="ic"><use href="#i-pause"/></svg></button>
+      <button class="ctrl" aria-label="Suivant"><svg class="ic"><use href="#i-next"/></svg></button>
+      <button class="ctrl" aria-label="Répéter"><svg class="ic"><use href="#i-repeat"/></svg></button>
+    </div>
+    <div class="time-row"><span>12:46</span><div class="bar"><i></i></div><span>-21:08</span></div>
+  </div>
+  <div class="player-right">
+    <button class="speed">1.25x</button>
+    <button class="ctrl" aria-label="File d'attente"><svg class="ic"><use href="#i-list"/></svg></button>
+    <div class="volume"><svg class="ic" style="width:18px;height:18px"><use href="#i-volume"/></svg><input type="range" min="0" max="100" value="70" aria-label="Volume"></div>
+    <button class="ctrl" aria-label="Plein écran"><svg class="ic"><use href="#i-expand"/></svg></button>
+  </div>
+</div>
+
+<nav class="mobile-nav" aria-label="Navigation mobile">
+  <button class="active"><svg class="ic"><use href="#i-home"/></svg>Accueil</button>
+  <button><svg class="ic"><use href="#i-compass"/></svg>Découvrir</button>
+  <button><svg class="ic"><use href="#i-book"/></svg>Bibliothèque</button>
+  <button><svg class="ic"><use href="#i-heart"/></svg>Favoris</button>
+  <button><svg class="ic"><use href="#i-chart"/></svg>Activité</button>
+</nav>
+
+<script>
+/* UI-only theme toggle — no backend, no product logic. */
+(function(){
+  var root=document.documentElement;
+  var dark=document.getElementById('theme-dark');
+  var light=document.getElementById('theme-light');
+  function set(theme){
+    root.setAttribute('data-theme',theme);
+    dark.setAttribute('aria-pressed',String(theme==='dark'));
+    light.setAttribute('aria-pressed',String(theme==='light'));
+  }
+  dark.addEventListener('click',function(){set('dark')});
+  light.addEventListener('click',function(){set('light')});
+})();
+</script>
+</body>
+</html>
