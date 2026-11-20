@@ -758,7 +758,6 @@ _PLAYER_JS = r"""
       closePanels();
     }
   });
-  }
   if(sleepSelect){
     sleepSelect.addEventListener('change', function(e){
       if(sleepTimer){ clearTimeout(sleepTimer); sleepTimer = null; }
