@@ -102,6 +102,7 @@ def test_public_router_exposes_only_portal_paths(
     # The HTML player uses relative /m/<slug> URLs: the media redirect must be
     # reachable on this host or every <audio> element returns 404 at the edge.
     assert "PathPrefix(`/m/`)" in rule
+    assert "PathPrefix(`/covers/`)" in rule
     assert "PathPrefix(`/api/v1/`)" not in rule
     assert public.get("service") == "aura-public"
 

@@ -901,6 +901,12 @@ class Repository:
         )
         self.conn.commit()
 
+    def set_object_cover(self, oid: str, cover_key: Optional[str]) -> None:
+        self.conn.execute(
+            "UPDATE objects SET cover_key = ? WHERE id = ?", (cover_key, oid)
+        )
+        self.conn.commit()
+
     def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
         """Point ``target_id`` at ``source_id``'s bytes, keeping id and slug.
 

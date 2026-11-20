@@ -1579,6 +1579,15 @@ def public_logout(principal: dict = Depends(require_public)):
     return out
 
 
+def _split_audio_name(display_name: str) -> tuple[str, str]:
+    """Split `Auteur - Titre.ext` into (author, title) when possible."""
+    stem = display_name.rsplit(".", 1)[0] if "." in display_name else display_name
+    if " - " in stem:
+        author, title = stem.split(" - ", 1)
+        return author.strip(), title.strip()
+    return "", stem.strip()
+
+
 def _library_items(col: dict, only_published: bool = False) -> list:
     """Items of a published pack, with their public media URL when available."""
     items = []
@@ -1589,14 +1598,19 @@ def _library_items(col: dict, only_published: bool = False) -> list:
         published = bool(row.get("published_at") and row.get("public_slug"))
         if only_published and not published:
             continue
+        author, title = _split_audio_name(row["display_name"])
         items.append({
             "position": pos,
             "id": row["id"],
             "display_name": row["display_name"],
+            "title": title,
+            "author": author,
+            "created_at": row.get("created_at"),
             "content_type": row["content_type"],
             "size_bytes": row["size_bytes"],
             "duration_seconds": row.get("duration_seconds"),
             "published_slug": row.get("public_slug"),
+            "cover_url": f"/covers/{row['id']}.jpg" if row.get("cover_key") else None,
             "url": f"/m/{row['public_slug']}" if published else None,
         })
     return items
@@ -1666,7 +1680,15 @@ def public_portal(request: Request):
     if principal is None:
         return HTMLResponse(public_ui.login_page(), headers=page_headers)
     query = (request.query_params.get("q") or "").strip()[:120]
+    view = request.query_params.get("vue", "liste").strip().lower()
+    if view not in ("liste", "grille", "immersif"):
+        view = "liste"
+    author = (request.query_params.get("auteur") or "").strip()[:120]
     collections = _public_collections(principal)
+    authors = sorted({
+        item["author"] for col in collections for item in col["items"]
+        if item["author"]
+    })
     if query:
         needle = query.lower()
         collections = [
@@ -1676,9 +1698,17 @@ def public_portal(request: Request):
             ]}
             for col in collections
         ]
-        collections = [col for col in collections if col["items"]]
+    if author:
+        collections = [
+            {**col, "items": [i for i in col["items"] if i["author"] == author]}
+            for col in collections
+        ]
+    collections = [col for col in collections if col["items"]]
     return HTMLResponse(
-        public_ui.catalog_page(principal, collections, query=query),
+        public_ui.catalog_page(
+            principal, collections, query=query, view=view,
+            authors=authors, active_author=author,
+        ),
         headers=page_headers,
     )
 
@@ -3505,6 +3535,31 @@ def public_media(slug: str):
         "Referrer-Policy": "no-referrer",
         "X-Robots-Tag": "noindex, nofollow",
         "X-Content-Type-Options": "nosniff",
+    })
+
+
+@app.get("/covers/{oid}.jpg")
+def public_cover(oid: str):
+    """Cover art extracted locally from a published audio file, or 404.
+
+    No external cover API is contacted: the JPEG is stored next to the object
+    in the same bucket by scripts/generate_audiobook_covers.py.
+    """
+    oid = _canonical_id(oid, "object id")
+    row = _as_dict(repo.get_object_unscoped(oid) or {})
+    if (
+        not row or row.get("status") != AVAILABLE
+        or not row.get("published_at") or not row.get("cover_key")
+    ):
+        raise HTTPException(status_code=404, detail="not found")
+    set_request_principal(row.get("space_id"), None)
+    url = presigned_get(
+        s3, row["bucket"], row["cover_key"], settings.intent_ttl,
+        content_disposition="inline", content_type="image/jpeg",
+    )
+    return RedirectResponse(url, status_code=302, headers={
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
     })
 
 

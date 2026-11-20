@@ -790,6 +790,9 @@ class Repository:
             (thumbnail_key, duration_seconds, oid),
         )
 
+    def set_object_cover(self, oid: str, cover_key: Optional[str]) -> None:
+        self._run("UPDATE objects SET cover_key = %s WHERE id = %s", (cover_key, oid))
+
     def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
         with self.conn.transaction():
             self._run("DELETE FROM objects WHERE id = %s", (source_id,))

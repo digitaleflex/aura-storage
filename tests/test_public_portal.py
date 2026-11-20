@@ -63,7 +63,7 @@ def _admin():
 def _published_pack():
     c, headers = _admin()
     oid = c.post("/api/v1/objects/upload-intents", json={
-        "display_name": "Chapitre 1.mp3", "size_bytes": 5000,
+        "display_name": "Auteur Test - Chapitre 1.mp3", "size_bytes": 5000,
         "content_type": "audio/mpeg",
     }, headers=headers).json()["id"]
     main.repo.mark_available(oid, 5000, uuid.uuid4().hex)
@@ -133,6 +133,27 @@ def test_google_login_public_role_and_logout():
 
     assert c.post("/api/public/logout", headers={"X-CSRF-Token": csrf}).status_code == 200
     assert c.get("/api/public/me").status_code == 401
+
+
+def test_view_modes_facets_and_cover_route():
+    _published_pack()
+    c = _sign_in(TestClient(main.app))
+    page = c.get("/").text
+    assert "view-liste" in page
+    assert "Auteur Test" in page  # facet derived from the file name
+    assert "Reprendre l&#x27;écoute" in page or "Reprendre l'écoute" in page
+    assert "view-grille" in c.get("/?vue=grille").text
+    assert "class=\"hero\"" in c.get("/?vue=immersif").text
+    assert "Chapitre 1" in c.get("/?q=chapitre").text
+    assert c.get("/?vue=bogus").status_code == 200
+
+
+def test_cover_route_is_404_without_extracted_art():
+    _published_pack()
+    c = _sign_in(TestClient(main.app))
+    item = c.get("/api/public/library").json()["collections"][0]["items"][0]
+    assert item["cover_url"] is None
+    assert c.get(f"/covers/{item['id']}.jpg").status_code == 404
 
 
 def test_listening_progress_is_saved_for_the_visitor_only():

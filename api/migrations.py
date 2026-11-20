@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0018_listen_progress"
+SCHEMA_VERSION = "0019_audio_covers"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -74,6 +74,9 @@ ADDED_COLUMNS = {
         ("hls_prefix", "TEXT"),
         ("subtitle_object_id", "TEXT"),
         ("idempotency_key", "TEXT"),
+        # Locally extracted cover art (embedded in the audio file), stored next
+        # to the object in S3. Never fetched from an external cover API.
+        ("cover_key", "TEXT"),
         # Multipart session (#72): backend upload id while parts are being
         # sent (cleared once completed) and the server-chosen part size.
         ("multipart_upload_id", "TEXT"),

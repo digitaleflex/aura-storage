@@ -5,6 +5,7 @@ with no JavaScript bundle and no external font/CDN. The visual direction is a
 warm library — cream paper, night-ink text, serif display, one clear action.
 """
 import html
+from urllib.parse import urlencode
 
 ESC = lambda value: html.escape(str(value if value is not None else ""), quote=True)
 
@@ -179,15 +180,68 @@ a{color:inherit}
 .player-right input[type=range]{width:5rem;accent-color:var(--brass)}
 .library{padding-bottom:9rem}
 
+/* ---- views, facets and discovery ------------------------------------- */
+.view-bar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:1.2rem 0 0}
+.view-bar .label{font-size:.78rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);font-weight:700;margin-right:.3rem}
+.view-link{font:inherit;font-size:.9rem;padding:.35rem .75rem;border:1px solid var(--line);
+  border-radius:100px;background:var(--sheet);color:var(--ink);text-decoration:none;
+  cursor:pointer}
+.view-link:hover{border-color:var(--brass)}
+.view-link[aria-current=true]{background:var(--ink);color:var(--sheet);border-color:var(--ink)}
+.facets{display:flex;flex-wrap:wrap;gap:.4rem;margin:1.6rem 0 0}
+.facet{font:inherit;font-size:.85rem;padding:.3rem .7rem;border-radius:100px;
+  border:1px solid var(--line);background:none;color:var(--muted);cursor:pointer}
+.facet:hover{color:var(--ink);border-color:var(--brass)}
+.facet[aria-pressed=true]{background:var(--paper-deep);color:var(--ink);
+  border-color:var(--brass)}
+.discovery{display:flex;flex-wrap:wrap;gap:.5rem;margin:1.4rem 0 2.4rem}
+.discovery a{font:inherit;font-size:.9rem;padding:.55rem .95rem;border-radius:3px;
+  border:1px solid var(--ink);background:var(--sheet);color:var(--ink);
+  text-decoration:none;cursor:pointer}
+.discovery a:hover{background:var(--ink);color:var(--sheet)}
+.cover{position:relative;overflow:hidden}
+.cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:2px}
+.view-grid .shelf ul{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:1rem}
+.view-grid .track-button{display:block;border:1px solid var(--line);border-radius:3px;
+  padding:.9rem;background:var(--sheet)}
+.view-grid .cover{width:100%;height:auto;aspect-ratio:1;margin-bottom:.8rem;font-size:2.4rem}
+.view-grid .track-duration{display:block;margin-top:.5rem}
+.view-grid .track-progress{margin-top:.5rem}
+.hero{display:grid;grid-template-columns:minmax(0,220px) minmax(0,1fr);gap:2rem;
+  align-items:center;margin:0 0 3rem;padding:2rem;background:var(--paper-deep);
+  border-radius:4px}
+.hero .big-cover{width:100%;aspect-ratio:1;border-radius:3px;display:grid;
+  place-items:center;font-family:Georgia,serif;font-size:4rem;
+  background:hsl(var(--cover-h) 28% 82%);color:hsl(var(--cover-h) 42% 26%);
+  position:relative;overflow:hidden;box-shadow:0 12px 30px -20px rgba(27,43,58,.6)}
+.hero .big-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.hero h2{font-family:Georgia,serif;font-weight:400;font-size:clamp(1.8rem,4vw,2.8rem);
+  line-height:1.15;margin:0 0 .6rem}
+.hero p{color:var(--muted);margin:0 0 1.4rem}
+.hero .launch{font:inherit;font-weight:600;padding:.8rem 1.4rem;border:0;border-radius:3px;
+  background:var(--ink);color:var(--sheet);cursor:pointer}
+.queue-panel{position:fixed;right:1rem;bottom:7.5rem;width:min(22rem,calc(100vw - 2rem));
+  max-height:50vh;overflow:auto;background:var(--sheet);border:1px solid var(--line);
+  border-radius:4px;box-shadow:0 18px 40px -24px rgba(27,43,58,.6);padding:.6rem;z-index:11}
+.queue-panel[hidden]{display:none}
+.queue-panel h3{font-size:.8rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);margin:.3rem .5rem .6rem}
+.queue-panel button{display:block;width:100%;text-align:left;font:inherit;font-size:.9rem;
+  padding:.5rem;border:0;background:none;color:var(--ink);cursor:pointer;border-radius:2px}
+.queue-panel button:hover{background:var(--paper-deep)}
+.queue-panel button.playing{background:var(--paper-deep);font-weight:600}
+
 @media (max-width:820px){
   .player-bar{grid-template-columns:1fr auto;gap:.6rem .8rem}
   .player-right{grid-column:1/-1;justify-content:space-between}
   .seek-row{grid-row:3}
   .transport{justify-content:flex-end}
-}
   .stage{grid-template-columns:1fr;align-content:center;gap:2.75rem;padding-top:3rem}
   .intro .kicker{margin-top:2rem}
   .access{justify-self:start;max-width:none}
+  .hero{grid-template-columns:1fr;gap:1.2rem;padding:1.3rem}
+  .hero .big-cover{max-width:12rem}
 }
 @media (prefers-reduced-motion:reduce){
   *{transition:none!important}
@@ -275,7 +329,10 @@ _PLAYER_JS = """
   const timeNow = document.getElementById('time-now');
   const timeTotal = document.getElementById('time-total');
   const playToggle = document.getElementById('play-toggle');
-  let index = -1, lastSaved = 0, retried = false;
+  const queuePanel = document.getElementById('queue-panel');
+  const queueList = document.getElementById('queue-list');
+  const sleepSelect = document.getElementById('sleep');
+  let index = -1, lastSaved = 0, retried = false, sleepTimer = null;
 
   function fmt(value){
     if(!isFinite(value) || value < 0) value = 0;
@@ -305,6 +362,10 @@ _PLAYER_JS = """
     nowTitle.textContent = track.dataset.title;
     nowAuthor.textContent = track.dataset.author || 'Livre audio';
     timeTotal.textContent = fmt(audio.duration);
+    const bigCover = document.getElementById('immersive-cover-host');
+    if(bigCover && track.dataset.cover){
+      bigCover.src = track.dataset.cover;
+    }
     if('mediaSession' in navigator){
       navigator.mediaSession.metadata = new MediaMetadata({
         title: track.dataset.title, artist: track.dataset.author || 'AURA'
@@ -318,6 +379,11 @@ _PLAYER_JS = """
     index = i; retried = false; lastSaved = 0;
     const track = tracks[i];
     track.classList.add('playing');
+    if(queueList){
+      Array.from(queueList.children).forEach(function(node, j){
+        node.classList.toggle('playing', j === i);
+      });
+    }
     audio.src = track.dataset.url;
     audio.load();
     const start = parseFloat(track.dataset.progress || '0');
@@ -340,6 +406,9 @@ _PLAYER_JS = """
   function stop(){
     save(true); audio.pause(); audio.removeAttribute('src'); audio.load();
     if(index >= 0) tracks[index].classList.remove('playing');
+    if(queueList){
+      Array.from(queueList.children).forEach(function(node){ node.classList.remove('playing'); });
+    }
     index = -1; bar.hidden = true;
   }
   playToggle.addEventListener('click', toggle);
@@ -388,6 +457,35 @@ _PLAYER_JS = """
   tracks.forEach(function(button, i){
     button.addEventListener('click', function(){ play(i); });
   });
+  function buildQueue(){
+    if(!queueList) return;
+    queueList.innerHTML = '';
+    tracks.forEach(function(track, i){
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.textContent = track.dataset.title;
+      item.addEventListener('click', function(){ play(i); });
+      queueList.appendChild(item);
+    });
+  }
+  buildQueue();
+  const queueToggle = document.getElementById('queue-toggle');
+  if(queueToggle && queuePanel){
+    queueToggle.addEventListener('click', function(){
+      queuePanel.hidden = !queuePanel.hidden;
+    });
+  }
+  const launch = document.getElementById('launch');
+  if(launch){ launch.addEventListener('click', function(){ play(0); }); }
+  if(sleepSelect){
+    sleepSelect.addEventListener('change', function(e){
+      if(sleepTimer){ clearTimeout(sleepTimer); sleepTimer = null; }
+      const minutes = parseFloat(e.target.value);
+      if(minutes > 0){
+        sleepTimer = setTimeout(function(){ audio.pause(); }, minutes * 60000);
+      }
+    });
+  }
   window.addEventListener('beforeunload', function(){ save(true); });
   document.addEventListener('visibilitychange', function(){
     if(document.hidden) save(true);
@@ -419,9 +517,86 @@ def _duration_text(seconds) -> str:
     return f"{minutes} min {remainder:02d} s"
 
 
-def catalog_page(principal: dict, collections: list[dict], query: str = "") -> str:
+def _track_html(item: dict) -> str:
+    label = str(item.get("title") or item.get("display_name") or "Livre")
+    author = str(item.get("author") or "")
+    initial = label.strip()[:1].upper() or "A"
+    hue = sum(ord(c) for c in label) * 37 % 360
+    duration = float(item.get("duration_seconds") or 0)
+    progress = float(item.get("progress_seconds") or 0)
+    pct = min(100.0, progress / duration * 100) if duration else 0.0
+    cover = item.get("cover_url") or ""
+    cover_html = (
+        f'<span class="cover" style="--cover-h:{hue}" aria-hidden="true">'
+        f'<span>{ESC(initial)}</span><img src="{ESC(cover)}" alt="" '
+        'onerror="this.remove()"></span>'
+    )
+    return "".join([
+        '<li><button type="button" class="track-button"',
+        f' data-url="{ESC(item["url"])}"',
+        f' data-object-id="{ESC(item["id"])}"',
+        f' data-title="{ESC(label)}"',
+        f' data-author="{ESC(author)}"',
+        f' data-cover="{ESC(cover)}"',
+        f' data-duration="{duration:.0f}"',
+        f' data-progress="{progress:.0f}"',
+        f' style="--cover-h:{hue}" aria-label="Écouter {ESC(label)}">',
+        cover_html,
+        '<span class="track-copy">',
+        f'<span class="track-title">{ESC(label)}</span>',
+        f'<span class="track-author">{ESC(author or "Livre audio")}</span>',
+        f'<span class="track-progress"><i style="width:{pct:.1f}%"></i></span>',
+        '</span>',
+        f'<span class="track-duration">{ESC(_duration_text(duration))}</span>',
+        '</button></li>',
+    ])
+
+
+def catalog_page(
+    principal: dict,
+    collections: list[dict],
+    query: str = "",
+    view: str = "liste",
+    authors: list[str] | None = None,
+    active_author: str = "",
+) -> str:
+    authors = authors or []
     name = principal.get("email") or principal.get("name")
     csrf = str(principal.get("csrf") or "")
+
+    def href(**changes):
+        params = {}
+        if query:
+            params["q"] = query
+        if view != "liste":
+            params["vue"] = view
+        if active_author:
+            params["auteur"] = active_author
+        for key, value in changes.items():
+            if value in (None, ""):
+                params.pop(key, None)
+            else:
+                params[key] = value
+        return "/?" + urlencode(params) if params else "/"
+
+    all_items = [item for col in collections for item in col["items"]]
+    seen: set[str] = set()
+    resume = []
+    for item in sorted(all_items, key=lambda i: float(i.get("progress_seconds") or 0), reverse=True):
+        if item.get("progress_seconds") and item["id"] not in seen:
+            resume.append(item)
+            seen.add(item["id"])
+        if len(resume) >= 6:
+            break
+    newest = []
+    for item in sorted(all_items, key=lambda i: int(i.get("created_at") or 0), reverse=True):
+        if item["id"] not in seen:
+            newest.append(item)
+            seen.add(item["id"])
+        if len(newest) >= 6:
+            break
+    discover = [item for item in all_items[::7] if item["id"] not in seen][:6]
+
     parts = [
         _HEAD,
         _title("AURA — Bibliothèque"),
@@ -432,52 +607,78 @@ def catalog_page(principal: dict, collections: list[dict], query: str = "") -> s
         f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
         '<button class="text-button" type="submit">Déconnexion</button>',
         '</form></div></header>',
-        '<main class="library"><header><h1>Bon retour.</h1>',
+        f'<main class="library view-{ESC(view)}"><header><h1>Bon retour.</h1>',
         '<p class="lede">Vos livres publiés, prêts à écouter.</p>',
         '<form class="search-form" method="get" action="/">',
         f'<input type="search" name="q" value="{ESC(query)}" '
         'placeholder="Rechercher un titre ou un auteur" aria-label="Rechercher un livre">',
-        '<button type="submit">Rechercher</button></form></header>',
+        '<button type="submit">Rechercher</button></form>',
+        '<nav class="view-bar" aria-label="Mode d\'affichage"><span class="label">Vue</span>',
     ]
-    published = [c for c in collections if c.get("items")]
-    if not published:
+    for label, value in (("Liste", "liste"), ("Grille", "grille"), ("Immersif", "immersif")):
+        current = "true" if view == value else "false"
+        parts.append(
+            f'<a class="view-link" href="{ESC(href(vue=value if value != "liste" else None))}" '
+            f'aria-current="{current}">{label}</a>'
+        )
+    parts.append('</nav>')
+    if authors:
+        parts.append('<nav class="facets" aria-label="Filtrer par auteur">')
+        parts.append(
+            f'<a class="facet" href="{ESC(href(auteur=None))}" '
+            f'aria-pressed="{"true" if not active_author else "false"}">Tous</a>'
+        )
+        for author in authors:
+            parts.append(
+                f'<a class="facet" href="{ESC(href(auteur=author))}" '
+                f'aria-pressed="{"true" if active_author == author else "false"}">'
+                f'{ESC(author)}</a>'
+            )
+        parts.append('</nav>')
+    parts.append(
+        '<nav class="discovery" aria-label="Découvrir la bibliothèque">'
+        '<a href="#resume">Reprendre l\'écoute</a>'
+        '<a href="#nouveautes">Nouveautés</a>'
+        '<a href="#decouvrir">À découvrir</a>'
+        '<a href="#tous">Toute la bibliothèque</a>'
+        '</nav>'
+    )
+    if not all_items:
         parts.append('<p class="empty">Aucun livre ne correspond à cette recherche.</p>')
-    for col in published:
-        parts.append('<section class="shelf"><div class="shelf-head">')
-        parts.append(f'<h2>{ESC(col.get("title"))}</h2>')
-        if col.get("description"):
-            parts.append(f'<p class="desc">{ESC(col["description"])}</p>')
-        parts.append('</div><ul>')
-        for item in col["items"]:
-            label = str(item.get("display_name") or "Livre")
-            stem = label.rsplit(".", 1)[0] if "." in label else label
-            if " - " in stem:
-                author, title = stem.split(" - ", 1)
-            else:
-                author, title = "", stem
-            initial = title.strip()[:1].upper() or "A"
-            hue = sum(ord(c) for c in title) * 37 % 360
-            duration = float(item.get("duration_seconds") or 0)
-            progress = float(item.get("progress_seconds") or 0)
-            pct = min(100.0, progress / duration * 100) if duration else 0.0
-            parts.extend([
-                '<li><button type="button" class="track-button"',
-                f' data-url="{ESC(item["url"])}"',
-                f' data-object-id="{ESC(item["id"])}"',
-                f' data-title="{ESC(title.strip())}"',
-                f' data-author="{ESC(author.strip())}"',
-                f' data-duration="{duration:.0f}"',
-                f' data-progress="{progress:.0f}"',
-                f' style="--cover-h:{hue}"',
-                ' aria-label="Écouter">',
-                f'<span class="cover" aria-hidden="true">{ESC(initial)}</span>',
-                '<span><span class="track-title">', ESC(title.strip()), '</span>',
-                f'<span class="track-author">{ESC(author.strip() or "Livre audio")}</span>',
-                f'<span class="track-progress"><i style="width:{pct:.1f}%"></i></span></span>',
-                f'<span class="track-duration">{ESC(_duration_text(duration))}</span>',
-                '</button></li>',
-            ])
+
+    if view == "immersif" and all_items:
+        first = all_items[0]
+        cover = first.get("cover_url") or ""
+        label = str(first.get("title") or first.get("display_name") or "Livre")
+        author = str(first.get("author") or "")
+        hue = sum(ord(c) for c in label) * 37 % 360
+        img = f'<img src="{ESC(cover)}" alt="" onerror="this.remove()">' if cover else ""
+        parts.extend([
+            '<section class="hero" aria-label="Lecture immersive">',
+            f'<div class="big-cover" style="--cover-h:{hue}" id="immersive-cover-host">',
+            f'<span>{ESC(label[:1].upper())}</span>{img}</div>',
+            '<div><p class="eyebrow">Lecture immersive</p>',
+            f'<h2>{ESC(label)}</h2>',
+            f'<p>{ESC(author or "Livre audio")}</p>',
+            '<button type="button" class="launch" id="launch">Lancer l\'écoute</button>',
+            '</div></section>',
+        ])
+
+    def shelf(anchor: str, title: str, items: list[dict]):
+        if not items:
+            return
+        parts.append(f'<section class="shelf" id="{anchor}"><div class="shelf-head">')
+        parts.append(f'<h2>{ESC(title)}</h2></div><ul>')
+        for item in items:
+            parts.append(_track_html(item))
         parts.append('</ul></section>')
+
+    shelf("resume", "Reprendre l'écoute", resume)
+    shelf("nouveautes", "Nouveautés", newest)
+    shelf("decouvrir", "À découvrir", discover)
+    for col in collections:
+        shelf("tous", col.get("title") or "Bibliothèque", col["items"])
+
     parts.extend([
         '<audio id="player" preload="none"></audio>',
         '<div class="player-bar" id="player-bar" hidden role="region" '
@@ -498,8 +699,14 @@ def catalog_page(principal: dict, collections: list[dict], query: str = "") -> s
         '<option value="1.25">1,25×</option><option value="1.5">1,5×</option>',
         '<option value="1.75">1,75×</option><option value="2">2×</option>',
         '</select>',
+        '<label for="sleep">Sommeil</label>',
+        '<select id="sleep" aria-label="Minuteur de sommeil">',
+        '<option value="0">Off</option><option value="5">5 min</option>',
+        '<option value="15">15 min</option><option value="30">30 min</option>',
+        '<option value="60">60 min</option></select>',
         '<label for="volume">Volume</label>',
         '<input id="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume">',
+        '<button type="button" class="icon-button" id="queue-toggle" aria-label="Afficher la file">File</button>',
         '<button type="button" class="icon-button" id="close" aria-label="Fermer le lecteur">Fermer</button>',
         '</div>',
         '<div class="seek-row"><span class="time" id="time-now">0:00</span>',
@@ -507,6 +714,8 @@ def catalog_page(principal: dict, collections: list[dict], query: str = "") -> s
         'step="0.1" aria-label="Position dans le livre">',
         '<span class="time" id="time-total">0:00</span></div>',
         '</div>',
+        '<aside class="queue-panel" id="queue-panel" hidden aria-label="File d\'attente">',
+        '<h3>Dans la file</h3><div id="queue-list"></div></aside>',
         _PLAYER_JS.replace("__CSRF__", ESC(csrf)),
         '</main></body></html>',
     ])

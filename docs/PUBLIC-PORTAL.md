@@ -32,9 +32,22 @@ ces URL ; la CSP du bord n'impose pas de `media-src` restrictive.
 La page du catalogue affiche une seule barre de lecture persistante au lieu de
 97 lecteurs natifs empilés. Contrôles : lecture/pause, titre précédent/suivant,
 recule et avance de 15 s, barre de progression à glisser, vitesse de 0,75× à 2×,
-volume, raccourcis clavier (Espace, ←/→, Échap) et Media Session (contrôles
+volume, **minuteur de sommeil** (5/15/30/60 min), **file d'attente** cliquable,
+raccourcis clavier (Espace, ←/→, Échap) et Media Session (contrôles
 système/mobile). Un seul `<audio preload="none">` existe dans la page : plus de
 97 requêtes `Range` au chargement.
+
+Trois modes d'affichage sont disponibles via `?vue=liste|grille|immersif` :
+liste compacte, grille de cartes avec pochettes, et vue immersive avec une
+grande couverture et un bouton « Lancer l'écoute ». Les auteurs sont extraits
+des noms `Auteur - Titre` et proposés comme filtres (`?auteur=`). Des boutons
+de découverte mènent à « Reprendre l'écoute », « Nouveautés », « À découvrir »
+et « Toute la bibliothèque ».
+
+Les couvertures sont extraites **localement** de l'artwork intégré aux fichiers
+(`scripts/generate_audiobook_covers.py`, ffmpeg) et servies par `/covers/{oid}.jpg`.
+Aucun service externe de métadonnées n'est contacté. Sans artwork intégré, une
+couverture typographique deterministe reste affichée.
 
 La position est enregistrée via `/api/public/progress` (table `listen_progress`,
 migration `0018`) et restaurée à la sélection du livre. Le filtre `?q=` permet de
