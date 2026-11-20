@@ -230,6 +230,9 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       AURA_PUBLIC_SESSION_TTL: ${AURA_PUBLIC_SESSION_TTL:-604800}
+      # Published media: a book is hours long, so its presigned URL must outlive
+      # the 15-minute upload intent TTL (default 12 h).
+      AURA_PUBLIC_MEDIA_TTL: ${AURA_PUBLIC_MEDIA_TTL:-43200}
       GOOGLE_ALLOWED_EMAIL_DOMAINS: ${GOOGLE_ALLOWED_EMAIL_DOMAINS:-}
       # Human session cookie lifetime (seconds), overridable from .env. The
       # code default is 8 h (api/config.py); 90 days was a stale literal that

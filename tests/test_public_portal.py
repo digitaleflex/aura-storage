@@ -135,6 +135,43 @@ def test_google_login_public_role_and_logout():
     assert c.get("/api/public/me").status_code == 401
 
 
+def test_listening_progress_is_saved_for_the_visitor_only():
+    _published_pack()
+    reader = _sign_in(TestClient(main.app))
+    csrf = reader.get("/api/public/me").json()["csrf_token"]
+    item = reader.get("/api/public/library").json()["collections"][0]["items"][0]
+
+    saved = reader.post("/api/public/progress", json={
+        "object_id": item["id"], "position_seconds": 123.5,
+    }, headers={"X-CSRF-Token": csrf})
+    assert saved.status_code == 200, saved.text
+
+    fresh = _sign_in(TestClient(main.app))
+    fresh_item = fresh.get("/api/public/library").json()["collections"][0]["items"][0]
+    assert fresh_item["progress_seconds"] == 123.5
+
+    # The same book is invisible to another Google user.
+    monkeypatch_sub = SUBJECT
+    globals()["SUBJECT"] = "another-subject"
+    try:
+        other = _sign_in(TestClient(main.app))
+        other_item = other.get("/api/public/library").json()["collections"][0]["items"][0]
+        assert other_item["progress_seconds"] == 0
+    finally:
+        globals()["SUBJECT"] = monkeypatch_sub
+
+
+def test_progress_rejects_unpublished_objects():
+    _published_pack()
+    c = _sign_in(TestClient(main.app))
+    csrf = c.get("/api/public/me").json()["csrf_token"]
+    unknown = "00000000-0000-4000-8000-000000000000"
+    r = c.post("/api/public/progress", json={
+        "object_id": unknown, "position_seconds": 10,
+    }, headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 404
+
+
 def test_callback_rejects_bad_state_and_wrong_domain(monkeypatch):
     c = TestClient(main.app)
     assert c.get("/api/public/auth/callback?code=abc&state=forged").status_code == 401

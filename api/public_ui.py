@@ -125,7 +125,66 @@ a{color:inherit}
 .track audio{width:100%;height:38px;display:block}
 .empty{padding:3rem 0;color:var(--muted);font-family:Georgia,serif;font-size:1.2rem}
 
+/* ---- search + player -------------------------------------------------- */
+.search-form{display:flex;gap:.6rem;align-items:center;margin-top:1.4rem;max-width:28rem}
+.search-form input{flex:1;min-width:0;font:inherit;padding:.65rem .8rem;color:var(--ink);
+  background:var(--sheet);border:1px solid var(--line);border-radius:3px}
+.search-form input:focus-visible,.seek:focus-visible,select:focus-visible{
+  outline:3px solid var(--brass);outline-offset:2px}
+.search-form button{font:inherit;padding:.65rem 1rem;border:1px solid var(--ink);
+  background:var(--ink);color:var(--sheet);border-radius:3px;cursor:pointer}
+.shelf ul{list-style:none;margin:0;padding:0}
+.track-button{
+  display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:1.1rem;
+  align-items:center;width:100%;text-align:left;font:inherit;color:inherit;
+  background:none;border:0;border-top:1px solid var(--line);padding:1.1rem .6rem;
+  border-radius:2px;cursor:pointer;
+}
+.track-button:hover{background:rgba(255,255,255,.55)}
+.track-button:focus-visible{outline:3px solid var(--brass);outline-offset:-3px}
+.track-button.playing{background:var(--paper-deep)}
+.cover{background:hsl(var(--cover-h) 28% 88%);color:hsl(var(--cover-h) 42% 30%)}
+.track-title{display:block;font-size:1.02rem;font-weight:600;line-height:1.35}
+.track-author{display:block;margin-top:.1rem;font-size:.85rem;color:var(--muted)}
+.track-progress{display:block;height:3px;margin-top:.55rem;background:var(--line);border-radius:3px;overflow:hidden}
+.track-progress i{display:block;height:100%;background:var(--brass);width:0}
+.track-duration{font-size:.85rem;color:var(--muted);font-variant-numeric:tabular-nums}
+#player{display:none}
+.player-bar{
+  position:fixed;left:0;right:0;bottom:0;z-index:10;
+  background:rgba(255,253,248,.97);border-top:1px solid var(--line);
+  box-shadow:0 -8px 24px -20px rgba(27,43,58,.5);
+  padding:.85rem clamp(1rem,4vw,2rem);
+  display:grid;grid-template-columns:minmax(8rem,1fr) minmax(14rem,2fr) minmax(8rem,1fr);
+  gap:1.2rem;align-items:center;
+}
+.player-bar[hidden]{display:none}
+.now-title{margin:0;font-size:.95rem;font-weight:600;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.now-author{margin:0;font-size:.8rem;color:var(--muted);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.transport{display:flex;align-items:center;justify-content:center;gap:.35rem}
+.icon-button{font:inherit;line-height:1;min-width:38px;min-height:38px;
+  border:1px solid transparent;background:none;color:var(--ink);border-radius:3px;
+  cursor:pointer;font-size:1.05rem}
+.icon-button:hover{border-color:var(--line);background:var(--paper)}
+.icon-button:focus-visible{outline:3px solid var(--brass);outline-offset:2px}
+.icon-button.main{background:var(--ink);color:var(--sheet);min-width:44px;min-height:44px;
+  border-radius:50%;font-size:1.15rem}
+.seek-row{grid-column:1/-1;display:flex;align-items:center;gap:.7rem;grid-row:2}
+.seek{flex:1;accent-color:var(--brass);width:100%}
+.time{font-size:.78rem;color:var(--muted);font-variant-numeric:tabular-nums;min-width:8rem;text-align:center}
+.player-right{display:flex;align-items:center;justify-content:flex-end;gap:.6rem}
+.player-right select,.player-right input[type=range]{font:inherit;font-size:.85rem}
+.player-right input[type=range]{width:5rem;accent-color:var(--brass)}
+.library{padding-bottom:9rem}
+
 @media (max-width:820px){
+  .player-bar{grid-template-columns:1fr auto;gap:.6rem .8rem}
+  .player-right{grid-column:1/-1;justify-content:space-between}
+  .seek-row{grid-row:3}
+  .transport{justify-content:flex-end}
+}
   .stage{grid-template-columns:1fr;align-content:center;gap:2.75rem;padding-top:3rem}
   .intro .kicker{margin-top:2rem}
   .access{justify-self:start;max-width:none}
@@ -203,8 +262,166 @@ def login_page() -> str:
 </body></html>"""
 
 
-def catalog_page(principal: dict, collections: list[dict]) -> str:
+_PLAYER_JS = """
+<script>
+(function(){
+  const csrf = "__CSRF__";
+  const audio = document.getElementById('player');
+  const bar = document.getElementById('player-bar');
+  const tracks = Array.from(document.querySelectorAll('.track-button'));
+  const seek = document.getElementById('seek');
+  const nowTitle = document.getElementById('now-title');
+  const nowAuthor = document.getElementById('now-author');
+  const timeNow = document.getElementById('time-now');
+  const timeTotal = document.getElementById('time-total');
+  const playToggle = document.getElementById('play-toggle');
+  let index = -1, lastSaved = 0, retried = false;
+
+  function fmt(value){
+    if(!isFinite(value) || value < 0) value = 0;
+    const m = Math.floor(value / 60), s = Math.floor(value % 60);
+    return m + ':' + String(s).padStart(2, '0');
+  }
+  function save(force){
+    if(index < 0) return;
+    const track = tracks[index];
+    const position = audio.currentTime || 0;
+    if(!force && Math.abs(position - lastSaved) < 5) return;
+    lastSaved = position;
+    const fill = track.querySelector('.track-progress i');
+    if(fill && audio.duration){
+      fill.style.width = Math.min(100, position / audio.duration * 100) + '%';
+    }
+    fetch('/api/public/progress', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf},
+      body: JSON.stringify({object_id: track.dataset.objectId,
+                            position_seconds: Math.floor(position)})
+    }).catch(function(){});
+  }
+  function nowPlaying(){
+    if(index < 0) return;
+    const track = tracks[index];
+    nowTitle.textContent = track.dataset.title;
+    nowAuthor.textContent = track.dataset.author || 'Livre audio';
+    timeTotal.textContent = fmt(audio.duration);
+    if('mediaSession' in navigator){
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: track.dataset.title, artist: track.dataset.author || 'AURA'
+      });
+    }
+  }
+  function play(i){
+    if(i < 0 || i >= tracks.length) return;
+    if(i === index){ toggle(); return; }
+    if(index >= 0) tracks[index].classList.remove('playing');
+    index = i; retried = false; lastSaved = 0;
+    const track = tracks[i];
+    track.classList.add('playing');
+    audio.src = track.dataset.url;
+    audio.load();
+    const start = parseFloat(track.dataset.progress || '0');
+    audio.addEventListener('loadedmetadata', function ready(){
+      if(isFinite(start) && start > 0 && start < (audio.duration || Infinity)){
+        audio.currentTime = start;
+      }
+      audio.removeEventListener('loadedmetadata', ready);
+    });
+    audio.play().catch(function(){});
+    bar.hidden = false;
+    nowPlaying();
+  }
+  function toggle(){
+    if(index < 0 && tracks.length){ play(0); return; }
+    if(audio.paused){ audio.play().catch(function(){}); }
+    else { save(true); audio.pause(); }
+    playToggle.textContent = audio.paused ? 'Lecture' : 'Pause';
+  }
+  function stop(){
+    save(true); audio.pause(); audio.removeAttribute('src'); audio.load();
+    if(index >= 0) tracks[index].classList.remove('playing');
+    index = -1; bar.hidden = true;
+  }
+  playToggle.addEventListener('click', toggle);
+  document.getElementById('prev').addEventListener('click', function(){ play(index - 1); });
+  document.getElementById('next').addEventListener('click', function(){ play(index + 1); });
+  document.getElementById('back15').addEventListener('click', function(){
+    audio.currentTime = Math.max(0, (audio.currentTime || 0) - 15);
+  });
+  document.getElementById('fwd15').addEventListener('click', function(){
+    audio.currentTime = Math.min(audio.duration || Infinity, (audio.currentTime || 0) + 15);
+  });
+  document.getElementById('close').addEventListener('click', stop);
+  seek.addEventListener('input', function(){
+    if(isFinite(audio.duration)) audio.currentTime = Number(seek.value);
+  });
+  document.getElementById('speed').addEventListener('change', function(e){
+    audio.playbackRate = parseFloat(e.target.value);
+  });
+  document.getElementById('volume').addEventListener('input', function(e){
+    audio.volume = parseFloat(e.target.value);
+  });
+  audio.addEventListener('play', function(){ playToggle.textContent = 'Pause'; });
+  audio.addEventListener('pause', function(){ playToggle.textContent = 'Lecture'; save(true); });
+  audio.addEventListener('timeupdate', function(){
+    if(!isFinite(audio.duration)) return;
+    seek.value = audio.currentTime;
+    timeNow.textContent = fmt(audio.currentTime);
+    timeTotal.textContent = fmt(audio.duration);
+    save(false);
+  });
+  audio.addEventListener('loadedmetadata', nowPlaying);
+  audio.addEventListener('ended', function(){
+    save(true);
+    if(index + 1 < tracks.length) play(index + 1); else stop();
+  });
+  audio.addEventListener('error', function(){
+    if(index < 0 || retried) return;
+    retried = true;
+    const track = tracks[index];
+    const position = audio.currentTime || 0;
+    audio.src = track.dataset.url + '?refresh=' + Date.now();
+    audio.load();
+    audio.currentTime = position;
+    audio.play().catch(function(){});
+  });
+  tracks.forEach(function(button, i){
+    button.addEventListener('click', function(){ play(i); });
+  });
+  window.addEventListener('beforeunload', function(){ save(true); });
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden) save(true);
+  });
+  document.addEventListener('keydown', function(e){
+    if(['INPUT','SELECT','TEXTAREA'].indexOf(e.target.tagName) >= 0) return;
+    if(e.code === 'Space'){ e.preventDefault(); toggle(); }
+    else if(e.key === 'ArrowRight'){ e.preventDefault(); audio.currentTime = (audio.currentTime||0) + 15; }
+    else if(e.key === 'ArrowLeft'){ e.preventDefault(); audio.currentTime = Math.max(0,(audio.currentTime||0) - 15); }
+    else if(e.key === 'Escape'){ stop(); }
+  });
+  if('mediaSession' in navigator){
+    navigator.mediaSession.setActionHandler('play', function(){ audio.play().catch(function(){}); });
+    navigator.mediaSession.setActionHandler('pause', function(){ audio.pause(); });
+    navigator.mediaSession.setActionHandler('seekbackward', function(){ audio.currentTime = Math.max(0,(audio.currentTime||0)-15); });
+    navigator.mediaSession.setActionHandler('seekforward', function(){ audio.currentTime = (audio.currentTime||0)+15; });
+    navigator.mediaSession.setActionHandler('previoustrack', function(){ play(index-1); });
+    navigator.mediaSession.setActionHandler('nexttrack', function(){ play(index+1); });
+  }
+})();
+</script>
+"""
+
+
+def _duration_text(seconds) -> str:
+    if not seconds:
+        return "Livre audio"
+    minutes, remainder = divmod(int(seconds), 60)
+    return f"{minutes} min {remainder:02d} s"
+
+
+def catalog_page(principal: dict, collections: list[dict], query: str = "") -> str:
     name = principal.get("email") or principal.get("name")
+    csrf = str(principal.get("csrf") or "")
     parts = [
         _HEAD,
         _title("AURA — Bibliothèque"),
@@ -212,37 +429,85 @@ def catalog_page(principal: dict, collections: list[dict]) -> str:
         '<span class="word">AURA</span></div><div class="member">',
         f'<span>{ESC(name)}</span>',
         '<form method="post" action="/api/public/logout">',
-        f'<input type="hidden" name="csrf_token" value="{ESC(principal["csrf"])}">',
+        f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
         '<button class="text-button" type="submit">Déconnexion</button>',
         '</form></div></header>',
         '<main class="library"><header><h1>Bon retour.</h1>',
-        '<p class="lede">Les livres publiés pour vous, prêts à écouter.</p></header>',
+        '<p class="lede">Vos livres publiés, prêts à écouter.</p>',
+        '<form class="search-form" method="get" action="/">',
+        f'<input type="search" name="q" value="{ESC(query)}" '
+        'placeholder="Rechercher un titre ou un auteur" aria-label="Rechercher un livre">',
+        '<button type="submit">Rechercher</button></form></header>',
     ]
     published = [c for c in collections if c.get("items")]
     if not published:
-        parts.append('<p class="empty">Aucun livre publié pour le moment.</p>')
+        parts.append('<p class="empty">Aucun livre ne correspond à cette recherche.</p>')
     for col in published:
         parts.append('<section class="shelf"><div class="shelf-head">')
         parts.append(f'<h2>{ESC(col.get("title"))}</h2>')
         if col.get("description"):
             parts.append(f'<p class="desc">{ESC(col["description"])}</p>')
-        parts.append('</div>')
+        parts.append('</div><ul>')
         for item in col["items"]:
-            label = str(item.get("display_name") or "?")
-            initial = label.strip()[:1].upper() or "A"
-            duration = item.get("duration_seconds")
-            meta = "Livre audio"
-            if duration:
-                minutes, seconds = divmod(int(duration), 60)
-                meta = f"{minutes} min {seconds:02d} s"
+            label = str(item.get("display_name") or "Livre")
+            stem = label.rsplit(".", 1)[0] if "." in label else label
+            if " - " in stem:
+                author, title = stem.split(" - ", 1)
+            else:
+                author, title = "", stem
+            initial = title.strip()[:1].upper() or "A"
+            hue = sum(ord(c) for c in title) * 37 % 360
+            duration = float(item.get("duration_seconds") or 0)
+            progress = float(item.get("progress_seconds") or 0)
+            pct = min(100.0, progress / duration * 100) if duration else 0.0
             parts.extend([
-                '<article class="track">',
-                f'<div class="cover" aria-hidden="true">{ESC(initial)}</div>',
-                '<div><p class="track-name">', ESC(label), '</p>',
-                f'<p class="track-meta">{ESC(meta)}</p>',
-                f'<audio controls preload="metadata" src="{ESC(item["url"])}"></audio>',
-                '</div></article>',
+                '<li><button type="button" class="track-button"',
+                f' data-url="{ESC(item["url"])}"',
+                f' data-object-id="{ESC(item["id"])}"',
+                f' data-title="{ESC(title.strip())}"',
+                f' data-author="{ESC(author.strip())}"',
+                f' data-duration="{duration:.0f}"',
+                f' data-progress="{progress:.0f}"',
+                f' style="--cover-h:{hue}"',
+                ' aria-label="Écouter">',
+                f'<span class="cover" aria-hidden="true">{ESC(initial)}</span>',
+                '<span><span class="track-title">', ESC(title.strip()), '</span>',
+                f'<span class="track-author">{ESC(author.strip() or "Livre audio")}</span>',
+                f'<span class="track-progress"><i style="width:{pct:.1f}%"></i></span></span>',
+                f'<span class="track-duration">{ESC(_duration_text(duration))}</span>',
+                '</button></li>',
             ])
-        parts.append('</section>')
-    parts.append('</main></body></html>')
+        parts.append('</ul></section>')
+    parts.extend([
+        '<audio id="player" preload="none"></audio>',
+        '<div class="player-bar" id="player-bar" hidden role="region" '
+        'aria-label="Lecteur audio">',
+        '<div><p class="now-title" id="now-title" aria-live="polite"></p>',
+        '<p class="now-author" id="now-author"></p></div>',
+        '<div class="transport">',
+        '<button type="button" class="icon-button" id="prev" aria-label="Titre précédent">Préc.</button>',
+        '<button type="button" class="icon-button" id="back15" aria-label="Reculer de 15 secondes">−15 s</button>',
+        '<button type="button" class="icon-button main" id="play-toggle" aria-label="Lecture ou pause">Lecture</button>',
+        '<button type="button" class="icon-button" id="fwd15" aria-label="Avancer de 15 secondes">+15 s</button>',
+        '<button type="button" class="icon-button" id="next" aria-label="Titre suivant">Suiv.</button>',
+        '</div>',
+        '<div class="player-right">',
+        '<label for="speed">Vitesse</label>',
+        '<select id="speed" aria-label="Vitesse de lecture">',
+        '<option value="0.75">0,75×</option><option value="1" selected>1×</option>',
+        '<option value="1.25">1,25×</option><option value="1.5">1,5×</option>',
+        '<option value="1.75">1,75×</option><option value="2">2×</option>',
+        '</select>',
+        '<label for="volume">Volume</label>',
+        '<input id="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume">',
+        '<button type="button" class="icon-button" id="close" aria-label="Fermer le lecteur">Fermer</button>',
+        '</div>',
+        '<div class="seek-row"><span class="time" id="time-now">0:00</span>',
+        '<input class="seek" id="seek" type="range" min="0" max="100" value="0" '
+        'step="0.1" aria-label="Position dans le livre">',
+        '<span class="time" id="time-total">0:00</span></div>',
+        '</div>',
+        _PLAYER_JS.replace("__CSRF__", ESC(csrf)),
+        '</main></body></html>',
+    ])
     return "".join(parts)

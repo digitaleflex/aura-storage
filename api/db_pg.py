@@ -169,6 +169,30 @@ class Repository:
             (session_key(token), self.now()),
         )
 
+    # -- public portal listening position --------------------------------
+    def get_progress_map(self, user_id: str, object_ids: list) -> dict:
+        if not object_ids:
+            return {}
+        marks = ",".join("%s" for _ in object_ids)
+        rows = self._all(
+            "SELECT object_id, position_seconds FROM listen_progress "
+            "WHERE user_id = %s AND object_id IN (" + marks + ")",
+            (user_id, *object_ids),
+        )
+        return {r["object_id"]: float(r["position_seconds"]) for r in rows}
+
+    def save_progress(
+        self, user_id: str, object_id: str, position_seconds: float, now: int,
+    ) -> None:
+        self._run(
+            "INSERT INTO listen_progress (user_id, object_id, position_seconds, updated_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (user_id, object_id) DO UPDATE SET "
+            "position_seconds = EXCLUDED.position_seconds, "
+            "updated_at = EXCLUDED.updated_at",
+            (user_id, object_id, max(0.0, float(position_seconds)), now),
+        )
+
     def revoke_sessions_beyond(self, max_expires_at: int) -> int:
         """PostgreSQL twin of ``SqliteRepository.revoke_sessions_beyond``."""
         return self._run(
@@ -730,6 +754,10 @@ class Repository:
             "ORDER BY terminal_at ASC LIMIT %s)",
             (cutoff, limit),
         )
+
+    def get_object_unscoped(self, oid: str) -> Optional[dict]:
+        """PostgreSQL twin of the unscoped lookup used by public progress."""
+        return self._one("SELECT * FROM objects WHERE id = %s", (oid,))
 
     def get_object(self, oid: str, *, space_id: str, owner_id: Optional[str] = None):
         sql = "SELECT * FROM objects WHERE id = %s AND space_id = %s"

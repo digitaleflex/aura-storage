@@ -690,6 +690,13 @@ class CollectionItemsIn(BaseModel):
     object_ids: list[Uuid4] = Field(default_factory=list, max_length=500)
 
 
+class ProgressIn(BaseModel):
+    """Playback position posted by the public player (CSRF-protected)."""
+    model_config = ConfigDict(extra="forbid")
+    object_id: Uuid4
+    position_seconds: float = Field(ge=0, le=864000)
+
+
 class LoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     # Bounded so a failed attempt can never inject megabytes into the audit
@@ -1567,7 +1574,7 @@ def public_me(principal: dict = Depends(require_public)):
 def public_logout(principal: dict = Depends(require_public)):
     repo.delete_session(principal["session_id"])
     audit_event("public-logout", principal["id"], "success")
-    out = JSONResponse({"status": "logged out"})
+    out = RedirectResponse("/", status_code=303)
     out.delete_cookie(settings.public_session_cookie, path="/")
     return out
 
@@ -1595,9 +1602,8 @@ def _library_items(col: dict, only_published: bool = False) -> list:
     return items
 
 
-@app.get("/api/public/library")
-def public_library(principal: dict = Depends(require_public)):
-    """Published catalogue for signed-in visitors (no object capability)."""
+def _public_collections(principal: dict) -> list:
+    """Published catalogue with each visitor's own listening position."""
     collections = []
     for col in repo.list_published_collections():
         col = _as_dict(col)
@@ -1607,14 +1613,42 @@ def public_library(principal: dict = Depends(require_public)):
             "updated_at": col["updated_at"],
             "items": _library_items(col, only_published=True),
         })
+    object_ids = [item["id"] for col in collections for item in col["items"]]
+    progress = repo.get_progress_map(principal["id"], object_ids)
+    for col in collections:
+        for item in col["items"]:
+            item["progress_seconds"] = progress.get(item["id"], 0)
+    return collections
+
+
+@app.get("/api/public/library")
+def public_library(principal: dict = Depends(require_public)):
+    """Published catalogue for signed-in visitors (no object capability)."""
+    collections = _public_collections(principal)
     set_request_principal(principal.get("space_id"), principal.get("application_id"))
     audit_event("public-library", principal["id"], "success")
     return {"collections": collections}
 
 
+@app.post("/api/public/progress")
+def public_progress(body: ProgressIn, principal: dict = Depends(require_public)):
+    """Persist a listening position for the signed-in visitor."""
+    oid = _canonical_id(body.object_id, "object id")
+    # Public users are not scoped to the publisher's space: they may only save
+    # progress for an object that is actually published, nothing else.
+    row = repo.get_object_unscoped(oid)
+    row = _as_dict(row) if row is not None else None
+    if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
+        raise HTTPException(status_code=404, detail="object not found")
+    repo.save_progress(
+        principal["id"], oid, body.position_seconds, int(time.time())
+    )
+    return {"object_id": oid, "position_seconds": body.position_seconds}
+
+
 @app.get("/", response_class=HTMLResponse)
 def public_portal(request: Request):
-    """No-JavaScript catalogue page, served only on the public host.
+    """Catalogue page with a single audio player, served on the public host.
 
     Anonymous visitors get a sign-in page instead of a JSON 401: the portal is
     the browser entry point, while /api/public/* stays strictly authenticated.
@@ -1631,18 +1665,21 @@ def public_portal(request: Request):
     }
     if principal is None:
         return HTMLResponse(public_ui.login_page(), headers=page_headers)
-    collections = []
-    for col in repo.list_published_collections():
-        col = _as_dict(col)
-        items = _library_items(col, only_published=True)
-        if not items:
-            continue
-        collections.append({
-            "title": col["title"], "description": col.get("description") or "",
-            "items": items,
-        })
+    query = (request.query_params.get("q") or "").strip()[:120]
+    collections = _public_collections(principal)
+    if query:
+        needle = query.lower()
+        collections = [
+            {**col, "items": [
+                item for item in col["items"]
+                if needle in item["display_name"].lower()
+            ]}
+            for col in collections
+        ]
+        collections = [col for col in collections if col["items"]]
     return HTMLResponse(
-        public_ui.catalog_page(principal, collections), headers=page_headers
+        public_ui.catalog_page(principal, collections, query=query),
+        headers=page_headers,
     )
 
 
@@ -3450,8 +3487,11 @@ def public_media(slug: str):
         raise HTTPException(status_code=404, detail="not found")
     set_request_principal(row["space_id"], None)
     inline = is_previewable(row["content_type"])
+    # Published media is streamed with Range requests for hours: the short
+    # upload-intent TTL would expire mid-book. Only this route gets the longer
+    # TTL; upload/download intents keep their own limits.
     url = presigned_get(
-        s3, row["bucket"], row["object_key"], settings.intent_ttl,
+        s3, row["bucket"], row["object_key"], settings.public_media_ttl,
         content_disposition=shares.content_disposition_header(
             "inline" if inline else "attachment", row["display_name"]
         ),

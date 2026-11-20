@@ -356,3 +356,16 @@ CREATE INDEX IF NOT EXISTS idx_transfer_records_session
   ON transfer_records(transfer_session_id);
 CREATE INDEX IF NOT EXISTS idx_transfer_records_terminal
   ON transfer_records(terminal_at);
+
+-- Public portal listening position. One row per (user, object); the player
+-- writes it from the browser and the catalogue reads it back to offer
+-- "resume where you stopped". No object bytes, token or URL is stored here.
+CREATE TABLE IF NOT EXISTS listen_progress (
+  user_id TEXT NOT NULL REFERENCES users(id),
+  object_id TEXT NOT NULL REFERENCES objects(id),
+  position_seconds REAL NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, object_id)
+);
+CREATE INDEX IF NOT EXISTS idx_listen_progress_user
+  ON listen_progress(user_id, updated_at);

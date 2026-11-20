@@ -16,7 +16,8 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 | `GET /api/public/auth/callback` | vérifie Google, crée la session, redirige vers `/` |
 | `GET /api/public/me` | identité + jeton CSRF de la session publique |
 | `POST /api/public/logout` | détruit la session (CSRF requis) |
-| `GET /api/public/library` | catalogue publié (JSON), pour une future UI React |
+| `GET /api/public/library` | catalogue publié (JSON), avec position d'écoute par visiteur |
+| `POST /api/public/progress` | enregistre la position de lecture (CSRF, session publique) |
 | `GET /m/{slug}` | redirection média publique déjà existante, routée ici aussi pour le lecteur |
 
 Les fichiers eux-mêmes sont servis par les liens `/m/{slug}` déjà existants :
@@ -25,6 +26,23 @@ une redirection 302 vers une URL S3 présignée de courte durée, avec `Range`
 ces URL ; la CSP du bord n'impose pas de `media-src` restrictive.
 
 `/api/v1/*`, `/s/*`, `/f/*`, `/p/*` et la console React restent sur `APP_DOMAIN`.
+
+## Lecteur et confort d'écoute
+
+La page du catalogue affiche une seule barre de lecture persistante au lieu de
+97 lecteurs natifs empilés. Contrôles : lecture/pause, titre précédent/suivant,
+recule et avance de 15 s, barre de progression à glisser, vitesse de 0,75× à 2×,
+volume, raccourcis clavier (Espace, ←/→, Échap) et Media Session (contrôles
+système/mobile). Un seul `<audio preload="none">` existe dans la page : plus de
+97 requêtes `Range` au chargement.
+
+La position est enregistrée via `/api/public/progress` (table `listen_progress`,
+migration `0018`) et restaurée à la sélection du livre. Le filtre `?q=` permet de
+rechercher un titre ou un auteur sans JavaScript, côté serveur.
+
+Les URL `/m/{slug}` utilisent un TTL dédié (`AURA_PUBLIC_MEDIA_TTL`, 12 h par
+défaut) : le TTL de 15 min des intentions d'upload coupait la lecture d'un livre
+long. Le lecteur tente aussi une fois de renouveler l'URL en cas d'erreur 403.
 
 ## Modèle d'identité
 

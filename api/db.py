@@ -166,6 +166,30 @@ class Repository:
             (session_key(token), self.now()),
         ).fetchone()
 
+    # -- public portal listening position --------------------------------
+    def get_progress_map(self, user_id: str, object_ids: list) -> dict:
+        if not object_ids:
+            return {}
+        marks = ",".join("?" for _ in object_ids)
+        rows = self.conn.execute(
+            f"SELECT object_id, position_seconds FROM listen_progress "
+            f"WHERE user_id = ? AND object_id IN ({marks})",
+            (user_id, *object_ids),
+        ).fetchall()
+        return {r["object_id"]: float(r["position_seconds"]) for r in rows}
+
+    def save_progress(
+        self, user_id: str, object_id: str, position_seconds: float, now: int,
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO listen_progress (user_id, object_id, position_seconds, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(user_id, object_id) DO UPDATE SET "
+            "position_seconds = excluded.position_seconds, "
+            "updated_at = excluded.updated_at",
+            (user_id, object_id, max(0.0, float(position_seconds)), now),
+        )
+        self.conn.commit()
+
     def revoke_sessions_beyond(self, max_expires_at: int) -> int:
         """Delete sessions whose expiry exceeds the current policy.
 
@@ -834,6 +858,15 @@ class Repository:
         )
         self.conn.commit()
         return cur.rowcount
+
+    def get_object_unscoped(self, oid: str) -> Optional[sqlite3.Row]:
+        """Look an object up by id without a tenant filter.
+
+        Only for callers that already hold an unguessable public capability
+        (a published slug) or that verify publication explicitly, as the public
+        progress route does. Never use this for ordinary data-plane reads.
+        """
+        return self.conn.execute("SELECT * FROM objects WHERE id = ?", (oid,)).fetchone()
 
     def get_object(self, oid: str, *, space_id: str, owner_id: Optional[str] = None):
         sql = "SELECT * FROM objects WHERE id = ? AND space_id = ?"
