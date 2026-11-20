@@ -322,9 +322,12 @@ services:
       # `docs` is a dedicated internal network shared with Traefik only. It lets
       # the docs host proxy /api/* here (same-origin "Try it") without attaching
       # the API to the public `edge` network, where SeaweedFS and the app
-      # containers could dial it directly. Internal like `storage`, so the API
-      # keeps its current (no Internet) connectivity.
+      # containers could dial it directly.
       - docs
+      # Google OAuth needs outbound HTTPS (token + tokeninfo endpoints). This
+      # dedicated bridge gives the API a default route without putting it on
+      # `edge`: SeaweedFS, app and s3-landing still cannot dial it directly.
+      - oauth
     # The process only needs its mounted audit volume and /tmp (AV scanner
     # scratch). Everything else is read-only and all Linux capabilities are
     # dropped. (Running as a non-root UID needs a chown of the existing audit
@@ -612,6 +615,15 @@ networks:
     ipam:
       config:
         - subnet: 172.32.0.0/24
+  # Outbound-only bridge for the API's Google OAuth calls. `internal: false`
+  # (the default) is required: internal networks have no default route, so the
+  # token exchange fails with "token endpoint unavailable". Only the API joins
+  # this network; the public `edge` and the other internal networks stay separated.
+  oauth:
+    name: aura-oauth-egress
+    ipam:
+      config:
+        - subnet: 172.33.0.0/24
 
 
 volumes:

@@ -86,6 +86,13 @@ stable `/m/{slug}` (`PUT /api/v1/objects/{oid}/publication`).
   reste une phase ultérieure, avec quarantaine, quota et antivirus.
 - Le portail dépend des gates de production du README (notamment le test de
   restauration de sauvegarde) avant une ouverture au grand public.
+- L'échange du code et la vérification du jeton appellent Google depuis le
+  conteneur API. Les réseaux `docs` et `storage` étant `internal: true` (aucune
+  route par défaut), l'API rejoint un **réseau de sortie dédié**
+  (`aura-oauth-egress`, 172.33.0.0/24). Elle n'est pas attachée au réseau
+  public `edge` : SeaweedFS, `app` et `s3-landing` ne peuvent toujours pas
+  l'appeler directement. Sans ce réseau, le callback échoue avec
+  `token endpoint unavailable`.
 
 ## Tests
 

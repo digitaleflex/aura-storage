@@ -104,3 +104,14 @@ def test_public_router_exposes_only_portal_paths(
     assert "PathPrefix(`/m/`)" in rule
     assert "PathPrefix(`/api/v1/`)" not in rule
     assert public.get("service") == "aura-public"
+
+
+def test_api_has_dedicated_oauth_egress_network() -> None:
+    """The OAuth token exchange needs outbound HTTPS, but not the public edge."""
+    data = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    api = data["services"]["api"]
+    assert "oauth" in api.get("networks", [])
+    assert "edge" not in api.get("networks", [])
+    oauth_network = data["networks"]["oauth"]
+    # An internal network has no default route: Google would be unreachable.
+    assert oauth_network.get("internal") is not True
