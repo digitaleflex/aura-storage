@@ -251,8 +251,12 @@ paths:
           description: Exact catalogue status.
         - in: query
           name: content_type
-          schema: { type: string, maxLength: 127 }
-          description: Exact media type, compared case-insensitively.
+          schema: { type: string, maxLength: 1000 }
+          description: >-
+            Media type filter, compared case-insensitively. One exact type
+            (`application/pdf`), or a comma separated list of up to 20 entries
+            where each entry is an exact type or a prefix ending with `*`
+            (`image/*,application/pdf`).
         - in: query
           name: min_size
           schema: { type: integer, minimum: 0 }

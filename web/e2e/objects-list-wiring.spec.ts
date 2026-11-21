@@ -120,6 +120,8 @@ test("status and sort controls reach the API", async ({ page }) => {
   );
   await login(page);
 
+  // The status select lives in the advanced filters panel.
+  await page.getByRole("button", { name: "Filtres" }).click();
   await page.getByLabel("État").selectOption("available");
   await expect
     .poll(() => objectRequests.some((url) => url.includes("status=available")))

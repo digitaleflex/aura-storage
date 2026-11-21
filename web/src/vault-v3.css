@@ -46,24 +46,61 @@
   line-height: 1.15;
 }
 
-/* Synthèse du coffre : bandeau de quatre repères, plat et compact. */
+/* Synthèse du coffre : une rangée fine (le contenu passe avant les repères). */
 .overview {
-  gap: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 28px;
+  margin: 0 0 var(--space-4, 16px);
+  padding: 8px 14px;
+  border: var(--bw) solid var(--line);
+  border-radius: 12px;
+  background: var(--steel-0);
 }
 
 .overview-tile {
-  border-radius: 14px;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
   box-shadow: none;
-  padding: 14px 16px;
+}
+
+.overview-tile:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.overview-label {
+  font-size: 12px;
 }
 
 .overview-value {
-  font-size: 22px;
-  letter-spacing: -0.01em;
+  font-size: 15px;
+  letter-spacing: 0;
 }
 
 .overview-sub {
   font-size: 12px;
+}
+
+/* Les descriptions longues restent dans le tableau de bord ; seul le repère
+ * d'espace garde son détail (pourcentage de la capacité). */
+.overview-tile:not(:first-child) .overview-sub {
+  display: none;
+}
+
+.overview .meter {
+  width: 72px;
+  height: 4px;
+  margin: 0;
+  align-self: center;
 }
 
 .ledger-row {
@@ -338,4 +375,43 @@
 .dashboard-label {
   font-size: 13px;
   color: var(--muted);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Fichiers : pastilles de famille de fichiers                             */
+/* ---------------------------------------------------------------------- */
+.filter-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.pill {
+  min-height: 36px;
+  padding: 0 14px;
+  border: var(--bw) solid var(--line-2);
+  border-radius: 18px;
+  background: var(--steel-1);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.pill:hover {
+  border-color: var(--ink-2);
+  color: var(--ink);
+}
+
+.pill[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--steel-1);
+}
+
+.pill:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
 }

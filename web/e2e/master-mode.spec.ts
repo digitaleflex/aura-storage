@@ -118,6 +118,8 @@ test("the trash is emptied in one click in master mode", async ({ page }) => {
     masterUntil: Math.floor(Date.now() / 1000) + 600, purged: [], emptied: 0,
   };
   await setup(page, server);
+  // The status select lives in the advanced filters panel.
+  await page.getByRole("button", { name: "Filtres" }).click();
   await page.getByLabel("État").selectOption({ label: "Corbeille" });
   await page.getByRole("button", { name: "Vider la corbeille" }).click();
   await expect(page.getByText("Corbeille vidée : 1 fichier(s) purgé(s).")).toBeVisible();
@@ -127,6 +129,8 @@ test("the trash is emptied in one click in master mode", async ({ page }) => {
 test("without master mode the trash cannot be emptied and purges still ask", async ({ page }) => {
   const server: Server = { masterUntil: null, purged: [], emptied: 0 };
   await setup(page, server);
+  // The status select lives in the advanced filters panel.
+  await page.getByRole("button", { name: "Filtres" }).click();
   await page.getByLabel("État").selectOption({ label: "Corbeille" });
   await expect(page.getByRole("button", { name: "Vider la corbeille" })).toHaveCount(0);
 });

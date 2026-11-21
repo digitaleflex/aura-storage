@@ -48,6 +48,8 @@ async function setup(page: Page, restored: string[]) {
 test("the trash lists deleted files and restores one", async ({ page }) => {
   const restored: string[] = [];
   await setup(page, restored);
+  // The status select lives in the advanced filters panel.
+  await page.getByRole("button", { name: "Filtres" }).click();
   await page.getByLabel("État").selectOption({ label: "Corbeille" });
 
   await page.getByRole("button", { name: "Actions pour rapport.txt" }).click();
@@ -58,6 +60,8 @@ test("the trash lists deleted files and restores one", async ({ page }) => {
 
 test("a file deleted before its upload cannot be restored", async ({ page }) => {
   await setup(page, []);
+  // The status select lives in the advanced filters panel.
+  await page.getByRole("button", { name: "Filtres" }).click();
   await page.getByLabel("État").selectOption({ label: "Corbeille" });
   await page.getByRole("button", { name: "Actions pour jamais-envoye.txt" }).click();
   await expect(page.getByRole("menuitem", { name: "Restaurer" })).toHaveCount(0);

@@ -201,6 +201,63 @@ def test_filter_by_content_type_is_case_insensitive():
     )
 
 
+def test_filter_by_content_type_list_and_prefix():
+    # The file-family pills of the UI send a list mixing prefixes and exact types.
+    c, headers = _admin()
+    tag = uuid.uuid4().hex[:8]
+    png = _upload(c, headers, f"img-{tag}", content_type="image/png")
+    jpg = _upload(c, headers, f"photo-{tag}", content_type="IMAGE/JPEG")
+    pdf = _upload(c, headers, f"doc-{tag}", content_type="application/pdf")
+    txt = _upload(c, headers, f"txt-{tag}", content_type="text/plain")
+
+    r = c.get(
+        "/api/v1/objects",
+        params={"content_type": "image/*, application/pdf", "limit": 100},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    ids = {o["id"] for o in r.json()["items"]}
+    assert {png, jpg, pdf} <= ids  # prefix (any case) and exact entry match
+    assert txt not in ids          # not listed
+
+    # A single exact type keeps its historical meaning: no prefix matching.
+    r = c.get(
+        "/api/v1/objects",
+        params={"content_type": "image/png", "limit": 100},
+        headers=headers,
+    )
+    ids = {o["id"] for o in r.json()["items"]}
+    assert png in ids and jpg not in ids
+
+
+def test_content_type_prefix_treats_wildcards_literally():
+    c, headers = _admin()
+    tag = uuid.uuid4().hex[:8]
+    png = _upload(c, headers, f"img-{tag}", content_type="image/png")
+
+    # "_" and "%" are LIKE wildcards: they must only match themselves.
+    for pattern in ("ima_e/*", "%/*", "image%*"):
+        r = c.get(
+            "/api/v1/objects",
+            params={"content_type": pattern, "limit": 100},
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        assert png not in {o["id"] for o in r.json()["items"]}, pattern
+
+
+def test_content_type_filter_with_only_separators_is_no_filter():
+    c, headers = _admin()
+    tag = uuid.uuid4().hex[:8]
+    txt = _upload(c, headers, f"txt-{tag}", content_type="text/plain")
+
+    r = c.get(
+        "/api/v1/objects", params={"content_type": " , ,", "limit": 100}, headers=headers
+    )
+    assert r.status_code == 200, r.text
+    assert txt in {o["id"] for o in r.json()["items"]}
+
+
 def test_filter_by_size_uses_committed_size():
     c, headers = _admin()
     tag = uuid.uuid4().hex[:8]
