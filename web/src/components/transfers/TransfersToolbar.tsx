@@ -29,6 +29,7 @@ export function TransfersToolbar({
   onClear,
   onResetFilters,
   onRetryFailed,
+  quietPrimary = false,
 }: {
   canPause: boolean;
   canResume: boolean;
@@ -51,13 +52,15 @@ export function TransfersToolbar({
   onClear: () => void;
   onResetFilters: () => void;
   onRetryFailed: () => void;
+  /** Another call to action (resume banner) is on screen: keep this one quiet. */
+  quietPrimary?: boolean;
 }) {
   return (
     <div className="transfers-actionbar">
       <div className="transfers-actionbar-actions">
         <button
           type="button"
-          className="btn btn-primary transfers-actionbar-primary"
+          className={`btn${quietPrimary ? "" : " btn-primary"} transfers-actionbar-primary`}
           onClick={onAddFiles}
           aria-label="Ajouter des fichiers"
         >
@@ -78,7 +81,7 @@ export function TransfersToolbar({
           </button>
         ) : null}
         {canCancel ? (
-          <button type="button" className="btn btn-danger" onClick={onCancelAll}>
+          <button type="button" className="btn btn-danger-outline" onClick={onCancelAll}>
             <TransferIcon name="close" size={16} />
             Annuler tout
           </button>
