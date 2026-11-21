@@ -2857,7 +2857,8 @@ export function ObjectsPage() {
         </div>
         <p className="muted">
           Déposez des fichiers ou des dossiers n'importe où sur la page, ou
-          choisissez-les. Un fichier n'est déclaré disponible qu'une fois sa
+          choisissez-les. Vous pouvez ajouter plusieurs dossiers successivement
+          avant de lancer l'import. Un fichier n'est déclaré disponible qu'une fois sa
           taille et son empreinte SHA-256 vérifiées par le serveur.
         </p>
         {dropScan ? (
