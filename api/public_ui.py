@@ -160,6 +160,22 @@ select:focus-visible,input[type=range]:focus-visible,.view-link:focus-visible,
   border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink)}
 .facet-toggle{font-size:.88rem;color:var(--muted);padding:0;margin-left:.1rem}
 .facet[hidden]{display:none !important}
+.filters-fold{margin-top:1rem}
+.filters-fold summary{display:inline-flex;align-items:center;gap:.5rem;cursor:pointer;list-style:none;
+  font-size:.9rem;padding:.4rem .9rem;border:1px solid var(--line);border-radius:999px;
+  background:var(--surface);color:var(--ink)}
+.filters-fold summary::-webkit-details-marker{display:none}
+.filters-fold summary::after{content:"";width:.45rem;height:.45rem;margin-left:.1rem;
+  border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg) translateY(-1px)}
+.filters-fold[open] summary::after{transform:rotate(-135deg) translateY(-1px)}
+.filters-fold summary:hover{border-color:rgba(149,109,53,.55)}
+.filters-fold summary:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.filters-badge{min-width:1.3rem;padding:0 .35rem;border-radius:999px;background:var(--ink);
+  color:var(--surface);font-size:.75rem;line-height:1.3rem;text-align:center}
+.filters-fold .controls-block{margin-top:.9rem}
+.filters-reset{margin:.6rem 0 0}
+.author-form select{font:inherit;font-size:.9rem;max-width:min(100%,20rem);padding:.45rem .7rem;
+  border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink)}
 .discovery{display:flex;flex-wrap:wrap;gap:.5rem;margin:1.2rem 0 2.2rem}
 .discovery a{font:inherit;font-size:.9rem;padding:.55rem .95rem;border-radius:999px;
   border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);text-decoration:none}
@@ -853,47 +869,9 @@ _PLAYER_JS = r"""
     play(i >= 0 ? i : 0);
   }); }
 
-  var authorsToggle = document.getElementById('authors-toggle');
-  if(authorsToggle){
-    authorsToggle.addEventListener('click', function(){
-      var expanded = authorsToggle.getAttribute('data-expanded') === 'true';
-      var extras = Array.from(document.querySelectorAll('.facet-extra'));
-      extras.forEach(function(el){
-        if(expanded){
-          el.hidden = true;
-        } else {
-          var match = el.getAttribute('data-match');
-          el.hidden = (match === 'false');
-        }
-      });
-      authorsToggle.setAttribute('data-expanded', expanded ? 'false' : 'true');
-      authorsToggle.textContent = expanded ? (authorsToggle.getAttribute('data-more') || 'Voir tous les auteurs')
-                                           : (authorsToggle.getAttribute('data-less') || 'Voir moins');
-    });
-  }
-  var authorSearch = document.getElementById('author-search');
-  if(authorSearch){
-    authorSearch.addEventListener('input', function(){
-      var q = (authorSearch.value || '').toLowerCase().trim();
-      var extras = Array.from(document.querySelectorAll('.facet-extra'));
-      var shownExtra = 0;
-      Array.from(document.querySelectorAll('#author-facets .facet[data-author]')).forEach(function(el){
-        var name = (el.getAttribute('data-author') || '');
-        if(name === '*') return;
-        var ok = !q || name.indexOf(q) >= 0;
-        el.setAttribute('data-match', ok ? 'true' : 'false');
-        if(el.classList.contains('facet-extra')){
-          var expanded = authorsToggle && authorsToggle.getAttribute('data-expanded') === 'true';
-          el.hidden = !(ok && (expanded || q));
-          if(!el.hidden) shownExtra++;
-        } else {
-          el.hidden = !ok;
-        }
-      });
-      if(authorsToggle){
-        authorsToggle.hidden = !!q; // when searching, show all matches; hide toggle
-      }
-    });
+  var authorSelect = document.getElementById('author-select');
+  if(authorSelect && authorSelect.form){
+    authorSelect.addEventListener('change', function(){ authorSelect.form.submit(); });
   }
 
   var best = -1, bestProgress = 0;
@@ -1066,9 +1044,21 @@ def catalog_page(
         f'<input type="search" name="q" value="{ESC(query)}" '
         'placeholder="Rechercher un livre, un auteur…" aria-label="Rechercher un livre, un auteur">',
         '<button type="submit">Rechercher</button></form>',
-        '<div class="controls-block">',
-        '<nav class="control-row" aria-label="Mode d\'affichage"><span class="label">Vue</span>',
     ]
+    filters_active = (view != "liste") or bool(active_author)
+    filter_count = (1 if view != "liste" else 0) + (1 if active_author else 0)
+    if active_author or query:
+        parts.append(
+            f'<p class="filters-reset"><a class="facet-clear" href="{ESC(href(auteur=None, q=None))}">'
+            'Effacer les filtres</a></p>'
+        )
+    badge = f' <span class="filters-badge">{filter_count}</span>' if filter_count else ""
+    parts.append(
+        f'<details class="filters-fold" id="filters-fold"{" open" if filters_active else ""}>'
+        f'<summary>Affichage et filtres{badge}</summary>'
+    )
+    parts.append('<div class="controls-block">')
+    parts.append('<nav class="control-row" aria-label="Mode d\'affichage"><span class="label">Vue</span>')
     for label, value in (("Liste", "liste"), ("Grille", "grille"), ("Immersif", "immersif")):
         current = "true" if view == value else "false"
         parts.append(
@@ -1077,9 +1067,9 @@ def catalog_page(
         )
     parts.append('</nav>')
 
-    if collection_options:
+    # Collections: only worth a row when there is something to choose between.
+    if len(collection_options) > 1:
         parts.append('<nav class="control-row" aria-label="Collections"><span class="label">Collections</span>')
-        parts.append('<a class="facet" href="#tous" aria-pressed="false">Toute la bibliothèque</a>')
         for copt in collection_options:
             parts.append(
                 f'<span class="pill pill-static" title="{ESC(copt["title"])}">'
@@ -1087,43 +1077,52 @@ def catalog_page(
             )
         parts.append('</nav>')
 
+    # Authors: one select (a long library has dozens), sent as a plain GET form.
     if author_options:
-        show_limit = 10
-        parts.append('<nav class="control-row facets" id="author-facets" aria-label="Filtrer par auteur"><span class="label">Auteurs</span>')
         parts.append(
-            f'<a class="facet" data-author="*" href="{ESC(href(auteur=None))}" '
-            f'aria-pressed="{"true" if not active_author else "false"}">Tous</a>'
+            '<form class="control-row author-form" method="get" action="/" aria-label="Filtrer par auteur">'
+            '<label class="label" for="author-select">Auteur</label>'
         )
-        for idx, author in enumerate(author_options):
+        if query:
+            parts.append(f'<input type="hidden" name="q" value="{ESC(query)}">')
+        if view != "liste":
+            parts.append(f'<input type="hidden" name="vue" value="{ESC(view)}">')
+        parts.append('<select id="author-select" name="auteur">')
+        parts.append(
+            f'<option value=""{"" if active_author else " selected"}>'
+            f'Tous les auteurs ({len(all_items)})</option>'
+        )
+        for author in author_options:
             count = author_counts.get(author, 0)
-            extra = " facet-extra" if idx >= show_limit else ""
-            hidden_attr = ' hidden' if idx >= show_limit else ''
+            chosen = " selected" if active_author == author else ""
             parts.append(
-                f'<a class="facet{extra}" data-author="{ESC(author.lower())}" href="{ESC(href(auteur=author))}" '
-                f'aria-pressed="{"true" if active_author == author else "false"}"{hidden_attr}>'
-                f'{ESC(author)} <small>({count})</small></a>'
+                f'<option value="{ESC(author)}"{chosen}>{ESC(author)} ({count})</option>'
             )
-        if len(author_options) > show_limit:
-            parts.append(
-                '<button type="button" class="text-button facet-toggle" id="authors-toggle" '
-                f'data-more="Voir tous les auteurs ({len(author_options)})" data-less="Voir moins">Voir tous les auteurs ({len(author_options)})</button>'
-            )
-        if active_author or query:
-            parts.append(f'<a class="facet-clear" href="{ESC(href(auteur=None, q=None))}">Effacer les filtres</a>')
-        parts.append('<div class="facet-tools">')
-        parts.append('<input type="search" id="author-search" class="facet-search" placeholder="Rechercher un auteur…" aria-label="Rechercher parmi les auteurs">')
-        parts.append('</div></nav>')
+        parts.append('</select>')
+        parts.append('<noscript><button type="submit" class="text-button">Filtrer</button></noscript>')
+        parts.append('</form>')
 
-    parts.append('</div></header>')
+    parts.append('</div></details>')
 
-    parts.append(
-        '<nav class="discovery" aria-label="Découvrir la bibliothèque">'
-        '<a href="#resume">Reprendre l\'écoute</a>'
-        '<a href="#nouveautes">Nouveautés</a>'
-        '<a href="#decouvrir">À découvrir</a>'
-        '<a href="#tous">Toute la bibliothèque</a>'
-        '</nav>'
-    )
+    parts.append('</header>')
+
+    # The first book in progress is the resume card itself: the shelf lists the others.
+    resume_shelf = resume[1:] if resume else []
+    discovery_links = []
+    if resume:
+        discovery_links.append(("#resume" if resume_shelf else "#resume-card", "Reprendre l'écoute"))
+    if newest:
+        discovery_links.append(("#nouveautes", "Nouveautés"))
+    if discover:
+        discovery_links.append(("#decouvrir", "À découvrir"))
+    if all_items:
+        discovery_links.append(("#tous", "Toute la bibliothèque"))
+    if len(discovery_links) > 1:
+        parts.append(
+            '<nav class="discovery" aria-label="Découvrir la bibliothèque">'
+            + "".join(f'<a href="{href_}">{ESC(label_)}</a>' for href_, label_ in discovery_links)
+            + '</nav>'
+        )
 
     if not all_items:
         parts.extend([
@@ -1156,10 +1155,11 @@ def catalog_page(
         elif fduration:
             fmeta = _duration_text(fduration)
         cta = "Continuer l'écoute" if fprogress > 0 else "Lancer l'écoute"
+        feyebrow = "Reprendre l'écoute" if fprogress > 0 else "Pour commencer"
         parts.extend([
-            '<section class="resume-card" aria-label="Reprendre l\'écoute">',
+            '<section class="resume-card" id="resume-card" aria-label="Reprendre l\'écoute">',
             f'<div class="resume-cover" style="--cover-h:{fhue}">{fcover_inner}</div>',
-            '<div class="resume-copy"><p class="eyebrow">Reprendre l\'écoute</p>',
+            f'<div class="resume-copy"><p class="eyebrow">{ESC(feyebrow)}</p>',
             f'<h2>{ESC(flabel)}</h2><p>{ESC(fauthor)}</p>',
             f'<p class="resume-meta">{ESC(fmeta)}</p>',
             f'<div class="resume-progress" aria-hidden="true"><i style="width:{fpct:.1f}%"></i></div>',
@@ -1178,7 +1178,7 @@ def catalog_page(
         img = f'<img src="{ESC(cover)}" alt="" onerror="this.remove()">' if cover else ""
         idx = id_to_index.get(str(first.get("id")), 0)
         parts.extend([
-            '<section class="hero" aria-label="Lecture immersive">',
+            '<section class="hero" id="resume-card" aria-label="Lecture immersive">',
             f'<div class="big-cover" style="--cover-h:{hue}" id="immersive-cover-host">',
             f'<span>{ESC(label[:1].upper() or "A")}</span>{img}</div>',
             '<div><p class="eyebrow">Lecture immersive</p>',
@@ -1200,7 +1200,7 @@ def catalog_page(
             parts.append(_track_html(item))
         parts.append('</ul></section>')
 
-    shelf("resume", "Reprendre l'écoute", resume, "Vos lectures en cours, à la dernière position.")
+    shelf("resume", "Reprendre l'écoute", resume_shelf, "Vos autres lectures en cours, à la dernière position.")
     shelf("nouveautes", "Nouveautés", newest, "Les titres récemment ajoutés à votre bibliothèque.")
     shelf("decouvrir", "À découvrir", discover, "Une sélection pour varier vos prochaines écoutes.")
     for col in collections:

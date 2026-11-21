@@ -153,6 +153,69 @@ def test_view_modes_facets_and_cover_route():
     assert "0,5×" in page and "3×" in page
 
 
+class _FreshVisitor:
+    """Sign in as a brand-new Google subject: no listening progress at all."""
+
+    def __enter__(self):
+        self._previous = SUBJECT
+        globals()["SUBJECT"] = f"visitor-{uuid.uuid4().hex}"
+        return _sign_in(TestClient(main.app))
+
+    def __exit__(self, *exc):
+        globals()["SUBJECT"] = self._previous
+        return False
+
+
+def test_catalogue_keeps_the_filters_folded_and_lists_authors_in_a_select():
+    import re
+
+    _published_pack()
+    with _FreshVisitor() as c:
+        page = c.get("/").text
+        # Books first: the display/filter controls sit in a folded panel.
+        assert '<details class="filters-fold" id="filters-fold">' in page
+        assert 'id="author-select"' in page
+        assert re.search(r"Auteur Test \(\d+\)", page)
+        # No per-author pills, no "show all authors" toggle, no author search box.
+        assert 'data-author="*"' not in page
+        assert 'class="facet"' not in page
+        assert 'id="authors-toggle"' not in page
+        assert 'id="author-search"' not in page
+        # The collections row no longer repeats the "whole library" shortcut.
+        assert 'href="#tous" aria-pressed' not in page
+        assert page.count(">Toute la bibliothèque<") == 1
+        # Nothing was listened to yet: the card says so instead of "Reprendre".
+        assert "Pour commencer" in page
+        assert "Reprendre l&#x27;écoute</a>" not in page
+
+        # An active filter opens the panel and keeps its choice.
+        filtered = c.get("/?auteur=Auteur%20Test&vue=grille").text
+        assert '<details class="filters-fold" id="filters-fold" open>' in filtered
+        assert re.search(r'<option value="Auteur Test" selected>', filtered)
+        assert 'name="vue" value="grille"' in filtered  # the select keeps the view
+        assert "Effacer les filtres" in filtered
+
+
+def test_resume_card_is_not_repeated_in_the_resume_shelf():
+    _published_pack()
+    with _FreshVisitor() as c:
+        csrf = c.get("/api/public/me").json()["csrf_token"]
+        items = c.get("/api/public/library").json()["collections"][0]["items"]
+        saved = c.post("/api/public/progress", json={
+            "object_id": items[0]["id"], "position_seconds": 321.0,
+        }, headers={"X-CSRF-Token": csrf})
+        assert saved.status_code == 200, saved.text
+
+        page = c.get("/").text
+        assert '<p class="eyebrow">Reprendre l&#x27;écoute</p>' in page
+        assert "Pour commencer" not in page
+        # Only one book in progress: it is the card, so there is no second shelf
+        # and the discovery link points at the card itself.
+        assert 'id="resume-card"' in page
+        assert 'id="resume"' not in page
+        assert 'href="#resume-card"' in page
+
+
 def test_cover_route_is_404_without_extracted_art():
     _published_pack()
     c = _sign_in(TestClient(main.app))
