@@ -44,6 +44,7 @@ import {
   parentDirOf,
   planFolders,
 } from "../lib/folderTree";
+import { findDuplicates, type DuplicateMatch } from "../lib/duplicateCheck";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { makeToast, ToastStack, type Toast } from "../components/Toasts";
@@ -412,6 +413,11 @@ export function ObjectsPage() {
   const [pendingFolderEntries, setPendingFolderEntries] = useState<{ file: File; rel: string }[]>([]);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [duplicateMatches, setDuplicateMatches] = useState<DuplicateMatch[] | null>(null);
+  const [duplicateChecking, setDuplicateChecking] = useState(false);
+  const [pendingUploadAfterDuplicate, setPendingUploadAfterDuplicate] = useState<
+    { files: File[]; relPaths: string[]; folderMode: boolean } | null
+  >(null);
   // Retours d'action : des toasts (là où l'action a eu lieu), plus des
   // bandeaux qui poussent le contenu. Les succès disparaissent seuls, les
   // erreurs restent jusqu'à fermeture. `null` est ignoré (ancien « effacer »).
@@ -1413,6 +1419,78 @@ export function ObjectsPage() {
     }
   }
 
+  function launchPreparedUpload(files: File[], relPaths: string[], folderMode: boolean) {
+    if (!csrf) {
+      setUploadError("Session expirée. Reconnectez-vous.");
+      return;
+    }
+    if (folderMode) {
+      void uploadRelPaths(files, relPaths);
+    } else {
+      launchQueue(
+        csrf,
+        files.map((file, index) => ({
+          file,
+          rel: relPaths[index] ?? file.name,
+          folderId: currentFolderId,
+        })),
+      );
+    }
+    setPendingFiles([]);
+    setPendingFolderEntries([]);
+  }
+
+  async function startUploadWithDuplicateCheck(files: File[], relPaths: string[], folderMode: boolean) {
+    setDuplicateChecking(true);
+    setUploadError(null);
+    try {
+      const matches = await checkUploadDuplicates(files, relPaths, folderMode);
+      if (matches.length > 0) {
+        setDuplicateMatches(matches);
+        setPendingUploadAfterDuplicate({ files, relPaths, folderMode });
+        return;
+      }
+    } catch (err) {
+      // Duplicate check is a safety aid; do not block upload on transient scan errors.
+      notify("info", "Vérification des doublons indisponible, l'import continue.");
+    } finally {
+      setDuplicateChecking(false);
+    }
+    launchPreparedUpload(files, relPaths, folderMode);
+  }
+
+  function cancelDuplicateUpload() {
+    setDuplicateMatches(null);
+    setPendingUploadAfterDuplicate(null);
+  }
+
+  function continueDuplicateUpload(mode: "skip" | "include") {
+    const pending = pendingUploadAfterDuplicate;
+    const matches = duplicateMatches ?? [];
+    setDuplicateMatches(null);
+    setPendingUploadAfterDuplicate(null);
+    if (!pending) return;
+    if (mode === "include") {
+      launchPreparedUpload(pending.files, pending.relPaths, pending.folderMode);
+      return;
+    }
+    const duplicateRelSet = new Set(matches.map((m) => m.rel));
+    const keptFiles: File[] = [];
+    const keptRels: string[] = [];
+    pending.files.forEach((file, index) => {
+      const rel = pending.relPaths[index] ?? file.name;
+      if (duplicateRelSet.has(rel)) return;
+      keptFiles.push(file);
+      keptRels.push(rel);
+    });
+    if (keptFiles.length === 0) {
+      notify("info", "Tous les fichiers sélectionnés sont des doublons — import annulé.");
+      return;
+    }
+    notify("info", `${matches.length} doublon(s) ignoré(s).`);
+    launchPreparedUpload(keptFiles, keptRels, pending.folderMode);
+  }
+
   function handleUpload(event: FormEvent) {
     event.preventDefault();
     setUploadError(null);
@@ -1422,8 +1500,6 @@ export function ObjectsPage() {
       return;
     }
     if (transferActive) {
-      // File d'attente : les fichiers sont mis en attente et seront uploadés
-      // automatiquement quand le transfert en cours se termine.
       if (pendingFiles.length > 0) {
         setNotice(
           `${pendingFiles.length} fichier(s) mis en file d'attente — ils seront uploadés automatiquement à la fin du transfert en cours.`,
@@ -1438,7 +1514,6 @@ export function ObjectsPage() {
       setUploadError("Session expirée. Reconnectez-vous.");
       return;
     }
-    // Garde-fou taille client : vérifier max_object_bytes avant l'upload
     const maxBytes = usageQuery.data?.limits?.max_object_bytes;
     const combinedForSize = [
       ...pendingFiles,
@@ -1460,18 +1535,18 @@ export function ObjectsPage() {
       const folderRels = pendingFolderEntries.map((e) => e.rel);
       const looseList = pendingFiles;
       const looseRels = pendingFiles.map((f) => f.name);
-      void uploadRelPaths([...folderList, ...looseList], [...folderRels, ...looseRels]);
-      setPendingFiles([]);
-      setPendingFolderEntries([]);
+      void startUploadWithDuplicateCheck(
+        [...folderList, ...looseList],
+        [...folderRels, ...looseRels],
+        true,
+      );
       return;
     }
-    launchQueue(
-      csrf,
-      pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
+    void startUploadWithDuplicateCheck(
+      pendingFiles,
+      pendingFiles.map((file) => file.name),
+      false,
     );
-    // The queue now owns the submitted files: clear them so anything dropped
-    // during the transfer stays visible as a real backlog for the next run.
-    setPendingFiles([]);
   }
 
   /** Directory import (#64): recreate the missing folders, then upload in place. */
@@ -1488,6 +1563,64 @@ export function ObjectsPage() {
       ...current,
       ...list.map((file, index) => ({ file, rel: relPaths[index] ?? file.name })),
     ]);
+  }
+
+  async function fetchAllObjectsInFolder(folderId: string | null): Promise<ObjectItem[]> {
+    const out: ObjectItem[] = [];
+    let offset = 0;
+    const limit = 100;
+    for (let guard = 0; guard < 200; guard += 1) {
+      const page = await api.listObjects({ folderId, limit, offset });
+      out.push(...page.items);
+      if (page.items.length < limit) break;
+      offset += page.items.length;
+    }
+    return out;
+  }
+
+  async function checkUploadDuplicates(
+    files: File[],
+    relPaths: string[],
+    folderMode: boolean,
+  ): Promise<DuplicateMatch[]> {
+    const entries = files.map((file, index) => ({ file, rel: relPaths[index] ?? file.name }));
+    const existingByKey = new Map<string, { id: string; display_name: string; size_bytes: number; checksum_sha256?: string | null }[]>();
+
+    if (!folderMode) {
+      const currentObjects = await fetchAllObjectsInFolder(currentFolderId);
+      existingByKey.set("", currentObjects.map((o) => ({
+        id: o.id, display_name: o.display_name, size_bytes: o.size_bytes, checksum_sha256: o.checksum_sha256,
+      })));
+    } else {
+      const plan = planFolders(relPaths);
+      const keyOf = (parentId: string | null, name: string) => `${parentId ?? "root"}/${name}`;
+      const existingFolderIds = new Map<string, string>();
+      for (const folder of tree) existingFolderIds.set(keyOf(folder.parent_id, folder.name), folder.id);
+      const folderIds = new Map<string, string>();
+      for (const folder of plan.folders) {
+        const parentId = folder.parentPath ? folderIds.get(folder.parentPath) ?? currentFolderId : currentFolderId;
+        const id = existingFolderIds.get(keyOf(parentId, folder.name));
+        if (id) folderIds.set(folder.path, id);
+      }
+      const neededKeys = new Set<string>([""]);
+      for (const entry of entries) {
+        const parent = entry.rel.includes("/") ? entry.rel.slice(0, entry.rel.lastIndexOf("/")) : "";
+        neededKeys.add(parent);
+      }
+      for (const key of neededKeys) {
+        const folderId = key === "" ? currentFolderId : folderIds.get(key) ?? null;
+        if (key !== "" && !folderIds.has(key)) {
+          existingByKey.set(key, []);
+          continue;
+        }
+        const objs = await fetchAllObjectsInFolder(folderId);
+        existingByKey.set(key, objs.map((o) => ({
+          id: o.id, display_name: o.display_name, size_bytes: o.size_bytes, checksum_sha256: o.checksum_sha256,
+        })));
+      }
+    }
+
+    return findDuplicates(entries, existingByKey, { computeHash: true, hashMaxBytes: 256 * 1024 * 1024 });
   }
 
   /** Shared core: plan folders, create them, queue files with folder ids. */
@@ -1783,12 +1916,13 @@ export function ObjectsPage() {
         notify(
           "info",
           entries.length === 1
-            ? "1 fichier prêt — préparation des dossiers…"
-            : `${entries.length} fichiers prêts — préparation des dossiers…`,
+            ? "1 fichier prêt — vérification des doublons…"
+            : `${entries.length} fichiers prêts — vérification des doublons…`,
         );
-        await uploadRelPaths(
+        await startUploadWithDuplicateCheck(
           entries.map((entry) => entry.file),
           entries.map((entry) => entry.rel),
+          true,
         );
       } else {
         handleFilesChange(entries.map((entry) => entry.file));
@@ -2932,9 +3066,9 @@ export function ObjectsPage() {
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={pendingFiles.length === 0 && pendingFolderEntries.length === 0}
+            disabled={(pendingFiles.length === 0 && pendingFolderEntries.length === 0) || duplicateChecking}
           >
-            {transferActive ? "Transfert…" : "Importer et valider"}
+            {duplicateChecking ? "Vérification…" : transferActive ? "Transfert…" : "Importer et valider"}
           </button>
           {transferActive ? (
             <ConfirmAction
@@ -4521,6 +4655,41 @@ export function ObjectsPage() {
         />
 
       ) : null}
+
+      <Dialog
+        open={duplicateMatches !== null}
+        title="Doublons détectés"
+        onClose={cancelDuplicateUpload}
+      >
+        <p className="dialog-text">
+          {duplicateMatches?.length ?? 0} fichier(s) semblent déjà présents dans la destination
+          (même nom et taille, ou même empreinte SHA-256). Vous pouvez les ignorer ou les importer quand même.
+        </p>
+        <ul className="pending" style={{ marginTop: "1rem" }}>
+          {(duplicateMatches ?? []).slice(0, 20).map((m, i) => (
+            <li key={`${m.rel}-${i}`} className="pending-item">
+              <span className="transfer-name">{m.rel}</span>
+              <span className="muted">
+                {m.reason === "checksum" ? "empreinte identique" : "nom + taille identiques"}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {(duplicateMatches?.length ?? 0) > 20 ? (
+          <p className="muted">… et {(duplicateMatches?.length ?? 0) - 20} autre(s).</p>
+        ) : null}
+        <div className="dialog-actions" style={{ marginTop: "1rem" }}>
+          <button type="button" className="btn" onClick={cancelDuplicateUpload}>
+            Annuler
+          </button>
+          <button type="button" className="btn" onClick={() => continueDuplicateUpload("include")}>
+            Importer quand même
+          </button>
+          <button type="button" className="btn btn-primary" onClick={() => continueDuplicateUpload("skip")}>
+            Ignorer les doublons
+          </button>
+        </div>
+      </Dialog>
 
       <MasterModeDialog
         open={masterDialogOpen}
