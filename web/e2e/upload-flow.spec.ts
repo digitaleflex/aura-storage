@@ -320,6 +320,9 @@ test("a page that throws shows the branded error page, not the router default", 
   await expect(page.getByRole("heading", { name: "Cette page n'a pas pu s'afficher" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect(page.getByRole("button", { name: "Recharger la page" })).toBeVisible({ timeout: 20_000 });
+  // The in-shell fallback keeps the navigation alive instead of offering a full
+  // reload (PageError.tsx): retry, go back, or reach the files page.
+  await expect(page.getByRole("button", { name: "Réessayer" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("link", { name: "Aller aux fichiers" })).toBeVisible();
   await expect(page.getByText("Something went wrong!")).toHaveCount(0);
 });
