@@ -118,6 +118,11 @@ class EventIn(BaseModel):
 
 class ProfileIn(BaseModel):
     display_name: str | None = Field(default=None, max_length=200)
+    first_name: str | None = Field(default=None, max_length=100)
+    last_name: str | None = Field(default=None, max_length=100)
+    avatar_url: str | None = Field(default=None, max_length=2048)
+    bio: str | None = Field(default=None, max_length=1000)
+    marketing_opt_in: bool | None = None
     locale: str | None = Field(default=None, min_length=2, max_length=16)
     timezone: str | None = Field(default=None, min_length=1, max_length=64)
     territory_code: str | None = Field(default=None, min_length=2, max_length=32)

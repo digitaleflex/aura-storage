@@ -79,6 +79,11 @@ class AccountService(BaseService):
         principal: auth.Principal,
         *,
         display_name: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        avatar_url: str | None = None,
+        bio: str | None = None,
+        marketing_opt_in: bool | None = None,
         locale: str | None = None,
         timezone: str | None = None,
         territory_code: str | None = None,
@@ -87,6 +92,11 @@ class AccountService(BaseService):
         listener = self.repo.update_listener(
             principal.listener_id,
             display_name=display_name,
+            first_name=first_name,
+            last_name=last_name,
+            avatar_url=avatar_url,
+            bio=bio,
+            marketing_opt_in=marketing_opt_in,
             locale=locale,
             timezone=timezone,
             territory_code=territory_code,
@@ -116,6 +126,46 @@ class AccountService(BaseService):
             request_id=request_id,
         )
         return listener
+
+    def cancel_deletion(
+        self, principal: auth.Principal, *, request_id: str = ""
+    ) -> dict:
+        listener = self.repo.cancel_listener_deletion(principal.listener_id)
+        self.repo.record_audit(
+            actor_type="listener",
+            actor_id=str(principal.listener_id),
+            action="listener.deletion.canceled",
+            target_type="listener",
+            target_id=str(principal.listener_id),
+            outcome="success",
+            request_id=request_id,
+        )
+        return listener
+
+    def export_me(self, principal: auth.Principal, *, request_id: str = "") -> dict:
+        listener = self.repo.get_listener(principal.listener_id)
+        preferences = self.repo.get_listener_preferences(principal.listener_id)
+        library = self.repo.list_library(principal.listener_id)
+        collections = self.repo.list_personal_collections(principal.listener_id)
+        devices = self.repo.list_devices(principal.listener_id)
+        sessions = self.repo.list_auth_sessions(principal.listener_id)
+        self.repo.record_audit(
+            actor_type="listener",
+            actor_id=str(principal.listener_id),
+            action="listener.data.exported",
+            target_type="listener",
+            target_id=str(principal.listener_id),
+            outcome="success",
+            request_id=request_id,
+        )
+        return {
+            "listener": listener,
+            "preferences": preferences,
+            "library": library,
+            "personal_collections": collections,
+            "devices": devices,
+            "auth_sessions": sessions,
+        }
 
     def list_auth_sessions(self, principal: auth.Principal) -> list[dict]:
         return self.repo.list_auth_sessions(principal.listener_id)

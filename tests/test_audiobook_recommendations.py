@@ -13,7 +13,7 @@ import pytest
 
 from audiobook import auth
 from audiobook.errors import ValidationError
-from audiobook.schemas import PreferencesIn
+from audiobook.schemas import PreferencesIn, ProfileIn
 from audiobook.services.recommendations import RecommendationsService
 
 
@@ -208,3 +208,16 @@ def test_preferences_schema_validation():
 
     with pytest.raises(Exception):
         PreferencesIn(min_duration_ms=-1)
+
+
+def test_profile_schema_accepts_new_fields():
+    model = ProfileIn(
+        display_name="Nom",
+        first_name="Jean",
+        last_name="Dupont",
+        avatar_url="https://example.com/a.png",
+        bio="Bio",
+        marketing_opt_in=True,
+    )
+    assert model.first_name == "Jean"
+    assert model.marketing_opt_in is True

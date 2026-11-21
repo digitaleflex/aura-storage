@@ -147,7 +147,8 @@ class IdentityRepository(BaseRepository):
                 cur.execute(
                     """
                     SELECT s.*, l.email, l.display_name, l.status AS listener_status,
-                           l.locale, l.timezone, l.territory_code
+                           l.locale, l.timezone, l.territory_code,
+                           l.first_name, l.last_name, l.avatar_url, l.bio, l.marketing_opt_in
                     FROM listener_sessions s
                     JOIN listeners l ON l.id = s.listener_id
                     WHERE s.token_hash = %s
@@ -263,6 +264,11 @@ class IdentityRepository(BaseRepository):
         listener_id: UUID,
         *,
         display_name: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        avatar_url: str | None = None,
+        bio: str | None = None,
+        marketing_opt_in: bool | None = None,
         locale: str | None = None,
         timezone: str | None = None,
         territory_code: str | None = None,
@@ -272,6 +278,21 @@ class IdentityRepository(BaseRepository):
         if display_name is not None:
             fields.append("display_name = %s")
             values.append(display_name)
+        if first_name is not None:
+            fields.append("first_name = %s")
+            values.append(first_name)
+        if last_name is not None:
+            fields.append("last_name = %s")
+            values.append(last_name)
+        if avatar_url is not None:
+            fields.append("avatar_url = %s")
+            values.append(avatar_url)
+        if bio is not None:
+            fields.append("bio = %s")
+            values.append(bio)
+        if marketing_opt_in is not None:
+            fields.append("marketing_opt_in = %s")
+            values.append(bool(marketing_opt_in))
         if locale is not None:
             fields.append("locale = %s")
             values.append(locale)
@@ -337,6 +358,33 @@ class IdentityRepository(BaseRepository):
                     aggregate_type="listener",
                     aggregate_id=str(listener_id),
                     event_type="listener.deletion.requested",
+                    payload={"listener_id": str(listener_id)},
+                )
+                return row
+
+    def cancel_listener_deletion(self, listener_id: UUID) -> dict:
+        with self.db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE listeners
+                    SET status = 'active', deletion_requested_at = NULL, updated_at = now()
+                    WHERE id = %s AND status = 'pending_deletion'
+                    RETURNING *
+                    """,
+                    (listener_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise ConflictError(
+                        "listener is not pending deletion",
+                        code="DELETION_CANCEL_REJECTED",
+                    )
+                self._enqueue(
+                    cur,
+                    aggregate_type="listener",
+                    aggregate_id=str(listener_id),
+                    event_type="listener.deletion.canceled",
                     payload={"listener_id": str(listener_id)},
                 )
                 return row

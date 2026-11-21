@@ -54,6 +54,11 @@ def register_listener_routes(app):
         listener = request.app.state.service.update_profile(
             principal,
             display_name=body.display_name,
+            first_name=body.first_name,
+            last_name=body.last_name,
+            avatar_url=body.avatar_url,
+            bio=body.bio,
+            marketing_opt_in=body.marketing_opt_in,
             locale=body.locale,
             timezone=body.timezone,
             territory_code=body.territory_code,
@@ -70,6 +75,25 @@ def register_listener_routes(app):
             principal, request_id=request_id(request)
         )
         return {"listener": listener}
+
+    @app.post("/api/v1/me/deletion-cancel")
+    def cancel_deletion(
+        request: Request,
+        principal: auth.Principal = Depends(get_principal),
+    ) -> dict:
+        listener = request.app.state.service.cancel_deletion(
+            principal, request_id=request_id(request)
+        )
+        return {"listener": listener}
+
+    @app.get("/api/v1/me/export")
+    def export_me(
+        request: Request,
+        principal: auth.Principal = Depends(get_principal),
+    ) -> dict:
+        return request.app.state.service.export_me(
+            principal, request_id=request_id(request)
+        )
 
     @app.get("/api/v1/me/sessions")
     def list_auth_sessions(
