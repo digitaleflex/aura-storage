@@ -109,6 +109,33 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "aborted", label: "Abandonné" },
 ];
 
+/**
+ * File-family pills. Each one is a preset of the server-side filters: media
+ * types (`content_type`, exact entries or `prefix*`, comma separated) and an
+ * optional status. "Tous" clears both. A pill is active only while the filters
+ * equal its preset, so the advanced fields stay the single source of truth.
+ */
+const KIND_PILLS: { id: string; label: string; types: string; status: string }[] = [
+  { id: "all", label: "Tous", types: "", status: "" },
+  { id: "image", label: "Images", types: "image/*", status: "" },
+  {
+    id: "document",
+    label: "Documents",
+    types: [
+      "application/pdf",
+      "text/*",
+      "application/msword",
+      "application/rtf",
+      "application/vnd.openxmlformats-officedocument.*",
+      "application/vnd.ms-*",
+      "application/vnd.oasis.opendocument.*",
+    ].join(","),
+    status: "",
+  },
+  { id: "media", label: "Audio et vidéo", types: "audio/*,video/*", status: "" },
+  { id: "attention", label: "À traiter", types: "", status: "failed" },
+];
+
 /** Sortable columns: the API field, its label and the order a first click uses. */
 const SORT_COLUMNS: {
   field: NonNullable<ObjectQuery["sort"]>;
@@ -601,10 +628,30 @@ export function ObjectsPage() {
     fromDate !== "" ||
     toDate !== "";
 
-  /** Advanced filters moved off the default screen; the count badges the toggle. */
-  const advancedCount = [typeFilter, minSize, maxSize, fromDate, toDate].filter(
-    (value) => value.trim() !== "",
-  ).length;
+  const activePillId =
+    KIND_PILLS.find(
+      (pill) => pill.types === typeFilter.trim() && pill.status === statusFilter,
+    )?.id ?? null;
+
+  function selectKindPill(id: string) {
+    const pill = KIND_PILLS.find((entry) => entry.id === id);
+    if (!pill) return;
+    setTypeFilter(pill.types);
+    setStatusFilter(pill.status);
+  }
+
+  /**
+   * Advanced filters moved off the default screen; the count badges the toggle.
+   * A media type or status that a pill already shows is not counted twice.
+   */
+  const advancedCount = [
+    activePillId === null ? typeFilter : "",
+    activePillId === null ? statusFilter : "",
+    minSize,
+    maxSize,
+    fromDate,
+    toDate,
+  ].filter((value) => value.trim() !== "").length;
 
   function resetFilters() {
     setSearch("");
@@ -3032,20 +3079,19 @@ export function ObjectsPage() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </label>
-          <label className="field">
-            <span>État</span>
-            <select
-              name="status"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="filter-pills" role="group" aria-label="Famille de fichiers">
+            {KIND_PILLS.map((pill) => (
+              <button
+                key={pill.id}
+                type="button"
+                className="pill"
+                aria-pressed={activePillId === pill.id}
+                onClick={() => selectKindPill(pill.id)}
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className="btn filters-toggle"
@@ -3070,6 +3116,20 @@ export function ObjectsPage() {
 
         {advancedOpen ? (
           <div className="filters-advanced" id="advanced-filters">
+            <label className="field">
+              <span>État</span>
+              <select
+                name="status"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="field">
               <span>Type MIME</span>
               <input

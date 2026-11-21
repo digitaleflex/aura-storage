@@ -40,6 +40,45 @@ def like_contains(value: str) -> str:
     return f"%{escaped}%"
 
 
+def like_prefix(value: str) -> str:
+    """A ``...%`` pattern that treats user input literally (prefix match)."""
+    escaped = (
+        value.replace(LIKE_ESCAPE, LIKE_ESCAPE * 2)
+        .replace("%", LIKE_ESCAPE + "%")
+        .replace("_", LIKE_ESCAPE + "_")
+    )
+    return f"{escaped}%"
+
+
+# A media-type filter lists a few families at most (the UI sends six).
+CONTENT_TYPE_FILTER_MAX_ENTRIES = 20
+
+
+def content_type_clause(value: str, ph: str) -> Tuple[Optional[str], list]:
+    """SQL for the ``content_type`` filter, or ``(None, [])`` when it is empty.
+
+    ``value`` is one exact media type (the historical behaviour) or a comma
+    separated list. Each entry is compared case-insensitively and is either an
+    exact type (``application/pdf``) or a prefix ending with ``*``
+    (``image/*``). A media type never contains a comma or an asterisk, so every
+    previously valid value keeps its meaning.
+    """
+    entries = [part.strip() for part in value.split(",") if part.strip()]
+    entries = entries[:CONTENT_TYPE_FILTER_MAX_ENTRIES]
+    if not entries:
+        return None, []
+    parts: list = []
+    params: list = []
+    for entry in entries:
+        if entry.endswith("*"):
+            parts.append(f"LOWER(content_type) LIKE LOWER({ph}) {_ESCAPE_SQL}")
+            params.append(like_prefix(entry[:-1]))
+        else:
+            parts.append(f"LOWER(content_type) = LOWER({ph})")
+            params.append(entry)
+    return "(" + " OR ".join(parts) + ")", params
+
+
 def build_object_where(
     *,
     ph: str = "?",
@@ -104,8 +143,10 @@ def build_object_where(
         clauses.append(f"status NOT IN ({ph}, {ph})")
         params.extend(["deleted", "purging"])
     if content_type is not None:
-        clauses.append(f"LOWER(content_type) = LOWER({ph})")
-        params.append(content_type)
+        type_sql, type_params = content_type_clause(content_type, ph)
+        if type_sql is not None:
+            clauses.append(type_sql)
+            params.extend(type_params)
     if min_size is not None:
         clauses.append(f"size_bytes >= {ph}")
         params.append(min_size)

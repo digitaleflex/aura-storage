@@ -2862,7 +2862,7 @@ def list_objects(
     q: str | None = Query(default=None, max_length=200),
     search: str | None = Query(default=None, max_length=200),
     status: ObjectStatus | None = None,
-    content_type: str | None = Query(default=None, max_length=127),
+    content_type: str | None = Query(default=None, max_length=1000),
     min_size: int | None = Query(default=None, ge=0),
     max_size: int | None = Query(default=None, ge=0),
     created_after: int | None = Query(default=None, ge=0),
