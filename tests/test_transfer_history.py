@@ -362,15 +362,32 @@ def test_purge_removes_only_records_older_than_cutoff(monkeypatch):
 
 
 def test_transfer_schema_objects_present():
-    # Lightweight schema sanity check for SQLite test backend.
-    assert main.repo.dialect == "sqlite"
-    tables = {
-        r[0] for r in main.repo.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    }
+    # Lightweight schema sanity check, on whichever backend runs the suite.
+    if main.repo.dialect == "sqlite":
+        tables = {
+            r[0] for r in main.repo.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        cols = {
+            r[1] for r in main.repo.conn.execute(
+                "PRAGMA table_info(transfer_records)"
+            ).fetchall()
+        }
+    else:
+        tables = {
+            r["table_name"] for r in main.repo._all(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = current_schema()"
+            )
+        }
+        cols = {
+            r["column_name"] for r in main.repo._all(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'transfer_records'"
+            )
+        }
     assert "transfer_records" in tables
-    cols = {r[1] for r in main.repo.conn.execute("PRAGMA table_info(transfer_records)").fetchall()}
     for needed in ("id", "transfer_session_id", "object_id", "status", "created_at", "terminal_at"):
         assert needed in cols
     assert "object_key" not in cols

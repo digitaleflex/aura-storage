@@ -89,8 +89,8 @@ test("the shares page renders its resources after loading", async ({ page }) => 
     page.getByRole("heading", { level: 1, name: "Partages publics" }),
   ).toBeVisible();
   await expect(page.getByText("Ressources (2)")).toBeVisible();
-  await expect(page.getByRole("cell", { name: "notes.txt" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "Docs" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "notes.txt", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Docs", exact: true })).toBeVisible();
   // The hook-order crash used to surface this boundary instead of the page.
   await expect(
     page.getByRole("heading", { name: "Cette page n'a pas pu s'afficher" }),

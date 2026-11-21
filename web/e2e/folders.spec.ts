@@ -25,7 +25,7 @@ async function createFolder(page: import("@playwright/test").Page, name: string)
   await page.getByRole("dialog").getByLabel("Nom").fill(name);
   await page.getByRole("dialog").getByRole("button", { name: "Créer" }).click();
   await expect(
-    page.getByRole("button", { name: `Ouvrir le dossier ${name}` }),
+    page.getByRole("button", { name, exact: true }),
   ).toBeVisible();
 }
 
@@ -110,7 +110,7 @@ test("selects several folders and deletes them with their content flow", async (
 
   for (const name of names) {
     await expect(
-      page.getByRole("button", { name: `Ouvrir le dossier ${name}` }),
+      page.getByRole("button", { name, exact: true }),
     ).toHaveCount(0);
   }
 });

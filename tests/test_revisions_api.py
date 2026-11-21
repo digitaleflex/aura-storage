@@ -42,6 +42,22 @@ def _admin_client():
     return c, {"X-CSRF-Token": csrf}
 
 
+def _sql(sql: str, params: tuple = ()) -> None:
+    """Write through the active backend (tests are written with ``?`` placeholders)."""
+    if main.repo.dialect == "sqlite":
+        main.repo.conn.execute(sql, params)
+        main.repo.conn.commit()
+    else:  # psycopg connection: go through the repository helper
+        main.repo._run(sql.replace("?", "%s"), params)
+
+
+def _row(sql: str, params: tuple = ()):
+    """Read one row through the active backend (``?`` placeholders)."""
+    if main.repo.dialect == "sqlite":
+        return main.repo.conn.execute(sql, params).fetchone()
+    return main.repo._one(sql.replace("?", "%s"), params)
+
+
 def _seed_object():
     # Reuse existing seeded/default context: admin belongs to a space; easiest is
     # to create an object row directly in the repo in that space.
@@ -49,20 +65,18 @@ def _seed_object():
     space_id = me["space_id"]
     oid = main.repo.new_id()
     now = main.repo.now()
-    main.repo.conn.execute(
+    _sql(
         "INSERT INTO objects (id, bucket, object_key, display_name, content_type, "
         "owner_id, space_id, status, size_bytes, checksum_sha256, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (oid, "aura", f"{space_id}/obj/{oid}", "report.pdf", "application/pdf",
          me["id"], space_id, "available", 123, "ab" * 32, now, now),
     )
-    main.repo.conn.commit()
     return oid, me["id"], space_id
 
 
 def _clear_revisions():
-    main.repo.conn.execute("DELETE FROM object_revisions")
-    main.repo.conn.commit()
+    _sql("DELETE FROM object_revisions")
 
 
 def test_list_and_get_revisions(monkeypatch):

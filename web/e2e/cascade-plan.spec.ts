@@ -230,16 +230,17 @@ test("the plan only holds objects the API can actually delete", async () => {
   expect(scanned.objects.map((object) => object.id)).toEqual([
     "available",
     "pending",
-    "verifying",
     "legacy",
   ]);
-  expect(scanned.fileCount).toBe(4);
+  expect(scanned.fileCount).toBe(3);
+  // `verifying` stays live on the server but DELETE refuses it (409): it is
+  // counted as blocking, never planned.
+  expect(scanned.blockedCount).toBe(1);
   // The planned steps follow too: no doomed DELETE is ever issued.
   const ops = planCascadeOps(scanned);
   expect(ops.filter((op) => op.kind === "object").map((op) => op.id)).toEqual([
     "available",
     "pending",
-    "verifying",
     "legacy",
   ]);
 });

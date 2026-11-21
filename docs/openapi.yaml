@@ -740,6 +740,142 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not available }
+  /api/v1/objects/{oid}/replace-intents:
+    post:
+      summary: Create an upload intent that replaces an existing object (capability objects:write)
+      tags: [objects]
+      description: >-
+        Archive-on-replace: the new bytes are uploaded to a fresh key (never
+        overwritten in place). On commit, the target's current content is
+        archived as a revision and the target adopts the new bytes. The target
+        must be available. Same body, headers and quotas as an upload intent;
+        large files use the multipart plan. The response carries
+        replace_target_id.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UploadIntentRequest" }
+      responses:
+        "200": { description: "Upload intent (id, status, presigned upload_url, required headers, expiry) plus replace_target_id" }
+        "401": { description: Authentication required }
+        "403": { description: Space missing or not active }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not available }
+        "422": { description: "Invalid content type, size, encoding or idempotency key" }
+        "429": { description: Too many pending uploads or pending bytes }
+        "502": { description: Storage unavailable while starting a multipart upload }
+  /api/v1/objects/{oid}/revisions:
+    get:
+      summary: List archived revisions of an object, newest first (objects:read)
+      tags: [objects]
+      description: >-
+        Storage keys are never exposed; purged revisions are omitted.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200":
+          description: Revisions of the object
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object_id: { $ref: "#/components/schemas/Uuid4" }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Revision" }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+  /api/v1/objects/{oid}/revisions/{rid}:
+    get:
+      summary: Get one revision (objects:read)
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+        - $ref: "#/components/parameters/RevisionId"
+      responses:
+        "200":
+          description: The revision
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Revision" }
+        "401": { description: Authentication required }
+        "404": { description: "Object or revision not found, or revision purged" }
+    delete:
+      summary: Delete a revision and its stored bytes (objects:write)
+      tags: [objects]
+      description: >-
+        A revision marked keep-forever must be unpinned first. Storage deletion
+        is best effort: the catalogue record is removed even if the bytes are
+        already gone.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+        - $ref: "#/components/parameters/RevisionId"
+      responses:
+        "200": { description: "Deleted (object_id, revision_id, deleted=true)" }
+        "401": { description: Authentication required }
+        "404": { description: Object or revision not found }
+        "409": { description: Revision is marked keep-forever }
+  /api/v1/objects/{oid}/revisions/{rid}/download-intent:
+    get:
+      summary: Short-lived download URL for a revision (objects:read)
+      tags: [objects]
+      description: >-
+        Presigned GET served as an attachment. A revision stays downloadable
+        even when the current head is unavailable, unless it has been purged.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+        - $ref: "#/components/parameters/RevisionId"
+      responses:
+        "200": { description: "download_url, method GET, expiry, content_type, size_bytes and checksum_sha256 of the revision" }
+        "401": { description: Authentication required }
+        "404": { description: Object or revision not found }
+  /api/v1/objects/{oid}/revisions/{rid}/keep-forever:
+    put:
+      summary: Pin a revision so it is never purged automatically (objects:write)
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+        - $ref: "#/components/parameters/RevisionId"
+      responses:
+        "200": { description: "object_id, revision_id, keep_forever=true" }
+        "401": { description: Authentication required }
+        "404": { description: Object or revision not found }
+        "409": { description: Keep-forever limit reached for this owner }
+    delete:
+      summary: Unpin a revision (objects:write)
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+        - $ref: "#/components/parameters/RevisionId"
+      responses:
+        "200": { description: "object_id, revision_id, keep_forever=false" }
+        "401": { description: Authentication required }
+        "404": { description: Object or revision not found }
+  /api/v1/objects/{oid}/revisions/{rid}/restore:
+    post:
+      summary: Restore a revision as the new head (objects:write)
+      tags: [objects]
+      description: >-
+        The current head is archived as a new revision, then the selected
+        revision's bytes are copied to a fresh head key. History is preserved;
+        nothing is moved in place.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+        - $ref: "#/components/parameters/RevisionId"
+      responses:
+        "200": { description: "object_id, restored_revision_id, archived_revision_id, revision_number, head_revision_number, status=available" }
+        "401": { description: Authentication required }
+        "404": { description: Object or revision not found }
+        "409": { description: Object not available or revision bytes unavailable }
+        "500": { description: Failed to update the object head after the copy }
   /api/v1/objects/{oid}/analytics:
     get:
       summary: Per-object views, downloads, shares and egress (objects:read)
@@ -2335,6 +2471,22 @@ components:
             Optional client-generated UUID correlating one upload batch. It is
             copied to the terminal transfer journal only; omitting it keeps the
             historical request shape.
+    Revision:
+      type: object
+      description: An archived version of an object's content. Storage keys are never exposed.
+      properties:
+        id: { $ref: "#/components/schemas/Uuid4" }
+        object_id: { $ref: "#/components/schemas/Uuid4" }
+        revision_number: { type: integer, minimum: 1 }
+        size_bytes: { type: integer, minimum: 0 }
+        checksum_sha256: { type: string }
+        checksum_algorithm: { type: string, enum: [sha256] }
+        content_type: { type: string }
+        created_at: { type: integer, description: Unix timestamp (seconds) }
+        created_by_id: { type: string, nullable: true }
+        created_by_kind: { type: string, nullable: true }
+        keep_forever: { type: boolean }
+        purged_at: { type: integer, nullable: true }
     UploadIntent:
       type: object
       required: [id, status, method, upload_url, headers, content_type, size_bytes]
@@ -2568,6 +2720,11 @@ components:
     ObjectId:
       in: path
       name: oid
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid4" }
+    RevisionId:
+      in: path
+      name: rid
       required: true
       schema: { $ref: "#/components/schemas/Uuid4" }
     IdentityId:
