@@ -123,6 +123,16 @@ class ProfileIn(BaseModel):
     territory_code: str | None = Field(default=None, min_length=2, max_length=32)
 
 
+class PreferencesIn(BaseModel):
+    preferred_languages: list[str] = Field(default_factory=list, max_length=20)
+    preferred_category_slugs: list[str] = Field(default_factory=list, max_length=50)
+    preferred_authors: list[str] = Field(default_factory=list, max_length=50)
+    preferred_narrators: list[str] = Field(default_factory=list, max_length=50)
+    min_duration_ms: int | None = Field(default=None, ge=0)
+    max_duration_ms: int | None = Field(default=None, ge=0)
+    prefer_completed: bool = False
+
+
 class DeviceIn(BaseModel):
     name: str = Field(default="", max_length=200)
     platform: str = Field(default="", max_length=100)

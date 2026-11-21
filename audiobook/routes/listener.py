@@ -16,7 +16,7 @@ from ..ids import constant_time_equal, new_token
 from ..schemas import (
     AssetIn, CategoryIn, ChapterIn, ContractIn, ContributorIn, DevLoginIn, DeviceIn, EditionIn,
     EditorialCollectionIn, EditorialCollectionItemIn, EntitlementIn, EntitlementRevokeIn, EventIn,
-    LibraryIn, PersonalCollectionIn, PersonalCollectionItemIn, ProfileIn, RightsIn, SessionIn,
+    LibraryIn, PersonalCollectionIn, PersonalCollectionItemIn, PreferencesIn, ProfileIn, RightsIn, SessionIn,
     TrackIn, WorkIn,
 )
 
@@ -123,4 +123,43 @@ def register_listener_routes(app):
         if not revoked:
             raise NotFoundError("device not found", code="DEVICE_NOT_FOUND")
         return {"revoked": True}
+
+    @app.get("/api/v1/me/preferences")
+    def get_preferences(
+        request: Request,
+        principal: auth.Principal = Depends(get_principal),
+    ) -> dict:
+        return {"preferences": request.app.state.service.get_preferences(principal)}
+
+    @app.put("/api/v1/me/preferences")
+    def update_preferences(
+        body: PreferencesIn,
+        request: Request,
+        principal: auth.Principal = Depends(get_principal),
+    ) -> dict:
+        prefs = request.app.state.service.update_preferences(
+            principal,
+            preferred_languages=body.preferred_languages,
+            preferred_category_slugs=body.preferred_category_slugs,
+            preferred_authors=body.preferred_authors,
+            preferred_narrators=body.preferred_narrators,
+            min_duration_ms=body.min_duration_ms,
+            max_duration_ms=body.max_duration_ms,
+            prefer_completed=body.prefer_completed,
+            request_id=request_id(request),
+        )
+        return {"preferences": prefs}
+
+    @app.get("/api/v1/me/recommendations")
+    def recommendations(
+        request: Request,
+        principal: auth.Principal = Depends(get_principal),
+        limit: int = Query(default=10, ge=1, le=50),
+        exclude_library: bool = Query(default=True),
+    ) -> dict:
+        return request.app.state.service.recommend(
+            principal,
+            limit=limit,
+            exclude_library=exclude_library,
+        )
 

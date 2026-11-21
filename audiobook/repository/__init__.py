@@ -11,6 +11,7 @@ from .catalog import CatalogRepository
 from .identity import IdentityRepository
 from .library import LibraryRepository
 from .playback import PlaybackRepository
+from .recommendations import RecommendationsRepository
 
 
 class Repository(
@@ -19,6 +20,7 @@ class Repository(
     LibraryRepository,
     PlaybackRepository,
     AuditRepository,
+    RecommendationsRepository,
 ):
     """Facade repository composing all audiobook persistence concerns."""
 

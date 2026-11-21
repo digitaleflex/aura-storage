@@ -14,6 +14,7 @@ from .entitlements import EntitlementsService
 from .library import LibraryService
 from .personal_collections import PersonalCollectionsService
 from .playback import PlaybackService
+from .recommendations import RecommendationsService
 from .serialization import SerializationService
 
 
@@ -27,6 +28,7 @@ class AudiobookService(
     PersonalCollectionsService,
     AdminCatalogService,
     AnalyticsService,
+    RecommendationsService,
     SerializationService,
 ):
     """Facade service composing audiobook application use cases."""
