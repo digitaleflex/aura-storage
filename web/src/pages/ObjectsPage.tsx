@@ -2926,7 +2926,7 @@ export function ObjectsPage() {
             disabled={transferActive}
             onClick={() => dirInputRef.current?.click()}
           >
-            Importer un dossier…
+            {pendingFolderEntries.length > 0 ? "Ajouter un autre dossier…" : "Ajouter un dossier…"}
           </button>
           <button
             type="submit"
