@@ -71,6 +71,22 @@ def _admin_client():
     return c, {"X-CSRF-Token": r.json()["csrf_token"]}
 
 
+def _sql(sql: str, params: tuple = ()) -> None:
+    """Write through the active backend (tests are written with ``?`` placeholders)."""
+    if main.repo.dialect == "sqlite":
+        main.repo.conn.execute(sql, params)
+        main.repo.conn.commit()
+    else:  # psycopg connection: go through the repository helper
+        main.repo._run(sql.replace("?", "%s"), params)
+
+
+def _row(sql: str, params: tuple = ()):
+    """Read one row through the active backend (``?`` placeholders)."""
+    if main.repo.dialect == "sqlite":
+        return main.repo.conn.execute(sql, params).fetchone()
+    return main.repo._one(sql.replace("?", "%s"), params)
+
+
 def _seed_available_object(display_name="orig.bin", data=b"old-content"):
     me = main.repo.get_user_by_name("admin")
     space_id = me["space_id"]
@@ -78,7 +94,7 @@ def _seed_available_object(display_name="orig.bin", data=b"old-content"):
     now = main.repo.now()
     key = f"aura/{space_id}/seed/{oid}"
     digest = hashlib.sha256(data).hexdigest()
-    main.repo.conn.execute(
+    _sql(
         "INSERT INTO objects (id, bucket, object_key, display_name, content_type, "
         "owner_id, space_id, status, size_bytes, checksum_sha256, expected_size_bytes, "
         "version, revision_count, created_at, updated_at) "
@@ -86,7 +102,6 @@ def _seed_available_object(display_name="orig.bin", data=b"old-content"):
         (oid, "aura", key, display_name, "application/octet-stream",
          me["id"], space_id, len(data), digest, len(data), now, now),
     )
-    main.repo.conn.commit()
     return oid, key, data, digest, space_id
 
 
