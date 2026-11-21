@@ -415,3 +415,15 @@
   outline: 2px solid var(--signal);
   outline-offset: 2px;
 }
+
+/* Action destructive secondaire : contour, pas aplat (un seul aplat par écran). */
+.btn-danger-outline {
+  border-color: var(--danger-strong);
+  background: transparent;
+  color: var(--danger-strong);
+}
+
+.btn-danger-outline:hover:not(:disabled) {
+  background: var(--danger-strong);
+  color: var(--on-danger);
+}

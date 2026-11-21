@@ -880,6 +880,7 @@ export function TransfersPage() {
       )}
 
       <TransfersToolbar
+        quietPrimary={resumable.length > 0}
         canPause={canPause}
         canResume={canResume}
         canCancel={canCancel}

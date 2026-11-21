@@ -44,6 +44,12 @@ const CATEGORY_ICON: Record<string, TransferIconName> = {
 
 /** Above this many rows, only the rows near the viewport are in the DOM. */
 const VIRTUALIZE_THRESHOLD = 200;
+
+/**
+ * A multipart file can have hundreds of parts. The bar is cut into at most this
+ * many segments so it always fits its cell, whatever the part count.
+ */
+const PART_SEGMENTS_MAX = 40;
 const INITIAL_WINDOW = 40;
 const FALLBACK_ROW_HEIGHT = 64;
 const FALLBACK_ERROR_HEIGHT = 124;
@@ -430,6 +436,25 @@ function TransferRow({
     });
   }
 
+  // Live part counters come from the bytes sent: `heldParts`/`missingParts` are
+  // the state when a (re)start began, not a running count.
+  const multipart =
+    item.state.multipart && item.state.multipart.partCount > 0
+      ? item.state.multipart
+      : null;
+  const partSegments = multipart
+    ? Math.min(multipart.partCount, PART_SEGMENTS_MAX)
+    : 0;
+  const partsDone = multipart
+    ? Math.min(
+        multipart.partCount,
+        Math.floor(
+          item.state.transferredBytes / Math.max(1, multipart.partSizeBytes),
+        ),
+      )
+    : 0;
+  const alreadyHeld = item.state.resumed ? (item.state.heldParts ?? 0) : 0;
+
   return (
     <Fragment>
       <tr
@@ -450,86 +475,81 @@ function TransferRow({
           />
         </td>
         <td className="transfers-file" data-label="Fichier">
-          <span
-            className={`transfers-file-icon transfers-file-icon--${tone}`}
-            aria-hidden="true"
-          >
-            <TransferIcon name={CATEGORY_ICON[category] ?? "file"} size={18} />
-          </span>
-          <span className="transfers-file-copy">
-            <span className="transfers-file-name" title={item.fileName}>
-              {item.fileName}
+          <div className="transfers-file-inner">
+            <span
+              className={`transfers-file-icon transfers-file-icon--${tone}`}
+              aria-hidden="true"
+            >
+              <TransferIcon name={CATEGORY_ICON[category] ?? "file"} size={18} />
             </span>
-            <span className="transfers-file-meta">
-              {CATEGORY_LABEL[category]}
-              {item.sizeBytes < 10 * 1024 * 1024 ? " · Léger" : ""}
-              {item.sizeBytes > 100 * 1024 * 1024 ? " · Lourd" : ""}
-              {item.state.verifyMode ? ` · vérification ${item.state.verifyMode === "background" ? "en tâche de fond" : "en ligne"}` : ""}
-              {addedAtMs !== null
-                ? ` · Ajouté à ${formatClock(addedAtMs)}`
-                : ""}
-              {status === "queued" && position !== undefined
-                ? ` · ${queuePositionLabel(position)}`
-                : ""}
+            <span className="transfers-file-copy">
+              <span className="transfers-file-name" title={item.fileName}>
+                {item.fileName}
+              </span>
+              <span className="transfers-file-meta">
+                {CATEGORY_LABEL[category]}
+                {item.sizeBytes < 10 * 1024 * 1024 ? " · Léger" : ""}
+                {item.sizeBytes > 100 * 1024 * 1024 ? " · Lourd" : ""}
+                {item.state.verifyMode ? ` · vérification ${item.state.verifyMode === "background" ? "en tâche de fond" : "en ligne"}` : ""}
+                {addedAtMs !== null
+                  ? ` · Ajouté à ${formatClock(addedAtMs)}`
+                  : ""}
+                {status === "queued" && position !== undefined
+                  ? ` · ${queuePositionLabel(position)}`
+                  : ""}
+              </span>
             </span>
-          </span>
+          </div>
         </td>
         <td className="transfers-size transfers-col-size" data-label="Taille">
           {formatBytes(item.sizeBytes)}
         </td>
         <td className="transfers-progress-cell" data-label="Progression">
-          <div className="transfers-progress-head">
-            <span className="transfers-progress-percent">
-              {verifying ? "Vérification" : `${percent} %`}
-            </span>
-          </div>
-          <div
-            className={`transfers-bar transfers-bar--${tone}${verifying ? " is-indeterminate" : ""}`}
-            role="progressbar"
-            aria-label={`Progression de ${item.fileName}`}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={percent}
-            aria-valuetext={verifying ? "Vérification d'intégrité en cours" : `${percent} %`}
-          >
-            <span
-              className="transfers-bar-fill"
-              style={verifying ? undefined : { width: `${percent}%` }}
-            />
-          </div>
-          <span className="transfers-progress-bytes">
-            {formatBytes(item.state.transferredBytes)} / {formatBytes(item.sizeBytes)}
-          </span>
-          {item.state.multipart && item.state.multipart.partCount > 0 ? (
-            <span className="transfers-progress-bytes">
-              {`${item.state.heldParts ?? 0}/${item.state.multipart.partCount} parts • ${
-                item.state.missingParts ?? 0
-              } ${(item.state.missingParts ?? 0) === 1 ? "manquante" : "manquantes"}`}
-              {item.state.resumed ? " • repris" : ""}
-              {item.state.attempts > 0 ? ` • tentative ${item.state.attempts}` : ""}
-            </span>
-          ) : null}
-          {item.state.multipart && item.state.multipart.partCount > 0 ? (
-            <span
-              style={{ display: "flex", gap: 2, marginTop: 2 }}
-              title={`${item.state.heldParts ?? 0}/${item.state.multipart.partCount} parts reçues`}
-              aria-hidden="true"
+          <div className="transfers-progress-line">
+            <div
+              className={`transfers-bar transfers-bar--${tone}${verifying ? " is-indeterminate" : ""}${
+                multipart ? " has-parts" : ""
+              }`}
+              style={
+                multipart
+                  ? ({ "--segments": partSegments } as React.CSSProperties)
+                  : undefined
+              }
+              role="progressbar"
+              aria-label={`Progression de ${item.fileName}`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percent}
+              aria-valuetext={verifying ? "Vérification d'intégrité en cours" : `${percent} %`}
             >
-              {Array.from({ length: item.state.multipart.partCount }, (_, i) => (
-                <i
-                  key={i}
-                  style={{
-                    width: 8,
-                    height: 6,
-                    borderRadius: 2,
-                    background: i < (item.state.heldParts ?? 0) ? "currentColor" : "transparent",
-                    border: "1px solid currentColor",
-                    opacity: i < (item.state.heldParts ?? 0) ? 1 : 0.45,
-                  }}
-                />
-              ))}
+              <span
+                className="transfers-bar-fill"
+                style={verifying ? undefined : { width: `${percent}%` }}
+              />
+            </div>
+            <span className="transfers-progress-percent">
+              {verifying ? "Vérification" : status === "queued" ? "—" : `${percent} %`}
             </span>
-          ) : null}
+          </div>
+          <span
+            className="transfers-progress-bytes"
+            title={
+              multipart
+                ? `${partsDone}/${multipart.partCount} parties envoyées`
+                : undefined
+            }
+          >
+            {formatBytes(item.state.transferredBytes)} / {formatBytes(item.sizeBytes)}
+            {multipart
+              ? ` · ${multipart.partCount} ${multipart.partCount === 1 ? "partie" : "parties"}`
+              : ""}
+            {item.state.resumed
+              ? alreadyHeld > 0
+                ? ` · repris (${alreadyHeld} déjà reçue${alreadyHeld > 1 ? "s" : ""})`
+                : " · repris"
+              : ""}
+            {item.state.attempts > 0 ? ` · tentative ${item.state.attempts}` : ""}
+          </span>
         </td>
         <td className="transfers-status-cell" data-label="Statut">
           <span className={`transfer-badge transfer-badge--${tone}`}>
