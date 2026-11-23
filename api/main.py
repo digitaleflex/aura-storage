@@ -1585,19 +1585,97 @@ def public_auth_callback(
     return out
 
 
+class PublicProfilePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str = Field(default="", max_length=80)
+
+
+def _clean_display_name(value: str) -> str:
+    cleaned = "".join(ch for ch in (value or "") if ch.isprintable()).strip()
+    return cleaned[:80]
+
+
 @app.get("/api/public/me")
 def public_me(principal: dict = Depends(require_public)):
     return {
-        "id": principal["id"], "name": principal.get("name"),
-        "email": principal.get("email"), "role": principal["role"],
+        "id": principal["id"],
+        "name": principal.get("name"),
+        "display_name": principal.get("display_name", ""),
+        "email": principal.get("email"),
+        "role": principal["role"],
         "csrf_token": principal["csrf"],
     }
+
+
+@app.patch("/api/public/me")
+def public_me_patch(body: PublicProfilePatch, principal: dict = Depends(require_public)):
+    display_name = _clean_display_name(body.display_name)
+    repo.update_user_display_name(principal["id"], display_name)
+    audit_event("public-profile", principal["id"], "success", {"action": "update"})
+    return {"ok": True, "display_name": display_name}
+
+
+@app.delete("/api/public/me")
+def public_me_delete(principal: dict = Depends(require_public)):
+    uid = principal["id"]
+    repo.delete_public_account(uid)
+    audit_event("public-account-delete", uid, "success")
+    out = JSONResponse({"ok": True})
+    out.delete_cookie(settings.public_session_cookie, path="/")
+    return out
 
 
 @app.post("/api/public/logout")
 def public_logout(principal: dict = Depends(require_public)):
     repo.delete_session(principal["session_id"])
     audit_event("public-logout", principal["id"], "success")
+    out = RedirectResponse("/", status_code=303)
+    out.delete_cookie(settings.public_session_cookie, path="/")
+    return out
+
+
+def _public_page_headers() -> dict:
+    return {
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
+    }
+
+
+@app.get("/profil", response_class=HTMLResponse)
+def public_profile(request: Request):
+    if not _public_host_ok(request):
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        principal = authenticate_public(request)
+    except HTTPException:
+        return RedirectResponse("/", status_code=302)
+    headers = _public_page_headers()
+    return HTMLResponse(public_ui.profile_page(principal), headers=headers)
+
+
+@app.post("/profil", response_class=HTMLResponse)
+async def public_profile_update(request: Request, principal: dict = Depends(require_public)):
+    if not _public_host_ok(request):
+        raise HTTPException(status_code=404, detail="not found")
+    form = await request.form()
+    display_name = _clean_display_name(str(form.get("display_name") or ""))
+    repo.update_user_display_name(principal["id"], display_name)
+    principal = {**principal, "display_name": display_name}
+    audit_event("public-profile", principal["id"], "success", {"action": "update"})
+    headers = _public_page_headers()
+    return HTMLResponse(
+        public_ui.profile_page(principal, message="Profil mis à jour."),
+        headers=headers,
+    )
+
+
+@app.post("/profil/supprimer")
+async def public_profile_delete(request: Request, principal: dict = Depends(require_public)):
+    if not _public_host_ok(request):
+        raise HTTPException(status_code=404, detail="not found")
+    uid = principal["id"]
+    repo.delete_public_account(uid)
+    audit_event("public-account-delete", uid, "success")
     out = RedirectResponse("/", status_code=303)
     out.delete_cookie(settings.public_session_cookie, path="/")
     return out
