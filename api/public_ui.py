@@ -106,7 +106,7 @@ select:focus-visible,input[type=range]:focus-visible,.view-link:focus-visible,
 }
 .member{display:flex;align-items:center;gap:1rem;font-size:.9rem;color:var(--muted)}
 .text-button{font:inherit;color:var(--ink);background:none;border:0;
-  border-bottom:1px solid var(--bronze);padding:0 0 2px;cursor:pointer;border-radius:0}
+  border-bottom:1px solid var(--bronze);padding:0 0 2px;cursor:pointer;border-radius:0;text-decoration:none}
 .library{max-width:1120px;margin:0 auto;padding:clamp(1.8rem,4vw,3rem) clamp(1.25rem,5vw,2rem) 12rem}
 .library-header{margin-bottom:1.6rem}
 .library-header h1{margin:0;font-family:Georgia,serif;font-weight:400;
@@ -363,6 +363,28 @@ body.has-player .library{padding-bottom:12.5rem}
   .control-group label{display:none}
   .player-actions select,.player-actions input[type=range]{font-size:.8rem}
 }
+/* ---- profile page ---------------------------------------------------- */
+.profile-shell{max-width:760px;margin:0 auto;padding:clamp(1.8rem,4vw,3rem) clamp(1.25rem,5vw,2rem) 4rem}
+.profile-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:1.25rem 1.3rem;margin-top:1.2rem}
+.profile-card h2{margin:0 0 .35rem;font-family:Georgia,serif;font-weight:400;font-size:1.5rem}
+.profile-card p{margin:.2rem 0;color:var(--muted)}
+.profile-form{display:grid;gap:.9rem;margin-top:1rem}
+.profile-field{display:grid;gap:.35rem}
+.profile-field label{font-size:.84rem;color:var(--muted);font-weight:600}
+.profile-field input[type=text],.profile-field input[type=email]{
+  font:inherit;padding:.7rem .85rem;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
+.profile-field input[readonly]{background:#f3f0ea;color:var(--soft)}
+.profile-actions{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-top:.2rem}
+.primary-button{font:inherit;font-weight:600;padding:.7rem 1.1rem;border:0;border-radius:999px;background:var(--ink);color:var(--surface);cursor:pointer}
+.primary-button:hover{background:#24384b}
+.danger-card{border-color:#d8c2c2}
+.danger-button{font:inherit;font-weight:600;padding:.7rem 1.1rem;border:1px solid #b35d5d;border-radius:999px;background:#fff7f7;color:#8a2e2e;cursor:pointer}
+.danger-button:hover{background:#fdecec}
+.notice{margin:0 0 1rem;padding:.75rem .9rem;border-radius:10px;font-size:.92rem}
+.notice-ok{background:#eef5ef;color:#245232;border:1px solid #cfe0d2}
+.notice-err{background:#fff1f1;color:#7c2626;border:1px solid #ebcaca}
+.back-link{display:inline-flex;align-items:center;gap:.35rem;color:var(--muted);text-decoration:none;font-size:.92rem}
+.back-link:hover{color:var(--ink)}
 @media (prefers-reduced-motion:reduce){
   *{transition:none!important}
 }
@@ -434,6 +456,55 @@ def login_page() -> str:
   </section>
 </div>
 </body></html>"""
+
+
+def profile_page(principal: dict, message: str = "", error: str = "") -> str:
+    display_name = str(principal.get("display_name") or "")
+    email = str(principal.get("email") or "")
+    csrf = str(principal.get("csrf") or "")
+    name = display_name or email or "Auditeur"
+    notice = ""
+    if message:
+        notice = f'<p class="notice notice-ok" role="status">{ESC(message)}</p>'
+    elif error:
+        notice = f'<p class="notice notice-err" role="alert">{ESC(error)}</p>'
+    return "".join([
+        _HEAD,
+        _title("AURA — Mon profil"),
+        '<header class="topbar"><div class="brand">', _BRAND,
+        '<span class="word">AURA</span></div><div class="member">',
+        f'<span class="member-name">{ESC(name)}</span>',
+        '<a class="text-button" href="/">Bibliothèque</a>',
+        '<form method="post" action="/api/public/logout">',
+        f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
+        '<button class="text-button" type="submit">Déconnexion</button>',
+        '</form></div></header>',
+        '<main class="profile-shell">',
+        '<a class="back-link" href="/">← Retour à la bibliothèque</a>',
+        '<header class="library-header" style="margin-bottom:.5rem"><h1>Mon profil</h1>',
+        '<p class="lede">Gérez vos informations personnelles sur le portail.</p></header>',
+        notice,
+        '<section class="profile-card" aria-labelledby="profile-info-title">',
+        '<h2 id="profile-info-title">Informations personnelles</h2>',
+        '<p>L’email est fourni par votre compte Google et reste en lecture seule.</p>',
+        '<form class="profile-form" method="post" action="/profil">',
+        f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
+        '<div class="profile-field"><label for="display_name">Nom d’affichage</label>',
+        f'<input id="display_name" name="display_name" type="text" maxlength="80" autocomplete="name" value="{ESC(display_name)}" placeholder="Votre nom d’affichage"></div>',
+        '<div class="profile-field"><label for="email">Email</label>',
+        f'<input id="email" name="email" type="email" value="{ESC(email)}" readonly></div>',
+        '<div class="profile-actions"><button class="primary-button" type="submit">Enregistrer</button></div>',
+        '</form></section>',
+        '<section class="profile-card danger-card" aria-labelledby="profile-delete-title">',
+        '<h2 id="profile-delete-title">Supprimer mon compte</h2>',
+        '<p>Cette action supprime votre compte public, vos sessions et votre progression d’écoute sur ce portail. Cette action est irréversible.</p>',
+        '<form class="profile-form" method="post" action="/profil/supprimer" ',
+        "onsubmit=\"return confirm('Supprimer définitivement votre compte et votre progression ?');\">",
+        f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
+        '<div class="profile-actions"><button class="danger-button" type="submit">Supprimer mon compte</button></div>',
+        '</form></section>',
+        '</main></body></html>',
+    ])
 
 
 _PLAYER_JS = r"""
@@ -1148,7 +1219,12 @@ def catalog_page(
     active_author: str = "",
 ) -> str:
     authors = authors or []
-    name = principal.get("email") or principal.get("name")
+    name = (
+        principal.get("display_name")
+        or principal.get("email")
+        or principal.get("name")
+        or "Auditeur"
+    )
     csrf = str(principal.get("csrf") or "")
 
     def href(**changes):
@@ -1205,7 +1281,8 @@ def catalog_page(
         _title("AURA — Bibliothèque"),
         '<header class="topbar"><div class="brand">', _BRAND,
         '<span class="word">AURA</span></div><div class="member">',
-        f'<span>{ESC(name)}</span>',
+        f'<span class="member-name">{ESC(name)}</span>',
+        '<a class="text-button" href="/profil">Mon profil</a>',
         '<form method="post" action="/api/public/logout">',
         f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
         '<button class="text-button" type="submit">Déconnexion</button>',

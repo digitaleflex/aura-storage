@@ -352,3 +352,66 @@ def test_unconfigured_portal_fails_closed(monkeypatch):
     c = TestClient(main.app)
     assert c.get("/api/public/auth/google").status_code == 503
     assert c.get("/api/public/auth/callback?code=abc&state=x").status_code == 503
+
+
+def test_public_profile_page_and_update():
+    c = _sign_in(TestClient(main.app))
+    me = c.get("/api/public/me").json()
+    csrf = me["csrf_token"]
+
+    page = c.get("/profil")
+    assert page.status_code == 200
+    assert "Mon profil" in page.text
+    assert "reader@example.com" in page.text
+    assert 'readonly' in page.text
+
+    r = c.post("/profil", data={"csrf_token": csrf, "display_name": "Alice Lectrice"})
+    assert r.status_code == 200
+    assert "Profil mis à jour" in r.text
+    assert "Alice Lectrice" in r.text
+
+    me2 = c.get("/api/public/me").json()
+    assert me2["display_name"] == "Alice Lectrice"
+
+    r = c.patch("/api/public/me", json={"display_name": "Alice"}, headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200
+    assert r.json()["display_name"] == "Alice"
+    assert c.get("/api/public/me").json()["display_name"] == "Alice"
+
+
+def test_public_profile_requires_csrf_and_auth():
+    c = _sign_in(TestClient(main.app))
+    assert c.post("/profil", data={"display_name": "X"}).status_code == 403
+    assert c.patch("/api/public/me", json={"display_name": "X"}).status_code == 403
+    assert c.post("/profil/supprimer", data={}).status_code == 403
+    assert c.delete("/api/public/me").status_code == 403
+
+    anon = TestClient(main.app)
+    r = anon.get("/profil", follow_redirects=False)
+    assert r.status_code in (302, 303)
+    assert r.headers["location"] == "/"
+
+
+def test_public_account_delete_clears_portal_data():
+    slug = _published_pack()
+    c = _sign_in(TestClient(main.app))
+    csrf = c.get("/api/public/me").json()["csrf_token"]
+    item = c.get("/api/public/library").json()["collections"][0]["items"][0]
+
+    saved = c.post("/api/public/progress", json={
+        "object_id": item["id"], "position_seconds": 42.0,
+    }, headers={"X-CSRF-Token": csrf})
+    assert saved.status_code == 200
+
+    r = c.post("/profil/supprimer", data={"csrf_token": csrf}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+    assert c.get("/api/public/me").status_code == 401
+
+    # Same Google subject signs in again: fresh public account, no old progress.
+    c2 = _sign_in(TestClient(main.app))
+    me2 = c2.get("/api/public/me").json()
+    assert me2["display_name"] == ""
+    item2 = c2.get("/api/public/library").json()["collections"][0]["items"][0]
+    assert item2["id"] == item["id"]
+    assert item2["progress_seconds"] == 0
