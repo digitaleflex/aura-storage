@@ -14,3 +14,6 @@ pyyaml==6.0.3
 # quiet YAML defects our own heuristics cannot see (e.g. an unquoted comma in a
 # flow mapping silently truncating a description).
 openapi-spec-validator==0.9.0
+# Test-only: coverage measurement. Advisory job `coverage` in
+# .github/workflows/quality.yml (no threshold yet; docs/engineering/QUALITE.md).
+pytest-cov==7.1.0

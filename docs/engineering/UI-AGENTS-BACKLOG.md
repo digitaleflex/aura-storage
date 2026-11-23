@@ -20,7 +20,9 @@ le livre en une PR, coche la case dans cette même PR, puis s'arrête.
    cases du backlog cochées dans la même PR. Pied de page d'attribution Claude.
 5. **Merge** : attendre que **toutes** les vérifications soient vertes :
    `unit-tests`, `e2e` (workflow `CI Tests (PR)`), `config` et `api-postgres`
-   (workflow `Validate storage configuration`), et que la PR soit fusionnable.
+   (workflow `Validate storage configuration`), `lint-python` et `lint-web`
+   (workflow `Quality`, voir `QUALITE.md`), et que la PR soit fusionnable.
+   Les autres jobs de `Quality` (`audit`, `coverage`) sont informatifs.
    Alors seulement : merge **squash**, puis supprimer la branche.
    *(L'exception sur `api-postgres`, en vigueur du 2026-11-12 au 2026-11-14,
    est retirée : le job est de nouveau vert depuis la correction de

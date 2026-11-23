@@ -63,3 +63,7 @@ web/dist.bak-*/
 
 # Deepwork session state (local, never committed)
 .slim/deepwork/
+
+# Mesure de couverture (quality.yml, job coverage)
+.coverage
+coverage.txt

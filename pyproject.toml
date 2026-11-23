@@ -1,0 +1,46 @@
+# Configuration des outils de qualité Python (ruff, mypy).
+#
+# Elle ne change ni le comportement de l'application ni la collecte de pytest
+# (aucune section [tool.pytest]). Principe :
+#   - ruff « bloquant » : uniquement des règles qui passent déjà sur tout le
+#     dépôt et qui signalent de vrais défauts (syntaxe, noms non définis,
+#     arguments par défaut modifiables, comparaisons fautives...). Elles ne
+#     peuvent plus régresser.
+#   - tout le reste (imports inutilisés, modernisation, simplifications...) est
+#     compté en avertissement dans la CI (.github/workflows/quality.yml) et
+#     réduit petit à petit. Voir docs/engineering/QUALITE.md.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["web", "node_modules", "docs", "config", "deploy", "landing"]
+
+[tool.ruff.lint]
+select = [
+    "E9",    # erreurs de syntaxe et d'exécution
+    "F63",   # comparaisons et assertions fautives
+    "F7",    # break/continue/return/yield hors de leur contexte
+    "F82",   # noms non définis
+    "F811",  # redéfinition d'un nom non utilisé
+    "F402",  # variable de boucle qui masque un import
+    "F601",  # clés de dictionnaire en double
+    "F632",  # `is` avec un littéral
+    "B002", "B003", "B005", "B006", "B011", "B012", "B015", "B023", "B025",
+    "B026", "B029", "B030", "B033", "B034", "B035",  # défauts probables (bugbear)
+    "E711", "E712", "E713", "E714", "E721", "E722",  # comparaisons et except nu
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# `Depends(...)`, `Query(...)` et consorts sont des valeurs par défaut voulues dans FastAPI.
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.Query", "fastapi.Body", "fastapi.Header",
+    "fastapi.File", "fastapi.Form", "fastapi.Cookie", "fastapi.Path",
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["api"]
+ignore_missing_imports = true
+follow_imports = "silent"
+# Progressif : on ne durcit rien tant que le compte de départ n'est pas réduit.
+check_untyped_defs = false
