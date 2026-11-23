@@ -72,10 +72,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [csrf, queryClient]);
 
   // Global session expiry: any 401 from the API lands here, so a request does
-  // not have to remember to invalidate the session itself.
+  // not have to remember to invalidate the session itself. Guard against the
+  // refetch loop: a 401 on /me would dispatch the event again and refetch /me
+  // forever. If the session query is already in an auth error (or currently
+  // refetching), just clear local CSRF and let the existing query state drive
+  // RequireAuth.
   useEffect(() => {
     const onUnauthorized = () => {
       setCsrf(null);
+      const state = queryClient.getQueryState(["session"]);
+      const status =
+        state?.error instanceof ApiError ? state.error.status : null;
+      const alreadyUnauthorized = status === 401 || status === 403;
+      if (alreadyUnauthorized || state?.fetchStatus === "fetching") return;
       void queryClient.invalidateQueries({ queryKey: ["session"] });
     };
     window.addEventListener("aura:unauthorized", onUnauthorized);
@@ -97,12 +106,24 @@ export function useAuth(): AuthState {
 /**
  * Server-verified session metadata (`GET /api/v1/me`). Shared query key with
  * RequireAuth, so the role read here is the same one the guard resolved.
+ *
+ * Polls periodically so an active tab keeps the sliding server session and the
+ * browser cookie alive; transient failures are retried, but an explicit 401/403
+ * is never retried because it means the session is gone.
  */
 export function useSession() {
   return useQuery<SessionInfo>({
     queryKey: ["session"],
     queryFn: () => api.me(),
-    retry: false,
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
+    retry: (failureCount, error) => {
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        return false;
+      }
+      return failureCount < 2;
+    },
   });
 }
 

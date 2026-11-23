@@ -217,6 +217,13 @@ class Repository:
         """Delete by stored row id (``session["id"]``, i.e. the digest)."""
         self._run("DELETE FROM sessions WHERE id = %s", (sid,))
 
+    def extend_session(self, sid: str, expires_at: int) -> None:
+        """Slide the session expiry forward. Only ever extends, never shortens."""
+        self._run(
+            "UPDATE sessions SET expires_at = %s WHERE id = %s AND expires_at < %s",
+            (expires_at, sid, expires_at),
+        )
+
     def set_session_master(self, sid: str, until: Optional[int]) -> None:
         """Grant (epoch seconds) or end (None) master mode on one session."""
         self._run("UPDATE sessions SET master_until = %s WHERE id = %s", (until, sid))

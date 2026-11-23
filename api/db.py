@@ -222,6 +222,14 @@ class Repository:
         self.conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
         self.conn.commit()
 
+    def extend_session(self, sid: str, expires_at: int) -> None:
+        """Slide the session expiry forward. Only ever extends, never shortens."""
+        self.conn.execute(
+            "UPDATE sessions SET expires_at = ? WHERE id = ? AND expires_at < ?",
+            (expires_at, sid, expires_at),
+        )
+        self.conn.commit()
+
     def set_session_master(self, sid: str, until: Optional[int]) -> None:
         """Grant (epoch seconds) or end (None) master mode on one session."""
         self.conn.execute("UPDATE sessions SET master_until = ? WHERE id = ?", (until, sid))

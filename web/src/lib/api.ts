@@ -925,9 +925,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     if (timer) clearTimeout(timer);
     options.signal?.removeEventListener("abort", onAbort);
   }
-  if (res.status === 401 && typeof window !== "undefined") {
+  if (
+    res.status === 401 &&
+    typeof window !== "undefined" &&
+    !path.startsWith("/api/v1/login")
+  ) {
     // Global session-expiry signal, handled by AuthProvider: no request has to
-    // remember to invalidate ["session"] itself.
+    // remember to invalidate ["session"] itself. Login failures are 401s too,
+    // but they mean bad credentials, not an expired session.
     window.dispatchEvent(new Event("aura:unauthorized"));
   }
   if (!res.ok) {
