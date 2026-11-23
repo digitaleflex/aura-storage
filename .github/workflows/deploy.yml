@@ -21,6 +21,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       
       - name: Execute Zero-Downtime Deploy
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -35,8 +37,19 @@ jobs:
           # The build runs on the host, whose non-interactive SSH shell does not
           # load the Node version manager profile.
           command_timeout: 25m
+          # The remote script never updated its checkout: a deploy shipped
+          # whatever commit the server already had (2026-11-23: c536609 went
+          # out instead of the merged b328ed0, so a CSP fix stayed offline).
+          # The commit this run was started on is now fetched and fast-forwarded
+          # to, and the deploy aborts if the checkout does not end up on it.
+          envs: DEPLOY_SHA
           script: |
+            set -Eeuo pipefail
             cd /home/aura-admin/aura-storage
+            git fetch --quiet origin main
+            git merge --ff-only "$DEPLOY_SHA"
+            [ "$(git rev-parse HEAD)" = "$DEPLOY_SHA" ] || { echo "ERROR: checkout is not at $DEPLOY_SHA"; exit 1; }
+            echo "Commit deploye : $(git log -1 --format='%h %s')"
             export PATH="/home/aura-admin/.node/v22/bin:$PATH"
             command -v npm >/dev/null || { echo "ERROR: npm still missing from PATH"; exit 1; }
             node --version
