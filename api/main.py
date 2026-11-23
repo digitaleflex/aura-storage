@@ -1634,7 +1634,7 @@ def public_logout(principal: dict = Depends(require_public)):
     return out
 
 
-def _public_page_headers() -> dict:
+def _public_profile_headers() -> dict:
     return {
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
@@ -1649,7 +1649,7 @@ def public_profile(request: Request):
         principal = authenticate_public(request)
     except HTTPException:
         return RedirectResponse("/", status_code=302)
-    headers = _public_page_headers()
+    headers = _public_profile_headers()
     return HTMLResponse(public_ui.profile_page(principal), headers=headers)
 
 
@@ -1662,7 +1662,7 @@ async def public_profile_update(request: Request, principal: dict = Depends(requ
     repo.update_user_display_name(principal["id"], display_name)
     principal = {**principal, "display_name": display_name}
     audit_event("public-profile", principal["id"], "success", {"action": "update"})
-    headers = _public_page_headers()
+    headers = _public_profile_headers()
     return HTMLResponse(
         public_ui.profile_page(principal, message="Profil mis à jour."),
         headers=headers,
