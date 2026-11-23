@@ -3024,7 +3024,12 @@ def list_transfers(
         created_before=min(upper_bounds) if upper_bounds else None,
         limit=limit, offset=offset,
     )
-    return {"items": [_transfer_public(row) for row in rows]}
+    has_more = len(rows) == limit
+    return {
+        "items": [_transfer_public(row) for row in rows],
+        "next_offset": offset + len(rows) if has_more else None,
+        "has_more": has_more,
+    }
 
 
 @app.get("/api/v1/transfers/{tid}")
