@@ -3,7 +3,7 @@
 # image. Install with: pip install -r requirements-dev.txt
 -r requirements.txt
 
-pytest==9.1.1
+pytest==9.2.0
 httpx==0.28.1
 # Test-only: the per-test timeout the CI job passes (--timeout=45). Without it
 # pytest rejects the flag and the whole suite aborts before running.
