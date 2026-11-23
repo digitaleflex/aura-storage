@@ -272,6 +272,11 @@ body.has-player .library{padding-bottom:12.5rem}
 .icon-button.main span[aria-hidden]{font-size:1.15rem;line-height:1}
 .icon-button[aria-pressed="true"],.pill-button[aria-pressed="true"],.icon-button[aria-expanded="true"],.pill-button[aria-expanded="true"]{
   background:var(--bg-deep);border-color:rgba(149,109,53,.35);color:var(--bronze)}
+.icon-button:disabled,.pill-button:disabled{opacity:.45;cursor:not-allowed}
+.icon-button:focus-visible,.pill-button:focus-visible,.player-actions select:focus-visible,.player-actions input:focus-visible,.seek:focus-visible,.time-toggle:focus-visible{
+  outline:2px solid var(--focus);outline-offset:2px}
+.time-toggle{background:none;border:0;padding:0;font:inherit;cursor:pointer;border-radius:4px}
+.time-toggle:hover{color:var(--ink)}
 .player-actions{grid-area:actions;display:flex;align-items:center;justify-content:flex-end;gap:.4rem;flex-wrap:wrap;min-width:0}
 .control-group{display:inline-flex;align-items:center;gap:.3rem}
 .control-group label{font-size:.74rem;color:var(--muted)}
@@ -455,7 +460,10 @@ _PLAYER_JS = r"""
   const fullButton = document.getElementById('fullscreen');
   const closeButton = document.getElementById('close');
   const chapterData = JSON.parse((document.getElementById('chapters-data') || {textContent:'{}'}).textContent || '{}');
-  let index = -1, lastSaved = 0, retries = 0, sleepTimer = null, endOfChapter = false;
+  let index = -1, lastSaved = 0, retries = 0, sleepTimer = null, endOfChapter = false, showRemaining = false;
+  const STORE = {speed:'aura-player-speed', volume:'aura-player-volume', remaining:'aura-player-remaining'};
+  function storeGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+  function storeSet(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
 
   function fmt(value){
     if(!isFinite(value) || value < 0) value = 0;
@@ -509,12 +517,24 @@ _PLAYER_JS = r"""
       seek.value = pos;
     }
     if(timeNow) timeNow.textContent = fmt(pos);
-    if(timeTotal) timeTotal.textContent = fmt(dur);
+    if(timeTotal){
+      if(showRemaining && dur > 0){
+        const rem = Math.max(0, dur - pos);
+        timeTotal.textContent = '-' + fmt(rem);
+        timeTotal.setAttribute('aria-label', 'Afficher la durée totale');
+        timeTotal.setAttribute('title', 'Afficher la durée totale');
+      } else {
+        timeTotal.textContent = fmt(dur);
+        timeTotal.setAttribute('aria-label', 'Afficher le temps restant');
+        timeTotal.setAttribute('title', 'Afficher le temps restant');
+      }
+    }
     const fill = track.querySelector('.track-progress i');
     if(fill && dur > 0){ fill.style.width = Math.min(100, (pos / dur) * 100) + '%'; }
     track.dataset.progress = String(Math.floor(pos));
     updateChapterLabel();
     highlightCurrentChapter(false);
+    updateBoundaryStates();
     if(force || Math.abs(pos - lastSaved) >= 5){
       lastSaved = pos;
       fetch('/api/public/progress', {
@@ -529,6 +549,27 @@ _PLAYER_JS = r"""
     playToggle.innerHTML = '<span aria-hidden="true">' + (isPlaying ? '⏸' : '▶') + '</span>';
     playToggle.setAttribute('aria-label', isPlaying ? 'Mettre en pause' : 'Lire');
     playToggle.setAttribute('title', isPlaying ? 'Mettre en pause' : 'Lecture');
+  }
+  function setDisabled(el, disabled){
+    if(!el) return;
+    el.disabled = !!disabled;
+    el.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+  }
+  function updateBoundaryStates(){
+    const prev = document.getElementById('prev');
+    const next = document.getElementById('next');
+    const prevChapter = document.getElementById('prev-chapter');
+    const nextChapter = document.getElementById('next-chapter');
+    const atStart = index <= 0;
+    const atEnd = index < 0 || index >= tracks.length - 1;
+    setDisabled(prev, atStart);
+    setDisabled(next, atEnd);
+    const list = chaptersFor(index);
+    const cur = currentChapter();
+    const ci = cur ? cur.i : -1;
+    const noCh = !list.length;
+    setDisabled(prevChapter, noCh || ci <= 0);
+    setDisabled(nextChapter, noCh || ci >= list.length - 1);
   }
   function setFullscreenState(active){
     document.body.classList.toggle('full-player', !!active);
@@ -611,6 +652,7 @@ _PLAYER_JS = r"""
       chaptersList.appendChild(item);
     });
     highlightCurrentChapter(true);
+    updateBoundaryStates();
   }
   function setPanelState(button, panel, open){
     if(!button || !panel) return;
@@ -668,6 +710,7 @@ _PLAYER_JS = r"""
     document.body.classList.add('has-player');
     nowPlaying();
     updateProgressUI(false);
+    updateBoundaryStates();
     if(autoplay) audio.play().catch(function(){});
   }
   function toggle(){
@@ -735,8 +778,40 @@ _PLAYER_JS = r"""
     }
   });
   if(seek) seek.addEventListener('input', function(){ if(isFinite(audio.duration)) audio.currentTime = Number(seek.value); });
-  var speed = document.getElementById('speed'); if(speed) speed.addEventListener('change', function(e){ audio.playbackRate = parseFloat(e.target.value || '1'); });
-  var volume = document.getElementById('volume'); if(volume) volume.addEventListener('input', function(e){ audio.volume = parseFloat(e.target.value || '1'); });
+  if(timeTotal) timeTotal.addEventListener('click', function(){
+    showRemaining = !showRemaining;
+    storeSet(STORE.remaining, showRemaining ? '1' : '0');
+    updateProgressUI(false);
+  });
+  var speed = document.getElementById('speed');
+  if(speed){
+    var savedSpeed = storeGet(STORE.speed);
+    if(savedSpeed && speed.querySelector('option[value="' + savedSpeed + '"]')){
+      speed.value = savedSpeed;
+      audio.playbackRate = parseFloat(savedSpeed);
+    }
+    speed.addEventListener('change', function(e){
+      var v = e.target.value || '1';
+      audio.playbackRate = parseFloat(v);
+      storeSet(STORE.speed, v);
+    });
+  }
+  var volume = document.getElementById('volume');
+  if(volume){
+    var savedVol = storeGet(STORE.volume);
+    if(savedVol !== null && !isNaN(parseFloat(savedVol))){
+      var vv = Math.min(1, Math.max(0, parseFloat(savedVol)));
+      volume.value = String(vv);
+      audio.volume = vv;
+    }
+    volume.addEventListener('input', function(e){
+      var v = parseFloat(e.target.value || '1');
+      audio.volume = v;
+      storeSet(STORE.volume, String(v));
+    });
+  }
+  var savedRemaining = storeGet(STORE.remaining);
+  if(savedRemaining === '1') showRemaining = true;
   if(fullButton) fullButton.addEventListener('click', function(){ setFullscreenState(!document.body.classList.contains('full-player')); });
   var nowBtn = document.getElementById('player-now-button'); if(nowBtn) nowBtn.addEventListener('click', function(){ setFullscreenState(true); });
   var queueToggle = document.getElementById('queue-toggle');
@@ -855,6 +930,7 @@ _PLAYER_JS = r"""
 
   tracks.forEach(function(button, i){ button.addEventListener('click', function(){ play(i); }); });
   buildQueue();
+  updateBoundaryStates();
 
   var resumeBtn = document.getElementById('resume-continue');
   if(resumeBtn){
@@ -1307,7 +1383,7 @@ def catalog_page(
         '<div class="seek-row">',
         '<span class="time start" id="time-now">0:00</span>',
         '<input class="seek" id="seek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Position dans le livre">',
-        '<span class="time end" id="time-total">0:00</span>',
+        '<button type="button" class="time end time-toggle" id="time-total" aria-label="Afficher le temps restant" title="Afficher le temps restant">0:00</button>',
         '</div></div>',
 
         '<div class="player-actions" aria-label="Options de lecture">',
