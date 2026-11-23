@@ -1943,11 +1943,17 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [items, has_more, next_offset]
                 properties:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/TransferRecord" }
+                  has_more:
+                    type: boolean
+                    description: True when another page may exist at next_offset
+                  next_offset:
+                    type: [integer, "null"]
+                    description: Offset for the next page, or null
         "401": { description: Authentication required }
         "403": { description: Missing capability }
         "422": { description: Invalid filter or session id }

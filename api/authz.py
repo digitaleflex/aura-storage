@@ -266,6 +266,7 @@ def authenticate_public(request: Request) -> dict:
         "session_id": session["id"],
         "csrf": session["csrf"],
         "email": _row_get(user, "email"),
+        "display_name": _row_get(user, "display_name") or "",
         "environment": _row_get(space, "environment") if space else None,
     }
     from . import audit as audit_log

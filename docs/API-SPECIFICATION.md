@@ -103,7 +103,7 @@ Track asynchronous bulk uploads/imports with a stable job ID, status (`queued`, 
   (client-generated `transfer_session_id`), and date bounds on `terminal_at`
   (`from`/`to`, also spelled `created_after`/`created_before` and
   `from_ts`/`to_ts`, in unix epoch seconds). Pagination uses `limit` (1–100,
-  default 50) and `offset`; the response is `{"items": [...]}`.
+  default 50) and `offset`; the response is `{"items": [...], "has_more": bool, "next_offset": int|null}`.
 - `GET /api/v1/transfers/{id}` — one terminal transfer record, same scope; an
   unknown or out-of-scope id answers `404`.
 - `PATCH /api/v1/objects/{id}` — file or unfile the object in a logical folder (`folder_id`, null = root); implemented (#62).

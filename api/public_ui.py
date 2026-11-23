@@ -106,7 +106,7 @@ select:focus-visible,input[type=range]:focus-visible,.view-link:focus-visible,
 }
 .member{display:flex;align-items:center;gap:1rem;font-size:.9rem;color:var(--muted)}
 .text-button{font:inherit;color:var(--ink);background:none;border:0;
-  border-bottom:1px solid var(--bronze);padding:0 0 2px;cursor:pointer;border-radius:0}
+  border-bottom:1px solid var(--bronze);padding:0 0 2px;cursor:pointer;border-radius:0;text-decoration:none}
 .library{max-width:1120px;margin:0 auto;padding:clamp(1.8rem,4vw,3rem) clamp(1.25rem,5vw,2rem) 12rem}
 .library-header{margin-bottom:1.6rem}
 .library-header h1{margin:0;font-family:Georgia,serif;font-weight:400;
@@ -272,6 +272,11 @@ body.has-player .library{padding-bottom:12.5rem}
 .icon-button.main span[aria-hidden]{font-size:1.15rem;line-height:1}
 .icon-button[aria-pressed="true"],.pill-button[aria-pressed="true"],.icon-button[aria-expanded="true"],.pill-button[aria-expanded="true"]{
   background:var(--bg-deep);border-color:rgba(149,109,53,.35);color:var(--bronze)}
+.icon-button:disabled,.pill-button:disabled{opacity:.45;cursor:not-allowed}
+.icon-button:focus-visible,.pill-button:focus-visible,.player-actions select:focus-visible,.player-actions input:focus-visible,.seek:focus-visible,.time-toggle:focus-visible{
+  outline:2px solid var(--focus);outline-offset:2px}
+.time-toggle{background:none;border:0;padding:0;font:inherit;cursor:pointer;border-radius:4px}
+.time-toggle:hover{color:var(--ink)}
 .player-actions{grid-area:actions;display:flex;align-items:center;justify-content:flex-end;gap:.4rem;flex-wrap:wrap;min-width:0}
 .control-group{display:inline-flex;align-items:center;gap:.3rem}
 .control-group label{font-size:.74rem;color:var(--muted)}
@@ -298,6 +303,7 @@ body.has-player .library{padding-bottom:12.5rem}
 .queue-panel .panel-list button,.queue-panel .panel-list p{display:block;width:100%;text-align:left;font:inherit;font-size:.9rem;
   padding:.55rem .55rem;border:0;background:none;color:var(--ink);cursor:pointer;border-radius:8px;margin:0}
 .queue-panel .panel-list button:hover{background:var(--bg)}
+.queue-panel .panel-list button:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
 .queue-panel .panel-list button.playing{background:rgba(149,109,53,.1);font-weight:600}
 .queue-panel .panel-list button.active{background:rgba(149,109,53,.16);color:var(--bronze);font-weight:600}
 .queue-panel .panel-list button.playing.active{box-shadow:inset 3px 0 0 var(--bronze)}
@@ -357,6 +363,28 @@ body.has-player .library{padding-bottom:12.5rem}
   .control-group label{display:none}
   .player-actions select,.player-actions input[type=range]{font-size:.8rem}
 }
+/* ---- profile page ---------------------------------------------------- */
+.profile-shell{max-width:760px;margin:0 auto;padding:clamp(1.8rem,4vw,3rem) clamp(1.25rem,5vw,2rem) 4rem}
+.profile-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:1.25rem 1.3rem;margin-top:1.2rem}
+.profile-card h2{margin:0 0 .35rem;font-family:Georgia,serif;font-weight:400;font-size:1.5rem}
+.profile-card p{margin:.2rem 0;color:var(--muted)}
+.profile-form{display:grid;gap:.9rem;margin-top:1rem}
+.profile-field{display:grid;gap:.35rem}
+.profile-field label{font-size:.84rem;color:var(--muted);font-weight:600}
+.profile-field input[type=text],.profile-field input[type=email]{
+  font:inherit;padding:.7rem .85rem;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
+.profile-field input[readonly]{background:#f3f0ea;color:var(--soft)}
+.profile-actions{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-top:.2rem}
+.primary-button{font:inherit;font-weight:600;padding:.7rem 1.1rem;border:0;border-radius:999px;background:var(--ink);color:var(--surface);cursor:pointer}
+.primary-button:hover{background:#24384b}
+.danger-card{border-color:#d8c2c2}
+.danger-button{font:inherit;font-weight:600;padding:.7rem 1.1rem;border:1px solid #b35d5d;border-radius:999px;background:#fff7f7;color:#8a2e2e;cursor:pointer}
+.danger-button:hover{background:#fdecec}
+.notice{margin:0 0 1rem;padding:.75rem .9rem;border-radius:10px;font-size:.92rem}
+.notice-ok{background:#eef5ef;color:#245232;border:1px solid #cfe0d2}
+.notice-err{background:#fff1f1;color:#7c2626;border:1px solid #ebcaca}
+.back-link{display:inline-flex;align-items:center;gap:.35rem;color:var(--muted);text-decoration:none;font-size:.92rem}
+.back-link:hover{color:var(--ink)}
 @media (prefers-reduced-motion:reduce){
   *{transition:none!important}
 }
@@ -430,6 +458,55 @@ def login_page() -> str:
 </body></html>"""
 
 
+def profile_page(principal: dict, message: str = "", error: str = "") -> str:
+    display_name = str(principal.get("display_name") or "")
+    email = str(principal.get("email") or "")
+    csrf = str(principal.get("csrf") or "")
+    name = display_name or email or "Auditeur"
+    notice = ""
+    if message:
+        notice = f'<p class="notice notice-ok" role="status">{ESC(message)}</p>'
+    elif error:
+        notice = f'<p class="notice notice-err" role="alert">{ESC(error)}</p>'
+    return "".join([
+        _HEAD,
+        _title("AURA — Mon profil"),
+        '<header class="topbar"><div class="brand">', _BRAND,
+        '<span class="word">AURA</span></div><div class="member">',
+        f'<span class="member-name">{ESC(name)}</span>',
+        '<a class="text-button" href="/">Bibliothèque</a>',
+        '<form method="post" action="/api/public/logout">',
+        f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
+        '<button class="text-button" type="submit">Déconnexion</button>',
+        '</form></div></header>',
+        '<main class="profile-shell">',
+        '<a class="back-link" href="/">← Retour à la bibliothèque</a>',
+        '<header class="library-header" style="margin-bottom:.5rem"><h1>Mon profil</h1>',
+        '<p class="lede">Gérez vos informations personnelles sur le portail.</p></header>',
+        notice,
+        '<section class="profile-card" aria-labelledby="profile-info-title">',
+        '<h2 id="profile-info-title">Informations personnelles</h2>',
+        '<p>L’email est fourni par votre compte Google et reste en lecture seule.</p>',
+        '<form class="profile-form" method="post" action="/profil">',
+        f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
+        '<div class="profile-field"><label for="display_name">Nom d’affichage</label>',
+        f'<input id="display_name" name="display_name" type="text" maxlength="80" autocomplete="name" value="{ESC(display_name)}" placeholder="Votre nom d’affichage"></div>',
+        '<div class="profile-field"><label for="email">Email</label>',
+        f'<input id="email" name="email" type="email" value="{ESC(email)}" readonly></div>',
+        '<div class="profile-actions"><button class="primary-button" type="submit">Enregistrer</button></div>',
+        '</form></section>',
+        '<section class="profile-card danger-card" aria-labelledby="profile-delete-title">',
+        '<h2 id="profile-delete-title">Supprimer mon compte</h2>',
+        '<p>Cette action supprime votre compte public, vos sessions et votre progression d’écoute sur ce portail. Cette action est irréversible.</p>',
+        '<form class="profile-form" method="post" action="/profil/supprimer" ',
+        "onsubmit=\"return confirm('Supprimer définitivement votre compte et votre progression ?');\">",
+        f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
+        '<div class="profile-actions"><button class="danger-button" type="submit">Supprimer mon compte</button></div>',
+        '</form></section>',
+        '</main></body></html>',
+    ])
+
+
 _PLAYER_JS = r"""
 <script>
 (function(){
@@ -455,7 +532,10 @@ _PLAYER_JS = r"""
   const fullButton = document.getElementById('fullscreen');
   const closeButton = document.getElementById('close');
   const chapterData = JSON.parse((document.getElementById('chapters-data') || {textContent:'{}'}).textContent || '{}');
-  let index = -1, lastSaved = 0, retries = 0, sleepTimer = null, endOfChapter = false;
+  let index = -1, lastSaved = 0, retries = 0, sleepTimer = null, endOfChapter = false, showRemaining = false;
+  const STORE = {speed:'aura-player-speed', volume:'aura-player-volume', remaining:'aura-player-remaining'};
+  function storeGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+  function storeSet(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
 
   function fmt(value){
     if(!isFinite(value) || value < 0) value = 0;
@@ -509,12 +589,24 @@ _PLAYER_JS = r"""
       seek.value = pos;
     }
     if(timeNow) timeNow.textContent = fmt(pos);
-    if(timeTotal) timeTotal.textContent = fmt(dur);
+    if(timeTotal){
+      if(showRemaining && dur > 0){
+        const rem = Math.max(0, dur - pos);
+        timeTotal.textContent = '-' + fmt(rem);
+        timeTotal.setAttribute('aria-label', 'Afficher la durée totale');
+        timeTotal.setAttribute('title', 'Afficher la durée totale');
+      } else {
+        timeTotal.textContent = fmt(dur);
+        timeTotal.setAttribute('aria-label', 'Afficher le temps restant');
+        timeTotal.setAttribute('title', 'Afficher le temps restant');
+      }
+    }
     const fill = track.querySelector('.track-progress i');
     if(fill && dur > 0){ fill.style.width = Math.min(100, (pos / dur) * 100) + '%'; }
     track.dataset.progress = String(Math.floor(pos));
     updateChapterLabel();
     highlightCurrentChapter(false);
+    updateBoundaryStates();
     if(force || Math.abs(pos - lastSaved) >= 5){
       lastSaved = pos;
       fetch('/api/public/progress', {
@@ -529,6 +621,27 @@ _PLAYER_JS = r"""
     playToggle.innerHTML = '<span aria-hidden="true">' + (isPlaying ? '⏸' : '▶') + '</span>';
     playToggle.setAttribute('aria-label', isPlaying ? 'Mettre en pause' : 'Lire');
     playToggle.setAttribute('title', isPlaying ? 'Mettre en pause' : 'Lecture');
+  }
+  function setDisabled(el, disabled){
+    if(!el) return;
+    el.disabled = !!disabled;
+    el.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+  }
+  function updateBoundaryStates(){
+    const prev = document.getElementById('prev');
+    const next = document.getElementById('next');
+    const prevChapter = document.getElementById('prev-chapter');
+    const nextChapter = document.getElementById('next-chapter');
+    const atStart = index <= 0;
+    const atEnd = index < 0 || index >= tracks.length - 1;
+    setDisabled(prev, atStart);
+    setDisabled(next, atEnd);
+    const list = chaptersFor(index);
+    const cur = currentChapter();
+    const ci = cur ? cur.i : -1;
+    const noCh = !list.length;
+    setDisabled(prevChapter, noCh || ci <= 0);
+    setDisabled(nextChapter, noCh || ci >= list.length - 1);
   }
   function setFullscreenState(active){
     document.body.classList.toggle('full-player', !!active);
@@ -562,7 +675,11 @@ _PLAYER_JS = r"""
   function syncTrackVisual(i){
     tracks.forEach(function(t, j){ t.classList.toggle('playing', j === i); });
     if(queueList){
-      Array.from(queueList.children).forEach(function(node, j){ node.classList.toggle('playing', j === i); });
+      Array.from(queueList.children).forEach(function(node, j){
+        const active = j === i;
+        node.classList.toggle('playing', active);
+        if(active && !queuePanel.hidden){ try { node.scrollIntoView({block:'nearest'}); } catch(e){} }
+      });
     }
   }
   function buildQueue(){
@@ -611,17 +728,33 @@ _PLAYER_JS = r"""
       chaptersList.appendChild(item);
     });
     highlightCurrentChapter(true);
+    updateBoundaryStates();
   }
   function setPanelState(button, panel, open){
     if(!button || !panel) return;
     panel.hidden = !open;
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if(open){
+      setTimeout(function(){
+        var active = panel.querySelector('.panel-list button.active, .panel-list button.playing');
+        var target = active || panel.querySelector('.panel-close') || panel.querySelector('.panel-list button');
+        if(target && target.focus) try { target.focus({preventScroll:true}); } catch(e){ target.focus(); }
+      }, 0);
+    } else {
+      if(button && button.focus) try { button.focus({preventScroll:true}); } catch(e){ button.focus(); }
+    }
   }
-  function closePanels(){
+  function closePanels(restoreFocus){
     const qt = document.getElementById('queue-toggle');
     const ct = document.getElementById('chapters-toggle');
-    setPanelState(qt, queuePanel, false);
-    setPanelState(ct, chaptersPanel, false);
+    const qOpen = queuePanel && !queuePanel.hidden;
+    const cOpen = chaptersPanel && !chaptersPanel.hidden;
+    if(queuePanel){ queuePanel.hidden = true; if(qt) qt.setAttribute('aria-expanded','false'); }
+    if(chaptersPanel){ chaptersPanel.hidden = true; if(ct) ct.setAttribute('aria-expanded','false'); }
+    if(restoreFocus){
+      const btn = cOpen ? ct : (qOpen ? qt : null);
+      if(btn && btn.focus) try { btn.focus({preventScroll:true}); } catch(e){ btn.focus(); }
+    }
   }
   function panelsOpen(){
     return (queuePanel && !queuePanel.hidden) || (chaptersPanel && !chaptersPanel.hidden);
@@ -668,6 +801,7 @@ _PLAYER_JS = r"""
     document.body.classList.add('has-player');
     nowPlaying();
     updateProgressUI(false);
+    updateBoundaryStates();
     if(autoplay) audio.play().catch(function(){});
   }
   function toggle(){
@@ -698,7 +832,7 @@ _PLAYER_JS = r"""
     if(queueList){ Array.from(queueList.children).forEach(function(n){ n.classList.remove('playing'); }); }
     index = -1;
     setFullscreenState(false);
-    closePanels();
+    closePanels(false);
     bar.hidden = true;
     document.body.classList.remove('has-player');
     setPlayState(false);
@@ -735,8 +869,40 @@ _PLAYER_JS = r"""
     }
   });
   if(seek) seek.addEventListener('input', function(){ if(isFinite(audio.duration)) audio.currentTime = Number(seek.value); });
-  var speed = document.getElementById('speed'); if(speed) speed.addEventListener('change', function(e){ audio.playbackRate = parseFloat(e.target.value || '1'); });
-  var volume = document.getElementById('volume'); if(volume) volume.addEventListener('input', function(e){ audio.volume = parseFloat(e.target.value || '1'); });
+  if(timeTotal) timeTotal.addEventListener('click', function(){
+    showRemaining = !showRemaining;
+    storeSet(STORE.remaining, showRemaining ? '1' : '0');
+    updateProgressUI(false);
+  });
+  var speed = document.getElementById('speed');
+  if(speed){
+    var savedSpeed = storeGet(STORE.speed);
+    if(savedSpeed && speed.querySelector('option[value="' + savedSpeed + '"]')){
+      speed.value = savedSpeed;
+      audio.playbackRate = parseFloat(savedSpeed);
+    }
+    speed.addEventListener('change', function(e){
+      var v = e.target.value || '1';
+      audio.playbackRate = parseFloat(v);
+      storeSet(STORE.speed, v);
+    });
+  }
+  var volume = document.getElementById('volume');
+  if(volume){
+    var savedVol = storeGet(STORE.volume);
+    if(savedVol !== null && !isNaN(parseFloat(savedVol))){
+      var vv = Math.min(1, Math.max(0, parseFloat(savedVol)));
+      volume.value = String(vv);
+      audio.volume = vv;
+    }
+    volume.addEventListener('input', function(e){
+      var v = parseFloat(e.target.value || '1');
+      audio.volume = v;
+      storeSet(STORE.volume, String(v));
+    });
+  }
+  var savedRemaining = storeGet(STORE.remaining);
+  if(savedRemaining === '1') showRemaining = true;
   if(fullButton) fullButton.addEventListener('click', function(){ setFullscreenState(!document.body.classList.contains('full-player')); });
   var nowBtn = document.getElementById('player-now-button'); if(nowBtn) nowBtn.addEventListener('click', function(){ setFullscreenState(true); });
   var queueToggle = document.getElementById('queue-toggle');
@@ -744,7 +910,14 @@ _PLAYER_JS = r"""
     queueToggle.addEventListener('click', function(){
       var open = queuePanel.hidden;
       setPanelState(queueToggle, queuePanel, open);
-      if(open) setPanelState(document.getElementById('chapters-toggle'), chaptersPanel, false);
+      if(open){
+        var ct = document.getElementById('chapters-toggle');
+        if(chaptersPanel){ chaptersPanel.hidden = true; if(ct) ct.setAttribute('aria-expanded','false'); }
+      }
+      if(open && queueList){
+        var active = queueList.querySelector('button.playing');
+        if(active) try { active.scrollIntoView({block:'nearest'}); } catch(e){}
+      }
     });
   }
   var chaptersToggle = document.getElementById('chapters-toggle');
@@ -752,7 +925,10 @@ _PLAYER_JS = r"""
     chaptersToggle.addEventListener('click', function(){
       var open = chaptersPanel.hidden;
       setPanelState(chaptersToggle, chaptersPanel, open);
-      if(open) setPanelState(queueToggle, queuePanel, false);
+      if(open){
+        var qt = document.getElementById('queue-toggle');
+        if(queuePanel){ queuePanel.hidden = true; if(qt) qt.setAttribute('aria-expanded','false'); }
+      }
       if(open) buildChapters();
     });
   }
@@ -771,7 +947,7 @@ _PLAYER_JS = r"""
     var onQueueToggle = queueToggle && queueToggle.contains(t);
     var onChaptersToggle = chaptersToggle && chaptersToggle.contains(t);
     if(!inQueue && !inChapters && !onQueueToggle && !onChaptersToggle){
-      closePanels();
+      closePanels(false);
     }
   });
   if(sleepSelect){
@@ -855,6 +1031,7 @@ _PLAYER_JS = r"""
 
   tracks.forEach(function(button, i){ button.addEventListener('click', function(){ play(i); }); });
   buildQueue();
+  updateBoundaryStates();
 
   var resumeBtn = document.getElementById('resume-continue');
   if(resumeBtn){
@@ -890,7 +1067,7 @@ _PLAYER_JS = r"""
     else if(e.key === 'ArrowRight'){ e.preventDefault(); audio.currentTime = Math.min(isFinite(audio.duration)?audio.duration:Infinity, (audio.currentTime||0) + 15); }
     else if(e.key === 'ArrowLeft'){ e.preventDefault(); audio.currentTime = Math.max(0,(audio.currentTime||0) - 15); }
     else if(e.key === 'Escape'){
-      if(panelsOpen()){ closePanels(); }
+      if(panelsOpen()){ closePanels(true); }
       else if(document.body.classList.contains('full-player')){ setFullscreenState(false); }
     }
   });
@@ -1042,7 +1219,12 @@ def catalog_page(
     active_author: str = "",
 ) -> str:
     authors = authors or []
-    name = principal.get("email") or principal.get("name")
+    name = (
+        principal.get("display_name")
+        or principal.get("email")
+        or principal.get("name")
+        or "Auditeur"
+    )
     csrf = str(principal.get("csrf") or "")
 
     def href(**changes):
@@ -1099,7 +1281,8 @@ def catalog_page(
         _title("AURA — Bibliothèque"),
         '<header class="topbar"><div class="brand">', _BRAND,
         '<span class="word">AURA</span></div><div class="member">',
-        f'<span>{ESC(name)}</span>',
+        f'<span class="member-name">{ESC(name)}</span>',
+        '<a class="text-button" href="/profil">Mon profil</a>',
         '<form method="post" action="/api/public/logout">',
         f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
         '<button class="text-button" type="submit">Déconnexion</button>',
@@ -1307,7 +1490,7 @@ def catalog_page(
         '<div class="seek-row">',
         '<span class="time start" id="time-now">0:00</span>',
         '<input class="seek" id="seek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Position dans le livre">',
-        '<span class="time end" id="time-total">0:00</span>',
+        '<button type="button" class="time end time-toggle" id="time-total" aria-label="Afficher le temps restant" title="Afficher le temps restant">0:00</button>',
         '</div></div>',
 
         '<div class="player-actions" aria-label="Options de lecture">',
