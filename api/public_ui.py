@@ -303,6 +303,7 @@ body.has-player .library{padding-bottom:12.5rem}
 .queue-panel .panel-list button,.queue-panel .panel-list p{display:block;width:100%;text-align:left;font:inherit;font-size:.9rem;
   padding:.55rem .55rem;border:0;background:none;color:var(--ink);cursor:pointer;border-radius:8px;margin:0}
 .queue-panel .panel-list button:hover{background:var(--bg)}
+.queue-panel .panel-list button:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
 .queue-panel .panel-list button.playing{background:rgba(149,109,53,.1);font-weight:600}
 .queue-panel .panel-list button.active{background:rgba(149,109,53,.16);color:var(--bronze);font-weight:600}
 .queue-panel .panel-list button.playing.active{box-shadow:inset 3px 0 0 var(--bronze)}
@@ -603,7 +604,11 @@ _PLAYER_JS = r"""
   function syncTrackVisual(i){
     tracks.forEach(function(t, j){ t.classList.toggle('playing', j === i); });
     if(queueList){
-      Array.from(queueList.children).forEach(function(node, j){ node.classList.toggle('playing', j === i); });
+      Array.from(queueList.children).forEach(function(node, j){
+        const active = j === i;
+        node.classList.toggle('playing', active);
+        if(active && !queuePanel.hidden){ try { node.scrollIntoView({block:'nearest'}); } catch(e){} }
+      });
     }
   }
   function buildQueue(){
@@ -658,12 +663,27 @@ _PLAYER_JS = r"""
     if(!button || !panel) return;
     panel.hidden = !open;
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if(open){
+      setTimeout(function(){
+        var active = panel.querySelector('.panel-list button.active, .panel-list button.playing');
+        var target = active || panel.querySelector('.panel-close') || panel.querySelector('.panel-list button');
+        if(target && target.focus) try { target.focus({preventScroll:true}); } catch(e){ target.focus(); }
+      }, 0);
+    } else {
+      if(button && button.focus) try { button.focus({preventScroll:true}); } catch(e){ button.focus(); }
+    }
   }
-  function closePanels(){
+  function closePanels(restoreFocus){
     const qt = document.getElementById('queue-toggle');
     const ct = document.getElementById('chapters-toggle');
-    setPanelState(qt, queuePanel, false);
-    setPanelState(ct, chaptersPanel, false);
+    const qOpen = queuePanel && !queuePanel.hidden;
+    const cOpen = chaptersPanel && !chaptersPanel.hidden;
+    if(queuePanel){ queuePanel.hidden = true; if(qt) qt.setAttribute('aria-expanded','false'); }
+    if(chaptersPanel){ chaptersPanel.hidden = true; if(ct) ct.setAttribute('aria-expanded','false'); }
+    if(restoreFocus){
+      const btn = cOpen ? ct : (qOpen ? qt : null);
+      if(btn && btn.focus) try { btn.focus({preventScroll:true}); } catch(e){ btn.focus(); }
+    }
   }
   function panelsOpen(){
     return (queuePanel && !queuePanel.hidden) || (chaptersPanel && !chaptersPanel.hidden);
@@ -741,7 +761,7 @@ _PLAYER_JS = r"""
     if(queueList){ Array.from(queueList.children).forEach(function(n){ n.classList.remove('playing'); }); }
     index = -1;
     setFullscreenState(false);
-    closePanels();
+    closePanels(false);
     bar.hidden = true;
     document.body.classList.remove('has-player');
     setPlayState(false);
@@ -819,7 +839,14 @@ _PLAYER_JS = r"""
     queueToggle.addEventListener('click', function(){
       var open = queuePanel.hidden;
       setPanelState(queueToggle, queuePanel, open);
-      if(open) setPanelState(document.getElementById('chapters-toggle'), chaptersPanel, false);
+      if(open){
+        var ct = document.getElementById('chapters-toggle');
+        if(chaptersPanel){ chaptersPanel.hidden = true; if(ct) ct.setAttribute('aria-expanded','false'); }
+      }
+      if(open && queueList){
+        var active = queueList.querySelector('button.playing');
+        if(active) try { active.scrollIntoView({block:'nearest'}); } catch(e){}
+      }
     });
   }
   var chaptersToggle = document.getElementById('chapters-toggle');
@@ -827,7 +854,10 @@ _PLAYER_JS = r"""
     chaptersToggle.addEventListener('click', function(){
       var open = chaptersPanel.hidden;
       setPanelState(chaptersToggle, chaptersPanel, open);
-      if(open) setPanelState(queueToggle, queuePanel, false);
+      if(open){
+        var qt = document.getElementById('queue-toggle');
+        if(queuePanel){ queuePanel.hidden = true; if(qt) qt.setAttribute('aria-expanded','false'); }
+      }
       if(open) buildChapters();
     });
   }
@@ -846,7 +876,7 @@ _PLAYER_JS = r"""
     var onQueueToggle = queueToggle && queueToggle.contains(t);
     var onChaptersToggle = chaptersToggle && chaptersToggle.contains(t);
     if(!inQueue && !inChapters && !onQueueToggle && !onChaptersToggle){
-      closePanels();
+      closePanels(false);
     }
   });
   if(sleepSelect){
@@ -966,7 +996,7 @@ _PLAYER_JS = r"""
     else if(e.key === 'ArrowRight'){ e.preventDefault(); audio.currentTime = Math.min(isFinite(audio.duration)?audio.duration:Infinity, (audio.currentTime||0) + 15); }
     else if(e.key === 'ArrowLeft'){ e.preventDefault(); audio.currentTime = Math.max(0,(audio.currentTime||0) - 15); }
     else if(e.key === 'Escape'){
-      if(panelsOpen()){ closePanels(); }
+      if(panelsOpen()){ closePanels(true); }
       else if(document.body.classList.contains('full-player')){ setFullscreenState(false); }
     }
   });
