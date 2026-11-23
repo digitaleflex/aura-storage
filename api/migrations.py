@@ -52,6 +52,8 @@ ADDED_COLUMNS = {
         ("oauth_provider", "TEXT"),
         ("oauth_sub", "TEXT"),
         ("email", "TEXT"),
+        # Public portal profile: user-chosen display name (editable in UI).
+        ("display_name", "TEXT DEFAULT ''"),
     ],
     "objects": [
         ("actor_kind", "TEXT"),

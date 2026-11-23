@@ -111,6 +111,21 @@ class Repository:
             "UPDATE users SET space_id = ? WHERE id = ? AND space_id IS NULL",
             (space_id, uid),
         )
+
+    def update_user_display_name(self, uid: str, display_name: str) -> None:
+        self.conn.execute(
+            "UPDATE users SET display_name = ? WHERE id = ?",
+            (display_name, uid),
+        )
+        self.conn.commit()
+
+    def delete_public_account(self, uid: str) -> None:
+        """Delete a public portal account and its portal-owned data."""
+        self.conn.execute("DELETE FROM listen_progress WHERE user_id = ?", (uid,))
+        self.conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
+        self.conn.execute(
+            "DELETE FROM users WHERE id = ? AND role = 'public'", (uid,)
+        )
         self.conn.commit()
 
     # -- default tenant ---------------------------------------------------

@@ -118,6 +118,20 @@ class Repository:
             (space_id, uid),
         )
 
+    def update_user_display_name(self, uid: str, display_name: str) -> None:
+        self._run(
+            "UPDATE users SET display_name = %s WHERE id = %s",
+            (display_name, uid),
+        )
+
+    def delete_public_account(self, uid: str) -> None:
+        """Delete a public portal account and its portal-owned data."""
+        self._run("DELETE FROM listen_progress WHERE user_id = %s", (uid,))
+        self._run("DELETE FROM sessions WHERE user_id = %s", (uid,))
+        self._run(
+            "DELETE FROM users WHERE id = %s AND role = 'public'", (uid,)
+        )
+
     # -- default tenant ---------------------------------------------------
     def get_default_space(self, application_id: str) -> Optional[dict]:
         """The seeded default space of ``application_id`` (name + environment)."""
