@@ -314,6 +314,9 @@ def test_service_issued_media_grant_is_revocable(monkeypatch):
     # leave no object, grant or usage event behind for analytics/publication
     # tests that count rows globally.
     main.repo.revoke_public_access_grants_for_object(oid, int(time.time()))
+    # A revoked grant still has an FK to the object: remove it physically in
+    # the test catalogue before deleting the object (PostgreSQL enforces it).
+    catalogue_sql.execute("DELETE FROM public_access_grants WHERE object_id = ?", (oid,))
     catalogue_sql.execute("DELETE FROM object_usage_monthly WHERE object_id = ?", (oid,))
     main.repo.delete_object_row(oid)
 

@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import api.main as main  # noqa: E402
 from api import portal_search  # noqa: E402
 from api.auth import hash_password  # noqa: E402
+from tests import catalogue_sql  # noqa: E402
 
 OID = "55555555-6666-4777-8777-888888888888"
 NEXT_OID = "66666666-7777-4888-8888-999999999999"
@@ -54,11 +55,11 @@ def _published_book(name="Auteur - Livre.mp3"):
         intent_expires_at=int(time.time()) + 900,
     )
     main.repo.mark_available(oid, 1000, "checksum")
-    main.repo.conn.execute(
+    # catalogue_sql translates the ? placeholders for the PostgreSQL suite.
+    catalogue_sql.execute(
         "UPDATE objects SET published_at = ?, public_slug = ?, duration_seconds = 600 "
         "WHERE id = ?", (int(time.time()), f"slug-{oid[:8]}", oid),
     )
-    main.repo.conn.commit()
     return oid
 
 
