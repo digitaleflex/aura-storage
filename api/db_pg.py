@@ -77,6 +77,35 @@ class Repository:
             (provider, subject),
         )
 
+    def get_public_user_by_email(self, email: str) -> Optional[dict]:
+        """The oldest public-portal account using this (lower-cased) address."""
+        return self._one(
+            "SELECT * FROM users WHERE role = 'public' AND lower(email) = %s "
+            "ORDER BY created_at LIMIT 1", (email.lower(),),
+        )
+
+    # -- e-mail sign-in links ---------------------------------------------
+    def create_login_link(self, token_hash: str, email: str, now: int, expires_at: int) -> None:
+        self._run("DELETE FROM login_links WHERE expires_at < %s", (now - 86400,))
+        self._run(
+            "INSERT INTO login_links (token_hash, email, created_at, expires_at) "
+            "VALUES (%s, %s, %s, %s)", (token_hash, email, now, expires_at),
+        )
+
+    def peek_login_link(self, token_hash: str, now: int) -> bool:
+        return self._one(
+            "SELECT 1 AS ok FROM login_links WHERE token_hash = %s AND used_at IS NULL "
+            "AND expires_at > %s", (token_hash, now),
+        ) is not None
+
+    def consume_login_link(self, token_hash: str, now: int) -> Optional[str]:
+        row = self._one(
+            "UPDATE login_links SET used_at = %s WHERE token_hash = %s "
+            "AND used_at IS NULL AND expires_at > %s RETURNING email",
+            (now, token_hash, now),
+        )
+        return row["email"] if row else None
+
     def create_oauth_user(
         self, username: str, pass_hash: str, provider: str, subject: str,
         email: str, role: str = "public",

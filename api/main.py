@@ -18,11 +18,11 @@ from typing import Annotated, Literal
 from html import escape as html_escape
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, folder_shares, google_oauth, ids, netinfo, public_book, public_ui, shares
+from . import authz, folder_shares, google_oauth, ids, magic_link, netinfo, public_book, public_ui, shares
 from .audit import (
     audit_event,
     audit_path,
@@ -400,6 +400,23 @@ def _public_login_clear(client_ip: str) -> None:
 _PUBLIC_RATE: dict[str, list[float]] = {}
 _PUBLIC_RATE_WINDOW = 60.0
 _PUBLIC_RATE_LIMITS = {"media": 120, "cover": 600, "progress": 120, "preview": 30}
+
+
+def _public_rate_hit(key: str, limit: int, window: float, raise_429: bool = True) -> bool:
+    """Count one hit on ``key``; False (or HTTP 429) once ``limit`` hits fit in ``window``."""
+    now = time.time()
+    recent = [t for t in _PUBLIC_RATE.get(key, []) if now - t < window]
+    if len(recent) >= limit:
+        _PUBLIC_RATE[key] = recent
+        if raise_429:
+            retry = max(1, int(window - (now - recent[0])))
+            raise HTTPException(status_code=429, detail="too many requests",
+                                headers={"Retry-After": str(retry)})
+        return False
+    recent.append(now)
+    _PUBLIC_RATE[key] = recent
+    _prune_attempt_table(_PUBLIC_RATE, window)
+    return True
 
 
 def _public_rate_check(kind: str, request: Request) -> None:
@@ -1591,6 +1608,14 @@ def public_auth_callback(
     subject = str(claims["sub"])
     user = repo.get_user_by_oauth("google", subject)
     if user is None:
+        # A visitor who first signed in with an e-mailed link keeps that account
+        # (favourites, progress) when they later use Google with the same verified
+        # address. Only accounts created by e-mail link are reused: two different
+        # Google identities are never merged on a shared address.
+        candidate = repo.get_public_user_by_email(email)
+        if candidate is not None and candidate["oauth_provider"] == "email":
+            user = candidate
+    if user is None:
         # The username is derived from the stable subject, never from the email
         # (which can change) or from a Google display name (which is user data).
         suffix = hashlib.sha256(subject.encode("utf-8")).hexdigest()[:24]
@@ -1605,12 +1630,19 @@ def public_auth_callback(
     else:
         user_id = user["id"]
 
+    return _public_login_response(user_id, request, "google-login", clear_oauth_cookie=True)
+
+
+def _public_login_response(
+    user_id: str, request: Request, event: str, clear_oauth_cookie: bool = False,
+) -> RedirectResponse:
+    """Open a public session for ``user_id`` and redirect to the catalogue."""
     csrf = new_token(16)
     sid = repo.create_session(
         user_id, csrf, int(time.time()) + settings.public_session_ttl
     )
     _public_login_clear(_client_ip(request))
-    audit_event("google-login", user_id, "success", {"user_id": user_id})
+    audit_event(event, user_id, "success", {"user_id": user_id})
     out = RedirectResponse("/", status_code=302, headers={
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
@@ -1620,8 +1652,127 @@ def public_auth_callback(
         secure=settings.cookie_secure, samesite="lax",
         max_age=settings.public_session_ttl, path="/",
     )
-    out.delete_cookie(_PUBLIC_OAUTH_COOKIE, path="/api/public/auth")
+    if clear_oauth_cookie:
+        out.delete_cookie(_PUBLIC_OAUTH_COOKIE, path="/api/public/auth")
     return out
+
+
+# ---------------------------------------------------------------------------
+# E-mail sign-in link for visitors without a Google account.
+# 1) POST the address -> always the same answer (no account enumeration), the
+#    mail is sent in the background. 2) The mailed link only opens a page with a
+#    button: mail scanners that pre-fetch links must not burn the single-use token.
+# 3) POST the token from that page -> session cookie.
+# ---------------------------------------------------------------------------
+_EMAIL_LINK_PER_IP = 10        # requests per client and hour
+_EMAIL_LINK_PER_ADDRESS = 3    # mails per address and hour
+
+
+def _same_origin_post(request: Request) -> bool:
+    """Browsers always send Origin/Referer on a POST: refuse another site's form."""
+    source = request.headers.get("origin") or request.headers.get("referer") or ""
+    if not source:
+        return True  # not a browser; the single-use token is the protection
+    return urlsplit(source).hostname == (settings.public_domain or "")
+
+
+def _email_login_open(request: Request) -> bool:
+    return _public_host_ok(request) and magic_link.enabled(settings)
+
+
+def _email_domain_allowed(email: str) -> bool:
+    allowed = settings.google_allowed_email_domains
+    return not allowed or email.rsplit("@", 1)[-1] in allowed
+
+
+def _send_login_email(email: str, link: str) -> None:
+    try:
+        magic_link.send(settings, email, link)
+    except Exception as exc:  # SMTP down/misconfigured: log, never tell the visitor
+        audit_event("email-link", "system", "send_failed", {"error": type(exc).__name__})
+
+
+@app.post("/api/public/auth/email", response_class=HTMLResponse)
+async def public_email_link_request(request: Request, background: BackgroundTasks):
+    if not _email_login_open(request):
+        raise HTTPException(status_code=404, detail="not found")
+    if not _same_origin_post(request):
+        raise HTTPException(status_code=403, detail="cross-site request")
+    _public_rate_hit(f"email-ip:{_client_ip(request)}", _EMAIL_LINK_PER_IP, 3600)
+    form = await request.form()
+    email = magic_link.normalize_email(str(form.get("email") or ""))
+    who = hashlib.sha256((email or "-").encode("utf-8")).hexdigest()[:12]
+    if (
+        email and _email_domain_allowed(email)
+        and _public_rate_hit(f"email-addr:{email}", _EMAIL_LINK_PER_ADDRESS, 3600, raise_429=False)
+    ):
+        token = magic_link.new_token()
+        now = int(time.time())
+        repo.create_login_link(magic_link.hash_token(token), email, now, now + settings.email_link_ttl)
+        background.add_task(
+            _send_login_email, email, f"{_public_base_url()}/connexion/lien?token={token}",
+        )
+        audit_event("email-link", who, "requested")
+    else:
+        audit_event("email-link", who, "ignored")
+    return HTMLResponse(
+        public_book.message_page(
+            "Vérifiez votre boîte mail",
+            "Si cette adresse est valide, un lien de connexion vient de lui être envoyé. "
+            f"Il est valable {max(1, settings.email_link_ttl // 60)} minutes.",
+        ),
+        headers=_public_profile_headers(),
+    )
+
+
+@app.get("/connexion/lien", response_class=HTMLResponse)
+def public_email_link_open(request: Request, token: str = ""):
+    if not _email_login_open(request):
+        raise HTTPException(status_code=404, detail="not found")
+    headers = _public_profile_headers()
+    if len(token) > 200 or not repo.peek_login_link(magic_link.hash_token(token), int(time.time())):
+        return HTMLResponse(
+            public_book.message_page(
+                "Lien expiré", "Ce lien a déjà été utilisé ou a expiré. Demandez-en un nouveau.",
+            ),
+            status_code=400, headers=headers,
+        )
+    return HTMLResponse(public_book.confirm_login_page(token), headers=headers)
+
+
+@app.post("/api/public/auth/email/confirm")
+async def public_email_link_confirm(request: Request):
+    if not _email_login_open(request):
+        raise HTTPException(status_code=404, detail="not found")
+    if not _same_origin_post(request):
+        raise HTTPException(status_code=403, detail="cross-site request")
+    client_ip = _client_ip(request)
+    if _public_login_blocked(client_ip):
+        raise HTTPException(status_code=429, detail="too many login attempts",
+                            headers={"Retry-After": str(settings.login_rate_window)})
+    form = await request.form()
+    token = str(form.get("token") or "")[:200]
+    email = repo.consume_login_link(magic_link.hash_token(token), int(time.time())) if token else None
+    if email is None or not _email_domain_allowed(email):
+        _public_login_record_failure(client_ip)
+        audit_event("email-login", "-", "failure")
+        return HTMLResponse(
+            public_book.message_page(
+                "Lien expiré", "Ce lien a déjà été utilisé ou a expiré. Demandez-en un nouveau.",
+            ),
+            status_code=400, headers=_public_profile_headers(),
+        )
+    user = repo.get_user_by_oauth("email", email) or repo.get_public_user_by_email(email)
+    if user is None:
+        from .auth import hash_password
+        suffix = hashlib.sha256(email.encode("utf-8")).hexdigest()[:24]
+        user_id = repo.create_oauth_user(
+            f"email-{suffix}", hash_password(new_token(32)), "email", email, email,
+            role=PUBLIC_ROLE,
+        )
+    else:
+        user_id = user["id"]
+    return _public_login_response(user_id, request, "email-login")
 
 
 class PublicProfilePatch(BaseModel):
@@ -1974,14 +2125,15 @@ def public_portal(request: Request):
     if principal is None:
         if not settings.public_browse:
             return HTMLResponse(
-                public_ui.login_page(), headers=_public_profile_headers(),
+                public_ui.login_page(with_email=magic_link.enabled(settings)),
+                headers=_public_profile_headers(),
             )
         catalog = _public_catalog()
         return HTMLResponse(
             public_book.landing_page(
                 _filter_collections(catalog, query, author), query=query,
                 authors=_catalog_authors(catalog), active_author=author,
-                base_url=_public_base_url(),
+                base_url=_public_base_url(), with_email=magic_link.enabled(settings),
             ),
             headers=_public_profile_headers(indexable=not (query or author)),
         )

@@ -58,6 +58,26 @@ par des variables CSS ; `color-scheme: light dark` adapte aussi lecteur natif et
 sur chaque livre (catalogue et page livre) alimente l'étagère « Mes favoris » ; l'état est privé,
 supprimé avec le compte, et le clic est annulé côté page si le serveur refuse.
 
+## Connexion par e-mail (lien magique)
+
+Pour les visiteurs sans compte Google. **Désactivée tant qu'aucun serveur de messagerie n'est
+configuré** : renseigner `AURA_SMTP_HOST` et `AURA_SMTP_FROM` (+ `AURA_SMTP_PORT`, `AURA_SMTP_USER`,
+`AURA_SMTP_PASSWORD`, `AURA_SMTP_STARTTLS`, `AURA_EMAIL_LINK_TTL`) dans `.env`. Le formulaire
+« Recevoir le lien » apparaît alors sur la page de connexion et sur la vitrine.
+
+| Chemin | Rôle |
+|---|---|
+| `POST /api/public/auth/email` | demande un lien ; **même réponse** que l'adresse soit valide, inconnue ou refusée (pas d'énumération) ; envoi en tâche de fond |
+| `GET /connexion/lien?token=` | page avec un bouton « Me connecter » : ouvrir le lien ne le consomme pas (les scanners de messagerie qui préchargent les liens ne le brûlent pas) |
+| `POST /api/public/auth/email/confirm` | consomme le jeton (usage unique) et ouvre la session |
+
+Jeton aléatoire, **seul son SHA-256 est stocké** (`login_links`, migration `0023`), valable 15 min
+par défaut. Limites : 10 demandes/heure/client et 3 mails/heure/adresse ; les mauvais jetons
+comptent dans le budget d'échecs de connexion publique. Un POST venu d'un autre site est refusé.
+`GOOGLE_ALLOWED_EMAIL_DOMAINS` s'applique aussi. Un lien envoyé à l'adresse d'un compte Google
+existant ouvre ce compte ; un compte créé par lien est réutilisé si la personne passe ensuite par
+Google avec la même adresse. Deux identités Google différentes ne sont jamais fusionnées.
+
 ## Application installable et écoute hors connexion
 
 Le portail est une **PWA** : manifeste (`/portal-assets/manifest.webmanifest`, icônes 192/512 px

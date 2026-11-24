@@ -8,7 +8,8 @@ import json
 from urllib.parse import quote, urlencode
 
 from .public_ui import (
-    ESC, _BRAND, _GOOGLE, _duration_text, _heart_button, _position_text, asset_url, page_head,
+    ESC, _BRAND, _GOOGLE, _duration_text, _heart_button, _position_text, asset_url, email_form,
+    page_head,
 )
 
 SITE_NAME = "AURA"
@@ -57,7 +58,7 @@ def _brand_bar(principal: dict | None) -> str:
 
 def landing_page(
     collections: list[dict], query: str = "", authors: list[str] | None = None,
-    active_author: str = "", base_url: str = "",
+    active_author: str = "", base_url: str = "", with_email: bool = False,
 ) -> str:
     """Anonymous front page: the catalogue to browse, a clear way to sign in."""
     authors = authors or []
@@ -83,7 +84,8 @@ def landing_page(
         f'<p class="lede">{len(items)} titres. Un extrait gratuit sur chaque livre ; '
         'votre compte Google suffit pour tout écouter et reprendre là où vous vous êtes arrêté.</p>',
         '<p class="welcome-actions"><a class="google-button" href="/api/public/auth/google">',
-        _GOOGLE, '<span>Continuer avec Google</span></a></p></section>',
+        _GOOGLE, '<span>Continuer avec Google</span></a></p>',
+        email_form() if with_email else '', '</section>',
         '<form class="search-form" method="get" action="/">',
         f'<input type="search" name="q" value="{ESC(query)}" '
         'placeholder="Rechercher un livre, un auteur…" aria-label="Rechercher un livre, un auteur">',
@@ -201,6 +203,18 @@ def book_page(
         parts.append('<script src="' + asset_url("favorites.js") + '"></script>')
     parts.append('</main><footer class="site-foot">AURA · Écoute privée</footer></body></html>')
     return "".join(parts)
+
+
+def confirm_login_page(token: str) -> str:
+    """Landing of the mailed link: one button, so a mail scanner cannot use the link up."""
+    return "".join([
+        page_head(f"Connexion — {SITE_NAME}"), '</head><body>', _brand_bar(None),
+        '<main class="library"><header class="library-header"><h1>Entrer dans la bibliothèque</h1>',
+        '<p class="lede">Confirmez pour ouvrir votre session sur cet appareil.</p></header>',
+        '<form method="post" action="/api/public/auth/email/confirm">',
+        f'<input type="hidden" name="token" value="{ESC(token)}">',
+        '<button class="primary-button" type="submit">Me connecter</button></form></main></body></html>',
+    ])
 
 
 def message_page(title: str, text: str) -> str:
