@@ -402,6 +402,23 @@ CREATE TABLE IF NOT EXISTS listen_favorites (
   PRIMARY KEY (user_id, object_id)
 );
 
+-- Private listener playlists (issue #302): ordered lists of published books,
+-- owned by one public-portal visitor and removed with their account.
+CREATE TABLE IF NOT EXISTS listen_playlists (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  name TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_listen_playlists_user ON listen_playlists(user_id, updated_at);
+CREATE TABLE IF NOT EXISTS listen_playlist_items (
+  playlist_id TEXT NOT NULL REFERENCES listen_playlists(id) ON DELETE CASCADE,
+  object_id TEXT NOT NULL REFERENCES objects(id),
+  position INTEGER NOT NULL,
+  PRIMARY KEY (playlist_id, object_id)
+);
+
 -- Locally extracted chapter markers (ffprobe). Ordered by chapter_index.
 CREATE TABLE IF NOT EXISTS audio_chapters (
   object_id TEXT NOT NULL REFERENCES objects(id),

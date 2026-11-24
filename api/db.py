@@ -168,6 +168,11 @@ class Repository:
         self.conn.execute("DELETE FROM listen_progress WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM listen_favorites WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM listen_bookmarks WHERE user_id = ?", (uid,))
+        self.conn.execute(
+            "DELETE FROM listen_playlist_items WHERE playlist_id IN "
+            "(SELECT id FROM listen_playlists WHERE user_id = ?)", (uid,)
+        )
+        self.conn.execute("DELETE FROM listen_playlists WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
         self.conn.execute(
             "DELETE FROM users WHERE id = ? AND role = 'public'", (uid,)
@@ -287,6 +292,84 @@ class Repository:
             "DELETE FROM listen_bookmarks WHERE id = ? AND user_id = ?", (bookmark_id, user_id),
         )
         self.conn.commit()
+        return cur.rowcount == 1
+
+    # -- private playlists (issue #302) ------------------------------------
+    def list_listen_playlists(self, user_id: str) -> list:
+        rows = self.conn.execute(
+            "SELECT p.*, (SELECT COUNT(*) FROM listen_playlist_items i "
+            "WHERE i.playlist_id = p.id) AS item_count "
+            "FROM listen_playlists p WHERE p.user_id = ? "
+            "ORDER BY p.updated_at DESC", (user_id,),
+        ).fetchall()
+        return [_as_dict(r) for r in rows]
+
+    def create_listen_playlist(self, user_id: str, name: str, now: int) -> dict:
+        pid = self.new_id()
+        self.conn.execute(
+            "INSERT INTO listen_playlists (id, user_id, name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)", (pid, user_id, name, now, now),
+        )
+        self.conn.commit()
+        return {"id": pid, "name": name, "item_count": 0}
+
+    def rename_listen_playlist(self, user_id: str, pid: str, name: str, now: int) -> bool:
+        cur = self.conn.execute(
+            "UPDATE listen_playlists SET name = ?, updated_at = ? "
+            "WHERE id = ? AND user_id = ?", (name, now, pid, user_id),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def delete_listen_playlist(self, user_id: str, pid: str) -> bool:
+        self.conn.execute(
+            "DELETE FROM listen_playlist_items WHERE playlist_id = ? "
+            "AND playlist_id IN (SELECT id FROM listen_playlists WHERE user_id = ?)",
+            (pid, user_id),
+        )
+        cur = self.conn.execute(
+            "DELETE FROM listen_playlists WHERE id = ? AND user_id = ?", (pid, user_id),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def get_listen_playlist(self, user_id: str, pid: str):
+        row = self.conn.execute(
+            "SELECT * FROM listen_playlists WHERE id = ? AND user_id = ?", (pid, user_id),
+        ).fetchone()
+        return _as_dict(row) if row else None
+
+    def list_listen_playlist_items(self, pid: str) -> list:
+        return [dict(r) for r in self.conn.execute(
+            "SELECT object_id, position FROM listen_playlist_items "
+            "WHERE playlist_id = ? ORDER BY position ASC", (pid,),
+        ).fetchall()]
+
+    def add_listen_playlist_item(self, pid: str, object_id: str, position: int, now: int) -> bool:
+        cur = self.conn.execute(
+            "INSERT INTO listen_playlist_items (playlist_id, object_id, position) "
+            "VALUES (?, ?, ?) ON CONFLICT(playlist_id, object_id) DO NOTHING",
+            (pid, object_id, position),
+        )
+        self.conn.commit()
+        if cur.rowcount:
+            self.conn.execute(
+                "UPDATE listen_playlists SET updated_at = ? WHERE id = ?", (now, pid)
+            )
+            self.conn.commit()
+        return cur.rowcount == 1
+
+    def remove_listen_playlist_item(self, pid: str, object_id: str, now: int) -> bool:
+        cur = self.conn.execute(
+            "DELETE FROM listen_playlist_items WHERE playlist_id = ? AND object_id = ?",
+            (pid, object_id),
+        )
+        self.conn.commit()
+        if cur.rowcount:
+            self.conn.execute(
+                "UPDATE listen_playlists SET updated_at = ? WHERE id = ?", (now, pid)
+            )
+            self.conn.commit()
         return cur.rowcount == 1
 
     def get_favorite_ids(self, user_id: str, object_ids: list) -> set:

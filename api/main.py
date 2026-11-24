@@ -439,7 +439,7 @@ _PUBLIC_RATE_WINDOW = 60.0
 # exempt from any per-client throttling.
 _PUBLIC_RATE_LIMITS = {
     "media": 120, "cover": 600, "progress": 120, "preview": 30,
-    "hls": 240, "subtitle": 120,
+    "hls": 240, "subtitle": 120, "search": 60,
 }
 
 
@@ -806,6 +806,12 @@ class BookmarkIn(BaseModel):
     object_id: Uuid4
     position_seconds: float = Field(ge=0, le=864000)
     note: str = Field(default="", max_length=200)
+
+
+class PlaylistIn(BaseModel):
+    """A private playlist name (CSRF-protected)."""
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=80)
 
 
 class LoginIn(BaseModel):
@@ -2014,7 +2020,14 @@ def public_profile(request: Request):
     except HTTPException:
         return RedirectResponse("/", status_code=302)
     headers = _public_profile_headers()
-    return HTMLResponse(public_ui.profile_page(principal), headers=headers)
+    return HTMLResponse(
+        public_ui.profile_page(
+            principal,
+            playlists=repo.list_listen_playlists(principal["id"]),
+            stats=_public_listening_stats(principal),
+        ),
+        headers=headers,
+    )
 
 
 @app.post("/profil", response_class=HTMLResponse)
@@ -2131,6 +2144,10 @@ def _filter_collections(collections: list, query: str, author: str, sort: str = 
             ]
         if author:
             items = [i for i in items if i["author"] == author]
+        if min_seconds is not None:
+            items = [i for i in items if float(i.get("duration_seconds") or 0) >= min_seconds]
+        if max_seconds is not None:
+            items = [i for i in items if 0 < float(i.get("duration_seconds") or 0) <= max_seconds]
         if items:
             out.append({**col, "items": public_ui.sort_items(items, sort)})
     return out
@@ -2246,6 +2263,162 @@ def public_favorite_remove(oid: str, request: Request, principal: dict = Depends
     return _set_public_favorite(oid, request, principal, False)
 
 
+# --- Private playlists (#302) -------------------------------------------
+def _own_playlist_or_404(pid: str, principal: dict) -> dict:
+    playlist = repo.get_listen_playlist(principal["id"], _canonical_id(pid, "playlist id"))
+    if playlist is None:
+        raise HTTPException(status_code=404, detail="playlist not found")
+    return playlist
+
+
+@app.post("/api/public/playlists/create")
+async def public_playlist_create_form(
+    request: Request, principal: dict = Depends(require_public),
+):
+    """No-JavaScript form variant used by the profile page."""
+    form = await request.form()
+    name = " ".join(str(form.get("name") or "").split())[:80]
+    if name:
+        repo.create_listen_playlist(principal["id"], name, int(time.time()))
+    return RedirectResponse("/profil", status_code=303)
+
+
+@app.post("/api/public/playlists/{pid}/delete")
+async def public_playlist_delete_form(
+    pid: str, request: Request, principal: dict = Depends(require_public),
+):
+    playlist = repo.get_listen_playlist(principal["id"], _canonical_id(pid, "playlist id"))
+    if playlist is not None:
+        repo.delete_listen_playlist(principal["id"], playlist["id"])
+    return RedirectResponse("/profil", status_code=303)
+
+
+def _public_listening_stats(principal: dict) -> dict:
+    """Lightweight listener stats, derived from data the portal already stores.
+
+    Only the latest position is kept per book, so the listened time is an
+    estimate from saved positions, never a claim of exact playback duration.
+    """
+    collections = _public_collections(principal)
+    items = [item for col in collections for item in col["items"]]
+    progress = repo.get_progress_map(principal["id"], [item["id"] for item in items])
+    positions = {item["id"]: float(progress.get(item["id"], 0)) for item in items}
+    listened = sum(positions.values())
+    completed = sum(
+        1 for item in items
+        if item.get("duration_seconds")
+        and positions[item["id"]] >= 0.9 * float(item["duration_seconds"])
+    )
+    favourites = [item for item in items if item.get("favorite")]
+    bookmarks = sum(len(repo.list_bookmarks(principal["id"], item["id"])) for item in items)
+    authors: dict[str, int] = {}
+    for item in favourites:
+        author = str(item.get("author") or "").strip()
+        if author:
+            authors[author] = authors.get(author, 0) + 1
+    series = []
+    for col in collections:
+        col_items = col.get("items", [])
+        started = [i for i in col_items if positions.get(i["id"], 0) > 0]
+        if len(col_items) > 1 and started:
+            series.append({
+                "title": col.get("title") or "Bibliothèque",
+                "started": len(started),
+                "total": len(col_items),
+            })
+    return {
+        "items_in_library": len(items),
+        "estimated_listened_seconds": int(listened),
+        "completed": completed,
+        "favorites": len(favourites),
+        "bookmarks": bookmarks,
+        "top_authors": [
+            {"name": name, "count": count}
+            for name, count in sorted(authors.items(), key=lambda pair: (-pair[1], pair[0]))[:5]
+        ],
+        "series_in_progress": series[:5],
+    }
+
+
+@app.get("/api/public/stats")
+def public_stats(principal: dict = Depends(require_public)):
+    """The listener's own listening summary (never another visitor's data)."""
+    return _public_listening_stats(principal)
+
+
+@app.get("/api/public/playlists")
+def public_playlists(principal: dict = Depends(require_public)):
+    """The visitor's private playlists, newest activity first."""
+    return {"playlists": repo.list_listen_playlists(principal["id"])}
+
+
+@app.post("/api/public/playlists")
+def public_playlist_create(
+    body: PlaylistIn, request: Request, principal: dict = Depends(require_public),
+):
+    _public_rate_check("progress", request)
+    name = " ".join(body.name.split())
+    if not name:
+        raise HTTPException(status_code=422, detail="name must not be empty")
+    return {"playlist": repo.create_listen_playlist(principal["id"], name, int(time.time()))}
+
+
+@app.patch("/api/public/playlists/{pid}")
+def public_playlist_rename(
+    pid: str, body: PlaylistIn, request: Request, principal: dict = Depends(require_public),
+):
+    _public_rate_check("progress", request)
+    current = _own_playlist_or_404(pid, principal)
+    name = " ".join(body.name.split())
+    if not name:
+        raise HTTPException(status_code=422, detail="name must not be empty")
+    if not repo.rename_listen_playlist(principal["id"], current["id"], name, int(time.time())):
+        raise HTTPException(status_code=404, detail="playlist not found")
+    return {"playlist": {"id": current["id"], "name": name}}
+
+
+@app.delete("/api/public/playlists/{pid}")
+def public_playlist_delete(
+    pid: str, request: Request, principal: dict = Depends(require_public),
+):
+    _public_rate_check("progress", request)
+    current = _own_playlist_or_404(pid, principal)
+    if not repo.delete_listen_playlist(principal["id"], current["id"]):
+        raise HTTPException(status_code=404, detail="playlist not found")
+    return {"ok": True}
+
+
+@app.get("/api/public/playlists/{pid}/items")
+def public_playlist_items(pid: str, principal: dict = Depends(require_public)):
+    current = _own_playlist_or_404(pid, principal)
+    return {"playlist_id": current["id"], "items": repo.list_listen_playlist_items(current["id"])}
+
+
+@app.put("/api/public/playlists/{pid}/items/{oid}")
+def public_playlist_add_item(
+    pid: str, oid: str, request: Request, principal: dict = Depends(require_public),
+):
+    _public_rate_check("progress", request)
+    current = _own_playlist_or_404(pid, principal)
+    oid = _published_book_or_404(oid)
+    items = repo.list_listen_playlist_items(current["id"])
+    position = max((int(i["position"]) for i in items), default=-1) + 1
+    added = repo.add_listen_playlist_item(current["id"], oid, position, int(time.time()))
+    return {"object_id": oid, "added": added}
+
+
+@app.delete("/api/public/playlists/{pid}/items/{oid}")
+def public_playlist_remove_item(
+    pid: str, oid: str, request: Request, principal: dict = Depends(require_public),
+):
+    _public_rate_check("progress", request)
+    current = _own_playlist_or_404(pid, principal)
+    oid = _canonical_id(oid, "object id")
+    if not repo.remove_listen_playlist_item(current["id"], oid, int(time.time())):
+        raise HTTPException(status_code=404, detail="item not found in playlist")
+    return {"ok": True}
+
+
 @app.get("/", response_class=HTMLResponse)
 def public_portal(request: Request):
     """Catalogue page with a single audio player, served on the public host.
@@ -2262,6 +2435,20 @@ def public_portal(request: Request):
     query = (request.query_params.get("q") or "").strip()[:120]
     author = (request.query_params.get("auteur") or "").strip()[:120]
     sort = _sort_param(request)
+    # Natural-language queries are translated into the portal's existing
+    # filters; the "search" limiter bounds how often one client can ask.
+    from . import portal_search
+    intent = portal_search.parse_search(query) if query else portal_search.SearchIntent()
+    search_note = ""
+    if intent.recognised:
+        _public_rate_check("search", request)
+        search_note = intent.explanation
+        query = intent.q
+        author = author or intent.author
+        sort = sort or intent.sort
+    duration_filters = dict(
+        min_seconds=intent.min_seconds, max_seconds=intent.max_seconds,
+    )
     if principal is None:
         if not settings.public_browse:
             return HTMLResponse(
@@ -2271,7 +2458,8 @@ def public_portal(request: Request):
         catalog = _public_catalog()
         return HTMLResponse(
             public_book.landing_page(
-                _filter_collections(catalog, query, author, sort), query=query,
+                _filter_collections(catalog, query, author, sort, **duration_filters),
+                query=query, search_note=search_note,
                 authors=_catalog_authors(catalog), active_author=author, sort=sort,
                 base_url=_public_base_url(), with_email=magic_link.enabled(settings),
             ),
@@ -2282,7 +2470,7 @@ def public_portal(request: Request):
         view = "liste"
     collections = _public_collections(principal)
     authors = _catalog_authors(collections)
-    collections = _filter_collections(collections, query, author, sort)
+    collections = _filter_collections(collections, query, author, sort, **duration_filters)
     try:
         page = max(1, int(request.query_params.get("page", "1")))
     except ValueError:
@@ -2293,7 +2481,7 @@ def public_portal(request: Request):
         recommend_fn = portal_recommendations.rank
     return HTMLResponse(
         public_ui.catalog_page(
-            principal, collections, query=query, view=view,
+            principal, collections, query=query, view=view, search_note=search_note,
             authors=authors, active_author=author, sort=sort,
             premium=str(principal.get("plan") or "free").lower() == "premium",
             page=page, recommend_fn=recommend_fn,
@@ -2352,7 +2540,11 @@ def _find_public_book(oid: str):
         items = _library_items(col, only_published=True)
         item = next((i for i in items if i["id"] == oid), None)
         if item is not None:
-            return item, {"title": col["title"], "items": items}
+            return item, {
+                "title": col["title"],
+                "description": col.get("description") or "",
+                "items": items,
+            }
     return None, None
 
 
@@ -2391,6 +2583,10 @@ def public_book_page(oid: str, request: Request):
     position = next(n for n, i in enumerate(col["items"]) if i["id"] == oid)
     shown = {i["id"] for i in related} | {oid}
     up_next = [i for i in col["items"][position + 1:] if i["id"] not in shown][:6]
+    # A pack with several ordered titles is presented as a series. Its editorial
+    # description is the spoiler-free recap; operators must keep it that way.
+    is_series = len(col["items"]) > 1
+    recap = col.get("description") if is_series and up_next else ""
     row = _as_dict(repo.get_object_unscoped(oid) or {})
     if principal is not None:
         item["favorite"] = oid in repo.get_favorite_ids(principal["id"], [oid])
@@ -2399,6 +2595,9 @@ def public_book_page(oid: str, request: Request):
             item, col["title"], related, principal, base_url=_public_base_url(),
             preview_seconds=settings.public_preview_seconds if _preview_bytes(row) else 0,
             up_next=up_next,
+            recap=recap,
+            series_position=position + 1 if is_series else 0,
+            series_total=len(col["items"]) if is_series else 0,
         ),
         # The HTML contains the CSRF token and the visitor's favourite state:
         # only the anonymous version may be cached and indexed.

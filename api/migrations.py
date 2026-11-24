@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0025_public_access_grants"
+SCHEMA_VERSION = "0026_listen_playlists"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -589,6 +589,27 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_public_access_grants_expiry "
         "ON public_access_grants(expires_at)"
+    )
+    # Private listener playlists (issue #302). Owned by a public portal visitor,
+    # never by a machine identity, and removed with the account.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS listen_playlists ("
+        "id TEXT PRIMARY KEY, "
+        "user_id TEXT NOT NULL REFERENCES users(id), "
+        "name TEXT NOT NULL, "
+        "created_at INTEGER NOT NULL, "
+        "updated_at INTEGER NOT NULL)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_listen_playlists_user "
+        "ON listen_playlists(user_id, updated_at)"
+    )
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS listen_playlist_items ("
+        "playlist_id TEXT NOT NULL REFERENCES listen_playlists(id) ON DELETE CASCADE, "
+        "object_id TEXT NOT NULL REFERENCES objects(id), "
+        "position INTEGER NOT NULL, "
+        "PRIMARY KEY (playlist_id, object_id))"
     )
     # Byte counts must be 64-bit: a 5 GiB object already overflows PostgreSQL's
     # INTEGER (2 147 483 647), and quotas are set in TiB. SQLite INTEGER is

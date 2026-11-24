@@ -58,6 +58,7 @@ def _brand_bar(principal: dict | None) -> str:
 def landing_page(
     collections: list[dict], query: str = "", authors: list[str] | None = None,
     active_author: str = "", base_url: str = "", with_email: bool = False, sort: str = "",
+    search_note: str = "",
 ) -> str:
     """Anonymous front page: the catalogue to browse, a clear way to sign in."""
     authors = authors or []
@@ -99,6 +100,8 @@ def landing_page(
     for label, value in SORTS:
         parts.append(f'<option value="{ESC(value)}"{" selected" if value == sort else ""}>{ESC(label)}</option>')
     parts.append('</select><button type="submit">Rechercher</button></form>')
+    if search_note:
+        parts.append(f'<p class="search-note" role="status">Compris comme : {ESC(search_note)}</p>')
     if query or active_author or sort:
         parts.append('<p class="filters-reset"><a class="facet-clear" href="/">Effacer les filtres</a></p>')
     if not items:
@@ -119,6 +122,9 @@ def book_page(
     item: dict, collection_title: str, related: list[dict],
     principal: dict | None, base_url: str = "", preview_seconds: int = 0,
     up_next: list[dict] | None = None,
+    recap: str = "",
+    series_position: int = 0,
+    series_total: int = 0,
 ) -> str:
     """One book: cover, facts, free preview, chapters, sign-in / listen call to action."""
     label = str(item.get("title") or item.get("display_name") or "Livre")
@@ -167,6 +173,8 @@ def book_page(
     facts = [_duration_text(duration)] + ([f"{len(chapters)} chapitres"] if chapters else [])
     if collection_title:
         facts.append(collection_title)
+    if series_total:
+        facts.append(f"Tome {series_position} sur {series_total}")
     parts.append('<p class="book-facts">' + " · ".join(ESC(f) for f in facts) + '</p>')
     if preview_seconds:
         parts += [
@@ -203,6 +211,13 @@ def book_page(
         parts.append('<section class="shelf"><div class="shelf-head"><h2>Du même auteur</h2></div><ul class="book-grid">')
         parts.extend(_card(i) for i in related)
         parts.append('</ul></section>')
+    if recap:
+        parts.append(
+            '<section class="recap" aria-labelledby="recap-title">'
+            '<div class="shelf-head"><h2 id="recap-title">Avant de continuer</h2>'
+            '<p class="desc">Résumé de la série, sans spoiler.</p></div>'
+            f'<p>{ESC(recap)}</p></section>'
+        )
     if up_next:
         parts.append('<section class="shelf"><div class="shelf-head"><h2>À écouter ensuite</h2>'
                      + (f'<p class="desc">Dans « {ESC(collection_title)} ».</p>' if collection_title else "")

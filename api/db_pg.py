@@ -162,6 +162,11 @@ class Repository:
         self._run("DELETE FROM listen_progress WHERE user_id = %s", (uid,))
         self._run("DELETE FROM listen_favorites WHERE user_id = %s", (uid,))
         self._run("DELETE FROM listen_bookmarks WHERE user_id = %s", (uid,))
+        self._run(
+            "DELETE FROM listen_playlist_items WHERE playlist_id IN "
+            "(SELECT id FROM listen_playlists WHERE user_id = %s)", (uid,)
+        )
+        self._run("DELETE FROM listen_playlists WHERE user_id = %s", (uid,))
         self._run("DELETE FROM sessions WHERE user_id = %s", (uid,))
         self._run(
             "DELETE FROM users WHERE id = %s AND role = 'public'", (uid,)
@@ -275,6 +280,73 @@ class Repository:
         return self._run(
             "DELETE FROM listen_bookmarks WHERE id = %s AND user_id = %s", (bookmark_id, user_id),
         ) == 1
+
+    # -- private playlists (issue #302) ------------------------------------
+    def list_listen_playlists(self, user_id: str) -> list:
+        return self._all(
+            "SELECT p.*, (SELECT COUNT(*) FROM listen_playlist_items i "
+            "WHERE i.playlist_id = p.id) AS item_count "
+            "FROM listen_playlists p WHERE p.user_id = %s "
+            "ORDER BY p.updated_at DESC", (user_id,),
+        )
+
+    def create_listen_playlist(self, user_id: str, name: str, now: int) -> dict:
+        pid = self.new_id()
+        self._run(
+            "INSERT INTO listen_playlists (id, user_id, name, created_at, updated_at) "
+            "VALUES (%s,%s,%s,%s,%s)", (pid, user_id, name, now, now),
+        )
+        return {"id": pid, "name": name, "item_count": 0}
+
+    def rename_listen_playlist(self, user_id: str, pid: str, name: str, now: int) -> bool:
+        return self._run(
+            "UPDATE listen_playlists SET name = %s, updated_at = %s "
+            "WHERE id = %s AND user_id = %s", (name, now, pid, user_id),
+        ) == 1
+
+    def delete_listen_playlist(self, user_id: str, pid: str) -> bool:
+        self._run(
+            "DELETE FROM listen_playlist_items WHERE playlist_id = %s "
+            "AND playlist_id IN (SELECT id FROM listen_playlists WHERE user_id = %s)",
+            (pid, user_id),
+        )
+        return self._run(
+            "DELETE FROM listen_playlists WHERE id = %s AND user_id = %s", (pid, user_id),
+        ) == 1
+
+    def get_listen_playlist(self, user_id: str, pid: str):
+        return self._one(
+            "SELECT * FROM listen_playlists WHERE id = %s AND user_id = %s", (pid, user_id),
+        )
+
+    def list_listen_playlist_items(self, pid: str) -> list:
+        return self._all(
+            "SELECT object_id, position FROM listen_playlist_items "
+            "WHERE playlist_id = %s ORDER BY position ASC", (pid,),
+        )
+
+    def add_listen_playlist_item(self, pid: str, object_id: str, position: int, now: int) -> bool:
+        added = self._run(
+            "INSERT INTO listen_playlist_items (playlist_id, object_id, position) "
+            "VALUES (%s,%s,%s) ON CONFLICT(playlist_id, object_id) DO NOTHING",
+            (pid, object_id, position),
+        ) == 1
+        if added:
+            self._run(
+                "UPDATE listen_playlists SET updated_at = %s WHERE id = %s", (now, pid)
+            )
+        return added
+
+    def remove_listen_playlist_item(self, pid: str, object_id: str, now: int) -> bool:
+        removed = self._run(
+            "DELETE FROM listen_playlist_items WHERE playlist_id = %s AND object_id = %s",
+            (pid, object_id),
+        ) == 1
+        if removed:
+            self._run(
+                "UPDATE listen_playlists SET updated_at = %s WHERE id = %s", (now, pid)
+            )
+        return removed
 
     def get_favorite_ids(self, user_id: str, object_ids: list) -> set:
         """Which of ``object_ids`` the visitor has put in their favourites."""

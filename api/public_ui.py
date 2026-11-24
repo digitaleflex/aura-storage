@@ -165,7 +165,10 @@ def login_page(with_email: bool = False) -> str:
 </body></html>"""
 
 
-def profile_page(principal: dict, message: str = "", error: str = "") -> str:
+def profile_page(
+    principal: dict, message: str = "", error: str = "",
+    playlists: list | None = None, stats: dict | None = None,
+) -> str:
     display_name = str(principal.get("display_name") or "")
     email = str(principal.get("email") or "")
     csrf = str(principal.get("csrf") or "")
@@ -201,6 +204,45 @@ def profile_page(principal: dict, message: str = "", error: str = "") -> str:
         '<div class="profile-field"><label for="email">Email</label>',
         f'<input id="email" name="email" type="email" value="{ESC(email)}" readonly></div>',
         '<div class="profile-actions"><button class="primary-button" type="submit">Enregistrer</button></div>',
+        '</form></section>',
+        '<section class="profile-card" aria-labelledby="stats-title">',
+        '<h2 id="stats-title">Mon écoute</h2>',
+        (f'<dl class="stats-grid">'
+         f'<div><dt>Temps écouté estimé</dt><dd>{_duration_text(float(stats.get("estimated_listened_seconds") or 0))}</dd></div>'
+         f'<div><dt>Livres terminés</dt><dd>{int(stats.get("completed") or 0)}</dd></div>'
+         f'<div><dt>Favoris</dt><dd>{int(stats.get("favorites") or 0)}</dd></div>'
+         f'<div><dt>Marque-pages</dt><dd>{int(stats.get("bookmarks") or 0)}</dd></div>'
+         '</dl>'
+         + (f'<p class="fine">Auteurs les plus écoutés : '
+            + ", ".join(ESC(a["name"]) for a in stats.get("top_authors") or []) + '.</p>'
+            if stats.get("top_authors") else '')
+         + (f'<p class="fine">Séries en cours : '
+            + ", ".join(ESC(s["title"]) for s in stats.get("series_in_progress") or []) + '.</p>'
+            if stats.get("series_in_progress") else '')
+         + '<p class="fine">Estimation calculée à partir des dernières positions enregistrées.</p>'
+         if stats else ''),
+        '</section>',
+        '<section class="profile-card" aria-labelledby="playlists-title">',
+        '<h2 id="playlists-title">Mes listes privées</h2>',
+        '<p>Rangez vos livres dans vos propres listes. Elles ne sont visibles que par vous.</p>',
+        '<ul class="playlist-list">',
+        "".join(
+            '<li><span>' + ESC(p.get("name") or "Sans titre") + '</span>'
+            f'<small>{int(p.get("item_count") or 0)} livre(s)</small>'
+            '<form method="post" action="/api/public/playlists/'
+            + ESC(p["id"]) + '/delete">'
+            f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">'
+            '<button class="text-button" type="submit" aria-label="Supprimer la liste">Supprimer</button>'
+            '</form></li>'
+            for p in (playlists or [])
+        ),
+        '</ul>' if playlists else '<p class="fine">Aucune liste pour le moment.</p>',
+        '<form class="profile-form" method="post" action="/api/public/playlists/create">',
+        f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
+        '<div class="profile-field"><label for="playlist-name">Nouvelle liste</label>',
+        '<input id="playlist-name" name="name" type="text" maxlength="80" required '
+        'placeholder="Ex. : À écouter en voyage"></div>',
+        '<div class="profile-actions"><button class="primary-button" type="submit">Créer la liste</button></div>',
         '</form></section>',
         '<section class="profile-card danger-card" aria-labelledby="profile-delete-title">',
         '<h2 id="profile-delete-title">Supprimer mon compte</h2>',
@@ -375,6 +417,7 @@ def catalog_page(
     page: int = 1,
     page_size: int = 60,
     recommend_fn=None,
+    search_note: str = "",
 ) -> str:
     authors = authors or []
     name = (
@@ -486,6 +529,8 @@ def catalog_page(
         'placeholder="Rechercher un livre, un auteur…" aria-label="Rechercher un livre, un auteur">',
         '<button type="submit">Rechercher</button></form>',
     ]
+    if search_note:
+        parts.append(f'<p class="search-note" role="status">Compris comme : {ESC(search_note)}</p>')
     filters_active = (view != "liste") or bool(active_author) or bool(sort)
     filter_count = (1 if view != "liste" else 0) + (1 if active_author else 0) + (1 if sort else 0)
     if active_author or query:
