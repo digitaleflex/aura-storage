@@ -1704,7 +1704,8 @@ def _portal_csp() -> str:
     return (
         "default-src 'none'; script-src 'self'; style-src 'self'; "
         "style-src-attr 'unsafe-inline'; "
-        f"img-src {media}; media-src {media}; connect-src 'self'; "
+        f"img-src {media}; media-src {media}; connect-src {media}; "
+        "manifest-src 'self'; worker-src 'self'; "
         "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
     )
 
@@ -1723,6 +1724,35 @@ def _public_profile_headers(indexable: bool = False) -> dict:
         headers["Cache-Control"] = "no-store"
         headers["X-Robots-Tag"] = "noindex, nofollow"
     return headers
+
+
+@app.get("/sw.js")
+def portal_service_worker(request: Request):
+    """Service worker: must live at the root to control every portal page."""
+    if not _public_host_ok(request) or not settings.public_domain:
+        raise HTTPException(status_code=404, detail="not found")
+    return Response(
+        public_ui.ASSETS["sw.js"][0], media_type="text/javascript; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache", "Service-Worker-Allowed": "/",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.get("/hors-ligne", response_class=HTMLResponse)
+def portal_offline_page(request: Request):
+    """Shown by the service worker when a page is needed and there is no network."""
+    if not _public_host_ok(request):
+        raise HTTPException(status_code=404, detail="not found")
+    return HTMLResponse(
+        public_book.message_page(
+            "Vous êtes hors connexion",
+            "Cette page n'a pas été enregistrée sur cet appareil. Les livres téléchargés "
+            "restent lisibles : rouvrez la bibliothèque depuis la page d'accueil.",
+        ),
+        headers=_public_profile_headers(),
+    )
 
 
 @app.get("/portal-assets/{name}")

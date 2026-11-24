@@ -390,7 +390,7 @@ services:
       # and the public media redirects /m/* reach the API here. /api/v1/* stays
       # on the private app host, so a portal visitor can never reach object,
       # folder or administration endpoints.
-      - traefik.http.routers.aura-public.rule=Host(`${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN in .env}`) && (Path(`/`) || PathPrefix(`/api/public/`) || PathPrefix(`/m/`) || PathPrefix(`/covers/`) || PathPrefix(`/portal-assets/`) || PathPrefix(`/profil`) || PathPrefix(`/livre/`) || PathPrefix(`/extrait/`) || Path(`/sitemap.xml`) || Path(`/robots.txt`))
+      - traefik.http.routers.aura-public.rule=Host(`${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN in .env}`) && (Path(`/`) || PathPrefix(`/api/public/`) || PathPrefix(`/m/`) || PathPrefix(`/covers/`) || PathPrefix(`/portal-assets/`) || PathPrefix(`/profil`) || PathPrefix(`/livre/`) || PathPrefix(`/extrait/`) || Path(`/sitemap.xml`) || Path(`/robots.txt`) || Path(`/sw.js`) || Path(`/hors-ligne`))
       - traefik.http.routers.aura-public.priority=210
       - traefik.http.routers.aura-public.entrypoints=websecure
       - traefik.http.routers.aura-public.tls=true

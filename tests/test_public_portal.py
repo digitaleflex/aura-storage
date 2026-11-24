@@ -766,3 +766,65 @@ def test_stylesheet_follows_the_system_dark_setting():
     assert "@media (prefers-color-scheme: dark)" in css
     dark = css[css.index("@media (prefers-color-scheme: dark)"):]
     assert "--bg:#10171e" in dark and "--ink:#EDE6D8" in dark
+
+
+# --------------------------------------------------------------------------
+# Installable app and offline listening
+# --------------------------------------------------------------------------
+def test_service_worker_is_served_from_the_root_with_the_right_headers():
+    c = TestClient(main.app)
+    r = c.get("/sw.js")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/javascript")
+    assert r.headers["service-worker-allowed"] == "/"
+    assert r.headers["cache-control"] == "no-cache"  # a new worker must be picked up at once
+    body = r.text
+    assert "'aura-audio'" in body and "Range" in body.replace("range", "Range")
+    assert "/api/public/logout" in body  # personal pages are wiped on sign-out
+    off = c.get("/hors-ligne")
+    assert off.status_code == 200 and "Vous êtes hors connexion" in off.text
+    assert "content-security-policy" in off.headers
+
+
+def test_service_worker_and_offline_page_follow_the_public_host_rules(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "portail.example.org")
+    other = TestClient(main.app)  # Host: testserver
+    assert other.get("/sw.js").status_code == 404
+    assert other.get("/hors-ligne").status_code == 404
+    monkeypatch.setattr(main.settings, "public_domain", "")
+    assert TestClient(main.app).get("/sw.js").status_code == 404  # portal not configured
+
+
+def test_pages_declare_the_manifest_icons_and_theme_colours():
+    c = _sign_in(TestClient(main.app))
+    for html in (TestClient(main.app).get("/").text, c.get("/").text, c.get("/profil").text):
+        assert 'rel="manifest" href="/portal-assets/manifest.webmanifest?v=' in html
+        assert 'rel="apple-touch-icon"' in html and 'rel="icon"' in html
+        assert 'name="theme-color"' in html and "prefers-color-scheme: dark" in html
+    manifest = c.get(re.search(r'href="(/portal-assets/manifest\.webmanifest\?v=[0-9a-f]+)"',
+                               c.get("/").text).group(1))
+    assert manifest.headers["content-type"].startswith("application/manifest+json")
+    data = manifest.json()
+    assert data["start_url"] == "/" and data["scope"] == "/" and data["display"] == "standalone"
+    sizes = {i["sizes"] for i in data["icons"]}
+    assert {"192x192", "512x512"} <= sizes
+    assert any(i.get("purpose") == "maskable" for i in data["icons"])
+    for icon in data["icons"]:  # every declared icon really is served
+        name = icon["src"].rsplit("/", 1)[1]
+        assert name in main.public_ui.ASSETS, name
+    png = main.public_ui.ASSETS["icon-512.png"][0]
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_csp_allows_the_manifest_worker_and_the_download_fetch(monkeypatch):
+    monkeypatch.setattr(main.settings, "s3_endpoint", "https://s3.example.org:8443")
+    csp = main._portal_csp()
+    assert "manifest-src 'self'" in csp and "worker-src 'self'" in csp
+    assert "connect-src 'self' https://s3.example.org:8443" in csp
+
+
+def test_player_offers_the_offline_download_button():
+    _published_pack()
+    page = _sign_in(TestClient(main.app)).get("/").text
+    assert 'id="offline-toggle"' in page and "/portal-assets/offline.js?v=" in page
+    _assert_strict_markup(page)

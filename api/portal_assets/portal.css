@@ -443,6 +443,12 @@ a.brand{text-decoration:none;color:inherit}
 .fav-labeled .fav-icon{font-size:1.15rem;color:var(--bronze)}
 @media (prefers-reduced-motion:no-preference){.fav-button{transition:color .15s,transform .15s}.fav-button:active{transform:scale(.92)}.shelf li>.fav-button:active{transform:translateY(-50%) scale(.92)}}
 
+/* ---- hors connexion ---------------------------------------------------- */
+.track-button[data-offline] .track-duration::after{content:" ⤓";color:var(--bronze)}
+html.is-offline .track-button:not([data-offline]){opacity:.45}
+#offline-toggle[aria-pressed=true]{color:var(--bronze);border-color:var(--bronze)}
+#offline-toggle:disabled{opacity:.5;cursor:not-allowed}
+
 /* ---- mode sombre (suit le réglage du système) ------------------------- */
 @media (prefers-color-scheme: dark){
   :root{

@@ -20,4 +20,12 @@
       setTimeout(function () { b.textContent = old; }, 1800);
     }, function () {});
   });
+  // Application installable + hors connexion : service worker sur tout le site.
+  if ('serviceWorker' in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
+  }
+  function connectivity() { document.documentElement.classList.toggle('is-offline', !navigator.onLine); }
+  window.addEventListener('online', connectivity);
+  window.addEventListener('offline', connectivity);
+  connectivity();
 })();
