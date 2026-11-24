@@ -36,8 +36,10 @@ Default-deny: a role only holds the capabilities listed here; anything else is r
 The `public` role is intentionally absent from `ROLE_SCOPES`: default-deny gives
 it zero effective capabilities. It can only reach `/api/public/*` (catalogue and
 session) on the public subdomain; Traefik does not route `/api/v1/*` there, and
-`require_public` refuses any session whose role is not `public`. Audio playback
-uses the already-public `/m/{slug}` 302, not an object capability.
+`require_public` refuses any session whose role is not `public`. Published audio
+and video use `/m/{slug}` only after the session/premium policy, an explicit
+open-slug exception or a service-issued `/a/{token}` grant; HLS and subtitles
+apply the same policy.
 
 ### Capabilities (service identities)
 
@@ -74,6 +76,12 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | GET | `/api/v1/objects/{oid}/analytics` | `objects:read` | monthly views/downloads/share opens/egress + lifetime totals |
 | GET | `/api/v1/objects/{oid}/thumbnail` | `objects:read` | 302 to a generated thumbnail/poster, 404 when none |
 | PUT | `/api/v1/objects/{oid}/publication` | `objects:write`, **human only** | stable public slug; `/m/<slug>` is the permanent URL |
+| POST | `/api/v1/objects/{oid}/public-access` | `objects:read` + `objects:write` | mint a short, revocable `/a/<token>` grant after an external entitlement decision; token shown once, stored as SHA-256 |
+| DELETE | `/api/v1/objects/{oid}/public-access` | `objects:read` + `objects:write` | revoke every outstanding grant for the object; already emitted storage URLs remain valid until their TTL |
+| GET | `/a/{token}` | public bearer grant | 302 to storage only while the grant is active; redirect TTL is capped by the grant's remaining lifetime |
+| GET | `/m/{slug}` | published-media policy | session/premium gate, explicit open-slug allow-list and restricted-slug denial; 302 to a presigned storage URL |
+| GET | `/hls/{slug}.m3u8`, `/hls/{slug}/{segment}` | same policy as `/m/{slug}` | HLS playlist and segments cannot bypass the media gate |
+| GET | `/m/{slug}/subtitles.vtt` | same policy as `/m/{slug}` | linked WebVTT cannot bypass the media gate |
 | PUT | `/api/v1/objects/{oid}/tags` | `objects:write`, **human only** | normalized tags (max 20) |
 | GET/POST | `/api/v1/collections` | `objects:read` / `objects:write`, **human only** | ordered packs |
 | GET/PATCH/DELETE | `/api/v1/collections/{cid}` | human only | pack detail, edit/publish, delete |

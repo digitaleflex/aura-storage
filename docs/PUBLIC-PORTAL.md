@@ -209,8 +209,10 @@ livres indéfiniment.
 `scripts/cover_candidates.sh [limite] [itunes|openlibrary|all]` interroge des API
 publiques (iTunes Search, Open Library) et écrit un fichier de revue dans
 `$AURA_DATA_DIR/cover-candidates.json`. **Aucune image n'est publiée** : le fichier
-liste les candidats par livre. Les résultats peuvent être erronés (mauvaise
-édition) et les droits d'image doivent être vérifiés avant publication.
+liste les candidats par livre. Une régénération bornée conserve les livres déjà
+appliqués, leurs choix et les entrées hors limite. Les résultats peuvent être
+erronés (mauvaise édition) et les droits d'image doivent être vérifiés avant
+publication.
 
 Une fois un candidat retenu :
 
@@ -222,6 +224,45 @@ scripts/apply_cover.sh OBJECT_ID /chemin/couverture.jpg
 
 Les deux formes redimensionnent l'image avec ffmpeg, la stockent en S3 avec SSE et
 renseignent `cover_key`. Le fichier de revue marque le livre comme `applied`.
+
+#### Validation et application en lot
+
+Une page HTML locale facilite la revue des propositions :
+
+```bash
+python3 scripts/render_cover_review.py \
+  /srv/aura-storage/cover-candidates.json \
+  --output /srv/aura-storage/cover-review.html
+```
+
+Elle affiche les images, signale les concordances de titre/auteur et exporte un
+`cover-selections.json` horodaté. Cette page ne contacte pas l'API AURA et ne
+publie rien. Seuls les livres explicitement sélectionnés sont marqués `selected`
+dans l'export ; les autres restent `pending`. L'export est ensuite fusionné avec
+la revue courante : un export ancien est refusé, les livres appliqués sont
+conservés et aucune entrée canonique ne peut disparaître.
+
+Le lot se vérifie d'abord sans téléchargement ni écriture :
+
+```bash
+scripts/apply_cover_candidates.sh /chemin/cover-selections.json --dry-run
+```
+
+Après contrôle, la publication se lance sans `--dry-run` :
+
+```bash
+scripts/apply_cover_candidates.sh /chemin/cover-selections.json
+# optionnel : traiter seulement les N premiers livres sélectionnés
+scripts/apply_cover_candidates.sh /chemin/cover-selections.json --selected-limit 10
+```
+
+Le traitement n'accepte que des URL HTTPS déjà présentes dans la liste des
+candidats et provenant d'Open Library Covers ou d'iTunes/Apple (`mzstatic.com`),
+sans suivre les redirections. Les commandes sont verrouillées contre les
+exécutions concurrentes et écrivent la revue de façon atomique. Il enregistre
+l'avancement après chaque livre ; un échec est marqué `error` dans le fichier de
+revue sans empêcher le traitement des suivants. Le mode `--dry-run` laisse le
+fichier canonique inchangé.
 
 La position est enregistrée via `/api/public/progress` (table `listen_progress`,
 ajoutée par la migration cumulative `0018`, aujourd'hui `0020_audio_chapters`)

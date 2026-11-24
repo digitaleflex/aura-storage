@@ -163,9 +163,10 @@ protégée.
 | 09 | [Revue de conception et décisions](09-design-review-and-decisions.md) | Résultats de revue, décisions acceptées, traçabilité, gate |
 | 10 | [Implémentation Lot 1](10-lot1-implementation.md) | Périmètre livré, exécution, limites, conditions restantes |
 | 11 | [Implémentation Lot 2](11-lot2-implementation.md) | Droits/territoires/contrats, entitlements, résolveur d'accès, historique/stats, refus |
+| 12 | [Métadonnées externes et ingestion commune](12-metadata-and-ingestion.md) | Ebooks + audiobooks : adaptateurs, provenance, revue, staging, validation, import AURA, Shelfmark optionnel |
 | — | [Runbook & administration](RUNBOOK.md) | Configuration, bootstrap, opérations, sécurité, incidents |
 
-**Ordre de lecture recommandé :** 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11.
+**Ordre de lecture recommandé :** 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11 → 12.
 Pour une revue rapide : ce README, puis 09, 10 et 11. Pour l'exploitation : 10/11 puis le runbook.
 
 ---
