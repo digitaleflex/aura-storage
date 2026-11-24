@@ -18,7 +18,9 @@ from typing import Annotated, Literal
 from html import escape as html_escape
 from urllib.parse import urlsplit
 
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
@@ -1877,6 +1879,21 @@ def _public_profile_headers(indexable: bool = False) -> dict:
     return headers
 
 
+@app.exception_handler(StarletteHTTPException)
+async def _portal_html_not_found(request: Request, exc: StarletteHTTPException):
+    """A visitor who mistypes a portal address gets a page, not a JSON error."""
+    if (
+        exc.status_code == 404 and settings.public_domain and _public_host_ok(request)
+        and "text/html" in request.headers.get("accept", "")
+        and not request.url.path.startswith("/api/")
+    ):
+        return HTMLResponse(
+            public_book.message_page("Page introuvable", "Cette adresse n'existe pas ou n'est plus disponible."),
+            status_code=404, headers=_public_profile_headers(),
+        )
+    return await http_exception_handler(request, exc)
+
+
 @app.get("/sw.js")
 def portal_service_worker(request: Request):
     """Service worker: must live at the root to control every portal page."""
@@ -2037,20 +2054,27 @@ def _public_collections(principal: dict) -> list:
     return collections
 
 
-def _filter_collections(collections: list, query: str, author: str) -> list:
-    """Keep the books matching the search text and/or the author; drop empty packs."""
-    if query:
-        needle = query.lower()
-        collections = [
-            {**col, "items": [i for i in col["items"] if needle in i["display_name"].lower()]}
-            for col in collections
-        ]
-    if author:
-        collections = [
-            {**col, "items": [i for i in col["items"] if i["author"] == author]}
-            for col in collections
-        ]
-    return [col for col in collections if col["items"]]
+def _filter_collections(collections: list, query: str, author: str, sort: str = "") -> list:
+    """Search (accent-insensitive, every word must match), author filter and sort."""
+    words = public_ui.fold(query).split()
+    out = []
+    for col in collections:
+        items = col["items"]
+        if words:
+            items = [
+                i for i in items
+                if all(w in public_ui.fold(f'{i["display_name"]} {i["author"]}') for w in words)
+            ]
+        if author:
+            items = [i for i in items if i["author"] == author]
+        if items:
+            out.append({**col, "items": public_ui.sort_items(items, sort)})
+    return out
+
+
+def _sort_param(request: Request) -> str:
+    value = (request.query_params.get("tri") or "").strip().lower()
+    return value if value in {v for _, v in public_ui.SORTS} else ""
 
 
 def _catalog_authors(collections: list) -> list:
@@ -2122,6 +2146,7 @@ def public_portal(request: Request):
         principal = None
     query = (request.query_params.get("q") or "").strip()[:120]
     author = (request.query_params.get("auteur") or "").strip()[:120]
+    sort = _sort_param(request)
     if principal is None:
         if not settings.public_browse:
             return HTMLResponse(
@@ -2131,22 +2156,22 @@ def public_portal(request: Request):
         catalog = _public_catalog()
         return HTMLResponse(
             public_book.landing_page(
-                _filter_collections(catalog, query, author), query=query,
-                authors=_catalog_authors(catalog), active_author=author,
+                _filter_collections(catalog, query, author, sort), query=query,
+                authors=_catalog_authors(catalog), active_author=author, sort=sort,
                 base_url=_public_base_url(), with_email=magic_link.enabled(settings),
             ),
-            headers=_public_profile_headers(indexable=not (query or author)),
+            headers=_public_profile_headers(indexable=not (query or author or sort)),
         )
     view = request.query_params.get("vue", "liste").strip().lower()
     if view not in ("liste", "grille", "immersif"):
         view = "liste"
     collections = _public_collections(principal)
     authors = _catalog_authors(collections)
-    collections = _filter_collections(collections, query, author)
+    collections = _filter_collections(collections, query, author, sort)
     return HTMLResponse(
         public_ui.catalog_page(
             principal, collections, query=query, view=view,
-            authors=authors, active_author=author,
+            authors=authors, active_author=author, sort=sort,
         ),
         headers=_public_profile_headers(),
     )
@@ -2204,6 +2229,9 @@ def public_book_page(oid: str, request: Request):
     related = [
         i for i in col["items"] if i["author"] and i["author"] == item["author"] and i["id"] != oid
     ][:6]
+    position = next(n for n, i in enumerate(col["items"]) if i["id"] == oid)
+    shown = {i["id"] for i in related} | {oid}
+    up_next = [i for i in col["items"][position + 1:] if i["id"] not in shown][:6]
     row = _as_dict(repo.get_object_unscoped(oid) or {})
     if principal is not None:
         item["favorite"] = oid in repo.get_favorite_ids(principal["id"], [oid])
@@ -2211,6 +2239,7 @@ def public_book_page(oid: str, request: Request):
         public_book.book_page(
             item, col["title"], related, principal, base_url=_public_base_url(),
             preview_seconds=settings.public_preview_seconds if _preview_bytes(row) else 0,
+            up_next=up_next,
         ),
         headers=_public_profile_headers(indexable=True),
     )

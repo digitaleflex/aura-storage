@@ -58,6 +58,18 @@ par des variables CSS ; `color-scheme: light dark` adapte aussi lecteur natif et
 sur chaque livre (catalogue et page livre) alimente l'étagère « Mes favoris » ; l'état est privé,
 supprimé avec le compte, et le clic est annulé côté page si le serveur refuse.
 
+## Recherche, tri et recommandations
+
+- **Recherche** (`?q=`) : insensible aux accents et à la casse, tous les mots doivent correspondre
+  (titre ou auteur) : « eleonore depart » trouve « Éléonore Dupré — Le Grand Départ ».
+- **Tri** (`?tri=titre|auteur|recent|duree`) : valeur inconnue ignorée ; les vues triées ou filtrées
+  ne sont pas indexées.
+- **Pour vous** : livres non écoutés des auteurs que le visiteur met en favori (poids 3) ou
+  a déjà commencés (poids 1). N'utilise que les données du visiteur ; aucun signal = pas d'étagère.
+- Page livre : « Du même auteur » et « À écouter ensuite » (suite de la collection).
+- Une adresse inconnue du portail renvoie une **page 404** (le JSON reste pour `/api/*` et pour les
+  clients qui n'acceptent pas le HTML). AirPlay est autorisé sur le lecteur (Safari/iOS).
+
 ## Connexion par e-mail (lien magique)
 
 Pour les visiteurs sans compte Google. **Désactivée tant qu'aucun serveur de messagerie n'est

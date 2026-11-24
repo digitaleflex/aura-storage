@@ -9,6 +9,7 @@ warm library — ivory paper, night ink, brass accents, one clear action.
 import hashlib
 import html
 import json
+import unicodedata
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -222,6 +223,58 @@ def _position_text(seconds) -> str:
     return f"{m}:{s:02d}"
 
 
+SORTS = (("Ordre de la collection", ""), ("Titre A→Z", "titre"), ("Auteur A→Z", "auteur"),
+         ("Plus récents", "recent"), ("Plus courts", "duree"))
+
+
+def fold(text) -> str:
+    """Lower-case without accents: « Éléonore » matches « eleonore »."""
+    decomposed = unicodedata.normalize("NFKD", str(text or ""))
+    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+
+
+def sort_items(items: list, sort: str) -> list:
+    """Order books for the ``tri`` option; unknown values keep the collection order."""
+    if sort == "titre":
+        return sorted(items, key=lambda i: fold(i.get("title") or i.get("display_name")))
+    if sort == "auteur":
+        return sorted(items, key=lambda i: (not i.get("author"), fold(i.get("author")),
+                                            fold(i.get("title") or i.get("display_name"))))
+    if sort == "recent":
+        return sorted(items, key=lambda i: int(i.get("created_at") or 0), reverse=True)
+    if sort == "duree":
+        return sorted(items, key=lambda i: (not i.get("duration_seconds"),
+                                            float(i.get("duration_seconds") or 0)))
+    return items
+
+
+def recommend(items: list, limit: int = 8) -> list:
+    """Unheard books by the authors the visitor favours or already listens to.
+
+    Signals are the visitor's own favourites (weight 3) and books they started
+    (weight 1). No other visitor's data is used. Empty when there is no signal.
+    """
+    weight: dict = {}
+    for item in items:
+        author = item.get("author")
+        if not author:
+            continue
+        weight[author] = weight.get(author, 0) \
+            + (3 if item.get("favorite") else 0) + (1 if float(item.get("progress_seconds") or 0) > 0 else 0)
+    picks = [
+        i for i in items
+        if i.get("author") and weight.get(i["author"], 0) > 0
+        and not i.get("favorite") and not float(i.get("progress_seconds") or 0) > 0
+    ]
+    picks.sort(key=lambda i: -weight[i["author"]])
+    seen, unique = set(), []
+    for item in picks:
+        if item["id"] not in seen:
+            seen.add(item["id"])
+            unique.append(item)
+    return unique[:limit]
+
+
 def _heart_button(item: dict, label: bool = False) -> str:
     """Favourite toggle (needs favorites.js and the CSRF token of #player-bar / body)."""
     on = bool(item.get("favorite"))
@@ -278,6 +331,7 @@ def catalog_page(
     view: str = "liste",
     authors: list[str] | None = None,
     active_author: str = "",
+    sort: str = "",
 ) -> str:
     authors = authors or []
     name = (
@@ -296,6 +350,8 @@ def catalog_page(
             params["vue"] = view
         if active_author:
             params["auteur"] = active_author
+        if sort:
+            params["tri"] = sort
         for key, value in changes.items():
             if value in (None, ""):
                 params.pop(key, None)
@@ -321,6 +377,7 @@ def catalog_page(
             break
     discover = [item for item in all_items[::7] if item.get("id") not in seen][:8]
     favorites = [item for item in all_items if item.get("favorite")]
+    suggested = recommend(all_items)
 
     id_to_index = {str(item.get("id")): i for i, item in enumerate(all_items)}
     featured = resume[0] if resume else (all_items[0] if all_items else None)
@@ -357,8 +414,8 @@ def catalog_page(
         'placeholder="Rechercher un livre, un auteur…" aria-label="Rechercher un livre, un auteur">',
         '<button type="submit">Rechercher</button></form>',
     ]
-    filters_active = (view != "liste") or bool(active_author)
-    filter_count = (1 if view != "liste" else 0) + (1 if active_author else 0)
+    filters_active = (view != "liste") or bool(active_author) or bool(sort)
+    filter_count = (1 if view != "liste" else 0) + (1 if active_author else 0) + (1 if sort else 0)
     if active_author or query:
         parts.append(
             f'<p class="filters-reset"><a class="facet-clear" href="{ESC(href(auteur=None, q=None))}">'
@@ -376,6 +433,13 @@ def catalog_page(
         parts.append(
             f'<a class="view-link" href="{ESC(href(vue=value if value != "liste" else None))}" '
             f'aria-current="{current}">{label}</a>'
+        )
+    parts.append('</nav>')
+    parts.append('<nav class="control-row" aria-label="Tri"><span class="label">Tri</span>')
+    for label, value in SORTS:
+        parts.append(
+            f'<a class="view-link" href="{ESC(href(tri=value or None))}" '
+            f'aria-current="{"true" if sort == value else "false"}">{label}</a>'
         )
     parts.append('</nav>')
 
@@ -425,6 +489,8 @@ def catalog_page(
         discovery_links.append(("#resume" if resume_shelf else "#resume-card", "Reprendre l'écoute"))
     if favorites:
         discovery_links.append(("#favoris", "Mes favoris"))
+    if suggested:
+        discovery_links.append(("#pour-vous", "Pour vous"))
     if newest:
         discovery_links.append(("#nouveautes", "Nouveautés"))
     if discover:
@@ -516,6 +582,7 @@ def catalog_page(
 
     shelf("resume", "Reprendre l'écoute", resume_shelf, "Vos autres lectures en cours, à la dernière position.")
     shelf("favoris", "Mes favoris", favorites, "Les livres que vous avez marqués d'un cœur.")
+    shelf("pour-vous", "Pour vous", suggested, "Dans la veine de vos favoris et de vos écoutes.")
     shelf("nouveautes", "Nouveautés", newest, "Les titres récemment ajoutés à votre bibliothèque.")
     shelf("decouvrir", "À découvrir", discover, "Une sélection pour varier vos prochaines écoutes.")
     for col in collections:
@@ -531,7 +598,7 @@ def catalog_page(
     )
 
     parts.extend([
-        '<audio id="player" preload="metadata"></audio>',
+        '<audio id="player" preload="metadata" x-webkit-airplay="allow"></audio>',
         f'<section class="player-bar" id="player-bar" data-csrf="{ESC(csrf)}" hidden aria-label="Lecteur audio">',
         '<div class="player-now">',
         '<button type="button" class="player-now-btn" id="player-now-button" aria-label="Ouvrir le lecteur">',
