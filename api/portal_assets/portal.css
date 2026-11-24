@@ -519,3 +519,4 @@ dialog input,dialog textarea{width:100%;box-sizing:border-box;font:inherit;paddi
 .dialog-actions{display:flex;justify-content:flex-end;gap:.6rem;margin-top:1rem}
 .catalog-pages{display:flex;align-items:center;justify-content:center;gap:1rem;margin:1.4rem 0 .6rem}
 .catalog-pages .page-label{color:var(--muted);font-size:.9rem}
+.reco-why{display:block;margin-top:.25rem;font-size:.78rem;color:var(--accent)}

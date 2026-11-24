@@ -35,10 +35,23 @@ services:
       AURA_SERVICE_TOKEN: ${AURA_SERVICE_TOKEN:-}
       AUDIOBOOK_CORS_ORIGINS: ${AUDIOBOOK_CORS_ORIGINS:-}
       AUDIOBOOK_LOG_LEVEL: ${AUDIOBOOK_LOG_LEVEL:-INFO}
+    # Exposed on its own subdomain so listener auth (cookie + CSRF) never
+    # shares an origin with the public portal or the private app console.
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.aura-audiobook.rule=Host(`${AUDIOBOOK_DOMAIN:-audiobook.${APP_DOMAIN:?Set APP_DOMAIN in .env}}`)
+      - traefik.http.routers.aura-audiobook.priority=220
+      - traefik.http.routers.aura-audiobook.entrypoints=websecure
+      - traefik.http.routers.aura-audiobook.tls=true
+      - traefik.http.routers.aura-audiobook.tls.certresolver=le
+      - traefik.http.routers.aura-audiobook.middlewares=api-ratelimit,api-secure-headers
+      - traefik.http.routers.aura-audiobook.service=aura-audiobook
+      - traefik.http.services.aura-audiobook.loadbalancer.server.port=8080
     depends_on:
       postgres:
         condition: service_healthy
     networks:
+      - edge
       - storage
       # `oauth` is required only for Google token exchange in production.
       - oauth
@@ -51,5 +64,6 @@ services:
       - no-new-privileges:true
     mem_limit: 512m
     cpus: 1.0
-    # No Traefik labels/ports by default: wire routing explicitly for your
-    # deployment (separate domain/path) and keep `/m/{slug}` paid access retired.
+    # Routed by Traefik on AUDIOBOOK_DOMAIN (default audiobook.<APP_DOMAIN>).
+    # Keep `/m/{slug}` retired for paid content: the service decides access and
+    # asks AURA for a short /a/<token> grant instead.

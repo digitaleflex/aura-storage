@@ -66,4 +66,11 @@ Résultat observé : **31 passed** (domaine + API Lot 1 + compléments Lot 1 + L
 - **Plans/abonnements réels** : périmètre plan-catalog modélisé, mais périodes/renouvellement/paiement au Lot 3.
 - **Statistiques** : base personnelle (progression/événements appliqués) ; agrégats analytiques/versionnés au Lot 5.
 - **Charge/concurrence** : tests fonctionnels de concurrence/progression présents ; campagne de charge dédiée à planifier avant montée en trafic.
-- **Offline/DRM** (Lot 4), **paiement/fiscalité** (Lot 3), **recherche/reco/notifications** (Lot 5) non implémentés.
+- **Offline/DRM** (Lot 4), **paiement/fiscalité** (Lot 3), **recherche avancée/notifications** (Lot 5) non implémentés.
+- **Recommandations (2026-11-24, issues #300/#301)** : le scoring est extrait en fonction pure
+  (`score_candidates`) et réutilisé par l'étagère « Pour vous » du portail public via
+  `api/portal_recommendations.py` (repli sur l'heuristique locale en cas d'erreur).
+  Préférences et recommandations sont couvertes par `tests/audiobook_service/test_lot2.py`
+  (nécessitent `AUDIOBOOK_TEST_DSN`) et par des tests hors base dans
+  `tests/test_portal_recommendations.py`. Le service est exposé derrière Traefik sur
+  `AUDIOBOOK_DOMAIN` (par défaut `audiobook.<APP_DOMAIN>`) via le profil `audiobook`.

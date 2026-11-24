@@ -359,3 +359,59 @@ def test_listener_territory_used_when_header_absent(client, admin_headers, liste
         f"/api/v1/access/{seeded['edition_id']}", headers=listener["headers"]
     )
     assert allowed.json()["allowed"] is True
+
+
+def test_preferences_validate_and_persist(client, listener):
+    body = {
+        "preferred_languages": ["fr"],
+        "preferred_category_slugs": ["roman"],
+        "preferred_authors": ["Awa Diallo"],
+        "preferred_narrators": ["Nora Mensah"],
+        "min_duration_ms": 60_000,
+        "max_duration_ms": 3_600_000,
+        "prefer_completed": False,
+    }
+    saved = client.put(
+        "/api/v1/me/preferences", headers=listener["headers"], json=body
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["preferences"]["preferred_authors"] == ["Awa Diallo"]
+
+    read = client.get("/api/v1/me/preferences", headers=listener["headers"])
+    assert read.status_code == 200, read.text
+    assert read.json()["preferences"]["preferred_languages"] == ["fr"]
+
+    invalid = client.put(
+        "/api/v1/me/preferences",
+        headers=listener["headers"],
+        json={**body, "min_duration_ms": 5_000_000},
+    )
+    assert invalid.status_code == 422, invalid.text
+
+
+def test_recommendations_use_preferences_and_explain_them(client, listener, seeded):
+    client.put(
+        "/api/v1/me/preferences",
+        headers=listener["headers"],
+        json={
+            "preferred_languages": ["fr"],
+            "preferred_category_slugs": [],
+            "preferred_authors": ["Awa Diallo"],
+            "preferred_narrators": [],
+            "min_duration_ms": None,
+            "max_duration_ms": None,
+            "prefer_completed": False,
+        },
+    )
+    result = client.get(
+        "/api/v1/me/recommendations?limit=5", headers=listener["headers"]
+    )
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["meta"]["has_explicit_preferences"] is True
+    assert body["meta"]["candidate_count"] >= 1
+    assert body["items"], "the published seeded edition must be a candidate"
+    top = body["items"][0]
+    assert top["edition_id"] == seeded["edition_id"]
+    assert "preferred_author" in top["reasons"]
+    assert "preferred_language" in top["reasons"]

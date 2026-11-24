@@ -2287,12 +2287,16 @@ def public_portal(request: Request):
         page = max(1, int(request.query_params.get("page", "1")))
     except ValueError:
         page = 1
+    recommend_fn = None
+    if settings.public_recommendations_engine == "audiobook":
+        from . import portal_recommendations
+        recommend_fn = portal_recommendations.rank
     return HTMLResponse(
         public_ui.catalog_page(
             principal, collections, query=query, view=view,
             authors=authors, active_author=author, sort=sort,
             premium=str(principal.get("plan") or "free").lower() == "premium",
-            page=page,
+            page=page, recommend_fn=recommend_fn,
         ),
         headers=_public_profile_headers(),
     )

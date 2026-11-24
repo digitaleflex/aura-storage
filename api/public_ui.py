@@ -78,6 +78,18 @@ _PWA_TAGS = (
 # Keyboard users must be able to skip the branded header on every page.
 _SKIP_LINK = '<a class="skip-link" href="#main">Aller au contenu</a>'
 
+# Human wording for the reasons produced by the audiobook scoring engine.
+_REASON_LABELS = {
+    "preferred_author": "Vous aimez cet auteur",
+    "preferred_language": "Dans votre langue",
+    "preferred_category": "Selon vos goûts",
+    "preferred_narrator": "Vous connaissez ce narrateur",
+    "preferred_duration": "La durée vous convient",
+    "favorite_signal": "Proche de vos favoris",
+    "in_progress_signal": "Vous avez commencé un livre similaire",
+    "recent_catalog": "Nouveauté de la bibliothèque",
+}
+
 _HEAD = (
     '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
     '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -340,6 +352,8 @@ def _track_html(item: dict) -> str:
         '<span class="track-copy">',
         f'<span class="track-title">{ESC(label)}</span>',
         f'<span class="track-author">{ESC(author or "Livre audio")}</span>',
+        (f'<span class="reco-why">{ESC(_REASON_LABELS.get(str((item.get("reco_reasons") or [""])[0]), ""))}</span>'
+         if item.get("reco_reasons") else ''),
         f'<span class="track-progress"><i style="width:{pct:.1f}%"></i></span>',
         '</span>',
         f'<span class="track-duration">{ESC(_duration_text(duration))}</span>',
@@ -360,6 +374,7 @@ def catalog_page(
     premium: bool = False,
     page: int = 1,
     page_size: int = 60,
+    recommend_fn=None,
 ) -> str:
     authors = authors or []
     name = (
@@ -432,7 +447,9 @@ def catalog_page(
             break
     discover = [item for item in all_items[::7] if item.get("id") not in seen][:8]
     favorites = [item for item in all_items if item.get("favorite")]
-    suggested = recommend(all_items)
+    # Injected by the API so this module stays independent of the audiobook
+    # engine; falls back to the local author-based recommender by default.
+    suggested = (recommend_fn or recommend)(all_items)
 
     id_to_index = {str(item.get("id")): i for i, item in enumerate(all_items)}
     featured = resume[0] if resume else (all_items[0] if all_items else None)

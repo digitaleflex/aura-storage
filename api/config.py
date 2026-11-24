@@ -258,6 +258,12 @@ class Settings:
     # Lifetime of a service-issued /a/<token> media grant (gate D-08). The
     # audiobook service mints one only after its own entitlement decision.
     public_access_grant_ttl: int = _int("AURA_PUBLIC_ACCESS_GRANT_TTL", 12 * 3600)
+    # Recommendation engine for the public "Pour vous" shelf. "audiobook"
+    # reuses the scoring extracted from the audiobook service; "local" keeps
+    # the historical author-only recommender.
+    public_recommendations_engine: str = os.environ.get(
+        "AURA_PUBLIC_RECOMMENDATIONS_ENGINE", "audiobook"
+    ).strip().lower()
     # Gate D-08: slugs listed here stop resolving through the permanent public
     # URL. Paid/entitled titles must instead be served by a short service-issued
     # URL decided by the audiobook service (docs/audiobook/README.md §2.3).
