@@ -229,7 +229,7 @@ Preuves détaillées : [journal de vérification](verification-log-2026-11-24-po
 |---|---|
 | Capacité de stockage réelle (panneau InterServer) | **Ouvert** — valeur d'endiguement 1 Tio en place, issue #314 |
 | Déploiement complet de la roadmap sur le pilote | **Partiel** — API/migrations et config rechargées ; rebuild global suivi par #315 |
-| Backup local + vérification | **En cours** — script corrigé (`38f762e`), archive en cours de génération |
+| Backup local + vérification | **Fait** — archive de 59 Go générée et vérifiée le 2026-11-24 (`aura-backup-20261124-182638`) ; reste la copie hors-site et le restore isolé |
 | Copie hors-site, restore isolé, reboot, E2E réel | **Ouverts** — issues #5, #9, #10, #11, #23 |
 | Preuves multipart (reclaim après abort, 10 000 parties) | **Ouvertes** — issues #316, #317 ; plafond opérationnel 5 000 parties en mitigation |
 | Tests audiobook PostgreSQL | **Ouvert** — issue #318 |

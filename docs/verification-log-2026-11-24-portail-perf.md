@@ -82,6 +82,13 @@ Content-Encoding: None
 | `https://public.aura-storage.eurinhash.com/livre/<oid publié>` | 200 |
 | `https://app.aura-storage.eurinhash.com/` | 200 |
 
+### 3.7 Sauvegarde locale
+
+- Script `scripts/aura-backup.sh` corrigé (`38f762e`, `57bcfb0`) : noms de conteneurs `aura-001-*`, rôle PostgreSQL `aura`, répertoires `master`/`volume`/`filer`, création de la destination avant le contrôle d'espace, et tolérance documentée de l'avertissement `tar: file changed as we read it` (les `.dat` restent ouverts en écriture).
+- Sauvegarde terminée le 2026-11-24 dans `/srv/aura-storage/backups/aura-backup-20261124-182638` : `catalogue.sql` (1,9 Mo), `seaweedfs-data.tar.gz` (59 Go), `audit-logs.tar.gz`, `scripts.tar.gz` — **59 Go au total**, exit code 0.
+- `scripts/aura-backup-verify.sh` adapté aux dumps texte `pg_dumpall` : **dump SQL valide, archive SeaweedFS valide, sauvegarde vérifiée avec succès**.
+- Limite : l'archive reste **sur le VPS** (aucune copie hors-site). La règle 3-2-1 et le test de restauration isolé ne sont pas encore satisfaits (issue #9).
+
 ## 4. Décisions et limites
 
 1. **`Cache-Control: immutable` n'est pas appliqué à `/m/<slug>` ni à `/a/<token>`.** Ces URL sont mutables par design (remplacement de contenu sous un même slug, grants révocables). L'immutabilité reste sur les assets hashés (`/assets/`) ou doit être portée par un CDN/site de cours qui possède ses propres URL immuables.

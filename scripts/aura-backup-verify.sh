@@ -29,16 +29,25 @@ for f in "${EXPECTED[@]}"; do
   fi
 done
 
-# Vérifier le dump SQL
-if command -v pg_restore >/dev/null 2>&1; then
-  echo "[verify] Vérification du dump PostgreSQL…"
+# Vérifier le dump SQL. aura-backup.sh produit un dump TEXTE (pg_dumpall),
+# pas un dump binaire : pg_restore --list ne s'applique pas dans ce cas.
+echo "[verify] Vérification du dump PostgreSQL…"
+if head -c 120 "${BACKUP_DIR}/catalogue.sql" | grep -q 'PostgreSQL database cluster dump'; then
+  if [ ! -s "${BACKUP_DIR}/catalogue.sql" ] \
+     || ! grep -q 'CREATE TABLE' "${BACKUP_DIR}/catalogue.sql" \
+     || ! grep -q 'COPY ' "${BACKUP_DIR}/catalogue.sql"; then
+    echo "ERREUR : dump SQL texte incomplet" >&2
+    exit 1
+  fi
+  echo "[verify] Dump SQL texte valide (pg_dumpall)."
+elif command -v pg_restore >/dev/null 2>&1; then
   pg_restore --list "${BACKUP_DIR}/catalogue.sql" >/dev/null 2>&1 || {
     echo "ERREUR : dump PostgreSQL invalide" >&2
     exit 1
   }
-  echo "[verify] Dump PostgreSQL valide."
+  echo "[verify] Dump binaire valide."
 else
-  echo "[verify] pg_restore non disponible, vérification ignorée."
+  echo "[verify] pg_restore non disponible et format inconnu, vérification ignorée." >&2
 fi
 
 # Vérifier l'archive SeaweedFS si présente
