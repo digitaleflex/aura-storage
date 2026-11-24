@@ -11,4 +11,13 @@
     var msg = e.target && e.target.getAttribute && e.target.getAttribute('data-confirm');
     if (msg && !window.confirm(msg)) e.preventDefault();
   }, true);
+  // Bouton « Copier le lien » : <button data-copy="https://…">.
+  document.addEventListener('click', function (e) {
+    var b = e.target && e.target.closest && e.target.closest('[data-copy]');
+    if (!b || !navigator.clipboard) return;
+    navigator.clipboard.writeText(b.getAttribute('data-copy')).then(function () {
+      var old = b.textContent; b.textContent = 'Lien copié ✓';
+      setTimeout(function () { b.textContent = old; }, 1800);
+    }, function () {});
+  });
 })();

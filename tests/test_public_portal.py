@@ -486,7 +486,9 @@ def _assert_strict_markup(html: str) -> None:
     """No inline code: the page must pass a CSP without 'unsafe-inline' scripts/styles."""
     assert "<style" not in html
     for tag in re.findall(r"<script\b[^>]*>", html):
-        assert "src=" in tag or 'type="application/json"' in tag, tag
+        # Data blocks are not executed, so a CSP without 'unsafe-inline' allows them.
+        assert "src=" in tag or 'type="application/json"' in tag \
+            or 'type="application/ld+json"' in tag, tag
     assert not re.search(r"\son[a-z]+\s*=", html), "inline event handler"
     assert "javascript:" not in html
 
@@ -546,3 +548,153 @@ def test_profile_delete_form_uses_data_confirm_instead_of_onsubmit():
     html = c.get("/profil").text
     assert 'data-confirm="Supprimer définitivement' in html
     assert "onsubmit" not in html
+
+
+# --------------------------------------------------------------------------
+# Browsing without signing in: landing, book page, free preview, sitemap
+# --------------------------------------------------------------------------
+class _FakeBody:
+    def __init__(self, data):
+        self.data = data
+
+    def iter_chunks(self, size):
+        for start in range(0, len(self.data), size):
+            yield self.data[start:start + size]
+
+
+def _book(duration=600, size=60000, content_type="audio/mpeg"):
+    """A published one-book pack; returns (collection slug, object slug, object id)."""
+    slug = _published_pack()
+    row = main.repo.get_object_by_slug(f"{slug}-ch1")
+    catalogue_sql.execute(
+        "UPDATE objects SET duration_seconds = ?, size_bytes = ?, content_type = ? WHERE id = ?",
+        (duration, size, content_type, row["id"]))
+    return slug, f"{slug}-ch1", row["id"]
+
+
+def test_anonymous_landing_lists_books_and_never_exposes_the_media_slug(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "portail.example.org")
+    _, media_slug, oid = _book()
+    r = TestClient(main.app, base_url="https://portail.example.org").get("/")
+    assert r.status_code == 200
+    assert f'href="/livre/{oid}"' in r.text
+    assert "Continuer avec Google" in r.text
+    assert media_slug not in r.text and "/m/" not in r.text  # no direct media link
+    assert "noindex" not in r.headers.get("x-robots-tag", "")
+    assert r.headers["cache-control"] == "public, max-age=60"
+    assert "Un livre audio" in r.text
+    _assert_strict_markup(r.text)
+    # Filtering works without an account and filtered pages are not indexed.
+    none = TestClient(main.app, base_url="https://portail.example.org").get("/?q=zzzz")
+    assert "Aucun livre ne correspond" in none.text
+    assert none.headers["x-robots-tag"] == "noindex, nofollow"
+
+
+def test_landing_falls_back_to_sign_in_page_when_browsing_is_disabled(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_browse", False)
+    _book()
+    anon = TestClient(main.app)
+    r = anon.get("/")
+    assert "Entrez dans votre bibliothèque" in r.text
+    assert r.headers["x-robots-tag"] == "noindex, nofollow"
+    assert anon.get("/livre/" + str(uuid.uuid4())).status_code == 404
+    assert anon.get("/sitemap.xml").status_code == 404
+
+
+def test_book_page_has_share_metadata_chapters_and_the_right_call_to_action(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    _, media_slug, oid = _book(duration=3725)
+    main.repo.replace_audio_chapters(oid, [
+        {"index": 0, "title": "Ouverture", "start": 0.0, "end": 60.0},
+        {"index": 1, "title": "La rencontre", "start": 65.0, "end": 900.0},
+    ])
+    catalogue_sql.execute("UPDATE objects SET cover_key = 'c.jpg' WHERE id = ?", (oid,))
+    anon = TestClient(main.app)
+    page = anon.get(f"/livre/{oid}")
+    assert page.status_code == 200, page.text
+    t = page.text
+    assert '<meta property="og:title" content="Chapitre 1.mp3 — AURA">' in t or "og:title" in t
+    assert 'property="og:image" content="https://testserver/covers/' in t
+    assert f'rel="canonical" href="https://testserver/livre/{oid}"' in t
+    assert '"@type": "Audiobook"' in t and "Ouverture" in t and "La rencontre" in t
+    assert "1 h 02 min" in t and "Extrait gratuit" in t
+    assert f'src="/extrait/{oid}"' in t
+    assert "Continuer avec Google pour écouter en entier" in t
+    assert media_slug not in t and "/m/" not in t
+    assert "noindex" not in page.headers.get("x-robots-tag", "")
+    assert "wa.me" in t and "data-copy=" in t
+    _assert_strict_markup(t)
+    # Signed in: the call to action starts the book in the player.
+    reader = _sign_in(TestClient(main.app))
+    mine = reader.get(f"/livre/{oid}").text
+    assert f'href="/?lecture={oid}"' in mine and "Écouter le livre" in mine
+    assert "Continuer avec Google pour écouter" not in mine
+    # The catalogue exposes the id the player is told to start with.
+    assert f'data-object-id="{oid}"' in reader.get("/").text
+
+
+def test_unknown_or_malformed_book_is_a_404_page_not_a_json_error():
+    for bad in (str(uuid.uuid4()), "pas-un-uuid"):
+        r = TestClient(main.app).get(f"/livre/{bad}")
+        assert r.status_code == 404
+        assert "Livre introuvable" in r.text
+        assert r.headers["x-robots-tag"] == "noindex, nofollow"
+
+
+def test_free_preview_streams_only_the_first_part_of_an_mp3(monkeypatch):
+    _, _, oid = _book(duration=600, size=60000)  # 10 min, 100 B/s
+    asked = {}
+
+    def fake_get_object(**kwargs):
+        asked.update(kwargs)
+        end = int(kwargs["Range"].split("-")[1]) + 1
+        return {"Body": _FakeBody(b"x" * end)}
+
+    monkeypatch.setattr(main.s3ops, "get_object", fake_get_object)
+    r = TestClient(main.app).get(f"/extrait/{oid}")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/mpeg"
+    # 120 s of 600 s = a fifth of the file (+ a 4 KiB margin), never the whole file.
+    assert len(r.content) == 60000 // 5 + 4096 == int(r.headers["content-length"])
+    assert asked["Range"] == f"bytes=0-{len(r.content) - 1}"
+    assert r.headers["accept-ranges"] == "none"
+
+
+def test_preview_is_refused_when_it_cannot_be_cut_safely(monkeypatch):
+    called = []
+    monkeypatch.setattr(main.s3ops, "get_object", lambda **k: called.append(k))
+    _, _, m4a = _book(content_type="audio/mp4")
+    assert TestClient(main.app).get(f"/extrait/{m4a}").status_code == 404
+    _, _, unknown_length = _book(duration=0)
+    assert TestClient(main.app).get(f"/extrait/{unknown_length}").status_code == 404
+    _, _, mp3 = _book()
+    monkeypatch.setattr(main.settings, "public_preview_seconds", 0)
+    assert TestClient(main.app).get(f"/extrait/{mp3}").status_code == 404
+    assert TestClient(main.app).get(f"/extrait/{uuid.uuid4()}").status_code == 404
+    assert called == []
+    page = TestClient(main.app).get(f"/livre/{mp3}").text
+    assert "Extrait gratuit" not in page  # no player when there is no preview
+
+
+def test_preview_does_not_serve_unpublished_objects(monkeypatch):
+    _, media_slug, oid = _book()
+    c, headers = _admin()
+    assert c.put(f"/api/v1/objects/{oid}/publication",
+                 json={"slug": media_slug, "published": False}, headers=headers).status_code == 200
+    monkeypatch.setattr(main.s3ops, "get_object", lambda **k: {"Body": _FakeBody(b"x")})
+    assert TestClient(main.app).get(f"/extrait/{oid}").status_code == 404
+
+
+def test_sitemap_and_robots_describe_only_the_browsable_pages(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "portail.example.org")
+    _, media_slug, oid = _book()
+    web = TestClient(main.app, base_url="https://portail.example.org")
+    sitemap = web.get("/sitemap.xml")
+    assert sitemap.headers["content-type"].startswith("application/xml")
+    assert f"<loc>https://portail.example.org/livre/{oid}</loc>" in sitemap.text
+    assert "<loc>https://portail.example.org/</loc>" in sitemap.text
+    assert media_slug not in sitemap.text
+    robots = web.get("/robots.txt").text
+    assert "Allow: /livre/" in robots and "Disallow: /" in robots
+    assert "Sitemap: https://portail.example.org/sitemap.xml" in robots
+    assert web.get("/api/public/library").status_code in (401, 403)  # still private

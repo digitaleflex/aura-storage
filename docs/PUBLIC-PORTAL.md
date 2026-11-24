@@ -11,7 +11,10 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 
 | Chemin (sur `PUBLIC_DOMAIN`) | Rôle |
 |---|---|
-| `GET /` | page de connexion pour les anonymes, puis catalogue HTML sans JavaScript avec lecteur `<audio>` pour les sessions connectées |
+| `GET /` | **anonyme** : vitrine du catalogue publié (recherche, filtre par auteur, bouton Google) ; **connecté** : catalogue avec lecteur `<audio>`. Avec `AURA_PUBLIC_BROWSE=0`, les anonymes voient seulement la page de connexion |
+| `GET /livre/{id}` | page d'un livre, lisible sans compte : couverture, durée, chapitres, extrait gratuit, partage (WhatsApp, copier le lien), balises Open Graph/Twitter et JSON-LD `Audiobook` |
+| `GET /extrait/{id}` | extrait gratuit : seuls les premières minutes d'un **MP3** publié, découpés côté serveur (`AURA_PUBLIC_PREVIEW_SECONDS`, 120 par défaut, 0 = désactivé) |
+| `GET /sitemap.xml`, `GET /robots.txt` | référencement : accueil et pages livre uniquement |
 | `GET /api/public/auth/google` | démarre le flux Google (state + PKCE) |
 | `GET /api/public/auth/callback` | vérifie Google, crée la session, redirige vers `/` |
 | `GET /api/public/me` | identité + jeton CSRF de la session publique |
@@ -21,6 +24,13 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 | `GET /m/{slug}` | redirection média publique déjà existante, routée ici aussi pour le lecteur |
 | `GET /portal-assets/{nom}` | feuille de style et scripts du portail (empreinte dans l'URL, cache immuable) |
 | `GET /profil` | page de profil du visiteur (nom affiché, suppression du compte) |
+
+**Navigation sans compte.** Les pages anonymes n'affichent jamais le lien `/m/{slug}` : les
+livres s'ouvrent par leur identifiant (`/livre/{id}`) et l'extrait est coupé côté serveur.
+Attention : `/m/{slug}` reste une URL publique permanente (c'est son rôle, pour l'intégration
+dans des sites de cours) ; toute personne qui connaît un slug peut donc télécharger le
+fichier complet. Si l'écoute complète doit vraiment être réservée aux comptes, il faudra
+des slugs non devinables ou une authentification sur `/m/`.
 
 Les fichiers eux-mêmes sont servis par les liens `/m/{slug}` déjà existants :
 une redirection 302 vers une URL S3 présignée de courte durée, avec `Range`

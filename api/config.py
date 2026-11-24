@@ -249,6 +249,13 @@ class Settings:
     # and buffered playback once the browser followed the /m/<slug> redirect.
     # This TTL applies only to published public media, never to upload intents.
     public_media_ttl: int = _int("AURA_PUBLIC_MEDIA_TTL", 12 * 3600)
+    # Anonymous browsing of the published catalogue (landing, book pages, sitemap).
+    # Listening in full still goes through the signed-in portal; set to 0 to
+    # restore the sign-in-only front page.
+    public_browse: bool = os.environ.get("AURA_PUBLIC_BROWSE", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+    # Free preview length for anonymous visitors (MP3 only); 0 disables it.
+    public_preview_seconds: int = _int("AURA_PUBLIC_PREVIEW_SECONDS", 120)
     # Google OAuth 2.0 Authorization Code + PKCE. No secret is hard-coded; both
     # values come from .env and are passed to the API container explicitly.
     google_client_id: str = os.environ.get("GOOGLE_CLIENT_ID", "")

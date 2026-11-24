@@ -547,6 +547,13 @@
   });
   setPlayState(false);
   if(best >= 0) selectTrack(best, false);
+  // ?lecture=<id du livre> (lien « Écouter le livre » d'une page livre) : lance ce livre.
+  var wanted = new URLSearchParams(window.location.search).get('lecture');
+  if(wanted){
+    for(var w = 0; w < tracks.length; w++){
+      if(tracks[w].dataset.objectId === wanted){ play(w); break; }
+    }
+  }
 
   window.addEventListener('beforeunload', function(){ updateProgressUI(true); });
   document.addEventListener('visibilitychange', function(){ if(document.hidden) updateProgressUI(true); });

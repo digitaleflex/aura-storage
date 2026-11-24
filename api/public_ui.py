@@ -75,6 +75,22 @@ def _title(title: str) -> str:
     return f'<title>{ESC(title)}</title>'
 
 
+def page_head(title: str, description: str = "", meta: list | None = None) -> str:
+    """Head with SEO/share metadata. ``meta`` is a list of (attribute, name, content)."""
+    tags = [
+        '<!doctype html><html lang="fr"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        _title(title),
+    ]
+    if description:
+        tags.append(f'<meta name="description" content="{ESC(description)}">')
+    for attr, name, content in meta or []:
+        tags.append(f'<meta {attr}="{ESC(name)}" content="{ESC(content)}">')
+    tags.append('<link rel="stylesheet" href="' + asset_url("portal.css") + '">')
+    tags.append('<script defer src="' + asset_url("common.js") + '"></script>')
+    return "".join(tags)
+
+
 def login_page() -> str:
     return _HEAD + _title("AURA — Votre bibliothèque audio") + """
 <div class="stage">
