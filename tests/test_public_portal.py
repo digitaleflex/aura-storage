@@ -612,17 +612,22 @@ def test_anonymous_landing_lists_books_and_never_exposes_the_media_slug(monkeypa
     assert none.headers["x-robots-tag"] == "noindex, nofollow"
 
 
-def test_full_media_is_only_downloadable_by_premium_accounts(monkeypatch):
+def test_streaming_is_signed_in_and_explicit_download_is_premium(monkeypatch):
     _, media_slug, _ = _book()
     anon = TestClient(main.app)
     assert anon.get(f"/m/{media_slug}").status_code == 401
+    assert anon.get(f"/d/{media_slug}").status_code == 401
     free = _sign_in(TestClient(main.app))
-    assert free.get(f"/m/{media_slug}").status_code == 403
+    # Listening is not a paid feature: a free account gets the whole book.
+    assert free.get(f"/m/{media_slug}", follow_redirects=False).status_code == 302
+    assert free.get(f"/d/{media_slug}").status_code == 403
     premium = _make_premium(free)
     assert premium.get(f"/m/{media_slug}", follow_redirects=False).status_code == 302
-    # An explicitly allowlisted course embed stays publicly resolvable.
+    assert premium.get(f"/d/{media_slug}", follow_redirects=False).status_code == 302
+    # An allowlisted course embed stays public for listening, never for download.
     monkeypatch.setattr(main.settings, "public_media_open_slugs", (media_slug,))
     assert anon.get(f"/m/{media_slug}", follow_redirects=False).status_code == 302
+    assert anon.get(f"/d/{media_slug}").status_code == 401
 
 
 def test_share_link_for_a_published_book_is_premium_only():
@@ -891,6 +896,7 @@ def test_offline_download_button_is_premium_only():
     assert 'class="premium-hint"' in page
     premium_page = _make_premium(free).get("/").text
     assert 'id="offline-toggle"' in premium_page
+    assert 'data-download="/d/' in premium_page
     assert "/portal-assets/offline.js?v=" in premium_page
     _assert_strict_markup(premium_page)
 

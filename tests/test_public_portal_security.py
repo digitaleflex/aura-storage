@@ -103,6 +103,7 @@ def test_restricted_slug_blocks_every_public_media_route(monkeypatch):
     client = TestClient(main.app)
     for path in (
         f"/m/{SLUG}",
+        f"/d/{SLUG}",
         f"/hls/{SLUG}.m3u8",
         f"/hls/{SLUG}/seg_00000.ts",
         f"/m/{SLUG}/subtitles.vtt",
@@ -164,6 +165,7 @@ def test_public_media_derivatives_require_the_same_session_gate(monkeypatch):
     client = TestClient(main.app)
     for path in (
         f"/m/{SLUG}",
+        f"/d/{SLUG}",
         f"/hls/{SLUG}.m3u8",
         f"/hls/{SLUG}/seg_00000.ts",
         f"/m/{SLUG}/subtitles.vtt",
@@ -171,14 +173,16 @@ def test_public_media_derivatives_require_the_same_session_gate(monkeypatch):
         assert client.get(path, follow_redirects=False).status_code == 401, path
 
 
-def test_premium_session_unlocks_media_and_all_derivatives(monkeypatch):
+def test_signed_in_session_unlocks_streaming_and_all_derivatives(monkeypatch):
     _stub_public_video(monkeypatch)
     monkeypatch.setattr(main.settings, "public_media_require_auth", True)
     monkeypatch.setattr(main.settings, "public_require_premium", True)
     monkeypatch.setattr(main.settings, "public_media_open_slugs", ())
     monkeypatch.setattr(main.settings, "public_media_restricted_slugs", ())
     calls = []
-    monkeypatch.setattr(main, "_require_premium", lambda request: calls.append(request))
+    monkeypatch.setattr(
+        main, "authenticate_public", lambda request: calls.append(request) or {}
+    )
     client = TestClient(main.app)
     expected = {
         f"/m/{SLUG}": 302,
@@ -194,16 +198,27 @@ def test_premium_session_unlocks_media_and_all_derivatives(monkeypatch):
     assert len(calls) == len(expected)
 
 
+def test_explicit_download_requires_premium_even_when_streaming_is_open(monkeypatch):
+    _stub_public_video(monkeypatch)
+    monkeypatch.setattr(main.settings, "public_media_require_auth", True)
+    monkeypatch.setattr(main.settings, "public_require_premium", True)
+    monkeypatch.setattr(main.settings, "public_media_open_slugs", ())
+    monkeypatch.setattr(main.settings, "public_media_restricted_slugs", ())
+    calls = []
+    monkeypatch.setattr(main, "_require_premium", lambda request: calls.append(request) or {})
+    client = TestClient(main.app)
+    assert client.get(f"/d/{SLUG}", follow_redirects=False).status_code == 302
+    assert len(calls) == 1
+
+
 def test_allowlisted_slug_is_open_for_media_and_derivatives(monkeypatch):
     _stub_public_video(monkeypatch)
     monkeypatch.setattr(main.settings, "public_media_require_auth", True)
     monkeypatch.setattr(main.settings, "public_require_premium", True)
     monkeypatch.setattr(main.settings, "public_media_open_slugs", (SLUG,))
     monkeypatch.setattr(main.settings, "public_media_restricted_slugs", ())
-    monkeypatch.setattr(
-        main, "_require_premium",
-        lambda request: pytest.fail("allowlisted media required a premium session"),
-    )
+    calls = []
+    monkeypatch.setattr(main, "_require_premium", lambda request: calls.append(request) or {})
     client = TestClient(main.app)
     for path, status in {
         f"/m/{SLUG}": 302,
@@ -212,6 +227,10 @@ def test_allowlisted_slug_is_open_for_media_and_derivatives(monkeypatch):
         f"/m/{SLUG}/subtitles.vtt": 302,
     }.items():
         assert client.get(path, follow_redirects=False).status_code == status, path
+    # The embed exemption covers listening only, never the explicit download.
+    assert calls == []
+    assert client.get(f"/d/{SLUG}", follow_redirects=False).status_code == 302
+    assert len(calls) == 1
 
 
 def test_hls_and_subtitle_routes_are_rate_limited(monkeypatch):
