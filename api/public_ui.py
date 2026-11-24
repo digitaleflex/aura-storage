@@ -13,7 +13,10 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 _ASSET_DIR = Path(__file__).with_name("portal_assets")
-_ASSET_TYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8"}
+_ASSET_TYPES = {
+    ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+    ".webmanifest": "application/manifest+json", ".png": "image/png", ".svg": "image/svg+xml",
+}
 
 
 def _load_assets() -> dict:
@@ -62,9 +65,19 @@ _GOOGLE = (
     '</svg>'
 )
 
+# Installable app: manifest, icons and theme colour (light / dark address bar).
+_PWA_TAGS = (
+    '<meta name="theme-color" content="#F8F6F1" media="(prefers-color-scheme: light)">'
+    '<meta name="theme-color" content="#10171e" media="(prefers-color-scheme: dark)">'
+    '<link rel="manifest" href="' + asset_url("manifest.webmanifest") + '">'
+    '<link rel="icon" href="' + asset_url("icon.svg") + '" type="image/svg+xml">'
+    '<link rel="apple-touch-icon" href="' + asset_url("icon-192.png") + '">'
+)
+
 _HEAD = (
     '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
     '<meta name="viewport" content="width=device-width, initial-scale=1">'
+    + _PWA_TAGS +
     '<link rel="stylesheet" href="' + asset_url("portal.css") + '">'
     '<script defer src="' + asset_url("common.js") + '"></script>'
     '</head><body>'
@@ -86,6 +99,7 @@ def page_head(title: str, description: str = "", meta: list | None = None) -> st
         tags.append(f'<meta name="description" content="{ESC(description)}">')
     for attr, name, content in meta or []:
         tags.append(f'<meta {attr}="{ESC(name)}" content="{ESC(content)}">')
+    tags.append(_PWA_TAGS)
     tags.append('<link rel="stylesheet" href="' + asset_url("portal.css") + '">')
     tags.append('<script defer src="' + asset_url("common.js") + '"></script>')
     return "".join(tags)
@@ -553,6 +567,7 @@ def catalog_page(
         '<button type="button" class="pill-button icon-button" id="chapters-toggle" aria-label="Chapitres" aria-controls="chapters-panel" aria-expanded="false" title="Chapitres">Chapitres</button>',
         '<button type="button" class="pill-button icon-button" id="queue-toggle" aria-label="File d’attente" aria-controls="queue-panel" aria-expanded="false" title="File d’attente">File</button>',
         '<button type="button" class="pill-button icon-button" id="fullscreen" aria-label="Agrandir le lecteur" aria-pressed="false" title="Agrandir le lecteur">Agrandir</button>',
+        '<button type="button" class="pill-button icon-button" id="offline-toggle" aria-pressed="false" title="Télécharger ce livre pour l’écouter sans connexion" disabled>Télécharger</button>',
         '<button type="button" class="pill-button icon-button" id="close" aria-label="Fermer le lecteur" title="Fermer ou arrêter">Fermer</button>',
         '</div></div>',
         '<p class="player-status" id="player-status" role="status" aria-live="polite"></p>',
@@ -570,6 +585,7 @@ def catalog_page(
         '<script src="' + asset_url("player.js") + '"></script>',
         '<script src="' + asset_url("shelf.js") + '"></script>',
         '<script src="' + asset_url("favorites.js") + '"></script>',
+        '<script src="' + asset_url("offline.js") + '"></script>',
         '</main></body></html>',
     ])
     return "".join(parts)

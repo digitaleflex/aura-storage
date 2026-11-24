@@ -58,6 +58,29 @@ par des variables CSS ; `color-scheme: light dark` adapte aussi lecteur natif et
 sur chaque livre (catalogue et page livre) alimente l'étagère « Mes favoris » ; l'état est privé,
 supprimé avec le compte, et le clic est annulé côté page si le serveur refuse.
 
+## Application installable et écoute hors connexion
+
+Le portail est une **PWA** : manifeste (`/portal-assets/manifest.webmanifest`, icônes 192/512 px
+dont une « maskable »), couleurs de barre claire/sombre, service worker `GET /sw.js` (à la racine,
+`Service-Worker-Allowed: /`, jamais mis en cache pour que les mises à jour passent) et page
+`GET /hors-ligne`. Le navigateur propose « Installer l'application » ; sur iPhone : Partager →
+« Sur l'écran d'accueil ».
+
+- **Pages** (accueil, fiches livre) : réseau d'abord ; hors connexion, la dernière copie
+  vue est servie, sinon la page « Vous êtes hors connexion ».
+- **Livres** : le bouton **Télécharger** du lecteur copie le livre en cours dans le cache
+  `aura-audio` de l'appareil (indicateur ⤓ dans les listes, livres non téléchargés grisés hors
+  connexion). Le service worker les sert avec la prise en charge de `Range` : lecture et
+  déplacement dans le livre sans réseau. Le même bouton retire le livre de l'appareil.
+- **Déconnexion** : les pages mises en cache (progression, favoris) sont effacées ; les livres
+  téléchargés restent (contenu public choisi par le visiteur).
+- **Prérequis côté stockage** : le téléchargement suit la redirection de `/m/{slug}` vers S3 avec
+  `fetch` ; le stockage doit donc répondre avec `Access-Control-Allow-Origin` pour le domaine du
+  portail. Sans CORS, le bouton affiche « Téléchargement impossible » et rien n'est enregistré
+  (l'écoute en ligne n'est pas affectée). **À vérifier sur le vrai stockage** (non testable hors
+  production).
+- La CSP autorise `manifest-src`, `worker-src` et `connect-src` vers l'origine S3.
+
 ## Lecteur et confort d'écoute
 
 La page du catalogue affiche une seule barre de lecture persistante au lieu de
