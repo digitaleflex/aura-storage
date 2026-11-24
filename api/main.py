@@ -46,6 +46,7 @@ from .authz import (
     OBJECTS_WRITE,
     PUBLIC_ROLE,
     SERVICE_SCOPES,
+    _row_get,
     authorize,
     authenticate_public,
     effective_scopes,
@@ -1224,7 +1225,7 @@ def _share_not_found() -> HTTPException:
 
 
 @app.get("/s/{token}")
-def redeem_share(token: str):
+def redeem_share(token: str, request: Request):
     """Redeem a share link: 302 to a short-lived presigned GET, or 404.
 
     Every failure mode (malformed, unknown, expired, exhausted, revoked, object
@@ -1258,6 +1259,17 @@ def redeem_share(token: str):
                     {"share_id": row["id"], "reason": "object_unavailable"})
         raise _share_not_found()
     obj = _as_dict(target)
+
+    # Published objects are portal/audiobook content: serving one through an
+    # anonymous share link would bypass the premium gate on /m/{slug}. Answer
+    # the same 404 as every other denial so the share stays unguessable.
+    if settings.public_require_premium and obj.get("published_at"):
+        try:
+            _require_premium(request)
+        except HTTPException:
+            audit_event("share-access", None, "denied",
+                        {"share_id": row["id"], "reason": "premium_required"})
+            raise _share_not_found()
 
     # Egress quota: checked before consuming a use, so a refused redemption
     # never burns a max_uses slot. The public route keeps its uniform 404.
@@ -1659,6 +1671,7 @@ def public_auth_callback(
         candidate = repo.get_public_user_by_email(email)
         if candidate is not None and candidate["oauth_provider"] == "email":
             user = candidate
+    plan = _public_plan_for_email(email)
     if user is None:
         # The username is derived from the stable subject, never from the email
         # (which can change) or from a Google display name (which is user data).
@@ -1669,10 +1682,12 @@ def public_auth_callback(
         from .auth import hash_password
         user_id = repo.create_oauth_user(
             username, hash_password(new_token(32)), "google", subject, email,
-            role=PUBLIC_ROLE,
+            role=PUBLIC_ROLE, plan=plan,
         )
     else:
         user_id = user["id"]
+        if plan == "premium" and str(_row_get(user, "plan") or "free").lower() != "premium":
+            repo.set_user_plan(user_id, "premium")
 
     return _public_login_response(user_id, request, "google-login", clear_oauth_cookie=True)
 
@@ -1807,15 +1822,18 @@ async def public_email_link_confirm(request: Request):
             status_code=400, headers=_public_profile_headers(),
         )
     user = repo.get_user_by_oauth("email", email) or repo.get_public_user_by_email(email)
+    plan = _public_plan_for_email(email)
     if user is None:
         from .auth import hash_password
         suffix = hashlib.sha256(email.encode("utf-8")).hexdigest()[:24]
         user_id = repo.create_oauth_user(
             f"email-{suffix}", hash_password(new_token(32)), "email", email, email,
-            role=PUBLIC_ROLE,
+            role=PUBLIC_ROLE, plan=plan,
         )
     else:
         user_id = user["id"]
+        if plan == "premium" and str(_row_get(user, "plan") or "free").lower() != "premium":
+            repo.set_user_plan(user_id, "premium")
     return _public_login_response(user_id, request, "email-login")
 
 
@@ -1848,6 +1866,7 @@ def public_me(request: Request, response: Response, principal: dict = Depends(re
         "display_name": principal.get("display_name", ""),
         "email": principal.get("email"),
         "role": principal["role"],
+        "plan": principal.get("plan", "free"),
         "csrf_token": principal["csrf"],
     }
 
@@ -4348,10 +4367,16 @@ def public_media(slug: str, request: Request):
     # Trusted course embeds can be allowlisted explicitly with
     # AURA_PUBLIC_MEDIA_OPEN_SLUGS (they stay permanently public on purpose).
     if settings.public_media_require_auth and slug not in settings.public_media_open_slugs:
-        try:
-            authenticate_public(request)
-        except HTTPException:
-            raise HTTPException(status_code=401, detail="authentication required")
+        # A free account may browse and listen to the excerpt, but the full
+        # file URL is a premium capability. _require_premium also authenticates
+        # the session, so anonymous callers still get 401 here.
+        if settings.public_require_premium:
+            _require_premium(request)
+        else:
+            try:
+                authenticate_public(request)
+            except HTTPException:
+                raise HTTPException(status_code=401, detail="authentication required")
     # D-08: a restricted slug is not an access-control bypass. Answer 404 with
     # no presign, no view event and no audit trail of a "successful" access.
     if slug in settings.public_media_restricted_slugs:

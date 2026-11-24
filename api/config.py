@@ -285,6 +285,19 @@ class Settings:
         "0", "false", "no", "off")
     # Free preview length for anonymous visitors (MP3 only); 0 disables it.
     public_preview_seconds: int = _int("AURA_PUBLIC_PREVIEW_SECONDS", 60)
+    # Full-file access is a paid feature by default: /m/{slug} and share links
+    # for published objects require a public session whose plan is "premium".
+    # Set to 0 to restore the previous "any signed-in listener" behaviour.
+    public_require_premium: bool = os.environ.get(
+        "AURA_PUBLIC_REQUIRE_PREMIUM", "1"
+    ).strip().lower() not in ("0", "false", "no", "off")
+    # Bootstrap: verified e-mail addresses promoted to "premium" at sign-in.
+    # Existing premium rows are never downgraded when this list changes.
+    premium_emails: tuple[str, ...] = tuple(
+        part.strip().lower()
+        for part in os.environ.get("AURA_PREMIUM_EMAILS", "").split(",")
+        if part.strip()
+    )
     # E-mail sign-in link ("magic link") for visitors without a Google account.
     # Disabled until a mail server is configured; the link is single-use and
     # short-lived, and it only confirms control of the mailbox.

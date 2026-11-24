@@ -54,6 +54,9 @@ ADDED_COLUMNS = {
         ("email", "TEXT"),
         # Public portal profile: user-chosen display name (editable in UI).
         ("display_name", "TEXT DEFAULT ''"),
+        # Product plan: "free" (excerpt only) or "premium" (full listening and
+        # offline downloads). Missing/NULL is treated as "free" everywhere.
+        ("plan", "TEXT DEFAULT 'free'"),
     ],
     "objects": [
         ("actor_kind", "TEXT"),

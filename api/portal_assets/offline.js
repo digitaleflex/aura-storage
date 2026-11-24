@@ -51,7 +51,8 @@
     say('Téléchargement en cours… Gardez cette page ouverte.');
     try {
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
-      var response = await fetch(url, { credentials: 'omit' });
+      // /m/{slug} is a premium capability served from a public-session cookie.
+      var response = await fetch(url, { credentials: 'same-origin' });
       if (!response.ok) throw new Error('http ' + response.status);
       await cache.put(key, response);
       say('Disponible hors connexion : « ' + (track.getAttribute('data-title') || 'livre') + ' ».');

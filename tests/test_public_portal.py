@@ -48,8 +48,12 @@ def _configure(monkeypatch):
         "sub": SUBJECT, "email": "reader@example.com", "email_verified": True,
         "aud": CLIENT_ID, "iss": "https://accounts.google.com", "exp": 4102444800,
     })
+    # The fake Google subject is shared by the whole module: never leak a
+    # premium promotion from one test into the next one.
+    catalogue_sql.execute("UPDATE users SET plan = 'free' WHERE role = 'public'")
     yield
     main.reset_login_attempts()
+    catalogue_sql.execute("UPDATE users SET plan = 'free' WHERE role = 'public'")
 
 
 def _admin():
@@ -105,6 +109,13 @@ def _sign_in(c):
     return c
 
 
+def _make_premium(c):
+    """Promote the signed-in public account without going through billing."""
+    session = main.repo.get_session(c.cookies["aura_public_session"])
+    main.repo.set_user_plan(session["user_id"], "premium")
+    return c
+
+
 def test_google_login_public_role_and_logout():
     slug = _published_pack()
     c = _sign_in(TestClient(main.app))
@@ -112,6 +123,7 @@ def test_google_login_public_role_and_logout():
     me = c.get("/api/public/me")
     assert me.status_code == 200, me.text
     assert me.json()["role"] == "public"
+    assert me.json()["plan"] == "free"  # product plan, not an object capability
     assert me.json()["email"] == "reader@example.com"
     csrf = me.json()["csrf_token"]
 
@@ -135,6 +147,15 @@ def test_google_login_public_role_and_logout():
 
     assert c.post("/api/public/logout", headers={"X-CSRF-Token": csrf}).status_code == 200
     assert c.get("/api/public/me").status_code == 401
+
+
+def test_premium_email_allowlist_promotes_the_account(monkeypatch):
+    monkeypatch.setattr(main.settings, "premium_emails", ("READER@example.com",))
+    c = _sign_in(TestClient(main.app))
+    assert c.get("/api/public/me").json()["plan"] == "premium"
+    # A promotion is never undone by a later sign-in with a different list.
+    monkeypatch.setattr(main.settings, "premium_emails", ())
+    assert _sign_in(c).get("/api/public/me").json()["plan"] == "premium"
 
 
 def test_view_modes_facets_and_cover_route():
@@ -591,15 +612,32 @@ def test_anonymous_landing_lists_books_and_never_exposes_the_media_slug(monkeypa
     assert none.headers["x-robots-tag"] == "noindex, nofollow"
 
 
-def test_full_media_is_not_downloadable_without_a_session(monkeypatch):
+def test_full_media_is_only_downloadable_by_premium_accounts(monkeypatch):
     _, media_slug, _ = _book()
     anon = TestClient(main.app)
     assert anon.get(f"/m/{media_slug}").status_code == 401
-    reader = _sign_in(TestClient(main.app))
-    assert reader.get(f"/m/{media_slug}", follow_redirects=False).status_code == 302
+    free = _sign_in(TestClient(main.app))
+    assert free.get(f"/m/{media_slug}").status_code == 403
+    premium = _make_premium(free)
+    assert premium.get(f"/m/{media_slug}", follow_redirects=False).status_code == 302
     # An explicitly allowlisted course embed stays publicly resolvable.
     monkeypatch.setattr(main.settings, "public_media_open_slugs", (media_slug,))
     assert anon.get(f"/m/{media_slug}", follow_redirects=False).status_code == 302
+
+
+def test_share_link_for_a_published_book_is_premium_only():
+    _, _, oid = _book()
+    admin, headers = _admin()
+    created = admin.post(f"/api/v1/objects/{oid}/share", json={}, headers=headers)
+    assert created.status_code == 200, created.text
+    token = created.json()["token"]
+
+    anon = TestClient(main.app)
+    assert anon.get(f"/s/{token}", follow_redirects=False).status_code == 404
+    free = _sign_in(TestClient(main.app))
+    assert free.get(f"/s/{token}", follow_redirects=False).status_code == 404
+    premium = _make_premium(free)
+    assert premium.get(f"/s/{token}", follow_redirects=False).status_code == 302
 
 
 def test_landing_falls_back_to_sign_in_page_when_browsing_is_disabled(monkeypatch):
@@ -845,11 +883,16 @@ def test_csp_allows_the_manifest_worker_and_the_download_fetch(monkeypatch):
     assert "connect-src 'self' https://s3.example.org:8443" in csp
 
 
-def test_player_offers_the_offline_download_button():
+def test_offline_download_button_is_premium_only():
     _published_pack()
-    page = _sign_in(TestClient(main.app)).get("/").text
-    assert 'id="offline-toggle"' in page and "/portal-assets/offline.js?v=" in page
-    _assert_strict_markup(page)
+    free = _sign_in(TestClient(main.app))
+    page = free.get("/").text
+    assert 'id="offline-toggle"' not in page
+    assert 'class="premium-hint"' in page
+    premium_page = _make_premium(free).get("/").text
+    assert 'id="offline-toggle"' in premium_page
+    assert "/portal-assets/offline.js?v=" in premium_page
+    _assert_strict_markup(premium_page)
 
 
 # --------------------------------------------------------------------------

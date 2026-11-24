@@ -267,6 +267,9 @@ def authenticate_public(request: Request) -> dict:
         "csrf": session["csrf"],
         "email": _row_get(user, "email"),
         "display_name": _row_get(user, "display_name") or "",
+        # Product plan, not a capability: routes that grant full-file access
+        # check this explicitly in addition to the public session.
+        "plan": str(_row_get(user, "plan") or "free").lower(),
         "environment": _row_get(space, "environment") if space else None,
     }
     from . import audit as audit_log

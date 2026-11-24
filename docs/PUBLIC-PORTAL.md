@@ -17,12 +17,13 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 | `GET /sitemap.xml`, `GET /robots.txt` | référencement : accueil et pages livre uniquement |
 | `GET /api/public/auth/google` | démarre le flux Google (state + PKCE) |
 | `GET /api/public/auth/callback` | vérifie Google, crée la session, redirige vers `/` |
-| `GET /api/public/me` | identité + jeton CSRF de la session publique |
+| `GET /api/public/me` | identité + plan (`free`/`premium`) + jeton CSRF de la session publique |
 | `POST /api/public/logout` | détruit la session (CSRF requis) |
 | `GET /api/public/library` | catalogue publié (JSON), avec position d'écoute par visiteur |
 | `PUT/DELETE /api/public/favorites/{id}` | ajoute/retire un livre publié des favoris du visiteur (CSRF, idempotent ; table `listen_favorites`, migration `0022`) |
 | `POST /api/public/progress` | enregistre la position de lecture (CSRF, session publique) |
-| `GET /m/{slug}` | redirection média **du livre entier** : session publique requise par défaut (`AURA_PUBLIC_MEDIA_REQUIRE_AUTH=1`) ; slugs d'intégration de confiance via `AURA_PUBLIC_MEDIA_OPEN_SLUGS` |
+| `GET /m/{slug}` | redirection média **du livre entier** : compte **premium** requis par défaut (`AURA_PUBLIC_REQUIRE_PREMIUM=1`) ; sans session → 401, compte gratuit → 403 ; slugs d'intégration de confiance via `AURA_PUBLIC_MEDIA_OPEN_SLUGS` |
+| `GET /s/{token}` | lien de partage : ouvert pour les fichiers ordinaires, mais un objet **publié** (livre du portail) exige aussi un compte premium ; sinon 404 uniforme |
 | `GET /portal-assets/{nom}` | feuille de style et scripts du portail (empreinte dans l'URL, cache immuable) |
 | `GET /profil` | page de profil du visiteur (nom affiché, suppression du compte) |
 
@@ -32,11 +33,24 @@ côté serveur. Le bouton « Continuer avec Google » concerne **la suite du liv
 lui-même ne demande aucun compte. La session publique dure 7 jours (`AURA_PUBLIC_SESSION_TTL`) ;
 une reconnexion après ce délai — ou si le navigateur refuse les cookies — est normale.
 
-Depuis `AURA_PUBLIC_MEDIA_REQUIRE_AUTH=1`, `/m/{slug}` renvoie **401** sans session publique :
-un visiteur non inscrit ne peut ni écouter le livre entier ni le télécharger. Les intégrations
-de confiance (sites de cours) peuvent être exemptées nommément avec
+**Plans.** Le compte gratuit lit l'extrait d'une minute et consulte le catalogue ; il ne reçoit
+jamais d'URL de fichier complet. Le compte **premium** ouvre `/m/{slug}`, le lecteur complet
+et le bouton « Télécharger » (cache hors-ligne). Le plan est stocké dans `users.plan`
+(`free`/`premium`, migration `ADDED_COLUMNS`) ; `AURA_PREMIUM_EMAILS=adresse@exemple.fr,…`
+promote les comptes vérifiés à la connexion, sans jamais rétrograder un compte déjà premium.
+Un opérateur peut aussi poser le plan directement en base.
+
+Sans session, `/m/{slug}` renvoie **401** ; avec un compte gratuit, **403**. Les liens de
+partage `/s/{token}` portant sur un objet publié appliquent la même règle mais répondent
+**404** comme toute autre erreur de partage, pour ne pas révéler l'existence du lien. Les
+intégrations de confiance (sites de cours) peuvent être exemptées nommément avec
 `AURA_PUBLIC_MEDIA_OPEN_SLUGS=slug-1,slug-2`. Leurs URLs redeviennent alors publiques par
 décision explicite de l'opérateur.
+
+Le script `preview.js` empêche le menu « Enregistrer sous » sur l'extrait ; ce n'est pas une
+protection contre l'inspection réseau, mais le fichier complet n'est délivré que sur
+autorisation serveur. `offline.js` envoie désormais le cookie de session (`same-origin`)
+et n'est chargé que pour les comptes premium.
 
 **Décision (issue #295) :** le contenu payant ne passe jamais par `/m/{slug}`. L'API
 audiobook prend la décision d'accès puis demande une URL courte à AURA avec son

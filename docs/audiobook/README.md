@@ -67,11 +67,14 @@ sont strictes (schéma dédié, aucune table partagée, adaptateur `StoragePort`
 
 ### 2.3 Le point critique : `/m/{slug}` n'est pas un contrôle d'accès
 
-Depuis le 2026-11-24, `GET /m/{slug}` exige une **session publique** par défaut
-(`AURA_PUBLIC_MEDIA_REQUIRE_AUTH=1`). Le livre entier n'est plus téléchargeable par
-quiconque possède le slug. Les intégrations publiques de confiance restent possibles
+Depuis le 2026-11-24, `GET /m/{slug}` exige un **compte premium** par défaut
+(`AURA_PUBLIC_REQUIRE_PREMIUM=1`, plus `AURA_PUBLIC_MEDIA_REQUIRE_AUTH=1`). Un visiteur
+anonyme reçoit 401, un compte gratuit 403 : le livre entier n'est plus téléchargeable
+par quiconque possède le slug. Les intégrations publiques de confiance restent possibles
 avec `AURA_PUBLIC_MEDIA_OPEN_SLUGS=slug-1,slug-2` (décision explicite de l'opérateur).
-L'extrait anonyme, lui, est limité à 1 minute côté serveur (`/extrait/{id}`).
+L'extrait anonyme, lui, est limité à 1 minute côté serveur (`/extrait/{id}`) et les liens
+de partage `/s/{token}` sur un objet publié suivent la même règle premium (404 uniforme
+en cas de refus).
 
 **Décision de conception :** aucun contenu payant ou soumis à des droits ne doit
 être exposé via `/m/{slug}`. L'API audiobook prend la décision d'accès, puis
