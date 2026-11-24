@@ -10,6 +10,22 @@
 - TLS expiry, OS security updates and image versions.
 - Failed authentication and unusual administrative actions.
 
+## TLS expiry alert
+
+`scripts/check_tls_expiry.sh` reads the public hostnames from `.env` (or takes
+hostnames as arguments), negotiates TLS on each one and exits non-zero as soon
+as a certificate has fewer than `TLS_MIN_DAYS` days left (default: 30). It
+prints no secrets and is safe to run from cron:
+
+```cron
+0 7 * * * cd /srv/aura-storage && ./scripts/check_tls_expiry.sh >> /var/log/aura-tls.log 2>&1 || /usr/bin/logger -t aura-tls -p user.warning "A public TLS certificate expires soon"
+```
+
+Public certificates are ACME-managed with a 90-day lifetime, already inside the
+CA/Browser Forum limits (200 days from 2026-03-15, 100 days from 2027-03-15 and
+47 days from 2029-03-15). The alert exists to catch a broken ACME renewal, not
+to replace it.
+
 ## Capacity
 
 Investigate at 70% filesystem use and plan remediation before 80%; tune these thresholds to growth and expansion lead time. Reserve room for logs, metadata and temporary upload activity.
