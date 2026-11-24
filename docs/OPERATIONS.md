@@ -32,8 +32,10 @@ left alone, so a normal night is a no-op. Verify with `volume.list` that
 
 ## HTTP/3 and media caching
 
-Traefik publishes UDP/443 and enables HTTP/3 on `websecure`; the host firewall
-must allow `443/udp`. There is deliberately **no buffering middleware** on the
+Traefik publishes UDP/443 and enables HTTP/3 on `websecure`. On the current
+pilot UFW is disabled (`ENABLED=no`), so nothing blocks `443/udp`; if UFW is
+ever enabled, allow it explicitly with `sudo ufw allow 443/udp`. There is
+deliberately **no buffering middleware** on the
 S3 router: presigned PUT/GET bodies stream straight to SeaweedFS. The S3 router
 only carries HSTS, and nginx gzip types exclude `audio/*` and `video/*`.
 
@@ -42,6 +44,14 @@ replacement, grants are revocable), so they must keep `no-store`/short-lived
 redirects. `Cache-Control: public, max-age=31536000, immutable` belongs only on
 content-hashed assets (already done for `/assets/`) or on a CDN/course-site
 layer that owns its own immutable URLs. Do not add it to `/m/` or `/a/`.
+
+Cloudflare: the two existing DNS records (`aura-storage.` and
+`public.aura-storage.`) are currently **DNS-only** (`proxied=false`). Do not
+switch the S3 upload domain to orange-cloud without verifying the plan's upload
+size limit: presigned `PUT` bodies of 50 GiB would traverse the CDN and most
+free/low-cost plans cap request bodies far below that. If a CDN is needed for
+playback, use a **dedicated media hostname** with a verified plan, keep the S3
+upload hostname grey, and test Range requests through the CDN before rollout.
 
 ## Changes
 
