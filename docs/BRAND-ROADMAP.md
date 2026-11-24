@@ -119,4 +119,4 @@ Reste à faire : rendu visuel réel et contraste mesuré (voir dépendance d'env
 
 ## Prochaine action
 
-Phase 0 validée : exécuter la **phase 1** (trois variantes SVG + galerie), puis la phase 2 (validation technique) avant tout choix définitif.
+Phases 0 et 1 terminées. Prochaine action : terminer la **phase 2** (rendu visuel et contraste des trois variantes dans un navigateur), puis soumettre le **choix de la phase 3** (A / A1 / A2 / A3) avant toute intégration.
