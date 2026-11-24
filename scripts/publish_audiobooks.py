@@ -96,6 +96,44 @@ def unique_slug(base: str, oid: str) -> str:
     return candidate
 
 
+def filter_publication_rows(
+    rows: list, *, only_unpublished: bool, dedupe_display_name: bool,
+) -> tuple[list, dict]:
+    """Filter unsafe publication batches without touching the catalogue."""
+    excluded = {"already_published": 0, "published_title": 0, "duplicate": 0}
+    published_names = {
+        row["display_name"] for row in rows
+        if only_unpublished and row["published_at"]
+    }
+    if only_unpublished:
+        kept = []
+        for row in rows:
+            if row["published_at"]:
+                excluded["already_published"] += 1
+            elif row["display_name"] in published_names:
+                excluded["published_title"] += 1
+            else:
+                kept.append(row)
+        rows = kept
+    if dedupe_display_name:
+        unique = []
+        positions = {}
+        for row in rows:
+            name = row["display_name"]
+            if name not in positions:
+                positions[name] = len(unique)
+                unique.append(row)
+                continue
+            excluded["duplicate"] += 1
+            position = positions[name]
+            # Prefer an available copy over a newer pending/expired duplicate;
+            # otherwise the first row wins (rows are newest-first).
+            if row["status"] == "available" and unique[position]["status"] != "available":
+                unique[position] = row
+        rows = unique
+    return rows, excluded
+
+
 def s3_client():
     return boto3.client(
         "s3",
@@ -145,6 +183,12 @@ def main() -> int:
     parser.add_argument("--pack-description", default="Livres audio disponibles à l'écoute.")
     parser.add_argument("--revive-pending", action="store_true",
                         help="finalize pending/failed/expired intents whose bytes exist in S3")
+    parser.add_argument("--only-unpublished", action="store_true",
+                        help="ignore objects already exposed on the public portal")
+    parser.add_argument("--dedupe-display-name", action="store_true",
+                        help="skip published-title duplicates and keep one upload per display name")
+    parser.add_argument("--append-pack", action="store_true",
+                        help="add newly published books to the existing pack instead of replacing it")
     parser.add_argument("--apply", action="store_true", help="write changes (default: dry-run)")
     args = parser.parse_args()
 
@@ -161,6 +205,11 @@ def main() -> int:
         "ORDER BY created_at DESC",
         (sid, *AUDIO_TYPES),
     ).fetchall()
+    rows, excluded = filter_publication_rows(
+        rows,
+        only_unpublished=args.only_unpublished,
+        dedupe_display_name=args.dedupe_display_name,
+    )
     s3 = s3_client()
     ready: list[dict] = []
     skipped = {"no_bytes": 0, "no_sse": 0, "terminal": 0, "too_large": 0}
@@ -188,7 +237,10 @@ def main() -> int:
                 continue
         ready.append((obj, size))
 
-    print(f"espace={args.space} candidats={len(rows)} retenus={len(ready)} ignored={skipped}")
+    print(
+        f"espace={args.space} candidats={len(rows)} retenus={len(ready)} "
+        f"ignored={skipped} exclus={excluded}"
+    )
     for obj, size in ready:
         playable = PLAYABLE.get(obj["content_type"], obj["content_type"])
         print(f"  - {obj['display_name']} | {obj['status']} | {size} octets | {playable}")
@@ -241,10 +293,14 @@ def main() -> int:
         repo.create_collection(cid, sid, owner, args.pack_slug, args.pack_title, args.pack_description)
     else:
         cid = collection["id"]
-    repo.replace_collection_items(cid, published_ids)
+    pack_ids = list(published_ids)
+    if args.append_pack and collection is not None:
+        existing_ids = [item["id"] for item in repo.get_collection_items(cid)]
+        pack_ids = existing_ids + [oid for oid in published_ids if oid not in existing_ids]
+    repo.replace_collection_items(cid, pack_ids)
     repo.update_collection(cid, args.pack_title, args.pack_description, int(time.time()))
     print(
-        f"pack publie: {len(published_ids)} pistes ; "
+        f"pack publie: {len(published_ids)} nouvelles pistes, {len(pack_ids)} au total ; "
         f"manifeste sur APP_DOMAIN: /p/{args.pack_slug}.json ; "
         "catalogue du portail: /api/public/library"
     )
