@@ -179,3 +179,8 @@ if [[ "${LOCAL_ASSET_HASH}" != "${SERVED_ASSET_HASH}" ]]; then
   exit 1
 fi
 echo "Bundle verified: ${ASSET_PATH}"
+
+# Postflight: the PUBLIC portal. The app checks above say nothing about
+# PUBLIC_DOMAIN, so a stale API container or a missing Traefik route would
+# pass. scripts/portal-postflight.sh proves the portal serves this checkout.
+PUBLIC_DOMAIN="${PUBLIC_DOMAIN:-}" bash "${ROOT_DIR}/scripts/portal-postflight.sh"
