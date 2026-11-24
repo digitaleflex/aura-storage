@@ -1,0 +1,8 @@
+# Tested edge version for this deployment.
+#
+# The legacy TRAEFIK_IMAGE value may still be present in a local .env; this
+# committed override is authoritative for `docker compose` (plain invocation,
+# as used by scripts/deploy.sh) so every host runs the reviewed HTTP/3 fixes.
+services:
+  traefik:
+    image: traefik:v3.7.20

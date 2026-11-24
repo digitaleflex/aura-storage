@@ -148,3 +148,10 @@ def test_api_has_dedicated_oauth_egress_network() -> None:
     oauth_network = data["networks"]["oauth"]
     # An internal network has no default route: Google would be unreachable.
     assert oauth_network.get("internal") is not True
+
+
+def test_tested_traefik_version_is_pinned() -> None:
+    """The reviewed HTTP/3 build must win over a stale local .env value."""
+    override = COMPOSE.with_name("docker-compose.override.yml")
+    data = yaml.safe_load(override.read_text(encoding="utf-8"))
+    assert data["services"]["traefik"]["image"] == "traefik:v3.7.20"

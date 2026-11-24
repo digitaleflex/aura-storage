@@ -68,6 +68,15 @@ def test_deploy_publishes_an_immutable_frontend_release() -> None:
     assert "AURA_KEEP_RELEASES" in script
     assert 'export AURA_WEB_DIST_DIR' in script
     assert 'cp -a "${ROOT_DIR}/web/dist/." "${RELEASE_DIR}/"' in script
+
+
+def test_deploy_reconciles_all_services_before_conditional_recreates() -> None:
+    """An image bump must not be lost when nginx templates also changed."""
+    script = DEPLOY.read_text(encoding="utf-8")
+    assert (
+        'docker compose up -d --wait --wait-timeout 180 --remove-orphans\n'
+        'if [[ -f "${NGINX_HASH_FILE}" ]]'
+    ) in script
     assert "${AURA_WEB_DIST_DIR}${ASSET_PATH}" in script
 
 

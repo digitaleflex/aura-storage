@@ -102,11 +102,13 @@ if [[ ! -f "${ROOT_DIR}/config/seaweedfs/s3.json" ]]; then
 fi
 S3_CONFIG_HASH_FILE="${ROOT_DIR}/.deploy-s3-config-hash"
 CURRENT_S3_CONFIG_HASH="$(sha256sum "${ROOT_DIR}/config/seaweedfs/s3.json" | awk '{print $1}')"
+# Reconcile the whole stack first. A changed image tag (e.g. the reviewed
+# Traefik upgrade) or compose file must not be skipped when the bind-mounted
+# nginx templates also change and the branch below targets only two services.
+docker compose up -d --wait --wait-timeout 180 --remove-orphans
 if [[ -f "${NGINX_HASH_FILE}" ]] && [[ "$(cat "${NGINX_HASH_FILE}")" != "${CURRENT_NGINX_HASH}" ]]; then
   echo "nginx/landing config changed: recreating app and s3-landing services"
   docker compose up -d --wait --wait-timeout 180 --remove-orphans --force-recreate app s3-landing
-else
-  docker compose up -d --wait --wait-timeout 180 --remove-orphans
 fi
 # SeaweedFS reads -s3.config only at startup and reloads identities on SIGHUP;
 # on 4.48 a removed identity requires a restart. Restart the S3 gateway whenever

@@ -9,3 +9,8 @@ docker compose exec -T seaweed-filer sh -lc 'wget -q -O /dev/null http://127.0.0
   exit 1
 }
 echo "Local S3 endpoint HTTP check passed. This does not validate S3 authentication; run tests/s3-smoke-test.sh too."
+
+echo "Public TLS certificates:"
+./scripts/check_tls_expiry.sh || {
+  echo "WARNING: a public certificate expires soon; run scripts/check_tls_expiry.sh for details." >&2
+}
