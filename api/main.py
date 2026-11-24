@@ -1689,11 +1689,50 @@ def public_logout(principal: dict = Depends(require_public)):
     return out
 
 
+def _portal_csp() -> str:
+    """Content-Security-Policy of the public portal pages.
+
+    Scripts and styles are same-origin files (api/portal_assets), so no inline
+    script or <style> is allowed. Audio and covers are 302-redirected to the S3
+    host, which therefore has to be allowed for media and images. Inline style
+    *attributes* stay allowed (server-computed cover hue and progress width).
+    """
+    parts = urlsplit(settings.s3_endpoint or "")
+    s3 = f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
+    media = f"'self' {s3}".strip()
+    return (
+        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "style-src-attr 'unsafe-inline'; "
+        f"img-src {media}; media-src {media}; connect-src 'self'; "
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    )
+
+
 def _public_profile_headers() -> dict:
+    """Headers of every portal HTML page (login, catalogue, profile)."""
     return {
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
+        "Content-Security-Policy": _portal_csp(),
     }
+
+
+@app.get("/portal-assets/{name}")
+def portal_asset(name: str, request: Request):
+    """Stylesheet and scripts of the portal, versioned by content hash."""
+    if not _public_host_ok(request):
+        raise HTTPException(status_code=404, detail="not found")
+    asset = public_ui.ASSETS.get(name)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="not found")
+    data, content_type, version = asset
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff", "ETag": f'"{version}"',
+    }
+    if request.headers.get("if-none-match") == headers["ETag"]:
+        return Response(status_code=304, headers=headers)
+    return Response(data, media_type=content_type, headers=headers)
 
 
 @app.get("/profil", response_class=HTMLResponse)
@@ -1842,10 +1881,7 @@ def public_portal(request: Request):
         principal = authenticate_public(request)
     except HTTPException:
         principal = None
-    page_headers = {
-        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
-        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
-    }
+    page_headers = _public_profile_headers()
     if principal is None:
         return HTMLResponse(public_ui.login_page(), headers=page_headers)
     query = (request.query_params.get("q") or "").strip()[:120]
