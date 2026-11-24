@@ -1,0 +1,160 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permissions": [
+    {
+      "action": "shell",
+      "resource": "docker compose *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker compose * down *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker compose * rm *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker compose * scale *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker compose * up *--renew-anon-volumes*",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker compose * up *--remove-orphans*",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker compose * create *--renew-anon-volumes*",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker compose * create *--remove-orphans*",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker ps *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker images *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker logs *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker inspect *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker stats *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker version *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker info *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker system df *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker network ls *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker volume ls *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "docker exec *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker rm *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker container rm *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker rmi *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker image rm *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker volume rm *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker network rm *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker container prune *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker image prune *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker volume prune *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker network prune *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker builder prune *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "docker system prune *",
+      "effect": "ask"
+    }
+  ]
+}
