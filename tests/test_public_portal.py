@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import api.main as main  # noqa: E402
 from api.auth import hash_password  # noqa: E402
 from api import google_oauth  # noqa: E402
+from tests import catalogue_sql  # noqa: E402
 from api.google_oauth import verify_id_token as real_verify_id_token  # noqa: E402
 
 CLIENT_ID = "test-client.apps.googleusercontent.com"
@@ -445,9 +446,8 @@ def test_cover_redirect_may_be_cached_briefly(monkeypatch):
     _published_pack()
     c = _sign_in(TestClient(main.app))
     item = c.get("/api/public/library").json()["collections"][0]["items"][0]
-    main.repo.conn.execute(
+    catalogue_sql.execute(
         "UPDATE objects SET cover_key = ? WHERE id = ?", ("covers/x.jpg", item["id"]))
-    main.repo.conn.commit()
     monkeypatch.setattr(main, "presigned_get", lambda *a, **k: "https://s3.example/c.jpg")
     r = c.get(f"/covers/{item['id']}.jpg", follow_redirects=False)
     assert r.status_code == 302
