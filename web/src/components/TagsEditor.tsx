@@ -10,11 +10,14 @@ export function TagsEditor({
   csrf,
   onSaved,
   onNotify,
+  onFilterTag,
 }: {
   item: ObjectItem;
   csrf: string | null;
   onSaved: () => void;
   onNotify: (kind: "ok" | "error", text: string) => void;
+  /** Optional: render the saved tags as buttons that apply the files filter. */
+  onFilterTag?: (tag: string) => void;
 }) {
   const [value, setValue] = useState((item.tags ?? []).join(", "));
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +59,22 @@ export function TagsEditor({
           }}
         />
       </label>
+      {onFilterTag && (item.tags ?? []).length > 0 ? (
+        <div className="tag-chips" aria-label="Étiquettes enregistrées">
+          {(item.tags ?? []).map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              className="tag-chip"
+              aria-label={`Filtrer par l'étiquette ${tag}`}
+              title={`Filtrer par l'étiquette ${tag}`}
+              onClick={() => onFilterTag(tag)}
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <button
         type="button"
         className="btn btn-small"

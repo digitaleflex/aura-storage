@@ -15,6 +15,8 @@ export default tseslint.config(
   {
     ignores: [
       "dist/**",
+      "dist.bak-*/**",
+      ".vite/**",
       "node_modules/**",
       "storybook-static/**",
       "playwright-report/**",

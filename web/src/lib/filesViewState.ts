@@ -12,6 +12,8 @@ export interface FilesViewState {
   search: string;
   statusFilter: string;
   typeFilter: string;
+  tagFilter: string;
+  tagMode: "all" | "any";
   minSize: string;
   maxSize: string;
   fromDate: string;
@@ -33,6 +35,8 @@ const DEFAULT: FilesViewState = {
   search: "",
   statusFilter: "",
   typeFilter: "",
+  tagFilter: "",
+  tagMode: "all",
   minSize: "",
   maxSize: "",
   fromDate: "",
@@ -66,6 +70,7 @@ export function loadFilesView(): FilesViewState | null {
         : 0,
       sortField: isSortField(parsed.sortField) ? parsed.sortField : "created_at",
       sortOrder: parsed.sortOrder === "asc" ? "asc" : "desc",
+      tagMode: parsed.tagMode === "any" ? "any" : "all",
       viewMode: parsed.viewMode === "grid" ? "grid" : "list",
     };
   } catch {

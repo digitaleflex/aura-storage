@@ -485,7 +485,10 @@ export function ObjectsPage() {
   const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null);
   const [publishTarget, setPublishTarget] = useState<ObjectItem | null>(null);
   const [packsOpen, setPacksOpen] = useState(false);
-  const [tagFilter, setTagFilter] = useState("");
+  const [tagFilter, setTagFilter] = useState(() => restoredView?.tagFilter ?? "");
+  const [tagMode, setTagMode] = useState<"all" | "any">(
+    () => restoredView?.tagMode ?? "all",
+  );
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [zippingSelection, setZippingSelection] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -607,7 +610,16 @@ export function ObjectsPage() {
     const before = dateToEpoch(toDate, true);
     if (after !== undefined) query.createdAfter = after;
     if (before !== undefined) query.createdBefore = before;
-    if (tagFilter.trim()) query.tag = tagFilter.trim().toLowerCase();
+    const tags = tagFilter
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean);
+    if (tags.length > 1) {
+      query.tags = [...new Set(tags)].slice(0, 10);
+      query.tagMode = tagMode;
+    } else if (tags.length === 1) {
+      query.tag = tags[0];
+    }
     query.sort = sortField;
     query.order = sortOrder;
     return query;
@@ -623,6 +635,7 @@ export function ObjectsPage() {
     sortField,
     sortOrder,
     tagFilter,
+    tagMode,
   ]);
 
   const hasActiveFilters =
@@ -632,7 +645,8 @@ export function ObjectsPage() {
     minSize.trim() !== "" ||
     maxSize.trim() !== "" ||
     fromDate !== "" ||
-    toDate !== "";
+    toDate !== "" ||
+    tagFilter.trim() !== "";
 
   const activePillId =
     KIND_PILLS.find(
@@ -657,6 +671,7 @@ export function ObjectsPage() {
     maxSize,
     fromDate,
     toDate,
+    tagFilter,
   ].filter((value) => value.trim() !== "").length;
 
   function resetFilters() {
@@ -668,6 +683,7 @@ export function ObjectsPage() {
     setFromDate("");
     setToDate("");
     setTagFilter("");
+    setTagMode("all");
   }
 
   const canPurge = hasScope(session.data?.scopes, "objects:purge");
@@ -960,6 +976,8 @@ export function ObjectsPage() {
         search,
         statusFilter,
         typeFilter,
+        tagFilter,
+        tagMode,
         minSize,
         maxSize,
         fromDate,
@@ -975,6 +993,8 @@ export function ObjectsPage() {
     search,
     statusFilter,
     typeFilter,
+    tagFilter,
+    tagMode,
     minSize,
     maxSize,
     fromDate,
@@ -2019,6 +2039,36 @@ export function ObjectsPage() {
     return out;
   }, [objectsQuery.data]);
 
+  // Suggestions d'étiquettes tirées des objets déjà chargés. La liste est
+  // partielle par construction : elle ne remplace pas la saisie libre, qui
+  // reste la source de vérité et interroge le catalogue côté serveur.
+  const availableTags = useMemo(() => {
+    const tags = new Set<string>();
+    for (const item of items) {
+      for (const tag of item.tags ?? []) tags.add(tag);
+    }
+    return [...tags].sort((a, b) => a.localeCompare(b, "fr"));
+  }, [items]);
+
+  const tagsQuery = useQuery({
+    queryKey: ["object-tags"],
+    queryFn: () => api.listObjectTags(),
+    staleTime: 60_000,
+    // Only fetched when the advanced panel is open: no request on every load.
+    enabled: advancedOpen,
+  });
+
+  // The server list is authoritative for counts; locally loaded tags are kept
+  // as a fallback while the request is in flight or the endpoint unavailable.
+  const tagOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of tagsQuery.data?.items ?? []) counts.set(entry.tag, entry.count);
+    for (const tag of availableTags) if (!counts.has(tag)) counts.set(tag, 0);
+    return [...counts.entries()].sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "fr"),
+    );
+  }, [tagsQuery.data, availableTags]);
+
   // Répartition des statuts sur les pages déjà chargées. Elle ne peut pas
   // vivre dans le filtre d'état : celui-ci sert justement à charger les autres
   // statuts, donc un compteur y serait circulaire et partiel par construction.
@@ -2062,6 +2112,7 @@ export function ObjectsPage() {
     fromDate,
     toDate,
     tagFilter,
+    tagMode,
   ].join("\u0000");
   useEffect(() => {
     setSelectedIds(new Set());
@@ -3282,6 +3333,39 @@ export function ObjectsPage() {
               </datalist>
             </label>
             <label className="field">
+              <span>Étiquettes (séparées par des virgules)</span>
+              <input
+                type="text"
+                name="tag"
+                list="tag-options"
+                placeholder="ex. maths, l1"
+                value={tagFilter}
+                onChange={(e) => setTagFilter(e.target.value)}
+              />
+              <datalist id="tag-options">
+                {tagOptions.map(([tag, count]) => (
+                  <option
+                    key={tag}
+                    value={tag}
+                    label={count > 0 ? `${tag} (${count})` : tag}
+                  />
+                ))}
+              </datalist>
+            </label>
+            {tagFilter.includes(",") ? (
+              <label className="field">
+                <span>Combinaison</span>
+                <select
+                  name="tagMode"
+                  value={tagMode}
+                  onChange={(e) => setTagMode(e.target.value as "all" | "any")}
+                >
+                  <option value="all">Toutes les étiquettes</option>
+                  <option value="any">Au moins une étiquette</option>
+                </select>
+              </label>
+            ) : null}
+            <label className="field">
               <span>Taille min (o)</span>
               <input
                 type="number"
@@ -4068,9 +4152,22 @@ export function ObjectsPage() {
             csrf={csrf}
             onSaved={() => {
               void queryClient.invalidateQueries({ queryKey: ["objects"] });
+              void queryClient.invalidateQueries({ queryKey: ["object-tags"] });
               void objectsQuery.refetch();
             }}
             onNotify={notify}
+            onFilterTag={(tag) => {
+              setTagFilter((current) => {
+                const tags = current
+                  .split(",")
+                  .map((entry) => entry.trim())
+                  .filter(Boolean);
+                if (tags.includes(tag)) return current;
+                return [...tags, tag].join(", ");
+              });
+              setAdvancedOpen(true);
+              setDetails(null);
+            }}
           />
           <dl className="detail-list">
             <dt>Taille</dt>

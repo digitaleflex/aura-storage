@@ -258,6 +258,22 @@ paths:
             where each entry is an exact type or a prefix ending with `*`
             (`image/*,application/pdf`).
         - in: query
+          name: tag
+          schema: { type: string, maxLength: 32 }
+          description: Exact normalized tag (lowercase). Single-tag shorthand.
+        - in: query
+          name: tags
+          schema: { type: string, maxLength: 400 }
+          description: >-
+            Comma separated normalized tags (up to 10 after de-duplication).
+            Combined according to `tag_mode`.
+        - in: query
+          name: tag_mode
+          schema: { type: string, enum: [all, any], default: all }
+          description: >-
+            `all` requires every tag in `tags`; `any` requires at least one.
+            Ignored without `tags`.
+        - in: query
           name: min_size
           schema: { type: integer, minimum: 0 }
           description: Minimum committed size in bytes (pending rows still carry size -1).
@@ -554,6 +570,36 @@ paths:
         "409": { description: No multipart upload in progress for this object }
         "410": { description: "Upload intent expired, or the multipart upload no longer exists" }
         "422": { description: "Identifier is not a canonical UUID v4, or a part number is out of range" }
+  /api/v1/objects/tags:
+    get:
+      summary: List distinct tags visible to the caller, with object counts
+      description: >
+        Uses the same space/owner and hide-deleted rules as the object list, so
+        a tag never reveals an object the caller cannot list. No folder filter.
+      tags: [objects]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 200 }
+      responses:
+        "200":
+          description: Tag vocabulary ordered by descending count, then tag name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [tag, count]
+                      properties:
+                        tag: { type: string }
+                        count: { type: integer }
+        "401": { description: Authentication required }
+        "403": { description: Missing objects:read scope }
   /api/v1/objects/{oid}:
     get:
       summary: Get object metadata

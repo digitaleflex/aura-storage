@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AURA — directions d'identité</title>
+    <style>
+      :root {
+        --night-950: #060d1a;
+        --night-800: #10203a;
+        --night-700: #1a2f52;
+        --ink: #dbe4f3;
+        --muted: #aeb9cf;
+        --electric: #2e7cf6;
+        --lime: #c5f441;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 48px 32px 80px;
+        background: radial-gradient(900px 480px at 50% -12%, rgba(46,124,246,.18), transparent 60%), var(--night-950);
+        color: var(--ink);
+        font-family: "Plus Jakarta Sans", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.5;
+      }
+      .wrap { max-width: 1080px; margin: 0 auto; }
+      h1 { font-size: 30px; letter-spacing: -.02em; margin: 0 0 6px; }
+      h2 { font-size: 16px; margin: 0 0 18px; color: var(--muted); font-weight: 600; }
+      .intro { color: var(--muted); max-width: 720px; margin: 0 0 36px; }
+      .palette { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 40px; }
+      .swatch { display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,.03); border: 1px solid var(--night-700); border-radius: 10px; padding: 8px 12px 8px 8px; }
+      .swatch i { width: 28px; height: 28px; border-radius: 6px; display: block; }
+      .swatch code { font-size: 12px; color: var(--muted); }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+      .card { border: 1px solid var(--night-700); border-radius: 16px; overflow: hidden; background: rgba(255,255,255,.02); }
+      .card > header { padding: 16px 20px; border-bottom: 1px solid var(--night-700); }
+      .card > header strong { display: block; font-size: 18px; }
+      .card > header span { color: var(--muted); font-size: 13px; }
+      .stage { display: flex; align-items: center; justify-content: center; gap: 28px; padding: 32px 20px; }
+      .stage.dark { background: var(--night-950); }
+      .stage.light { background: #f4f7fc; }
+      .stage img { width: 86px; height: 86px; }
+      .stage .mini { width: 40px; height: 40px; }
+      .stage .tiny { width: 16px; height: 16px; }
+      .stage .mono { width: 86px; height: 86px; color: #10151d; }
+      .stage.light .mono { color: #10151d; }
+      .label { font-size: 11px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+      .card > footer { padding: 14px 20px 20px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--night-700); }
+      .hero { margin: 0 0 40px; border: 1px solid var(--night-700); border-radius: 16px; padding: 40px; background: linear-gradient(180deg, var(--night-800), var(--night-950)); }
+      .hero img { width: 100%; max-width: 460px; height: auto; display: block; }
+      .hero p { margin: 18px 0 0; color: var(--muted); font-size: 14px; }
+      .tag { display: inline-block; background: rgba(197,244,65,.12); color: var(--lime); border: 1px solid rgba(197,244,65,.3); border-radius: 999px; padding: 3px 10px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 12px; }
+      .wide { width: 100%; max-width: 560px; height: auto; display: block; }
+      h3.section { margin: 52px 0 6px; font-size: 22px; letter-spacing: -.02em; }
+      p.section-intro { margin: 0 0 22px; color: var(--muted); max-width: 720px; }
+      .note { margin-top: 40px; padding: 20px 24px; border-left: 3px solid var(--electric); background: rgba(46,124,246,.07); border-radius: 0 10px 10px 0; color: var(--muted); font-size: 14px; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>AURA — nouvelles directions d'identité</h1>
+      <p class="intro">Trois propositions de marque, construites à partir de la palette déjà employée par l'application et la page d'entrée S3. Aucun élément tiers, aucun logo existant réutilisé : formes originales en SVG.</p>
+
+      <div class="palette">
+        <div class="swatch"><i style="background:#060d1a"></i><code>#060d1a</code></div>
+        <div class="swatch"><i style="background:#10203a"></i><code>#10203a</code></div>
+        <div class="swatch"><i style="background:#1a2f52"></i><code>#1a2f52</code></div>
+        <div class="swatch"><i style="background:#2e7cf6"></i><code>#2e7cf6</code></div>
+        <div class="swatch"><i style="background:#c5f441"></i><code>#c5f441</code></div>
+        <div class="swatch"><i style="background:#dbe4f3"></i><code>#dbe4f3</code></div>
+      </div>
+
+      <section class="hero">
+        <span class="tag">Recommandé</span>
+        <h2>A — « Halo Vault » — verrouillage complet</h2>
+        <img src="aura-lockup-halo.svg" alt="Verrouillage horizontal AURA Vault" />
+        <p>Le monogramme A (AURA) est aussi une voûte de coffre ; le halo bleu évoque l'aura, le point lime le geste d'ouverture. Le mot « VAULT » conserve le nom connu des utilisateurs.</p>
+      </section>
+
+      <div class="grid">
+        <article class="card">
+          <header><strong>A — Halo Vault</strong><span>Monogramme, halo, coffre</span></header>
+          <div class="stage dark"><span class="label">Sombre</span><img src="aura-mark-halo.svg" alt="" /></div>
+          <div class="stage light"><span class="label">Clair</span><img src="aura-mark-halo.svg" alt="" /></div>
+          <footer>Direction recommandée : la plus lisible en petit format et la plus proche de l'identité actuelle (géométrie de voûte).</footer>
+        </article>
+
+        <article class="card">
+          <header><strong>B — Sentinel</strong><span>Bouclier et couches superposées</span></header>
+          <div class="stage dark"><span class="label">Sombre</span><img src="aura-mark-sentinel.svg" alt="" /></div>
+          <div class="stage light"><span class="label">Clair</span><img src="aura-mark-sentinel.svg" alt="" /></div>
+          <footer>Insiste sur la protection et le chiffrement. Plus « sécurité » que « stockage » ; bouclier plus dense à 16 px.</footer>
+        </article>
+
+        <article class="card">
+          <header><strong>C — Orbits</strong><span>Aura/orbites et noyau-coffre</span></header>
+          <div class="stage dark"><span class="label">Sombre</span><img src="aura-mark-orbits.svg" alt="" /></div>
+          <div class="stage light"><span class="label">Clair</span><img src="aura-mark-orbits.svg" alt="" /></div>
+          <footer>Sans fond, donc réutilisable en avatar ou filigrane. Moins immédiatement « stockage » que A et B.</footer>
+        </article>
+
+        <article class="card">
+          <header><strong>Monochrome</strong><span>Une seule couleur courante</span></header>
+          <div class="stage dark"><span class="label">Clair sur sombre</span><img class="mono" src="aura-mark-mono.svg" alt="" style="color:#dbe4f3" /></div>
+          <div class="stage light"><span class="label">Sombre sur clair</span><img class="mono" src="aura-mark-mono.svg" alt="" /></div>
+          <footer>Pour tampons, impression et contextes où la couleur n'est pas disponible. Hérite de <code>currentColor</code>.</footer>
+        </article>
+
+        <article class="card">
+          <header><strong>Favicon</strong><span>32 px, simplifié</span></header>
+          <div class="stage dark"><span class="label">32 px</span><img src="aura-favicon.svg" alt="" /><img class="mini" src="aura-favicon.svg" alt="" /><img class="tiny" src="aura-favicon.svg" alt="" /></div>
+          <div class="stage light"><span class="label">Sur fond clair</span><img src="aura-favicon.svg" alt="" /><img class="mini" src="aura-favicon.svg" alt="" /><img class="tiny" src="aura-favicon.svg" alt="" /></div>
+          <footer>Le halo est conservé mais allégé ; la barre lime reste le seul accent à 16 px.</footer>
+        </article>
+      </div>
+
+      <h3 class="section">Phase 1 — variante modulaire</h3>
+      <p class="section-intro">Trois pistes d'évolution de la direction A, d'après les principes de Dashlane et Pure Storage : monogramme à concept, géométrie décomposable, révélation progressive. Aucun tracé de marque tierce n'est repris.</p>
+
+      <div class="grid">
+        <article class="card">
+          <header><strong>A1 — Dash</strong><span>Traverse décomposée en 3 tirets</span></header>
+          <div class="stage dark"><span class="label">Sombre</span><img src="aura-mark-dash.svg" alt="" /><img class="mini" src="aura-mark-dash.svg" alt="" /></div>
+          <div class="stage light"><span class="label">Clair</span><img src="aura-mark-dash.svg" alt="" /><img class="mini" src="aura-mark-dash.svg" alt="" /></div>
+          <footer>Les tirets évoquent les couches de fichiers. À valider à 16 px : les écarts peuvent se fondre en petite taille.</footer>
+        </article>
+
+        <article class="card">
+          <header><strong>A2 — Reveal</strong><span>Révélation animée par couches</span></header>
+          <div class="stage dark"><span class="label">Animation</span><img src="aura-mark-reveal.svg" alt="" /><img class="mini" src="aura-mark-reveal.svg" alt="" /></div>
+          <div class="stage light"><span class="label">Sur fond clair</span><img src="aura-mark-reveal.svg" alt="" /><img class="mini" src="aura-mark-reveal.svg" alt="" /></div>
+          <footer>CSS intégré, <code>prefers-reduced-motion</code> respecté. Destination possible : états de transfert et de chargement.</footer>
+        </article>
+
+        <article class="card">
+          <header><strong>A3 — System</strong><span>Famille d'icônes sur une grille unique</span></header>
+          <div class="stage dark"><img class="wide" src="aura-icons-system.svg" alt="Coffre, fichier, dossier et partage" /></div>
+          <div class="stage light"><img class="wide" src="aura-icons-system.svg" alt="Coffre, fichier, dossier et partage" /></div>
+          <footer>Coffre, fichier, dossier, partage : même tuile, même accent lime, même épaisseur de trait.</footer>
+        </article>
+      </div>
+
+      <p class="note">Direction A retenue et appliquée : monogramme dans l'application, favicon et page S3. Les variantes de phase 1 sont des explorations, pas encore intégrées. Voir <code>docs/BRAND-ROADMAP.md</code>.</p>
+    </div>
+  </body>
+</html>

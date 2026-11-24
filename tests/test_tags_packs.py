@@ -76,6 +76,81 @@ def test_tags_are_normalized_filterable_and_validated():
     ).status_code == 403
 
 
+def test_multiple_tags_support_all_and_any_modes():
+    a = f"a{uuid.uuid4().hex[:8]}"
+    b = f"b{uuid.uuid4().hex[:8]}"
+    c, headers = _admin()
+    only_a = _object(c, headers, name="only-a.pdf")
+    only_b = _object(c, headers, name="only-b.pdf")
+    both = _object(c, headers, name="both.pdf")
+    assert _tags(c, headers, only_a, [a]).status_code == 200
+    assert _tags(c, headers, only_b, [b]).status_code == 200
+    assert _tags(c, headers, both, [a, b]).status_code == 200
+
+    def ids(url):
+        return [item["id"] for item in c.get(url, headers=headers).json()["items"]]
+
+    assert ids(f"/api/v1/objects?tags={a},{b}&tag_mode=all") == [both]
+    assert set(ids(f"/api/v1/objects?tags={a},{b}&tag_mode=any")) == {only_a, only_b, both}
+    # Normalization and de-duplication mirror the single-tag shorthand.
+    assert ids(f"/api/v1/objects?tags={a.upper()},{a},{b}&tag_mode=all") == [both]
+    assert set(ids(f"/api/v1/objects?tag={a}")) == {only_a, both}
+
+
+def test_tag_filters_treat_user_input_literally():
+    c, headers = _admin()
+    oid = _object(c, headers)
+    assert _tags(c, headers, oid, ["safe"]).status_code == 200
+    # Tags are bound as SQL parameters: a wildcard or a quote cannot widen the
+    # filter into an "everything" match or an injection.
+    for hostile in ("%", "_", "safe' OR '1'='1", "safe,%"):
+        result = c.get("/api/v1/objects", params={"tag": hostile}, headers=headers)
+        assert result.status_code == 200, result.text
+        assert result.json()["items"] == [], hostile
+
+
+def test_tag_vocabulary_counts_only_visible_objects():
+    # Unique tags: the test catalogue is shared with the other tests in this file.
+    shared = f"v{uuid.uuid4().hex[:8]}"
+    single = f"w{uuid.uuid4().hex[:8]}"
+    c, headers = _admin()
+    a = _object(c, headers, name="a.pdf")
+    b = _object(c, headers, name="b.pdf")
+    assert _tags(c, headers, a, [shared.upper(), single]).status_code == 200
+    assert _tags(c, headers, b, [shared]).status_code == 200
+
+    items = c.get("/api/v1/objects/tags", headers=headers).json()["items"]
+    assert {"tag": shared, "count": 2} in items
+    assert {"tag": single, "count": 1} in items
+    assert items == sorted(items, key=lambda e: (-e["count"], e["tag"]))
+
+    # A soft-deleted object is hidden from the default list and from the counts.
+    main.repo.set_status(b, "deleted")
+    items = c.get("/api/v1/objects/tags", headers=headers).json()["items"]
+    assert {"tag": shared, "count": 1} in items
+    assert {"tag": single, "count": 1} in items
+
+
+def test_tag_vocabulary_is_owner_scoped():
+    secret = f"z{uuid.uuid4().hex[:8]}"
+    c, headers = _admin()
+    oid = _object(c, headers)
+    assert _tags(c, headers, oid, [secret]).status_code == 200
+
+    name = f"user-{uuid.uuid4().hex[:8]}"
+    password = "user-password-123"
+    main.repo.create_user(
+        name, hash_password(password), role="user",
+        space_id=main.repo.list_spaces()[0]["id"],
+    )
+    other = TestClient(main.app)
+    login = other.post("/api/v1/login", json={"username": name, "password": password})
+    assert login.status_code == 200, login.text
+    headers_other = {"X-CSRF-Token": login.json()["csrf_token"]}
+    items = other.get("/api/v1/objects/tags", headers=headers_other).json()["items"]
+    assert all(entry["tag"] != secret for entry in items)
+
+
 def test_pack_order_publication_and_manifest():
     c, headers = _admin()
     a, b = _object(c, headers, name="intro.pdf"), _object(c, headers, name="suite.pdf")

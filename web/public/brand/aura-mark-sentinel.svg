@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AURA Vault — Sentinel">
+  <!-- Direction B — « Sentinel » : bouclier et couches superposées. -->
+  <defs>
+    <linearGradient id="se-tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#10203a"/>
+      <stop offset="1" stop-color="#060d1a"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="62" height="62" rx="17" fill="url(#se-tile)" stroke="#1a2f52"/>
+  <path d="M32 10.5 L51 17.5 V32 C51 43.5 43 50.5 32 54.5 C21 50.5 13 43.5 13 32 V17.5 Z" fill="#0f1c33" stroke="#2e7cf6" stroke-width="2.6" stroke-linejoin="round"/>
+  <path d="M22 25.5 L32 20.5 L42 25.5 L32 30.5 Z" fill="#c5f441"/>
+  <path d="M22 31 L32 36 L42 31 L42 35 L32 40 L22 35 Z" fill="#dbe4f3"/>
+  <path d="M22 38 L32 43 L42 38 L42 41 L32 46 L22 41 Z" fill="#2e7cf6"/>
+</svg>

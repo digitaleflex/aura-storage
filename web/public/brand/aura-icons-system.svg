@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 72" role="img" aria-label="AURA Vault — famille d'icônes">
+  <!-- Phase 1 — A3 « System » : quatre icônes sur la même grille de 64 px. -->
+  <defs>
+    <linearGradient id="sy-tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#10203a"/>
+      <stop offset="1" stop-color="#060d1a"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(0 4)">
+    <rect x="1" y="1" width="62" height="62" rx="17" fill="url(#sy-tile)" stroke="#1a2f52"/>
+    <path d="M53.7 44.5 A25 25 0 1 1 44.5 10.4" fill="none" stroke="#2e7cf6" stroke-width="2.6" stroke-linecap="round"/>
+    <circle cx="44.5" cy="10.4" r="3.2" fill="#c5f441"/>
+    <path d="M32 14 L50 50 H41 L32 27 L23 50 H14 Z" fill="#dbe4f3"/>
+    <rect x="19" y="38" width="26" height="4.6" rx="2.3" fill="#c5f441"/>
+  </g>
+
+  <g transform="translate(72 4)">
+    <rect x="1" y="1" width="62" height="62" rx="17" fill="url(#sy-tile)" stroke="#1a2f52"/>
+    <path d="M22 15 h13 l7 7 v25 a2 2 0 0 1 -2 2 h-18 a2 2 0 0 1 -2 -2 v-30 a2 2 0 0 1 2 -2 Z" fill="none" stroke="#dbe4f3" stroke-width="2.6" stroke-linejoin="round"/>
+    <path d="M35 15 v7 h7" fill="none" stroke="#dbe4f3" stroke-width="2.6" stroke-linejoin="round"/>
+    <rect x="25" y="35" width="14" height="3.4" rx="1.7" fill="#c5f441"/>
+  </g>
+
+  <g transform="translate(144 4)">
+    <rect x="1" y="1" width="62" height="62" rx="17" fill="url(#sy-tile)" stroke="#1a2f52"/>
+    <path d="M18 24 h11 l4.5 5 h12.5 a2 2 0 0 1 2 2 v18 a2 2 0 0 1 -2 2 h-28 a2 2 0 0 1 -2 -2 v-23 a2 2 0 0 1 2 -2 Z" fill="none" stroke="#dbe4f3" stroke-width="2.6" stroke-linejoin="round"/>
+    <rect x="22" y="34" width="16" height="3.4" rx="1.7" fill="#c5f441"/>
+    <circle cx="46" cy="19" r="2.6" fill="#2e7cf6"/>
+  </g>
+
+  <g transform="translate(216 4)">
+    <rect x="1" y="1" width="62" height="62" rx="17" fill="url(#sy-tile)" stroke="#1a2f52"/>
+    <path d="M22 24 L44 20 M22 24 L30 45 M44 20 L30 45" fill="none" stroke="#2e7cf6" stroke-width="2.2"/>
+    <circle cx="22" cy="24" r="4.5" fill="#dbe4f3"/>
+    <circle cx="44" cy="20" r="4.5" fill="#dbe4f3"/>
+    <circle cx="30" cy="45" r="4.5" fill="#dbe4f3"/>
+    <rect x="29" y="28" width="8" height="8" rx="2" fill="#c5f441"/>
+  </g>
+</svg>

@@ -91,6 +91,8 @@ def build_object_where(
     hide_deleted: bool = False,
     content_type: Optional[str] = None,
     tag: Optional[str] = None,
+    tags: Optional[list[str]] = None,
+    tag_mode: str = "all",
     min_size: Optional[int] = None,
     max_size: Optional[int] = None,
     created_after: Optional[int] = None,
@@ -120,6 +122,24 @@ def build_object_where(
             f"WHERE t.object_id = objects.id AND t.tag = {ph})"
         )
         params.append(tag)
+    if tags:
+        # The API normalizes and de-duplicates; cap here too so a direct caller
+        # cannot turn one request into an unbounded number of EXISTS clauses.
+        values = list(dict.fromkeys(tags))[:10]
+        if tag_mode == "any":
+            marks = ", ".join([ph] * len(values))
+            clauses.append(
+                "EXISTS (SELECT 1 FROM object_tags t "
+                f"WHERE t.object_id = objects.id AND t.tag IN ({marks}))"
+            )
+            params.extend(values)
+        else:
+            for value in values:
+                clauses.append(
+                    "EXISTS (SELECT 1 FROM object_tags t "
+                    f"WHERE t.object_id = objects.id AND t.tag = {ph})"
+                )
+                params.append(value)
     if q:
         clauses.append(
             f"LOWER(display_name) LIKE LOWER({ph}) {_ESCAPE_SQL}"

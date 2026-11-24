@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="AURA Vault">
+  <!-- Favicon 32 px : monogramme A + halo, simplifié pour la petite taille. -->
+  <rect x="0.5" y="0.5" width="31" height="31" rx="7" fill="#060d1a" stroke="#1a2f52"/>
+  <path d="M26.8 22.2 A12.5 12.5 0 1 1 22.3 5.2" fill="none" stroke="#2e7cf6" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="22.3" cy="5.2" r="1.6" fill="#c5f441"/>
+  <path d="M16 7 L25 25 H20.5 L16 13.5 L11.5 25 H7 Z" fill="#dbe4f3"/>
+  <rect x="9.5" y="19" width="13" height="2.3" rx="1.15" fill="#c5f441"/>
+</svg>
