@@ -23,10 +23,14 @@ BACKUP_DEST="${1:-${AURA_DATA_DIR}/backups}"
 RETENTION="${2:-7}"           # Nombre de backups à garder (défaut: 7)
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="${BACKUP_DEST}/aura-backup-${TIMESTAMP}"
-CONTAINER_NAME="${AURA_API_CONTAINER:-aura-api}"
-PG_CONTAINER="${AURA_PG_CONTAINER:-aura-postgres}"
+CONTAINER_NAME="${AURA_API_CONTAINER:-${AURA_INSTANCE_ID:-aura-001}-api}"
+PG_CONTAINER="${AURA_PG_CONTAINER:-${AURA_INSTANCE_ID:-aura-001}-postgres}"
+PG_USER="${AURA_PG_USER:-${POSTGRES_USER:-aura}}"
 
 # --- Vérification de l'espace disque avant de commencer --------------------
+# Créer la destination avant `df`, sinon un répertoire absent donnait 0 Ko
+# disponible et faisait échouer la sauvegarde à tort.
+mkdir -p "${BACKUP_DEST}"
 AVAILABLE_KB=$(df "${BACKUP_DEST}" 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
 if [ "${AVAILABLE_KB}" -lt 1048576 ]; then  # moins de 1 Go disponible
   echo "[aura-backup] ERREUR : Espace disque insuffisant (< 1 Go) sur ${BACKUP_DEST}" >&2
@@ -40,18 +44,25 @@ echo "[aura-backup] Rétention : ${RETENTION} backup(s) maximum"
 
 # --- 1. Sauvegarde du catalogue PostgreSQL --------------------------------
 echo "[aura-backup] Sauvegarde PostgreSQL…"
-docker exec "${PG_CONTAINER}" pg_dumpall --clean --if-exists --username=postgres \
+docker exec "${PG_CONTAINER}" pg_dumpall --clean --if-exists --username="${PG_USER}" \
   > "${BACKUP_DIR}/catalogue.sql" 2>/dev/null || {
     echo "[aura-backup] ERREUR : pg_dumpall a échoué" >&2
     exit 1
   }
 
 # --- 2. Sauvegarde des données SeaweedFS (volumes) ------------------------
+# docker-compose.yml monte ${AURA_DATA_DIR}/{master,volume,filer} dans les
+# conteneurs SeaweedFS (pas un répertoire unique `seaweedfs`).
 echo "[aura-backup] Sauvegarde des données SeaweedFS…"
-if [ -d "${AURA_DATA_DIR}/seaweedfs" ]; then
-  tar -czf "${BACKUP_DIR}/seaweedfs-data.tar.gz" -C "${AURA_DATA_DIR}" seaweedfs
+SEAWEED_DIRS=()
+for d in master volume filer; do
+  [ -d "${AURA_DATA_DIR}/${d}" ] && SEAWEED_DIRS+=("$d")
+done
+if [ "${#SEAWEED_DIRS[@]}" -gt 0 ]; then
+  tar -czf "${BACKUP_DIR}/seaweedfs-data.tar.gz" -C "${AURA_DATA_DIR}" "${SEAWEED_DIRS[@]}"
 else
-  echo "[aura-backup] ATTENTION : répertoire SeaweedFS introuvable, ignoré."
+  echo "[aura-backup] ATTENTION : répertoires SeaweedFS introuvables, ignorés." >&2
+  exit 1
 fi
 
 # --- 3. Sauvegarde des journaux d'audit -----------------------------------
