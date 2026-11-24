@@ -7,7 +7,9 @@ no external resource, so the strict portal CSP applies unchanged.
 import json
 from urllib.parse import quote, urlencode
 
-from .public_ui import ESC, _BRAND, _GOOGLE, _duration_text, _position_text, page_head
+from .public_ui import (
+    ESC, _BRAND, _GOOGLE, _duration_text, _heart_button, _position_text, asset_url, page_head,
+)
 
 SITE_NAME = "AURA"
 
@@ -145,6 +147,8 @@ def book_page(
         ld["author"] = {"@type": "Person", "name": author}
     if duration:
         ld["duration"] = f"PT{int(duration)}S"
+    if principal:
+        meta.append(("name", "csrf-token", str(principal.get("csrf") or "")))
     parts = [page_head(f"{label} — {SITE_NAME}", description, meta)]
     if base_url:
         parts.append(f'<link rel="canonical" href="{ESC(url)}">')
@@ -175,7 +179,8 @@ def book_page(
             '<p class="fine">Gratuit · aucun mot de passe à créer.</p>',
         ]
     parts += [
-        '<p class="share"><span class="label">Partager</span> ',
+        '<p class="share">' + (_heart_button(item, label=True) if principal else '')
+        + '<span class="label">Partager</span> ',
         f'<a class="pill" href="https://wa.me/?text={ESC(quote(label + " " + url))}" rel="noopener noreferrer" target="_blank">WhatsApp</a> ',
         f'<button type="button" class="pill" data-copy="{ESC(url or book_path(item))}">Copier le lien</button></p>',
         '</div></article>',
@@ -192,6 +197,8 @@ def book_page(
         parts.append('<section class="shelf"><div class="shelf-head"><h2>Du même auteur</h2></div><ul class="book-grid">')
         parts.extend(_card(i) for i in related)
         parts.append('</ul></section>')
+    if principal:
+        parts.append('<script src="' + asset_url("favorites.js") + '"></script>')
     parts.append('</main><footer class="site-foot">AURA · Écoute privée</footer></body></html>')
     return "".join(parts)
 

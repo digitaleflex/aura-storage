@@ -20,6 +20,7 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 | `GET /api/public/me` | identité + jeton CSRF de la session publique |
 | `POST /api/public/logout` | détruit la session (CSRF requis) |
 | `GET /api/public/library` | catalogue publié (JSON), avec position d'écoute par visiteur |
+| `PUT/DELETE /api/public/favorites/{id}` | ajoute/retire un livre publié des favoris du visiteur (CSRF, idempotent ; table `listen_favorites`, migration `0022`) |
 | `POST /api/public/progress` | enregistre la position de lecture (CSRF, session publique) |
 | `GET /m/{slug}` | redirection média publique déjà existante, routée ici aussi pour le lecteur |
 | `GET /portal-assets/{nom}` | feuille de style et scripts du portail (empreinte dans l'URL, cache immuable) |
@@ -49,6 +50,13 @@ inline : le CSS et le JS vivent dans `api/portal_assets/` (`portal.css`, `common
 `/portal-assets/` et `/profil` vers l'API sur le domaine public.
 
 `/api/v1/*`, `/s/*`, `/f/*`, `/p/*` et la console React restent sur `APP_DOMAIN`.
+
+## Mode sombre et favoris
+
+Le CSS suit le réglage du système (`prefers-color-scheme: dark`, palette nuit + laiton, tout passe
+par des variables CSS ; `color-scheme: light dark` adapte aussi lecteur natif et listes). Un cœur
+sur chaque livre (catalogue et page livre) alimente l'étagère « Mes favoris » ; l'état est privé,
+supprimé avec le compte, et le clic est annulé côté page si le serveur refuse.
 
 ## Lecteur et confort d'écoute
 

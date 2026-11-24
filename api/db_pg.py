@@ -127,6 +127,7 @@ class Repository:
     def delete_public_account(self, uid: str) -> None:
         """Delete a public portal account and its portal-owned data."""
         self._run("DELETE FROM listen_progress WHERE user_id = %s", (uid,))
+        self._run("DELETE FROM listen_favorites WHERE user_id = %s", (uid,))
         self._run("DELETE FROM sessions WHERE user_id = %s", (uid,))
         self._run(
             "DELETE FROM users WHERE id = %s AND role = 'public'", (uid,)
@@ -194,6 +195,29 @@ class Repository:
             (user_id, *object_ids),
         )
         return {r["object_id"]: float(r["position_seconds"]) for r in rows}
+
+    def get_favorite_ids(self, user_id: str, object_ids: list) -> set:
+        """Which of ``object_ids`` the visitor has put in their favourites."""
+        if not object_ids:
+            return set()
+        return {r["object_id"] for r in self._all(
+            "SELECT object_id FROM listen_favorites "
+            "WHERE user_id = %s AND object_id = ANY(%s)",
+            (user_id, list(object_ids)),
+        )}
+
+    def set_favorite(self, user_id: str, object_id: str, favorite: bool, now: int) -> None:
+        if favorite:
+            self._run(
+                "INSERT INTO listen_favorites (user_id, object_id, created_at) "
+                "VALUES (%s, %s, %s) ON CONFLICT (user_id, object_id) DO NOTHING",
+                (user_id, object_id, now),
+            )
+        else:
+            self._run(
+                "DELETE FROM listen_favorites WHERE user_id = %s AND object_id = %s",
+                (user_id, object_id),
+            )
 
     def save_progress(
         self, user_id: str, object_id: str, position_seconds: float, now: int,

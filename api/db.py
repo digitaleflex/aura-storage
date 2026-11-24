@@ -122,6 +122,7 @@ class Repository:
     def delete_public_account(self, uid: str) -> None:
         """Delete a public portal account and its portal-owned data."""
         self.conn.execute("DELETE FROM listen_progress WHERE user_id = ?", (uid,))
+        self.conn.execute("DELETE FROM listen_favorites WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
         self.conn.execute(
             "DELETE FROM users WHERE id = ? AND role = 'public'", (uid,)
@@ -192,6 +193,33 @@ class Repository:
             (user_id, *object_ids),
         ).fetchall()
         return {r["object_id"]: float(r["position_seconds"]) for r in rows}
+
+    def get_favorite_ids(self, user_id: str, object_ids: list) -> set:
+        """Which of ``object_ids`` the visitor has put in their favourites."""
+        found: set = set()
+        for start in range(0, len(object_ids), 500):
+            batch = object_ids[start:start + 500]
+            marks = ",".join("?" for _ in batch)
+            found.update(r["object_id"] for r in self.conn.execute(
+                "SELECT object_id FROM listen_favorites "
+                f"WHERE user_id = ? AND object_id IN ({marks})",
+                (user_id, *batch),
+            ).fetchall())
+        return found
+
+    def set_favorite(self, user_id: str, object_id: str, favorite: bool, now: int) -> None:
+        if favorite:
+            self.conn.execute(
+                "INSERT INTO listen_favorites (user_id, object_id, created_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(user_id, object_id) DO NOTHING",
+                (user_id, object_id, now),
+            )
+        else:
+            self.conn.execute(
+                "DELETE FROM listen_favorites WHERE user_id = ? AND object_id = ?",
+                (user_id, object_id),
+            )
+        self.conn.commit()
 
     def save_progress(
         self, user_id: str, object_id: str, position_seconds: float, now: int,
