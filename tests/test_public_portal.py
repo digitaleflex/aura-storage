@@ -1010,3 +1010,78 @@ def test_magic_link_helpers_and_smtp_delivery(monkeypatch):
     assert [c[0] for c in calls] == ["connect", "starttls", "login", "send"]
     assert calls[-1][1] == "x@example.org" and "https://p.example/connexion/lien?token=abc" in calls[-1][3]
     assert "15 minutes" in calls[-1][3]
+
+
+# --------------------------------------------------------------------------
+# Search, sort, recommendations, 404 page
+# --------------------------------------------------------------------------
+from api import public_book, public_ui  # noqa: E402
+
+
+def _item(i, author, title, **kw):
+    return {"id": f"id-{i}", "display_name": f"{author} - {title}", "title": title, "author": author,
+            "created_at": 1000 + i, "duration_seconds": 600 * (i + 1), "chapters": [], "cover_url": None,
+            "url": f"/m/s{i}", "progress_seconds": 0, "favorite": False, **kw}
+
+
+def test_fold_ignores_accents_and_case_and_sorts_keep_unknown_values_untouched():
+    assert public_ui.fold("Éléonore DUPRÉ") == "eleonore dupre"
+    items = [_item(0, "Zola", "Germinal"), _item(1, "Éluard", "Capitale"), _item(2, "", "Anonyme", duration_seconds=0)]
+    assert [i["id"] for i in public_ui.sort_items(items, "titre")] == ["id-2", "id-1", "id-0"]
+    assert [i["id"] for i in public_ui.sort_items(items, "auteur")] == ["id-1", "id-0", "id-2"]  # no author last
+    assert [i["id"] for i in public_ui.sort_items(items, "recent")] == ["id-2", "id-1", "id-0"]
+    assert [i["id"] for i in public_ui.sort_items(items, "duree")] == ["id-0", "id-1", "id-2"]  # unknown length last
+    assert public_ui.sort_items(items, "n-importe-quoi") is items
+
+
+def test_search_is_accent_insensitive_matches_every_word_and_sort_is_validated(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    _, _, oid = _book()
+    catalogue_sql.execute("UPDATE objects SET display_name = ? WHERE id = ?",
+                           ("Éléonore Dupré - Le Grand Départ.mp3", oid))
+    c = TestClient(main.app)
+    assert f'href="/livre/{oid}"' in c.get("/?q=eleonore+depart").text
+    assert f'href="/livre/{oid}"' in c.get("/?q=DUPRE").text
+    assert f'href="/livre/{oid}"' not in c.get("/?q=eleonore+zzz").text  # every word must match
+    page = c.get("/?tri=titre")
+    assert 'option value="titre" selected' in page.text
+    assert page.headers["x-robots-tag"] == "noindex, nofollow"  # sorted views are not indexed
+    assert 'selected' not in c.get("/?tri=hacked%22%3E").text.split('name="tri"')[1].split("</select>")[0].replace('value="" selected', "")
+
+
+def test_recommendations_follow_the_visitors_own_signals_only():
+    books = [_item(0, "Hugo", "Les Misérables", favorite=True), _item(1, "Hugo", "Notre-Dame"),
+             _item(2, "Hugo", "Ruy Blas"), _item(3, "Zola", "Germinal", progress_seconds=60),
+             _item(4, "Zola", "Nana"), _item(5, "Verne", "Nemo")]
+    picks = public_ui.recommend(books)
+    assert [b["id"] for b in picks] == ["id-1", "id-2", "id-4"]  # Hugo (3) before Zola (1); Verne: no signal
+    assert public_ui.recommend([_item(0, "A", "x"), _item(1, "B", "y")]) == []
+    principal = {"id": "u", "csrf": "c", "display_name": "L"}
+    html = public_ui.catalog_page(principal, [{"title": "T", "description": "", "items": books}])
+    assert 'id="pour-vous"' in html and "Pour vous" in html
+    plain = public_ui.catalog_page(principal, [{"title": "T", "description": "", "items": [_item(9, "Q", "r")]}])
+    assert 'id="pour-vous"' not in plain
+
+
+def test_book_page_suggests_what_to_listen_to_next():
+    a, b, c = _item(0, "Hugo", "Un"), _item(1, "Hugo", "Deux"), _item(2, "Zola", "Trois")
+    html = public_book.book_page(a, "Ma série", [b], None, up_next=[c])
+    assert "Du même auteur" in html and "À écouter ensuite" in html and "Ma série" in html
+    assert 'href="/livre/id-2"' in html
+
+
+def test_unknown_portal_address_gets_an_html_404_but_the_api_keeps_json(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    c = TestClient(main.app)
+    page = c.get("/page-qui-nexiste-pas", headers={"Accept": "text/html"})
+    assert page.status_code == 404 and "Page introuvable" in page.text
+    assert "content-security-policy" in page.headers
+    assert c.get("/page-qui-nexiste-pas").json() == {"detail": "Not Found"}  # no Accept: html -> default
+    assert c.get("/api/public/inconnu", headers={"Accept": "text/html"}).json() == {"detail": "Not Found"}
+    monkeypatch.setattr(main.settings, "public_domain", "autre.example.org")  # other host: untouched
+    assert c.get("/page-qui-nexiste-pas", headers={"Accept": "text/html"}).json() == {"detail": "Not Found"}
+
+
+def test_player_allows_airplay():
+    _published_pack()
+    assert 'x-webkit-airplay="allow"' in _sign_in(TestClient(main.app)).get("/").text

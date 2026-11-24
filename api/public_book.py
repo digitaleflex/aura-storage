@@ -8,8 +8,8 @@ import json
 from urllib.parse import quote, urlencode
 
 from .public_ui import (
-    ESC, _BRAND, _GOOGLE, _duration_text, _heart_button, _position_text, asset_url, email_form,
-    page_head,
+    ESC, SORTS, _BRAND, _GOOGLE, _duration_text, _heart_button, _position_text, asset_url,
+    email_form, page_head,
 )
 
 SITE_NAME = "AURA"
@@ -58,7 +58,7 @@ def _brand_bar(principal: dict | None) -> str:
 
 def landing_page(
     collections: list[dict], query: str = "", authors: list[str] | None = None,
-    active_author: str = "", base_url: str = "", with_email: bool = False,
+    active_author: str = "", base_url: str = "", with_email: bool = False, sort: str = "",
 ) -> str:
     """Anonymous front page: the catalogue to browse, a clear way to sign in."""
     authors = authors or []
@@ -96,8 +96,11 @@ def landing_page(
             sel = " selected" if a == active_author else ""
             parts.append(f'<option value="{ESC(a)}"{sel}>{ESC(a)}</option>')
         parts.append('</select>')
-    parts.append('<button type="submit">Rechercher</button></form>')
-    if query or active_author:
+    parts.append('<select name="tri" aria-label="Tri">')
+    for label, value in SORTS:
+        parts.append(f'<option value="{ESC(value)}"{" selected" if value == sort else ""}>{ESC(label)}</option>')
+    parts.append('</select><button type="submit">Rechercher</button></form>')
+    if query or active_author or sort:
         parts.append('<p class="filters-reset"><a class="facet-clear" href="/">Effacer les filtres</a></p>')
     if not items:
         parts.append('<p class="empty">Aucun livre ne correspond à votre recherche.</p>')
@@ -116,6 +119,7 @@ def landing_page(
 def book_page(
     item: dict, collection_title: str, related: list[dict],
     principal: dict | None, base_url: str = "", preview_seconds: int = 0,
+    up_next: list[dict] | None = None,
 ) -> str:
     """One book: cover, facts, free preview, chapters, sign-in / listen call to action."""
     label = str(item.get("title") or item.get("display_name") or "Livre")
@@ -198,6 +202,12 @@ def book_page(
     if related:
         parts.append('<section class="shelf"><div class="shelf-head"><h2>Du même auteur</h2></div><ul class="book-grid">')
         parts.extend(_card(i) for i in related)
+        parts.append('</ul></section>')
+    if up_next:
+        parts.append('<section class="shelf"><div class="shelf-head"><h2>À écouter ensuite</h2>'
+                     + (f'<p class="desc">Dans « {ESC(collection_title)} ».</p>' if collection_title else "")
+                     + '</div><ul class="book-grid">')
+        parts.extend(_card(i) for i in up_next)
         parts.append('</ul></section>')
     if principal:
         parts.append('<script src="' + asset_url("favorites.js") + '"></script>')
