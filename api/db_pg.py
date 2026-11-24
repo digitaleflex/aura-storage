@@ -108,19 +108,23 @@ class Repository:
 
     def create_oauth_user(
         self, username: str, pass_hash: str, provider: str, subject: str,
-        email: str, role: str = "public",
+        email: str, role: str = "public", plan: str = "free",
     ) -> str:
         """PostgreSQL mirror of the SQLite public-portal user creation."""
         uid = self.new_id()
         application_id, space_id = self.default_scope()
         self._run(
             "INSERT INTO users (id, username, pass_hash, created_at, role, "
-            "application_id, space_id, oauth_provider, oauth_sub, email) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "application_id, space_id, oauth_provider, oauth_sub, email, plan) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (uid, username, pass_hash, self.now(), role, application_id,
-             space_id, provider, subject, email),
+             space_id, provider, subject, email, plan),
         )
         return uid
+
+    def set_user_plan(self, uid: str, plan: str) -> None:
+        """PostgreSQL mirror of ``Repository.set_user_plan``."""
+        self._run("UPDATE users SET plan = %s WHERE id = %s", (plan, uid))
 
     def create_user(
         self, username: str, pass_hash: str, role: str = "user",
@@ -1664,6 +1668,15 @@ class Repository:
             params.append(owner_id)
         sql += " ORDER BY c.created_at DESC"
         return self._all(sql, tuple(params))
+
+    def get_published_collections_for_object(self, oid: str) -> list:
+        """PostgreSQL twin: published packs containing one object."""
+        return self._all(
+            "SELECT c.* FROM collections c JOIN collection_items i "
+            "ON i.collection_id = c.id WHERE i.object_id = %s "
+            "AND c.published_at IS NOT NULL ORDER BY c.updated_at DESC",
+            (oid,),
+        )
 
     def list_published_collections(self) -> list:
         """Published collections for the public portal, newest first.

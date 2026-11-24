@@ -22,6 +22,7 @@
   const closeButton = document.getElementById('close');
   const chapterData = JSON.parse((document.getElementById('chapters-data') || {textContent:'{}'}).textContent || '{}');
   let index = -1, lastSaved = 0, retries = 0, sleepTimer = null, endOfChapter = false, showRemaining = false;
+  let lastFocused = null;
   const STORE = {speed:'aura-player-speed', volume:'aura-player-volume', remaining:'aura-player-remaining'};
   function storeGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
   function storeSet(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
@@ -76,6 +77,7 @@
     if(seek){
       if(dur > 0){ seek.max = dur; }
       seek.value = pos;
+      seek.setAttribute('aria-valuetext', fmt(pos) + (dur > 0 ? ' sur ' + fmt(dur) : ''));
     }
     if(timeNow) timeNow.textContent = fmt(pos);
     if(timeTotal){
@@ -132,8 +134,31 @@
     setDisabled(prevChapter, noCh || ci <= 0);
     setDisabled(nextChapter, noCh || ci >= list.length - 1);
   }
+  function fullscreenFocusables(){
+    var roots = [bar, queuePanel, chaptersPanel].filter(Boolean);
+    var out = [];
+    roots.forEach(function(root){
+      Array.from(root.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), '
+        + 'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )).forEach(function(el){
+        if(!el.hidden && el.offsetParent !== null && out.indexOf(el) < 0) out.push(el);
+      });
+    });
+    return out;
+  }
   function setFullscreenState(active){
-    document.body.classList.toggle('full-player', !!active);
+    active = !!active;
+    if(active === document.body.classList.contains('full-player')) return;
+    if(active){
+      lastFocused = document.activeElement;
+      bar.setAttribute('role', 'dialog');
+      bar.setAttribute('aria-modal', 'true');
+    } else {
+      bar.removeAttribute('role');
+      bar.removeAttribute('aria-modal');
+    }
+    document.body.classList.toggle('full-player', active);
     if(fullButton){
       fullButton.setAttribute('aria-pressed', active ? 'true' : 'false');
       fullButton.setAttribute('aria-label', active ? 'Réduire le lecteur' : 'Agrandir le lecteur');
@@ -150,6 +175,13 @@
         closeButton.setAttribute('aria-label', 'Fermer le lecteur');
         closeButton.setAttribute('title', 'Arrêter la lecture');
       }
+    }
+    if(active){
+      var target = closeButton || document.getElementById('play-toggle');
+      if(target) target.focus();
+    } else if(lastFocused && typeof lastFocused.focus === 'function'){
+      lastFocused.focus();
+      lastFocused = null;
     }
   }
   function resumeAt(start, expected){
@@ -276,6 +308,19 @@
       } catch(e){}
     }
   }
+  function attachSubtitle(){
+    Array.from(audio.querySelectorAll('track')).forEach(function(t){ t.remove(); });
+    var item = tracks[index];
+    var url = item && item.dataset.subtitle;
+    if(!url) return;
+    var text = document.createElement('track');
+    text.kind = 'subtitles';
+    text.srclang = 'fr';
+    text.label = 'Sous-titres';
+    text.src = url;
+    audio.appendChild(text);
+    try { text.track.mode = 'hidden'; } catch(e){}
+  }
   function selectTrack(i, autoplay){
     if(i < 0 || i >= tracks.length) return;
     index = i; retries = 0; lastSaved = 0; endOfChapter = false;
@@ -283,6 +328,7 @@
     const track = tracks[i];
     syncTrackVisual(i);
     audio.src = track.dataset.url;
+    attachSubtitle();
     audio.load();
     const start = parseFloat(track.dataset.progress || '0') || 0;
     resumeAt(start, i);
@@ -378,15 +424,19 @@
   }
   var volume = document.getElementById('volume');
   if(volume){
+    function volumeText(v){ volume.setAttribute('aria-valuetext', Math.round(v * 100) + ' %'); }
+    volumeText(parseFloat(volume.value || '1'));
     var savedVol = storeGet(STORE.volume);
     if(savedVol !== null && !isNaN(parseFloat(savedVol))){
       var vv = Math.min(1, Math.max(0, parseFloat(savedVol)));
       volume.value = String(vv);
       audio.volume = vv;
+      volumeText(vv);
     }
     volume.addEventListener('input', function(e){
       var v = parseFloat(e.target.value || '1');
       audio.volume = v;
+      volumeText(v);
       storeSet(STORE.volume, String(v));
     });
   }
@@ -448,10 +498,11 @@
         endOfChapter = true;
         if(statusLine) statusLine.textContent = 'Arrêt prévu à la fin du chapitre.';
       } else if(val === 'custom'){
-        var mins = parseFloat(window.prompt('Minuteur (minutes) :', '20') || '');
-        if(isFinite(mins) && mins > 0){
-          sleepTimer = setTimeout(function(){ audio.pause(); clearSleepTimer(); }, mins * 60000);
-          if(statusLine) statusLine.textContent = 'Minuteur : ' + mins + ' min.';
+        var dialog = document.getElementById('sleep-dialog');
+        if(dialog && typeof dialog.showModal === 'function'){
+          var field = document.getElementById('sleep-minutes');
+          if(field) field.value = '20';
+          dialog.showModal();
         } else {
           sleepSelect.value = '0';
         }
@@ -463,6 +514,23 @@
         } else if(statusLine && statusLine.textContent.indexOf('Minuteur') === 0){
           statusLine.textContent = '';
         }
+      }
+    });
+  }
+  var sleepDialog = document.getElementById('sleep-dialog');
+  if(sleepDialog){
+    sleepDialog.addEventListener('close', function(){
+      if(sleepDialog.returnValue !== 'confirm'){
+        if(sleepSelect) sleepSelect.value = '0';
+        return;
+      }
+      var field = document.getElementById('sleep-minutes');
+      var mins = field ? parseFloat(field.value) : NaN;
+      if(isFinite(mins) && mins > 0){
+        sleepTimer = setTimeout(function(){ audio.pause(); clearSleepTimer(); }, mins * 60000);
+        if(statusLine) statusLine.textContent = 'Minuteur : ' + mins + ' min.';
+      } else if(sleepSelect){
+        sleepSelect.value = '0';
       }
     });
   }
@@ -507,6 +575,7 @@
     var wait = 400 * retries;
     setTimeout(function(){
       audio.src = track.dataset.url + (track.dataset.url.indexOf('?') >= 0 ? '&' : '?') + 'refresh=' + Date.now();
+      attachSubtitle();
       audio.load();
       resumeAt(position, index);
       audio.play().catch(function(){
@@ -558,7 +627,19 @@
   window.addEventListener('beforeunload', function(){ updateProgressUI(true); });
   document.addEventListener('visibilitychange', function(){ if(document.hidden) updateProgressUI(true); });
   document.addEventListener('keydown', function(e){
-    if(['INPUT','SELECT','TEXTAREA'].indexOf(e.target.tagName) >= 0) return;
+    // A focused button/link already handles Space and Enter: toggling the
+    // player too would fire two actions for a single keypress (issue #297).
+    if(['INPUT','SELECT','TEXTAREA','BUTTON','A'].indexOf(e.target.tagName) >= 0) return;
+    if(e.target.isContentEditable) return;
+    if(e.key === 'Tab' && document.body.classList.contains('full-player')){
+      var items = fullscreenFocusables();
+      if(items.length){
+        var first = items[0], last = items[items.length - 1];
+        if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+        else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+      }
+      return;
+    }
     if(e.code === 'Space'){ e.preventDefault(); toggle(); }
     else if(e.key === 'ArrowRight'){ e.preventDefault(); audio.currentTime = Math.min(isFinite(audio.duration)?audio.duration:Infinity, (audio.currentTime||0) + 15); }
     else if(e.key === 'ArrowLeft'){ e.preventDefault(); audio.currentTime = Math.max(0,(audio.currentTime||0) - 15); }

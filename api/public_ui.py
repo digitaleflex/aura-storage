@@ -75,13 +75,16 @@ _PWA_TAGS = (
     '<link rel="apple-touch-icon" href="' + asset_url("icon-192.png") + '">'
 )
 
+# Keyboard users must be able to skip the branded header on every page.
+_SKIP_LINK = '<a class="skip-link" href="#main">Aller au contenu</a>'
+
 _HEAD = (
     '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
     '<meta name="viewport" content="width=device-width, initial-scale=1">'
     + _PWA_TAGS +
     '<link rel="stylesheet" href="' + asset_url("portal.css") + '">'
     '<script defer src="' + asset_url("common.js") + '"></script>'
-    '</head><body>'
+    '</head><body>' + _SKIP_LINK
 )
 
 
@@ -171,7 +174,7 @@ def profile_page(principal: dict, message: str = "", error: str = "") -> str:
         f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
         '<button class="text-button" type="submit">Déconnexion</button>',
         '</form></div></header>',
-        '<main class="profile-shell">',
+        '<main class="profile-shell" id="main">',
         '<a class="back-link" href="/">← Retour à la bibliothèque</a>',
         '<header class="library-header profile-head"><h1>Mon profil</h1>',
         '<p class="lede">Gérez vos informations personnelles sur le portail.</p></header>',
@@ -323,6 +326,9 @@ def _track_html(item: dict) -> str:
     return "".join([
         '<li><button type="button" class="track-button"',
         f' data-url="{ESC(item.get("url") or "")}"',
+        # Public VTT is served under /m/<slug>/subtitles.vtt when the object
+        # has one; the player attaches it as a real <track> (issue #297).
+        f' data-subtitle="{ESC((str(item.get("url") or "") + "/subtitles.vtt") if str(item.get("url") or "").startswith("/m/") else "")}"',
         f' data-object-id="{ESC(item.get("id") or "")}"',
         f' data-title="{ESC(label)}"',
         f' data-author="{ESC(author)}"',
@@ -351,6 +357,9 @@ def catalog_page(
     authors: list[str] | None = None,
     active_author: str = "",
     sort: str = "",
+    premium: bool = False,
+    page: int = 1,
+    page_size: int = 60,
 ) -> str:
     authors = authors or []
     name = (
@@ -360,6 +369,16 @@ def catalog_page(
         or "Auditeur"
     )
     csrf = str(principal.get("csrf") or "")
+    # Offline download is a premium feature. Free listeners still get the
+    # player and the one-minute excerpt; they simply never see the button and
+    # cannot obtain the full-file URL from the page.
+    offline_button = (
+        '<button type="button" class="pill-button icon-button" id="offline-toggle" '
+        'aria-pressed="false" title="Télécharger ce livre pour l’écouter sans connexion" '
+        'disabled>Télécharger</button>'
+        if premium else
+        '<span class="premium-hint" title="Réservé aux comptes premium">Premium</span>'
+    )
 
     def href(**changes):
         params = {}
@@ -371,6 +390,8 @@ def catalog_page(
             params["auteur"] = active_author
         if sort:
             params["tri"] = sort
+        if page > 1:
+            params["page"] = str(page)
         for key, value in changes.items():
             if value in (None, ""):
                 params.pop(key, None)
@@ -379,6 +400,21 @@ def catalog_page(
         return "/?" + urlencode(params) if params else "/"
 
     all_items = [item for col in collections for item in col.get("items", [])]
+    # Paginate the browse list only. The shelves below keep the whole catalogue
+    # (they are small, personalised selections) so navigation does not change.
+    page = max(1, page)
+    page_size = max(1, min(200, page_size))
+    start, end = (page - 1) * page_size, page * page_size
+    cursor = 0
+    visible_collections = []
+    for col in collections:
+        items = col.get("items", [])
+        chunk = items[max(0, start - cursor):max(0, end - cursor)]
+        cursor += len(items)
+        if chunk:
+            visible_collections.append({**col, "items": chunk})
+    has_prev = page > 1
+    has_next = end < len(all_items)
     seen: set[str] = set()
     resume = []
     for item in sorted(all_items, key=lambda i: float(i.get("progress_seconds") or 0), reverse=True):
@@ -425,7 +461,7 @@ def catalog_page(
         f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
         '<button class="text-button" type="submit">Déconnexion</button>',
         '</form></div></header>',
-        f'<main class="library view-{ESC(view)}">',
+        f'<main class="library view-{ESC(view)}" id="main">',
         '<header class="library-header"><h1>Bon retour.</h1>',
         '<p class="lede">Reprenez là où votre esprit s\'est arrêté.</p>',
         '<form class="search-form" method="get" action="/">',
@@ -448,17 +484,18 @@ def catalog_page(
     parts.append('<div class="controls-block">')
     parts.append('<nav class="control-row" aria-label="Mode d\'affichage"><span class="label">Vue</span>')
     for label, value in (("Liste", "liste"), ("Grille", "grille"), ("Immersif", "immersif")):
-        current = "true" if view == value else "false"
+        # aria-current must be absent when false, not "false".
+        current = ' aria-current="true"' if view == value else ""
         parts.append(
-            f'<a class="view-link" href="{ESC(href(vue=value if value != "liste" else None))}" '
-            f'aria-current="{current}">{label}</a>'
+            f'<a class="view-link" href="{ESC(href(vue=value if value != "liste" else None))}"'
+            f'{current}>{label}</a>'
         )
     parts.append('</nav>')
     parts.append('<nav class="control-row" aria-label="Tri"><span class="label">Tri</span>')
     for label, value in SORTS:
+        current = ' aria-current="true"' if sort == value else ""
         parts.append(
-            f'<a class="view-link" href="{ESC(href(tri=value or None))}" '
-            f'aria-current="{"true" if sort == value else "false"}">{label}</a>'
+            f'<a class="view-link" href="{ESC(href(tri=value or None))}"{current}>{label}</a>'
         )
     parts.append('</nav>')
 
@@ -605,12 +642,25 @@ def catalog_page(
     shelf("pour-vous", "Pour vous", suggested, "Dans la veine de vos favoris et de vos écoutes.")
     shelf("nouveautes", "Nouveautés", newest, "Les titres récemment ajoutés à votre bibliothèque.")
     shelf("decouvrir", "À découvrir", discover, "Une sélection pour varier vos prochaines écoutes.")
-    for col in collections:
+    for col in visible_collections:
         shelf("tous", col.get("title") or "Bibliothèque", col.get("items", []))
 
+    if has_prev or has_next:
+        parts.append('<nav class="catalog-pages" aria-label="Pages du catalogue">')
+        if has_prev:
+            parts.append(f'<a class="pill-button" href="{ESC(href(page=page - 1))}" rel="prev">← Précédent</a>')
+        parts.append(f'<span class="page-label">Page {page}</span>')
+        if has_next:
+            parts.append(f'<a class="pill-button" href="{ESC(href(page=page + 1))}" rel="next">Suivant →</a>')
+        parts.append('</nav>')
+
+    # Only embed chapters for items that actually appear on this page or in a
+    # shelf: a 500-title catalogue no longer ships 500 chapter lists in HTML.
+    rendered = resume + favorites + suggested + newest + discover
+    rendered += [i for col in visible_collections for i in col.get("items", [])]
     chapter_map = {
         str(item.get("id")): (item.get("chapters") or [])
-        for item in all_items
+        for item in rendered
     }
     chapters_json = json.dumps(chapter_map, ensure_ascii=False).replace("<", "\\u003c")
     parts.append(
@@ -641,7 +691,7 @@ def catalog_page(
         '</div>',
         '<div class="seek-row">',
         '<span class="time start" id="time-now">0:00</span>',
-        '<input class="seek" id="seek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Position dans le livre">',
+        '<input class="seek" id="seek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Position dans le livre" aria-valuetext="0:00">',
         '<button type="button" class="time end time-toggle" id="time-total" aria-label="Afficher le temps restant" title="Afficher le temps restant">0:00</button>',
         '</div></div>',
 
@@ -661,16 +711,36 @@ def catalog_page(
         '<option value="60">60 min</option><option value="chapter">Fin du chapitre</option>',
         '<option value="custom">Personnalisé…</option></select></div>',
         '<div class="control-group"><label for="volume">Volume</label>',
-        '<input id="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume"></div>',
+        '<input id="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume" aria-valuetext="100 %"></div>',
         '<div class="utility-buttons" role="group" aria-label="Panneaux et affichage">',
         '<button type="button" class="pill-button icon-button" id="chapters-toggle" aria-label="Chapitres" aria-controls="chapters-panel" aria-expanded="false" title="Chapitres">Chapitres</button>',
         '<button type="button" class="pill-button icon-button" id="queue-toggle" aria-label="File d’attente" aria-controls="queue-panel" aria-expanded="false" title="File d’attente">File</button>',
         '<button type="button" class="pill-button icon-button" id="fullscreen" aria-label="Agrandir le lecteur" aria-pressed="false" title="Agrandir le lecteur">Agrandir</button>',
-        '<button type="button" class="pill-button icon-button" id="offline-toggle" aria-pressed="false" title="Télécharger ce livre pour l’écouter sans connexion" disabled>Télécharger</button>',
+        offline_button,
         '<button type="button" class="pill-button icon-button" id="close" aria-label="Fermer le lecteur" title="Fermer ou arrêter">Fermer</button>',
         '</div></div>',
         '<p class="player-status" id="player-status" role="status" aria-live="polite"></p>',
         '</section>',
+        # Native dialogs give focus trapping and Escape for free: no more
+        # window.prompt() in the sleep timer or the bookmark note (issue #297).
+        '<dialog id="sleep-dialog" aria-labelledby="sleep-dialog-title">',
+        '<form method="dialog">',
+        '<h3 id="sleep-dialog-title">Minuteur personnalisé</h3>',
+        '<label for="sleep-minutes">Durée en minutes</label>',
+        '<input id="sleep-minutes" type="number" min="1" max="600" value="20" inputmode="numeric">',
+        '<div class="dialog-actions">',
+        '<button type="submit" value="cancel">Annuler</button>',
+        '<button type="submit" value="confirm" class="primary-button">Démarrer</button>',
+        '</div></form></dialog>',
+        '<dialog id="note-dialog" aria-labelledby="note-dialog-title">',
+        '<form method="dialog">',
+        '<h3 id="note-dialog-title">Note du marque-page</h3>',
+        '<label for="note-text">Note (facultatif)</label>',
+        '<textarea id="note-text" maxlength="200" rows="3"></textarea>',
+        '<div class="dialog-actions">',
+        '<button type="submit" value="cancel">Annuler</button>',
+        '<button type="submit" value="confirm" class="primary-button">Enregistrer</button>',
+        '</div></form></dialog>',
 
         '<aside class="queue-panel" id="queue-panel" hidden aria-label="File d\'attente">',
         '<div class="queue-panel-head"><h3>Dans la file</h3>'

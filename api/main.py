@@ -2264,10 +2264,16 @@ def public_portal(request: Request):
     collections = _public_collections(principal)
     authors = _catalog_authors(collections)
     collections = _filter_collections(collections, query, author, sort)
+    try:
+        page = max(1, int(request.query_params.get("page", "1")))
+    except ValueError:
+        page = 1
     return HTMLResponse(
         public_ui.catalog_page(
             principal, collections, query=query, view=view,
             authors=authors, active_author=author, sort=sort,
+            premium=str(principal.get("plan") or "free").lower() == "premium",
+            page=page,
         ),
         headers=_public_profile_headers(),
     )
@@ -2284,12 +2290,46 @@ def _optional_public_principal(request: Request):
         return None
 
 
+def _public_plan_for_email(email: str) -> str:
+    """Bootstrap plan from the operator allow-list; never downgrades a row."""
+    allow = {str(item).strip().lower() for item in settings.premium_emails}
+    return "premium" if str(email or "").strip().lower() in allow else "free"
+
+
+def _require_premium(request: Request) -> dict:
+    """Authenticate the public session and require the premium product plan.
+
+    This is a product gate, not an authorization scope: a public principal
+    still has zero object capabilities. Full-file routes call it before they
+    mint any presigned URL.
+    """
+    principal = authenticate_public(request)
+    if not settings.public_require_premium:
+        return principal
+    if str(principal.get("plan") or "free").lower() != "premium":
+        raise HTTPException(status_code=403, detail="premium account required")
+    return principal
+
+
 def _find_public_book(oid: str):
-    """``(item, collection)`` of a published book, or ``(None, None)``."""
-    for col in _public_catalog():
-        for item in col["items"]:
-            if item["id"] == oid:
-                return item, col
+    """``(item, collection)`` of a published book, or ``(None, None)``.
+
+    A book page used to rebuild the entire published catalogue (every pack and
+    every chapter) just to find one object. Look up the packs containing this
+    id directly and build only that pack's items (issue #299).
+    """
+    row = _as_dict(repo.get_object_unscoped(oid) or {})
+    if (
+        not row or row["status"] != AVAILABLE
+        or not row.get("published_at") or not row.get("public_slug")
+    ):
+        return None, None
+    for col_row in repo.get_published_collections_for_object(oid):
+        col = _as_dict(col_row)
+        items = _library_items(col, only_published=True)
+        item = next((i for i in items if i["id"] == oid), None)
+        if item is not None:
+            return item, {"title": col["title"], "items": items}
     return None, None
 
 

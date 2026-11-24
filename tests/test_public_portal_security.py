@@ -45,6 +45,19 @@ def _configure(monkeypatch):
     main.reset_login_attempts()
     monkeypatch.setattr(main.settings, "public_domain", "testserver")
     monkeypatch.setattr(main, "_public_catalog", lambda: CATALOG)
+    # The book page now resolves a single pack directly (issue #299).
+    monkeypatch.setattr(main.repo, "get_published_collections_for_object", lambda oid: [
+        {"id": "col-phase0", "title": "Un livre", "updated_at": 0},
+    ])
+    monkeypatch.setattr(main, "_library_items", lambda col, only_published=False: CATALOG[0]["items"])
+    monkeypatch.setattr(main.repo, "get_audio_chapters_map", lambda ids: {})
+    monkeypatch.setattr(main.repo, "get_object_unscoped", lambda oid: {
+        "id": oid, "status": "available", "published_at": int(time.time()),
+        "public_slug": "livre-phase0", "bucket": "aura", "object_key": f"aura/{oid}",
+        "space_id": main.repo.default_scope()[1], "content_type": "audio/mpeg",
+        "size_bytes": 1000, "duration_seconds": 120,
+        "display_name": "Auteur Test - Chapitre 1.mp3",
+    })
     yield
     main.reset_login_attempts()
 

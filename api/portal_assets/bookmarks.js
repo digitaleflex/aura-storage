@@ -74,18 +74,36 @@
       .catch(function () {});
   }
 
+  var noteDialog = document.getElementById('note-dialog');
+  var noteField = document.getElementById('note-text');
+  var pendingBook = null;
   addButton.addEventListener('click', function () {
     var id = bookId();
     if (!id) return;
-    var note = window.prompt('Note pour ce marque-page (facultatif) :', '');
-    if (note === null) return;
+    if (noteDialog && typeof noteDialog.showModal === 'function') {
+      pendingBook = id;
+      if (noteField) noteField.value = '';
+      noteDialog.showModal();
+      return;
+    }
+    saveNote(id, '');
+  });
+  function saveNote(id, note) {
     api('POST', '/api/public/bookmarks', {
       object_id: id, position_seconds: audio.currentTime || 0, note: note.slice(0, 200)
     }).then(load).catch(function (e) {
       var status = document.getElementById('player-status');
       if (status) status.textContent = e.status === 409 ? 'Trop de marque-pages sur ce livre (50 maximum).' : 'Marque-page non enregistré.';
     });
-  });
+  }
+  if (noteDialog) {
+    noteDialog.addEventListener('close', function () {
+      var id = pendingBook;
+      pendingBook = null;
+      if (!id || noteDialog.returnValue !== 'confirm') return;
+      saveNote(id, noteField ? noteField.value : '');
+    });
+  }
 
   // Livre changé : recharger les marque-pages.
   audio.addEventListener('loadstart', function () { setTimeout(function () { if (bookId() !== shown) load(); }, 0); });

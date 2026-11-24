@@ -103,25 +103,32 @@ class Repository:
 
     def create_oauth_user(
         self, username: str, pass_hash: str, provider: str, subject: str,
-        email: str, role: str = "public",
+        email: str, role: str = "public", plan: str = "free",
     ) -> str:
         """Create a public-portal user from a verified OAuth identity.
 
         ``pass_hash`` is an argon2 hash of a random secret: the account has no
         usable password and can only be entered through the OAuth callback.
         The role defaults to ``public``, which carries no object capability.
+        ``plan`` is a product label ("free" or "premium"), never a capability:
+        authorization is always checked separately from the public session.
         """
         uid = self.new_id()
         application_id, space_id = self.default_scope()
         self.conn.execute(
             "INSERT INTO users (id, username, pass_hash, created_at, role, "
-            "application_id, space_id, oauth_provider, oauth_sub, email) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "application_id, space_id, oauth_provider, oauth_sub, email, plan) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (uid, username, pass_hash, self.now(), role, application_id,
-             space_id, provider, subject, email),
+             space_id, provider, subject, email, plan),
         )
         self.conn.commit()
         return uid
+
+    def set_user_plan(self, uid: str, plan: str) -> None:
+        """Set the product plan of a public account. Never called on downgrade."""
+        self.conn.execute("UPDATE users SET plan = ? WHERE id = ?", (plan, uid))
+        self.conn.commit()
 
     def create_user(
         self, username: str, pass_hash: str, role: str = "user",
@@ -1907,6 +1914,15 @@ class Repository:
             params.append(owner_id)
         sql += " ORDER BY c.created_at DESC"
         return [_as_dict(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    def get_published_collections_for_object(self, oid: str) -> list:
+        """Published packs containing one object (book pages, bounded lookup)."""
+        return [_as_dict(r) for r in self.conn.execute(
+            "SELECT c.* FROM collections c JOIN collection_items i "
+            "ON i.collection_id = c.id WHERE i.object_id = ? "
+            "AND c.published_at IS NOT NULL ORDER BY c.updated_at DESC",
+            (oid,),
+        ).fetchall()]
 
     def list_published_collections(self) -> list:
         """Published collections for the public portal, newest first.

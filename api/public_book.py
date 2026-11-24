@@ -8,7 +8,7 @@ import json
 from urllib.parse import quote, urlencode
 
 from .public_ui import (
-    ESC, SORTS, _BRAND, _GOOGLE, _duration_text, _heart_button, _position_text, asset_url,
+    ESC, SORTS, _BRAND, _GOOGLE, _SKIP_LINK, _duration_text, _heart_button, _position_text, asset_url,
     cover_hue, email_form, fallback_cover_inner, page_head,
 )
 
@@ -76,8 +76,8 @@ def landing_page(
         meta.append(("property", "og:url", base_url + "/"))
     parts = [
         page_head("AURA — Bibliothèque de livres audio", description, meta),
-        '</head><body>', _brand_bar(None),
-        '<main class="library view-grille">',
+        '</head><body>', _SKIP_LINK, _brand_bar(None),
+        '<main class="library view-grille" id="main">',
         '<section class="welcome"><p class="kicker">Bibliothèque audio</p>',
         '<h1>Des livres à écouter, <span class="nowrap">où que vous soyez.</span></h1>',
         f'<p class="lede">{len(items)} titres. Un extrait gratuit sur chaque livre ; '
@@ -158,7 +158,7 @@ def book_page(
     if base_url:
         parts.append(f'<link rel="canonical" href="{ESC(url)}">')
     parts.append('<script type="application/ld+json">' + json.dumps(ld, ensure_ascii=False).replace("</", "<\\/") + '</script>')
-    parts += ['</head><body>', _brand_bar(principal), '<main class="library book">',
+    parts += ['</head><body>', _SKIP_LINK, _brand_bar(principal), '<main class="library book" id="main">',
               '<p class="crumbs"><a href="/">← Toute la bibliothèque</a></p>',
               '<article class="book-hero">', _cover(item), '<div class="book-info">',
               f'<h1>{ESC(label)}</h1>']
@@ -211,6 +211,8 @@ def book_page(
         parts.append('</ul></section>')
     if principal:
         parts.append('<script src="' + asset_url("favorites.js") + '"></script>')
+    if preview_seconds:
+        parts.append('<script src="' + asset_url("preview.js") + '"></script>')
     parts.append('</main><footer class="site-foot">AURA · Écoute privée</footer></body></html>')
     return "".join(parts)
 
@@ -218,8 +220,8 @@ def book_page(
 def confirm_login_page(token: str) -> str:
     """Landing of the mailed link: one button, so a mail scanner cannot use the link up."""
     return "".join([
-        page_head(f"Connexion — {SITE_NAME}"), '</head><body>', _brand_bar(None),
-        '<main class="library"><header class="library-header"><h1>Entrer dans la bibliothèque</h1>',
+        page_head(f"Connexion — {SITE_NAME}"), '</head><body>', _SKIP_LINK, _brand_bar(None),
+        '<main class="library" id="main"><header class="library-header"><h1>Entrer dans la bibliothèque</h1>',
         '<p class="lede">Confirmez pour ouvrir votre session sur cet appareil.</p></header>',
         '<form method="post" action="/api/public/auth/email/confirm">',
         f'<input type="hidden" name="token" value="{ESC(token)}">',
@@ -229,8 +231,8 @@ def confirm_login_page(token: str) -> str:
 
 def message_page(title: str, text: str) -> str:
     return "".join([
-        page_head(f"{title} — {SITE_NAME}"), '</head><body>', _brand_bar(None),
-        f'<main class="library"><header class="library-header"><h1>{ESC(title)}</h1>',
+        page_head(f"{title} — {SITE_NAME}"), '</head><body>', _SKIP_LINK, _brand_bar(None),
+        f'<main class="library" id="main"><header class="library-header"><h1>{ESC(title)}</h1>',
         f'<p class="lede">{ESC(text)}</p></header><p><a class="text-button" href="/">'
         'Retour à la bibliothèque</a></p></main></body></html>',
     ])
