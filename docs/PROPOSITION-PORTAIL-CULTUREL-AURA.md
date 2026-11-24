@@ -57,7 +57,7 @@ Le premier volet média a été corrigé ; voir [le compte rendu du Lot 0](LOT0-
 - **À faire :** valider une restauration indépendante hors site et la persistance après redémarrage réel du VPS.
 - **À faire :** remplacer le worker d'import stub par un traitement effectif des lots.
 - **À faire :** aligner les identités, les catalogues et les rôles sans réutiliser les sessions administrateur comme comptes publics.
-- **À faire :** valider séparément l'intégration de l'adaptateur audiobook avec `/a/{token}`.
+- **À faire :** implémenter et valider l'intégration de l'adaptateur audiobook avec `/a/{token}`.
 
 ### Analyse de la piste Calibre-Web + Plesk
 

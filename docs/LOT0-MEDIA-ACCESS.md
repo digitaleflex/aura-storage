@@ -2,7 +2,7 @@
 
 - **Date :** 24 novembre 2026
 - **Périmètre :** `/m/{slug}`, `/a/{token}`, HLS et sous-titres WebVTT
-- **Statut :** corrections appliquées et tests ciblés validés ; déploiement VPS non exécuté
+- **Statut :** corrections appliquées et tests validés ; déploiement complet Traefik/API/app non exécuté
 
 ## Objectif
 
@@ -58,18 +58,13 @@ Un environnement existant qui définit encore `AURA_PUBLIC_ACCESS_GRANT_TTL=4320
 ## Validation effectuée
 
 ```bash
-.venv/bin/python -m pytest -q \
-  tests/test_public_portal_security.py \
-  tests/test_hls.py \
-  tests/test_compose_traefik_wiring.py \
-  tests/test_public_portal.py \
-  tests/test_publication.py \
-  tests/test_security_isolation.py
-
+.venv/bin/python -m pytest -q
 docker compose config --quiet
 ```
 
-Résultat : **111 tests ciblés réussis** et configuration Compose valide.
+Résultat de la dernière suite complète : **655 tests réussis, 39 ignorés**. Après le dernier durcissement du calcul fractionnaire du TTL, **41 tests ciblés** ont été rejoués avec succès. La configuration Compose est valide.
+
+La syntaxe nginx a été validée avec `nginx -t`. Lors de cette session, `docker compose run --rm app nginx -t` a recréé puis redémarré les dépendances `filer` et `api` ; l'API est remontée avec un état `healthy`. Les conteneurs `traefik` et `app` n'ont pas été recréés : le déploiement complet reste à effectuer avec la commande documentée ci-dessous. Pour une prochaine validation sans redémarrer les dépendances, utiliser `docker compose run --rm --no-deps app nginx -t`.
 
 Les tests couvrent notamment :
 
@@ -77,7 +72,7 @@ Les tests couvrent notamment :
 - accès premium cohérent sur le média et tous ses dérivés ;
 - slug explicitement public ;
 - slug restreint bloqué avant consultation du catalogue ;
-- grant révocable, expiré et TTL de redirection borné ;
+- grant révocable, expiré, expirant pendant la lecture DB, temps fractionnaire et TTL de redirection borné ;
 - refus d'une identité machine en écriture seule ;
 - absence des chemins de grants dans les logs d'accès configurés ;
 - présence des routes `/a/` et `/hls/` dans Traefik ;
@@ -109,7 +104,7 @@ Vérifier aussi qu'un token de test `/a/...` n'apparaît dans aucun log Traefik,
 - Les segments HLS déjà présignés restent valides jusqu'à 300 secondes.
 - Le cache hors ligne du portail peut conserver un fichier après déconnexion ou suppression du compte.
 - `/m/{slug}` conserve un TTL par défaut de 12 h pour ne pas couper la lecture de livres longs.
-- L'intégration de l'adaptateur audiobook avec `/a/{token}` doit être validée séparément.
+- L'intégration de l'adaptateur audiobook avec `/a/{token}` reste à implémenter : l'adaptateur utilise encore `preview-intent` au moment de ce lot.
 - Plesk n'est pas utilisé : le routage livré dans ce lot concerne l'infrastructure custom Traefik + nginx.
 
 ## Prochaines actions du Lot 0
