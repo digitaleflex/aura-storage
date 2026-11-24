@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0021_media_probe_marks"
+SCHEMA_VERSION = "0024_listen_bookmarks"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -297,6 +297,40 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_listen_progress_user "
         "ON listen_progress(user_id, updated_at)"
+    )
+    # Public portal bookmarks (additive, private to the visitor).
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS listen_bookmarks ("
+        "id TEXT PRIMARY KEY, "
+        "user_id TEXT NOT NULL REFERENCES users(id), "
+        "object_id TEXT NOT NULL REFERENCES objects(id), "
+        "position_seconds REAL NOT NULL, "
+        "note TEXT NOT NULL DEFAULT '', "
+        "created_at INTEGER NOT NULL)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_listen_bookmarks_user "
+        "ON listen_bookmarks(user_id, object_id)"
+    )
+    # E-mail sign-in links (additive): hashed token, single use, short expiry.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS login_links ("
+        "token_hash TEXT PRIMARY KEY, "
+        "email TEXT NOT NULL, "
+        "created_at INTEGER NOT NULL, "
+        "expires_at INTEGER NOT NULL, "
+        "used_at INTEGER)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_login_links_expiry ON login_links(expires_at)"
+    )
+    # Public portal favourites (additive, private to the visitor).
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS listen_favorites ("
+        "user_id TEXT NOT NULL REFERENCES users(id), "
+        "object_id TEXT NOT NULL REFERENCES objects(id), "
+        "created_at INTEGER NOT NULL, "
+        "PRIMARY KEY (user_id, object_id))"
     )
     # Partial unique index: a slug is unique when set, and any number of rows
     # may have no slug. Supported by both SQLite and PostgreSQL.

@@ -77,6 +77,35 @@ class Repository:
             (provider, subject),
         )
 
+    def get_public_user_by_email(self, email: str) -> Optional[dict]:
+        """The oldest public-portal account using this (lower-cased) address."""
+        return self._one(
+            "SELECT * FROM users WHERE role = 'public' AND lower(email) = %s "
+            "ORDER BY created_at LIMIT 1", (email.lower(),),
+        )
+
+    # -- e-mail sign-in links ---------------------------------------------
+    def create_login_link(self, token_hash: str, email: str, now: int, expires_at: int) -> None:
+        self._run("DELETE FROM login_links WHERE expires_at < %s", (now - 86400,))
+        self._run(
+            "INSERT INTO login_links (token_hash, email, created_at, expires_at) "
+            "VALUES (%s, %s, %s, %s)", (token_hash, email, now, expires_at),
+        )
+
+    def peek_login_link(self, token_hash: str, now: int) -> bool:
+        return self._one(
+            "SELECT 1 AS ok FROM login_links WHERE token_hash = %s AND used_at IS NULL "
+            "AND expires_at > %s", (token_hash, now),
+        ) is not None
+
+    def consume_login_link(self, token_hash: str, now: int) -> Optional[str]:
+        row = self._one(
+            "UPDATE login_links SET used_at = %s WHERE token_hash = %s "
+            "AND used_at IS NULL AND expires_at > %s RETURNING email",
+            (now, token_hash, now),
+        )
+        return row["email"] if row else None
+
     def create_oauth_user(
         self, username: str, pass_hash: str, provider: str, subject: str,
         email: str, role: str = "public",
@@ -127,6 +156,8 @@ class Repository:
     def delete_public_account(self, uid: str) -> None:
         """Delete a public portal account and its portal-owned data."""
         self._run("DELETE FROM listen_progress WHERE user_id = %s", (uid,))
+        self._run("DELETE FROM listen_favorites WHERE user_id = %s", (uid,))
+        self._run("DELETE FROM listen_bookmarks WHERE user_id = %s", (uid,))
         self._run("DELETE FROM sessions WHERE user_id = %s", (uid,))
         self._run(
             "DELETE FROM users WHERE id = %s AND role = 'public'", (uid,)
@@ -194,6 +225,75 @@ class Repository:
             (user_id, *object_ids),
         )
         return {r["object_id"]: float(r["position_seconds"]) for r in rows}
+
+    def portal_stats(self, period: str, available: str) -> dict:
+        """Aggregate portal figures per published book: no visitor is identifiable."""
+        books = self._all(
+            "SELECT o.id, o.display_name, o.duration_seconds, "
+            "(SELECT COUNT(*) FROM listen_progress p WHERE p.object_id = o.id "
+            "  AND p.position_seconds > 0) AS listeners, "
+            "(SELECT COUNT(*) FROM listen_progress p WHERE p.object_id = o.id "
+            "  AND o.duration_seconds > 0 AND p.position_seconds >= 0.9 * o.duration_seconds) AS completed, "
+            "(SELECT COUNT(*) FROM listen_favorites f WHERE f.object_id = o.id) AS favorites, "
+            "COALESCE((SELECT u.views FROM object_usage_monthly u "
+            "  WHERE u.object_id = o.id AND u.period = %s), 0) AS views_month "
+            "FROM objects o WHERE o.published_at IS NOT NULL AND o.status = %s",
+            (period, available),
+        )
+        accounts = self._one("SELECT COUNT(*) AS n FROM users WHERE role = 'public'")["n"]
+        return {"books": [dict(b) for b in books], "accounts": accounts}
+
+    # -- public portal bookmarks -------------------------------------------
+    def list_bookmarks(self, user_id: str, object_id: str) -> list:
+        return [dict(r) for r in self._all(
+            "SELECT id, position_seconds, note, created_at FROM listen_bookmarks "
+            "WHERE user_id = %s AND object_id = %s ORDER BY position_seconds, created_at",
+            (user_id, object_id),
+        )]
+
+    def add_bookmark(self, user_id: str, object_id: str, position: float, note: str,
+                     now: int, limit: int) -> Optional[dict]:
+        """Store a bookmark; None when the visitor already has ``limit`` on this book."""
+        count = self._one(
+            "SELECT COUNT(*) AS n FROM listen_bookmarks WHERE user_id = %s AND object_id = %s",
+            (user_id, object_id),
+        )["n"]
+        if count >= limit:
+            return None
+        bid = self.new_id()
+        self._run(
+            "INSERT INTO listen_bookmarks (id, user_id, object_id, position_seconds, note, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s)", (bid, user_id, object_id, position, note, now),
+        )
+        return {"id": bid, "position_seconds": position, "note": note, "created_at": now}
+
+    def delete_bookmark(self, user_id: str, bookmark_id: str) -> bool:
+        return self._run(
+            "DELETE FROM listen_bookmarks WHERE id = %s AND user_id = %s", (bookmark_id, user_id),
+        ) == 1
+
+    def get_favorite_ids(self, user_id: str, object_ids: list) -> set:
+        """Which of ``object_ids`` the visitor has put in their favourites."""
+        if not object_ids:
+            return set()
+        return {r["object_id"] for r in self._all(
+            "SELECT object_id FROM listen_favorites "
+            "WHERE user_id = %s AND object_id = ANY(%s)",
+            (user_id, list(object_ids)),
+        )}
+
+    def set_favorite(self, user_id: str, object_id: str, favorite: bool, now: int) -> None:
+        if favorite:
+            self._run(
+                "INSERT INTO listen_favorites (user_id, object_id, created_at) "
+                "VALUES (%s, %s, %s) ON CONFLICT (user_id, object_id) DO NOTHING",
+                (user_id, object_id, now),
+            )
+        else:
+            self._run(
+                "DELETE FROM listen_favorites WHERE user_id = %s AND object_id = %s",
+                (user_id, object_id),
+            )
 
     def save_progress(
         self, user_id: str, object_id: str, position_seconds: float, now: int,
@@ -844,6 +944,21 @@ class Repository:
             "FROM audio_chapters WHERE object_id = %s ORDER BY chapter_index",
             (oid,),
         )
+
+    def get_audio_chapters_map(self, oids: list) -> dict:
+        """Chapters of many objects in one query: ``{object_id: [chapter]}``."""
+        result: dict = {oid: [] for oid in oids}
+        if not oids:
+            return result
+        for row in self._all(
+            "SELECT object_id, chapter_index, title, start_seconds, end_seconds "
+            "FROM audio_chapters WHERE object_id = ANY(%s) "
+            "ORDER BY object_id, chapter_index",
+            (list(oids),),
+        ):
+            row = dict(row)
+            result[row.pop("object_id")].append(row)
+        return result
 
     def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
         with self.conn.transaction():

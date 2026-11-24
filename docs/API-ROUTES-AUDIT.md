@@ -75,6 +75,7 @@ Régénéré le 2026-10-24. La parité avec `docs/openapi.yaml` est vérifiée a
 - `GET /api/v1/admin/identities`
 - `GET /api/v1/admin/integrity`
 - `GET /api/v1/admin/orphans`
+- `GET /api/v1/admin/portal-stats`
 - `GET /api/v1/admin/spaces`
 - `GET /api/v1/admin/spaces/{sid}`
 - `GET /api/v1/admin/stats`

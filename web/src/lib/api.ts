@@ -373,6 +373,32 @@ export interface UsageSpaceEntry {
   quota: SpaceQuota;
 }
 
+export interface PortalBookStat {
+  id: string;
+  title: string;
+  author: string;
+  listeners: number;
+  completed: number;
+  completion_rate: number;
+  favorites: number;
+  views_month: number;
+}
+
+/** Aggregate public-portal figures (admin:read). No visitor is identifiable. */
+export interface PortalStatsResponse {
+  measured_at: number;
+  period: string;
+  totals: {
+    accounts: number;
+    published_books: number;
+    listeners: number;
+    completed: number;
+    favorites: number;
+    views_month: number;
+  };
+  books: PortalBookStat[];
+}
+
 export interface UsageResponse {
   /** Live query time (epoch seconds): the freshness marker. */
   measured_at: number;
@@ -1482,6 +1508,10 @@ export const api = {
   adminUsage(spaceId?: string): Promise<UsageResponse> {
     const suffix = spaceId ? `?space_id=${encodeURIComponent(spaceId)}` : "";
     return request<UsageResponse>(`/api/v1/admin/usage${suffix}`);
+  },
+
+  adminPortalStats(): Promise<PortalStatsResponse> {
+    return request<PortalStatsResponse>("/api/v1/admin/portal-stats");
   },
 
   adminHealth(): Promise<HealthResponse> {

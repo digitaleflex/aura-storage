@@ -64,6 +64,43 @@ class Repository:
             (provider, subject),
         ).fetchone()
 
+    def get_public_user_by_email(self, email: str) -> Optional[sqlite3.Row]:
+        """The oldest public-portal account using this (lower-cased) address."""
+        return self.conn.execute(
+            "SELECT * FROM users WHERE role = 'public' AND lower(email) = ? "
+            "ORDER BY created_at LIMIT 1", (email.lower(),),
+        ).fetchone()
+
+    # -- e-mail sign-in links ---------------------------------------------
+    def create_login_link(self, token_hash: str, email: str, now: int, expires_at: int) -> None:
+        self.conn.execute("DELETE FROM login_links WHERE expires_at < ?", (now - 86400,))
+        self.conn.execute(
+            "INSERT INTO login_links (token_hash, email, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?)", (token_hash, email, now, expires_at),
+        )
+        self.conn.commit()
+
+    def peek_login_link(self, token_hash: str, now: int) -> bool:
+        """Whether the link exists, is unused and not expired (nothing is consumed)."""
+        return self.conn.execute(
+            "SELECT 1 FROM login_links WHERE token_hash = ? AND used_at IS NULL "
+            "AND expires_at > ?", (token_hash, now),
+        ).fetchone() is not None
+
+    def consume_login_link(self, token_hash: str, now: int) -> Optional[str]:
+        """Use a link once: returns its e-mail, or None if unknown, used or expired."""
+        cur = self.conn.execute(
+            "UPDATE login_links SET used_at = ? WHERE token_hash = ? "
+            "AND used_at IS NULL AND expires_at > ?", (now, token_hash, now),
+        )
+        self.conn.commit()
+        if cur.rowcount != 1:
+            return None
+        row = self.conn.execute(
+            "SELECT email FROM login_links WHERE token_hash = ?", (token_hash,),
+        ).fetchone()
+        return row["email"] if row else None
+
     def create_oauth_user(
         self, username: str, pass_hash: str, provider: str, subject: str,
         email: str, role: str = "public",
@@ -122,6 +159,8 @@ class Repository:
     def delete_public_account(self, uid: str) -> None:
         """Delete a public portal account and its portal-owned data."""
         self.conn.execute("DELETE FROM listen_progress WHERE user_id = ?", (uid,))
+        self.conn.execute("DELETE FROM listen_favorites WHERE user_id = ?", (uid,))
+        self.conn.execute("DELETE FROM listen_bookmarks WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
         self.conn.execute(
             "DELETE FROM users WHERE id = ? AND role = 'public'", (uid,)
@@ -192,6 +231,83 @@ class Repository:
             (user_id, *object_ids),
         ).fetchall()
         return {r["object_id"]: float(r["position_seconds"]) for r in rows}
+
+    def portal_stats(self, period: str, available: str) -> dict:
+        """Aggregate portal figures per published book: no visitor is identifiable."""
+        books = [dict(r) for r in self.conn.execute(
+            "SELECT o.id, o.display_name, o.duration_seconds, "
+            "(SELECT COUNT(*) FROM listen_progress p WHERE p.object_id = o.id "
+            "  AND p.position_seconds > 0) AS listeners, "
+            "(SELECT COUNT(*) FROM listen_progress p WHERE p.object_id = o.id "
+            "  AND o.duration_seconds > 0 AND p.position_seconds >= 0.9 * o.duration_seconds) AS completed, "
+            "(SELECT COUNT(*) FROM listen_favorites f WHERE f.object_id = o.id) AS favorites, "
+            "COALESCE((SELECT u.views FROM object_usage_monthly u "
+            "  WHERE u.object_id = o.id AND u.period = ?), 0) AS views_month "
+            "FROM objects o WHERE o.published_at IS NOT NULL AND o.status = ?",
+            (period, available),
+        ).fetchall()]
+        accounts = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE role = 'public'").fetchone()["n"]
+        return {"books": books, "accounts": accounts}
+
+    # -- public portal bookmarks -------------------------------------------
+    def list_bookmarks(self, user_id: str, object_id: str) -> list:
+        return [dict(r) for r in self.conn.execute(
+            "SELECT id, position_seconds, note, created_at FROM listen_bookmarks "
+            "WHERE user_id = ? AND object_id = ? ORDER BY position_seconds, created_at",
+            (user_id, object_id),
+        ).fetchall()]
+
+    def add_bookmark(self, user_id: str, object_id: str, position: float, note: str,
+                     now: int, limit: int) -> Optional[dict]:
+        """Store a bookmark; None when the visitor already has ``limit`` on this book."""
+        count = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM listen_bookmarks WHERE user_id = ? AND object_id = ?",
+            (user_id, object_id),
+        ).fetchone()["n"]
+        if count >= limit:
+            return None
+        bid = self.new_id()
+        self.conn.execute(
+            "INSERT INTO listen_bookmarks (id, user_id, object_id, position_seconds, note, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)", (bid, user_id, object_id, position, note, now),
+        )
+        self.conn.commit()
+        return {"id": bid, "position_seconds": position, "note": note, "created_at": now}
+
+    def delete_bookmark(self, user_id: str, bookmark_id: str) -> bool:
+        cur = self.conn.execute(
+            "DELETE FROM listen_bookmarks WHERE id = ? AND user_id = ?", (bookmark_id, user_id),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def get_favorite_ids(self, user_id: str, object_ids: list) -> set:
+        """Which of ``object_ids`` the visitor has put in their favourites."""
+        found: set = set()
+        for start in range(0, len(object_ids), 500):
+            batch = object_ids[start:start + 500]
+            marks = ",".join("?" for _ in batch)
+            found.update(r["object_id"] for r in self.conn.execute(
+                "SELECT object_id FROM listen_favorites "
+                f"WHERE user_id = ? AND object_id IN ({marks})",
+                (user_id, *batch),
+            ).fetchall())
+        return found
+
+    def set_favorite(self, user_id: str, object_id: str, favorite: bool, now: int) -> None:
+        if favorite:
+            self.conn.execute(
+                "INSERT INTO listen_favorites (user_id, object_id, created_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(user_id, object_id) DO NOTHING",
+                (user_id, object_id, now),
+            )
+        else:
+            self.conn.execute(
+                "DELETE FROM listen_favorites WHERE user_id = ? AND object_id = ?",
+                (user_id, object_id),
+            )
+        self.conn.commit()
 
     def save_progress(
         self, user_id: str, object_id: str, position_seconds: float, now: int,
@@ -966,6 +1082,22 @@ class Repository:
                 (oid,),
             ).fetchall()
         ]
+
+    def get_audio_chapters_map(self, oids: list) -> dict:
+        """Chapters of many objects in a few queries: ``{object_id: [chapter]}``."""
+        result: dict = {oid: [] for oid in oids}
+        for start in range(0, len(oids), 500):  # SQLite caps bound variables
+            batch = oids[start:start + 500]
+            marks = ",".join("?" for _ in batch)
+            for r in self.conn.execute(
+                "SELECT object_id, chapter_index, title, start_seconds, end_seconds "
+                f"FROM audio_chapters WHERE object_id IN ({marks}) "
+                "ORDER BY object_id, chapter_index",
+                tuple(batch),
+            ).fetchall():
+                row = dict(r)
+                result[row.pop("object_id")].append(row)
+        return result
 
     def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
         """Point ``target_id`` at ``source_id``'s bytes, keeping id and slug.

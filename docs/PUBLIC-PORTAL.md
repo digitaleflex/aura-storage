@@ -11,23 +11,126 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 
 | Chemin (sur `PUBLIC_DOMAIN`) | Rôle |
 |---|---|
-| `GET /` | page de connexion pour les anonymes, puis catalogue HTML sans JavaScript avec lecteur `<audio>` pour les sessions connectées |
+| `GET /` | **anonyme** : vitrine du catalogue publié (recherche, filtre par auteur, bouton Google) ; **connecté** : catalogue avec lecteur `<audio>`. Avec `AURA_PUBLIC_BROWSE=0`, les anonymes voient seulement la page de connexion |
+| `GET /livre/{id}` | page d'un livre, lisible sans compte : couverture, durée, chapitres, extrait gratuit, partage (WhatsApp, copier le lien), balises Open Graph/Twitter et JSON-LD `Audiobook` |
+| `GET /extrait/{id}` | extrait gratuit : seuls les premières minutes d'un **MP3** publié, découpés côté serveur (`AURA_PUBLIC_PREVIEW_SECONDS`, 120 par défaut, 0 = désactivé) |
+| `GET /sitemap.xml`, `GET /robots.txt` | référencement : accueil et pages livre uniquement |
 | `GET /api/public/auth/google` | démarre le flux Google (state + PKCE) |
 | `GET /api/public/auth/callback` | vérifie Google, crée la session, redirige vers `/` |
 | `GET /api/public/me` | identité + jeton CSRF de la session publique |
 | `POST /api/public/logout` | détruit la session (CSRF requis) |
 | `GET /api/public/library` | catalogue publié (JSON), avec position d'écoute par visiteur |
+| `PUT/DELETE /api/public/favorites/{id}` | ajoute/retire un livre publié des favoris du visiteur (CSRF, idempotent ; table `listen_favorites`, migration `0022`) |
 | `POST /api/public/progress` | enregistre la position de lecture (CSRF, session publique) |
 | `GET /m/{slug}` | redirection média publique déjà existante, routée ici aussi pour le lecteur |
+| `GET /portal-assets/{nom}` | feuille de style et scripts du portail (empreinte dans l'URL, cache immuable) |
+| `GET /profil` | page de profil du visiteur (nom affiché, suppression du compte) |
+
+**Navigation sans compte.** Les pages anonymes n'affichent jamais le lien `/m/{slug}` : les
+livres s'ouvrent par leur identifiant (`/livre/{id}`) et l'extrait est coupé côté serveur.
+Attention : `/m/{slug}` reste une URL publique permanente (c'est son rôle, pour l'intégration
+dans des sites de cours) ; toute personne qui connaît un slug peut donc télécharger le
+fichier complet. Si l'écoute complète doit vraiment être réservée aux comptes, il faudra
+des slugs non devinables ou une authentification sur `/m/`.
 
 Les fichiers eux-mêmes sont servis par les liens `/m/{slug}` déjà existants :
 une redirection 302 vers une URL S3 présignée de courte durée, avec `Range`
 (seek). Aucun octet ne traverse l'API. Le lecteur HTML pointe directement sur
-ces URL. Les pages du portail n'ont pas de CSP dédiée pour l'instant : le middleware
-`api-secure-headers` pose HSTS/nosniff/frame/referrer, mais pas de `Content-Security-Policy`.
-Le JS du lecteur est donc inline et doit être pris en compte si une CSP est ajoutée.
+ces URL. Les pages du portail (connexion, catalogue, profil) portent une **Content-Security-Policy
+stricte** : `default-src 'none'; script-src 'self'; style-src 'self'`, `connect-src 'self'`,
+`form-action 'self'`, `frame-ancestors 'none'`, et `media-src`/`img-src` limités à l'origine
+et au stockage S3 (vers lequel `/m/` et `/covers/` redirigent). Aucun script ni `<style>`
+inline : le CSS et le JS vivent dans `api/portal_assets/` (`portal.css`, `common.js`,
+`player.js`, `shelf.js`), servis par `GET /portal-assets/{nom}?v=<empreinte>` en
+`immutable` (cache d'un an, l'empreinte change avec le fichier). Seuls les attributs
+`style="--cover-h:…"` / `width:…%` calculés par le serveur restent autorisés
+(`style-src-attr`). Le jeton CSRF n'est jamais écrit dans un fichier mis en cache : il passe par
+`data-csrf` sur `#player-bar`. Ajouter un fichier : le déposer dans `api/portal_assets/`
+(`.css` ou `.js`) et le référencer avec `asset_url("nom")` ; Traefik route déjà
+`/portal-assets/` et `/profil` vers l'API sur le domaine public.
 
 `/api/v1/*`, `/s/*`, `/f/*`, `/p/*` et la console React restent sur `APP_DOMAIN`.
+
+## Mode sombre et favoris
+
+Le CSS suit le réglage du système (`prefers-color-scheme: dark`, palette nuit + laiton, tout passe
+par des variables CSS ; `color-scheme: light dark` adapte aussi lecteur natif et listes). Un cœur
+sur chaque livre (catalogue et page livre) alimente l'étagère « Mes favoris » ; l'état est privé,
+supprimé avec le compte, et le clic est annulé côté page si le serveur refuse.
+
+## Marque-pages et reprise depuis un autre appareil
+
+- **Marque-pages** : bouton « + Ici » dans le panneau Chapitres du lecteur (note facultative de 200
+  caractères), liste triée par position, clic = se placer à cet endroit, × = supprimer. 50 maximum
+  par livre et par visiteur ; privés, supprimés avec le compte (table `listen_bookmarks`, migration
+  `0024`). API : `GET/POST /api/public/bookmarks`, `DELETE /api/public/bookmarks/{id}` (CSRF).
+- **Reprise** : au retour sur l'onglet, si le serveur connaît une position plus avancée de plus de
+  20 s (écoute faite sur un autre appareil) et que le lecteur est en pause, une bulle propose
+  « Vous en étiez à 0:40 sur un autre appareil. Reprendre ». API : `GET /api/public/progress?object_id=`.
+
+## Statistiques (administration)
+
+`GET /api/v1/admin/portal-stats` (`admin:read`) et la carte **Portail public** de l'onglet Vue
+d'ensemble de la console : comptes visiteurs, livres publiés, et pour chaque livre (50 premiers,
+classés par auditeurs) : auditeurs, livres **terminés** (≥ 90 % de la durée), favoris, ouvertures du
+mois. Ce sont des **comptages agrégés** calculés à partir de `listen_progress`, `listen_favorites` et
+`object_usage_monthly` : aucune table de suivi n'a été ajoutée, aucun visiteur, e-mail ou historique
+individuel n'est renvoyé. Les ouvertures comptent les redirections `/m/` et les extraits.
+
+## Recherche, tri et recommandations
+
+- **Recherche** (`?q=`) : insensible aux accents et à la casse, tous les mots doivent correspondre
+  (titre ou auteur) : « eleonore depart » trouve « Éléonore Dupré — Le Grand Départ ».
+- **Tri** (`?tri=titre|auteur|recent|duree`) : valeur inconnue ignorée ; les vues triées ou filtrées
+  ne sont pas indexées.
+- **Pour vous** : livres non écoutés des auteurs que le visiteur met en favori (poids 3) ou
+  a déjà commencés (poids 1). N'utilise que les données du visiteur ; aucun signal = pas d'étagère.
+- Page livre : « Du même auteur » et « À écouter ensuite » (suite de la collection).
+- Une adresse inconnue du portail renvoie une **page 404** (le JSON reste pour `/api/*` et pour les
+  clients qui n'acceptent pas le HTML). AirPlay est autorisé sur le lecteur (Safari/iOS).
+
+## Connexion par e-mail (lien magique)
+
+Pour les visiteurs sans compte Google. **Désactivée tant qu'aucun serveur de messagerie n'est
+configuré** : renseigner `AURA_SMTP_HOST` et `AURA_SMTP_FROM` (+ `AURA_SMTP_PORT`, `AURA_SMTP_USER`,
+`AURA_SMTP_PASSWORD`, `AURA_SMTP_STARTTLS`, `AURA_EMAIL_LINK_TTL`) dans `.env`. Le formulaire
+« Recevoir le lien » apparaît alors sur la page de connexion et sur la vitrine.
+
+| Chemin | Rôle |
+|---|---|
+| `POST /api/public/auth/email` | demande un lien ; **même réponse** que l'adresse soit valide, inconnue ou refusée (pas d'énumération) ; envoi en tâche de fond |
+| `GET /connexion/lien?token=` | page avec un bouton « Me connecter » : ouvrir le lien ne le consomme pas (les scanners de messagerie qui préchargent les liens ne le brûlent pas) |
+| `POST /api/public/auth/email/confirm` | consomme le jeton (usage unique) et ouvre la session |
+
+Jeton aléatoire, **seul son SHA-256 est stocké** (`login_links`, migration `0023`), valable 15 min
+par défaut. Limites : 10 demandes/heure/client et 3 mails/heure/adresse ; les mauvais jetons
+comptent dans le budget d'échecs de connexion publique. Un POST venu d'un autre site est refusé.
+`GOOGLE_ALLOWED_EMAIL_DOMAINS` s'applique aussi. Un lien envoyé à l'adresse d'un compte Google
+existant ouvre ce compte ; un compte créé par lien est réutilisé si la personne passe ensuite par
+Google avec la même adresse. Deux identités Google différentes ne sont jamais fusionnées.
+
+## Application installable et écoute hors connexion
+
+Le portail est une **PWA** : manifeste (`/portal-assets/manifest.webmanifest`, icônes 192/512 px
+dont une « maskable »), couleurs de barre claire/sombre, service worker `GET /sw.js` (à la racine,
+`Service-Worker-Allowed: /`, jamais mis en cache pour que les mises à jour passent) et page
+`GET /hors-ligne`. Le navigateur propose « Installer l'application » ; sur iPhone : Partager →
+« Sur l'écran d'accueil ».
+
+- **Pages** (accueil, fiches livre) : réseau d'abord ; hors connexion, la dernière copie
+  vue est servie, sinon la page « Vous êtes hors connexion ».
+- **Livres** : le bouton **Télécharger** du lecteur copie le livre en cours dans le cache
+  `aura-audio` de l'appareil (indicateur ⤓ dans les listes, livres non téléchargés grisés hors
+  connexion). Le service worker les sert avec la prise en charge de `Range` : lecture et
+  déplacement dans le livre sans réseau. Le même bouton retire le livre de l'appareil.
+- **Déconnexion** : les pages mises en cache (progression, favoris) sont effacées ; les livres
+  téléchargés restent (contenu public choisi par le visiteur).
+- **Prérequis côté stockage** : le téléchargement suit la redirection de `/m/{slug}` vers S3 avec
+  `fetch` ; le stockage doit donc répondre avec `Access-Control-Allow-Origin` pour le domaine du
+  portail. Sans CORS, le bouton affiche « Téléchargement impossible » et rien n'est enregistré
+  (l'écoute en ligne n'est pas affectée). **À vérifier sur le vrai stockage** (non testable hors
+  production).
+- La CSP autorise `manifest-src`, `worker-src` et `connect-src` vers l'origine S3.
 
 ## Lecteur et confort d'écoute
 

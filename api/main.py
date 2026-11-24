@@ -15,13 +15,16 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, Literal
+from html import escape as html_escape
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, folder_shares, google_oauth, ids, netinfo, public_ui, shares
+from . import authz, folder_shares, google_oauth, ids, magic_link, netinfo, public_book, public_ui, shares
 from .audit import (
     audit_event,
     audit_path,
@@ -409,9 +412,50 @@ def _public_login_clear(client_ip: str) -> None:
     _PUBLIC_LOGIN_ATTEMPTS.pop(client_ip, None)
 
 
+# Public read endpoints (media redirect, covers, listening position) count EVERY
+# request, not only failures: a scraper or a runaway client must not be able to
+# mint unlimited presigned URLs or write unlimited rows. Limits are per client
+# address and per minute, generous for a person (a 100-cover grid is one burst).
+_PUBLIC_RATE: dict[str, list[float]] = {}
+_PUBLIC_RATE_WINDOW = 60.0
+_PUBLIC_RATE_LIMITS = {"media": 120, "cover": 600, "progress": 120, "preview": 30}
+
+
+def _public_rate_hit(key: str, limit: int, window: float, raise_429: bool = True) -> bool:
+    """Count one hit on ``key``; False (or HTTP 429) once ``limit`` hits fit in ``window``."""
+    now = time.time()
+    recent = [t for t in _PUBLIC_RATE.get(key, []) if now - t < window]
+    if len(recent) >= limit:
+        _PUBLIC_RATE[key] = recent
+        if raise_429:
+            retry = max(1, int(window - (now - recent[0])))
+            raise HTTPException(status_code=429, detail="too many requests",
+                                headers={"Retry-After": str(retry)})
+        return False
+    recent.append(now)
+    _PUBLIC_RATE[key] = recent
+    _prune_attempt_table(_PUBLIC_RATE, window)
+    return True
+
+
+def _public_rate_check(kind: str, request: Request) -> None:
+    now = time.time()
+    key = f"{kind}:{_client_ip(request)}"
+    recent = [t for t in _PUBLIC_RATE.get(key, []) if now - t < _PUBLIC_RATE_WINDOW]
+    if len(recent) >= _PUBLIC_RATE_LIMITS[kind]:
+        _PUBLIC_RATE[key] = recent
+        retry = max(1, int(_PUBLIC_RATE_WINDOW - (now - recent[0])))
+        raise HTTPException(status_code=429, detail="too many requests",
+                            headers={"Retry-After": str(retry)})
+    recent.append(now)
+    _PUBLIC_RATE[key] = recent
+    _prune_attempt_table(_PUBLIC_RATE, _PUBLIC_RATE_WINDOW)
+
+
 def reset_login_attempts() -> None:
     _LOGIN_ATTEMPTS.clear()
     _PUBLIC_LOGIN_ATTEMPTS.clear()
+    _PUBLIC_RATE.clear()
 
 s3, s3ops = make_clients(
     settings.s3_endpoint, settings.s3_internal_endpoint,
@@ -736,6 +780,14 @@ class ProgressIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     object_id: Uuid4
     position_seconds: float = Field(ge=0, le=864000)
+
+
+class BookmarkIn(BaseModel):
+    """A named position in a book, posted by the public player (CSRF-protected)."""
+    model_config = ConfigDict(extra="forbid")
+    object_id: Uuid4
+    position_seconds: float = Field(ge=0, le=864000)
+    note: str = Field(default="", max_length=200)
 
 
 class LoginIn(BaseModel):
@@ -1583,6 +1635,14 @@ def public_auth_callback(
     subject = str(claims["sub"])
     user = repo.get_user_by_oauth("google", subject)
     if user is None:
+        # A visitor who first signed in with an e-mailed link keeps that account
+        # (favourites, progress) when they later use Google with the same verified
+        # address. Only accounts created by e-mail link are reused: two different
+        # Google identities are never merged on a shared address.
+        candidate = repo.get_public_user_by_email(email)
+        if candidate is not None and candidate["oauth_provider"] == "email":
+            user = candidate
+    if user is None:
         # The username is derived from the stable subject, never from the email
         # (which can change) or from a Google display name (which is user data).
         suffix = hashlib.sha256(subject.encode("utf-8")).hexdigest()[:24]
@@ -1597,12 +1657,19 @@ def public_auth_callback(
     else:
         user_id = user["id"]
 
+    return _public_login_response(user_id, request, "google-login", clear_oauth_cookie=True)
+
+
+def _public_login_response(
+    user_id: str, request: Request, event: str, clear_oauth_cookie: bool = False,
+) -> RedirectResponse:
+    """Open a public session for ``user_id`` and redirect to the catalogue."""
     csrf = new_token(16)
     sid = repo.create_session(
         user_id, csrf, int(time.time()) + settings.public_session_ttl
     )
     _public_login_clear(_client_ip(request))
-    audit_event("google-login", user_id, "success", {"user_id": user_id})
+    audit_event(event, user_id, "success", {"user_id": user_id})
     out = RedirectResponse("/", status_code=302, headers={
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
@@ -1612,8 +1679,127 @@ def public_auth_callback(
         secure=settings.cookie_secure, samesite="lax",
         max_age=settings.public_session_ttl, path="/",
     )
-    out.delete_cookie(_PUBLIC_OAUTH_COOKIE, path="/api/public/auth")
+    if clear_oauth_cookie:
+        out.delete_cookie(_PUBLIC_OAUTH_COOKIE, path="/api/public/auth")
     return out
+
+
+# ---------------------------------------------------------------------------
+# E-mail sign-in link for visitors without a Google account.
+# 1) POST the address -> always the same answer (no account enumeration), the
+#    mail is sent in the background. 2) The mailed link only opens a page with a
+#    button: mail scanners that pre-fetch links must not burn the single-use token.
+# 3) POST the token from that page -> session cookie.
+# ---------------------------------------------------------------------------
+_EMAIL_LINK_PER_IP = 10        # requests per client and hour
+_EMAIL_LINK_PER_ADDRESS = 3    # mails per address and hour
+
+
+def _same_origin_post(request: Request) -> bool:
+    """Browsers always send Origin/Referer on a POST: refuse another site's form."""
+    source = request.headers.get("origin") or request.headers.get("referer") or ""
+    if not source:
+        return True  # not a browser; the single-use token is the protection
+    return urlsplit(source).hostname == (settings.public_domain or "")
+
+
+def _email_login_open(request: Request) -> bool:
+    return _public_host_ok(request) and magic_link.enabled(settings)
+
+
+def _email_domain_allowed(email: str) -> bool:
+    allowed = settings.google_allowed_email_domains
+    return not allowed or email.rsplit("@", 1)[-1] in allowed
+
+
+def _send_login_email(email: str, link: str) -> None:
+    try:
+        magic_link.send(settings, email, link)
+    except Exception as exc:  # SMTP down/misconfigured: log, never tell the visitor
+        audit_event("email-link", "system", "send_failed", {"error": type(exc).__name__})
+
+
+@app.post("/api/public/auth/email", response_class=HTMLResponse)
+async def public_email_link_request(request: Request, background: BackgroundTasks):
+    if not _email_login_open(request):
+        raise HTTPException(status_code=404, detail="not found")
+    if not _same_origin_post(request):
+        raise HTTPException(status_code=403, detail="cross-site request")
+    _public_rate_hit(f"email-ip:{_client_ip(request)}", _EMAIL_LINK_PER_IP, 3600)
+    form = await request.form()
+    email = magic_link.normalize_email(str(form.get("email") or ""))
+    who = hashlib.sha256((email or "-").encode("utf-8")).hexdigest()[:12]
+    if (
+        email and _email_domain_allowed(email)
+        and _public_rate_hit(f"email-addr:{email}", _EMAIL_LINK_PER_ADDRESS, 3600, raise_429=False)
+    ):
+        token = magic_link.new_token()
+        now = int(time.time())
+        repo.create_login_link(magic_link.hash_token(token), email, now, now + settings.email_link_ttl)
+        background.add_task(
+            _send_login_email, email, f"{_public_base_url()}/connexion/lien?token={token}",
+        )
+        audit_event("email-link", who, "requested")
+    else:
+        audit_event("email-link", who, "ignored")
+    return HTMLResponse(
+        public_book.message_page(
+            "Vérifiez votre boîte mail",
+            "Si cette adresse est valide, un lien de connexion vient de lui être envoyé. "
+            f"Il est valable {max(1, settings.email_link_ttl // 60)} minutes.",
+        ),
+        headers=_public_profile_headers(),
+    )
+
+
+@app.get("/connexion/lien", response_class=HTMLResponse)
+def public_email_link_open(request: Request, token: str = ""):
+    if not _email_login_open(request):
+        raise HTTPException(status_code=404, detail="not found")
+    headers = _public_profile_headers()
+    if len(token) > 200 or not repo.peek_login_link(magic_link.hash_token(token), int(time.time())):
+        return HTMLResponse(
+            public_book.message_page(
+                "Lien expiré", "Ce lien a déjà été utilisé ou a expiré. Demandez-en un nouveau.",
+            ),
+            status_code=400, headers=headers,
+        )
+    return HTMLResponse(public_book.confirm_login_page(token), headers=headers)
+
+
+@app.post("/api/public/auth/email/confirm")
+async def public_email_link_confirm(request: Request):
+    if not _email_login_open(request):
+        raise HTTPException(status_code=404, detail="not found")
+    if not _same_origin_post(request):
+        raise HTTPException(status_code=403, detail="cross-site request")
+    client_ip = _client_ip(request)
+    if _public_login_blocked(client_ip):
+        raise HTTPException(status_code=429, detail="too many login attempts",
+                            headers={"Retry-After": str(settings.login_rate_window)})
+    form = await request.form()
+    token = str(form.get("token") or "")[:200]
+    email = repo.consume_login_link(magic_link.hash_token(token), int(time.time())) if token else None
+    if email is None or not _email_domain_allowed(email):
+        _public_login_record_failure(client_ip)
+        audit_event("email-login", "-", "failure")
+        return HTMLResponse(
+            public_book.message_page(
+                "Lien expiré", "Ce lien a déjà été utilisé ou a expiré. Demandez-en un nouveau.",
+            ),
+            status_code=400, headers=_public_profile_headers(),
+        )
+    user = repo.get_user_by_oauth("email", email) or repo.get_public_user_by_email(email)
+    if user is None:
+        from .auth import hash_password
+        suffix = hashlib.sha256(email.encode("utf-8")).hexdigest()[:24]
+        user_id = repo.create_oauth_user(
+            f"email-{suffix}", hash_password(new_token(32)), "email", email, email,
+            role=PUBLIC_ROLE,
+        )
+    else:
+        user_id = user["id"]
+    return _public_login_response(user_id, request, "email-login")
 
 
 class PublicProfilePatch(BaseModel):
@@ -1682,11 +1868,102 @@ def public_logout(principal: dict = Depends(require_public)):
     return out
 
 
-def _public_profile_headers() -> dict:
-    return {
-        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
-        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
+def _portal_csp() -> str:
+    """Content-Security-Policy of the public portal pages.
+
+    Scripts and styles are same-origin files (api/portal_assets), so no inline
+    script or <style> is allowed. Audio and covers are 302-redirected to the S3
+    host, which therefore has to be allowed for media and images. Inline style
+    *attributes* stay allowed (server-computed cover hue and progress width).
+    """
+    parts = urlsplit(settings.s3_endpoint or "")
+    s3 = f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
+    media = f"'self' {s3}".strip()
+    return (
+        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "style-src-attr 'unsafe-inline'; "
+        f"img-src {media}; media-src {media}; connect-src {media}; "
+        "manifest-src 'self'; worker-src 'self'; "
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    )
+
+
+def _public_profile_headers(indexable: bool = False) -> dict:
+    """Headers of every portal HTML page; only browse pages may be indexed."""
+    headers = {
+        "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": _portal_csp(),
     }
+    if indexable:
+        # Same content for every anonymous visitor: cacheable for a minute.
+        headers["Cache-Control"] = "public, max-age=60"
+        headers["Vary"] = "Cookie"
+    else:
+        headers["Cache-Control"] = "no-store"
+        headers["X-Robots-Tag"] = "noindex, nofollow"
+    return headers
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _portal_html_not_found(request: Request, exc: StarletteHTTPException):
+    """A visitor who mistypes a portal address gets a page, not a JSON error."""
+    if (
+        exc.status_code == 404 and settings.public_domain and _public_host_ok(request)
+        and "text/html" in request.headers.get("accept", "")
+        and not request.url.path.startswith("/api/")
+    ):
+        return HTMLResponse(
+            public_book.message_page("Page introuvable", "Cette adresse n'existe pas ou n'est plus disponible."),
+            status_code=404, headers=_public_profile_headers(),
+        )
+    return await http_exception_handler(request, exc)
+
+
+@app.get("/sw.js")
+def portal_service_worker(request: Request):
+    """Service worker: must live at the root to control every portal page."""
+    if not _public_host_ok(request) or not settings.public_domain:
+        raise HTTPException(status_code=404, detail="not found")
+    return Response(
+        public_ui.ASSETS["sw.js"][0], media_type="text/javascript; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache", "Service-Worker-Allowed": "/",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.get("/hors-ligne", response_class=HTMLResponse)
+def portal_offline_page(request: Request):
+    """Shown by the service worker when a page is needed and there is no network."""
+    if not _public_host_ok(request):
+        raise HTTPException(status_code=404, detail="not found")
+    return HTMLResponse(
+        public_book.message_page(
+            "Vous êtes hors connexion",
+            "Cette page n'a pas été enregistrée sur cet appareil. Les livres téléchargés "
+            "restent lisibles : rouvrez la bibliothèque depuis la page d'accueil.",
+        ),
+        headers=_public_profile_headers(),
+    )
+
+
+@app.get("/portal-assets/{name}")
+def portal_asset(name: str, request: Request):
+    """Stylesheet and scripts of the portal, versioned by content hash."""
+    if not _public_host_ok(request):
+        raise HTTPException(status_code=404, detail="not found")
+    asset = public_ui.ASSETS.get(name)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="not found")
+    data, content_type, version = asset
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff", "ETag": f'"{version}"',
+    }
+    if request.headers.get("if-none-match") == headers["ETag"]:
+        return Response(status_code=304, headers=headers)
+    return Response(data, media_type=content_type, headers=headers)
 
 
 @app.get("/profil", response_class=HTMLResponse)
@@ -1743,7 +2020,7 @@ def _split_audio_name(display_name: str) -> tuple[str, str]:
 
 def _library_items(col: dict, only_published: bool = False) -> list:
     """Items of a published pack, with their public media URL when available."""
-    items = []
+    rows = []
     for pos, row in enumerate(repo.get_collection_items(col["id"])):
         row = _as_dict(row)
         if row["status"] != AVAILABLE:
@@ -1751,6 +2028,11 @@ def _library_items(col: dict, only_published: bool = False) -> list:
         published = bool(row.get("published_at") and row.get("public_slug"))
         if only_published and not published:
             continue
+        rows.append((pos, row, published))
+    # One query for every chapter of the pack instead of one per book.
+    chapters = repo.get_audio_chapters_map([row["id"] for _, row, _ in rows])
+    items = []
+    for pos, row, published in rows:
         author, title = _split_audio_name(row["display_name"])
         items.append({
             "position": pos,
@@ -1762,7 +2044,7 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             "content_type": row["content_type"],
             "size_bytes": row["size_bytes"],
             "duration_seconds": row.get("duration_seconds"),
-            "chapters": repo.get_audio_chapters(row["id"]),
+            "chapters": chapters.get(row["id"], []),
             "published_slug": row.get("public_slug"),
             "cover_url": f"/covers/{row['id']}.jpg" if row.get("cover_key") else None,
             "url": f"/m/{row['public_slug']}" if published else None,
@@ -1770,8 +2052,8 @@ def _library_items(col: dict, only_published: bool = False) -> list:
     return items
 
 
-def _public_collections(principal: dict) -> list:
-    """Published catalogue with each visitor's own listening position."""
+def _public_catalog() -> list:
+    """Published catalogue, identical for every visitor (no listening position)."""
     collections = []
     for col in repo.list_published_collections():
         col = _as_dict(col)
@@ -1781,12 +2063,47 @@ def _public_collections(principal: dict) -> list:
             "updated_at": col["updated_at"],
             "items": _library_items(col, only_published=True),
         })
+    return collections
+
+
+def _public_collections(principal: dict) -> list:
+    """Published catalogue with each visitor's own listening position."""
+    collections = _public_catalog()
     object_ids = [item["id"] for col in collections for item in col["items"]]
     progress = repo.get_progress_map(principal["id"], object_ids)
+    favorites = repo.get_favorite_ids(principal["id"], object_ids)
     for col in collections:
         for item in col["items"]:
             item["progress_seconds"] = progress.get(item["id"], 0)
+            item["favorite"] = item["id"] in favorites
     return collections
+
+
+def _filter_collections(collections: list, query: str, author: str, sort: str = "") -> list:
+    """Search (accent-insensitive, every word must match), author filter and sort."""
+    words = public_ui.fold(query).split()
+    out = []
+    for col in collections:
+        items = col["items"]
+        if words:
+            items = [
+                i for i in items
+                if all(w in public_ui.fold(f'{i["display_name"]} {i["author"]}') for w in words)
+            ]
+        if author:
+            items = [i for i in items if i["author"] == author]
+        if items:
+            out.append({**col, "items": public_ui.sort_items(items, sort)})
+    return out
+
+
+def _sort_param(request: Request) -> str:
+    value = (request.query_params.get("tri") or "").strip().lower()
+    return value if value in {v for _, v in public_ui.SORTS} else ""
+
+
+def _catalog_authors(collections: list) -> list:
+    return sorted({i["author"] for col in collections for i in col["items"] if i["author"]})
 
 
 @app.get("/api/public/library")
@@ -1799,8 +2116,11 @@ def public_library(principal: dict = Depends(require_public)):
 
 
 @app.post("/api/public/progress")
-def public_progress(body: ProgressIn, principal: dict = Depends(require_public)):
+def public_progress(
+    body: ProgressIn, request: Request, principal: dict = Depends(require_public),
+):
     """Persist a listening position for the signed-in visitor."""
+    _public_rate_check("progress", request)
     oid = _canonical_id(body.object_id, "object id")
     # Public users are not scoped to the publisher's space: they may only save
     # progress for an object that is actually published, nothing else.
@@ -1812,6 +2132,79 @@ def public_progress(body: ProgressIn, principal: dict = Depends(require_public))
         principal["id"], oid, body.position_seconds, int(time.time())
     )
     return {"object_id": oid, "position_seconds": body.position_seconds}
+
+
+_BOOKMARKS_PER_BOOK = 50
+
+
+def _published_book_or_404(oid: str) -> str:
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object_unscoped(oid)
+    row = _as_dict(row) if row is not None else None
+    if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
+        raise HTTPException(status_code=404, detail="object not found")
+    return oid
+
+
+@app.get("/api/public/progress")
+def public_progress_get(object_id: str, principal: dict = Depends(require_public)):
+    """Where the visitor stopped on a book (used to offer 'resume from your other device')."""
+    oid = _published_book_or_404(object_id)
+    position = repo.get_progress_map(principal["id"], [oid]).get(oid, 0)
+    return {"object_id": oid, "position_seconds": position}
+
+
+@app.get("/api/public/bookmarks")
+def public_bookmarks(object_id: str, principal: dict = Depends(require_public)):
+    oid = _published_book_or_404(object_id)
+    return {"object_id": oid, "bookmarks": repo.list_bookmarks(principal["id"], oid)}
+
+
+@app.post("/api/public/bookmarks")
+def public_bookmark_add(body: BookmarkIn, request: Request, principal: dict = Depends(require_public)):
+    _public_rate_check("progress", request)
+    oid = _published_book_or_404(body.object_id)
+    note = "".join(ch for ch in body.note if ch.isprintable()).strip()
+    saved = repo.add_bookmark(
+        principal["id"], oid, round(body.position_seconds, 1), note, int(time.time()),
+        _BOOKMARKS_PER_BOOK,
+    )
+    if saved is None:
+        raise HTTPException(status_code=409, detail="too many bookmarks on this book")
+    return saved
+
+
+@app.delete("/api/public/bookmarks/{bookmark_id}")
+def public_bookmark_delete(
+    bookmark_id: str, request: Request, principal: dict = Depends(require_public),
+):
+    _public_rate_check("progress", request)
+    bid = _canonical_id(bookmark_id, "bookmark id")
+    if not repo.delete_bookmark(principal["id"], bid):
+        raise HTTPException(status_code=404, detail="bookmark not found")
+    return {"ok": True}
+
+
+def _set_public_favorite(oid: str, request: Request, principal: dict, favorite: bool) -> dict:
+    _public_rate_check("progress", request)
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object_unscoped(oid)
+    row = _as_dict(row) if row is not None else None
+    if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
+        raise HTTPException(status_code=404, detail="object not found")
+    repo.set_favorite(principal["id"], oid, favorite, int(time.time()))
+    return {"object_id": oid, "favorite": favorite}
+
+
+@app.put("/api/public/favorites/{oid}")
+def public_favorite_add(oid: str, request: Request, principal: dict = Depends(require_public)):
+    """Put a published book in the visitor's favourites (CSRF-protected)."""
+    return _set_public_favorite(oid, request, principal, True)
+
+
+@app.delete("/api/public/favorites/{oid}")
+def public_favorite_remove(oid: str, request: Request, principal: dict = Depends(require_public)):
+    return _set_public_favorite(oid, request, principal, False)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1827,44 +2220,169 @@ def public_portal(request: Request):
         principal = authenticate_public(request)
     except HTTPException:
         principal = None
-    page_headers = {
-        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
-        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
-    }
-    if principal is None:
-        return HTMLResponse(public_ui.login_page(), headers=page_headers)
     query = (request.query_params.get("q") or "").strip()[:120]
+    author = (request.query_params.get("auteur") or "").strip()[:120]
+    sort = _sort_param(request)
+    if principal is None:
+        if not settings.public_browse:
+            return HTMLResponse(
+                public_ui.login_page(with_email=magic_link.enabled(settings)),
+                headers=_public_profile_headers(),
+            )
+        catalog = _public_catalog()
+        return HTMLResponse(
+            public_book.landing_page(
+                _filter_collections(catalog, query, author, sort), query=query,
+                authors=_catalog_authors(catalog), active_author=author, sort=sort,
+                base_url=_public_base_url(), with_email=magic_link.enabled(settings),
+            ),
+            headers=_public_profile_headers(indexable=not (query or author or sort)),
+        )
     view = request.query_params.get("vue", "liste").strip().lower()
     if view not in ("liste", "grille", "immersif"):
         view = "liste"
-    author = (request.query_params.get("auteur") or "").strip()[:120]
     collections = _public_collections(principal)
-    authors = sorted({
-        item["author"] for col in collections for item in col["items"]
-        if item["author"]
-    })
-    if query:
-        needle = query.lower()
-        collections = [
-            {**col, "items": [
-                item for item in col["items"]
-                if needle in item["display_name"].lower()
-            ]}
-            for col in collections
-        ]
-    if author:
-        collections = [
-            {**col, "items": [i for i in col["items"] if i["author"] == author]}
-            for col in collections
-        ]
-    collections = [col for col in collections if col["items"]]
+    authors = _catalog_authors(collections)
+    collections = _filter_collections(collections, query, author, sort)
     return HTMLResponse(
         public_ui.catalog_page(
             principal, collections, query=query, view=view,
-            authors=authors, active_author=author,
+            authors=authors, active_author=author, sort=sort,
         ),
-        headers=page_headers,
+        headers=_public_profile_headers(),
     )
+
+
+def _public_base_url() -> str:
+    return f"https://{settings.public_domain}" if settings.public_domain else ""
+
+
+def _optional_public_principal(request: Request):
+    try:
+        return authenticate_public(request)
+    except HTTPException:
+        return None
+
+
+def _find_public_book(oid: str):
+    """``(item, collection)`` of a published book, or ``(None, None)``."""
+    for col in _public_catalog():
+        for item in col["items"]:
+            if item["id"] == oid:
+                return item, col
+    return None, None
+
+
+def _preview_bytes(row: dict) -> int:
+    """Size of the free preview in bytes, 0 when the format cannot be cut safely."""
+    seconds = settings.public_preview_seconds
+    duration = float(row.get("duration_seconds") or 0)
+    size = int(row.get("size_bytes") or 0)
+    if seconds <= 0 or duration <= 0 or size <= 0:
+        return 0
+    if (row.get("content_type") or "").split(";")[0].strip().lower() != "audio/mpeg":
+        return 0  # only MPEG frames survive a cut at an arbitrary byte
+    return min(size, int(size * min(seconds, duration) / duration) + 4096)
+
+
+@app.get("/livre/{oid}", response_class=HTMLResponse)
+def public_book_page(oid: str, request: Request):
+    """One book of the published catalogue, readable without signing in."""
+    if not _public_host_ok(request) or not settings.public_browse:
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        oid = _canonical_id(oid, "object id")
+    except HTTPException:
+        item = None
+    else:
+        item, col = _find_public_book(oid)
+    if item is None:
+        return HTMLResponse(
+            public_book.message_page("Livre introuvable", "Ce livre n'existe pas ou n'est plus publié."),
+            status_code=404, headers=_public_profile_headers(),
+        )
+    principal = _optional_public_principal(request)
+    related = [
+        i for i in col["items"] if i["author"] and i["author"] == item["author"] and i["id"] != oid
+    ][:6]
+    position = next(n for n, i in enumerate(col["items"]) if i["id"] == oid)
+    shown = {i["id"] for i in related} | {oid}
+    up_next = [i for i in col["items"][position + 1:] if i["id"] not in shown][:6]
+    row = _as_dict(repo.get_object_unscoped(oid) or {})
+    if principal is not None:
+        item["favorite"] = oid in repo.get_favorite_ids(principal["id"], [oid])
+    return HTMLResponse(
+        public_book.book_page(
+            item, col["title"], related, principal, base_url=_public_base_url(),
+            preview_seconds=settings.public_preview_seconds if _preview_bytes(row) else 0,
+            up_next=up_next,
+        ),
+        headers=_public_profile_headers(indexable=True),
+    )
+
+
+@app.get("/extrait/{oid}")
+def public_preview(oid: str, request: Request):
+    """Free preview: only the first minutes of a published MP3, cut server-side."""
+    _public_rate_check("preview", request)
+    if not _public_host_ok(request) or not settings.public_browse:
+        raise HTTPException(status_code=404, detail="not found")
+    oid = _canonical_id(oid, "object id")
+    row = _as_dict(repo.get_object_unscoped(oid) or {})
+    if (
+        not row or row.get("status") != AVAILABLE or not row.get("published_at")
+        or not _preview_bytes(row)
+    ):
+        raise HTTPException(status_code=404, detail="not found")
+    length = _preview_bytes(row)
+    set_request_principal(row.get("space_id"), None)
+    try:
+        body = s3ops.get_object(
+            Bucket=row["bucket"], Key=row["object_key"], Range=f"bytes=0-{length - 1}",
+        )["Body"]
+    except Exception:
+        raise HTTPException(status_code=404, detail="not found")
+    _record_object_event(oid, length, "view")
+    return StreamingResponse(
+        body.iter_chunks(64 * 1024), media_type="audio/mpeg",
+        headers={
+            "Content-Length": str(length), "Accept-Ranges": "none",
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline",
+        },
+    )
+
+
+@app.get("/robots.txt")
+def public_robots(request: Request):
+    if not _public_host_ok(request) or not settings.public_domain:
+        raise HTTPException(status_code=404, detail="not found")
+    lines = ["User-agent: *"]
+    if settings.public_browse:
+        lines += ["Allow: /$", "Allow: /livre/", "Disallow: /",
+                  f"Sitemap: {_public_base_url()}/sitemap.xml"]
+    else:
+        lines.append("Disallow: /")
+    return Response("\n".join(lines) + "\n", media_type="text/plain; charset=utf-8",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/sitemap.xml")
+def public_sitemap(request: Request):
+    if not _public_host_ok(request) or not settings.public_domain or not settings.public_browse:
+        raise HTTPException(status_code=404, detail="not found")
+    base = _public_base_url()
+    urls = [f"{base}/"] + [
+        f"{base}/livre/{i['id']}" for col in _public_catalog() for i in col["items"]
+    ]
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        + "".join(f"<url><loc>{html_escape(u)}</loc></url>" for u in urls)
+        + "</urlset>"
+    )
+    return Response(xml, media_type="application/xml",
+                    headers={"Cache-Control": "public, max-age=3600"})
 
 
 # ---------------------------------------------------------------------------
@@ -3710,13 +4228,14 @@ def replace_object_content(
 
 
 @app.get("/m/{slug}")
-def public_media(slug: str):
+def public_media(slug: str, request: Request):
     """Permanent published URL: 302 to a short-lived presigned GET, or 404.
 
     Only an object with `published_at` resolves. The slug survives content
     replacement, so course sites embed one stable URL. Bytes still come from
     the storage host; the API never proxies them.
     """
+    _public_rate_check("media", request)
     if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
         raise HTTPException(status_code=404, detail="not found")
     row = repo.get_object_by_slug(slug)
@@ -3749,12 +4268,13 @@ def public_media(slug: str):
 
 
 @app.get("/covers/{oid}.jpg")
-def public_cover(oid: str):
+def public_cover(oid: str, request: Request):
     """Cover art extracted locally from a published audio file, or 404.
 
     No external cover API is contacted: the JPEG is stored next to the object
     in the same bucket by scripts/generate_audiobook_covers.py.
     """
+    _public_rate_check("cover", request)
     oid = _canonical_id(oid, "object id")
     row = _as_dict(repo.get_object_unscoped(oid) or {})
     if (
@@ -3767,8 +4287,11 @@ def public_cover(oid: str):
         s3, row["bucket"], row["cover_key"], settings.intent_ttl,
         content_disposition="inline", content_type="image/jpeg",
     )
+    # The redirect target is valid for `intent_ttl`; letting the browser reuse
+    # the redirect for 5 minutes spares a signed URL per cover on every visit
+    # (a unpublished cover may stay visible that long in a warm cache).
     return RedirectResponse(url, status_code=302, headers={
-        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "Cache-Control": "private, max-age=300", "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
     })
 
@@ -4668,6 +5191,40 @@ def prune_audit(principal: dict = Depends(authorize(ADMIN_WRITE))):
         raise HTTPException(status_code=503, detail="audit log unavailable")
     audit_event("admin.audit.prune", principal["id"], "success", out)
     return out
+
+
+@app.get("/api/v1/admin/portal-stats")
+def admin_portal_stats(principal: dict = Depends(authorize(ADMIN_READ))):
+    """What the public portal is used for: per-book listeners, completions, favourites.
+
+    Counts only, computed from the listening-progress and favourites tables; no
+    visitor, e-mail or listening history is returned or stored for this purpose.
+    A book is "completed" once a visitor reached 90 % of its duration.
+    """
+    period = _usage_period()
+    raw = repo.portal_stats(period, AVAILABLE)
+    books = []
+    for row in raw["books"]:
+        author, title = _split_audio_name(row["display_name"])
+        listeners, completed = int(row["listeners"]), int(row["completed"])
+        books.append({
+            "id": row["id"], "title": title or row["display_name"], "author": author or "",
+            "listeners": listeners, "completed": completed,
+            "completion_rate": round(completed / listeners, 3) if listeners else 0.0,
+            "favorites": int(row["favorites"]), "views_month": int(row["views_month"]),
+        })
+    books.sort(key=lambda b: (-b["listeners"], -b["favorites"], -b["views_month"], b["title"].lower()))
+    return {
+        "measured_at": int(time.time()), "period": period,
+        "totals": {
+            "accounts": int(raw["accounts"]), "published_books": len(books),
+            "listeners": sum(b["listeners"] for b in books),
+            "completed": sum(b["completed"] for b in books),
+            "favorites": sum(b["favorites"] for b in books),
+            "views_month": sum(b["views_month"] for b in books),
+        },
+        "books": books[:50],
+    }
 
 
 @app.get("/api/v1/admin/usage")
