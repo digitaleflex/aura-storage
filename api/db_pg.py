@@ -1582,6 +1582,64 @@ class Repository:
         )
         return self._all(sql, tuple(params) + (limit,))
 
+    # -- Shared public rate limits and revocable media grants ---------------
+    def rate_hit(self, key: str, *, now: float, window: float, limit: int) -> tuple[bool, int]:
+        """PostgreSQL twin: atomic counter shared by every API worker."""
+        self._run(
+            "INSERT INTO public_rate_counters(key, window_start, hits) VALUES(%s,%s,1) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "window_start = CASE WHEN public_rate_counters.window_start < %s "
+            "THEN excluded.window_start ELSE public_rate_counters.window_start END, "
+            "hits = CASE WHEN public_rate_counters.window_start < %s THEN 1 "
+            "ELSE LEAST(public_rate_counters.hits + 1, %s) END",
+            (key, now, now - window, now - window, limit + 1),
+        )
+        row = self._one(
+            "SELECT window_start, hits FROM public_rate_counters WHERE key = %s", (key,)
+        )
+        if row is None or int(row["hits"]) <= limit:
+            return True, 0
+        retry = max(1, int(window - (now - float(row["window_start"]))))
+        return False, retry
+
+    def clear_rate_counters(self) -> None:
+        self._run("DELETE FROM public_rate_counters")
+
+    def create_public_access_grant(
+        self, token_hash: str, oid: str, space_id: str, actor_id: str,
+        created_at: int, expires_at: int,
+    ) -> None:
+        self._run(
+            "INSERT INTO public_access_grants"
+            "(token_hash, object_id, space_id, actor_id, created_at, expires_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s)",
+            (token_hash, oid, space_id, actor_id, created_at, expires_at),
+        )
+
+    def get_public_access_grant(self, token_hash: str):
+        return self._one(
+            "SELECT * FROM public_access_grants WHERE token_hash = %s", (token_hash,)
+        )
+
+    def revoke_public_access_grant(self, token_hash: str, at: int) -> int:
+        return self._run(
+            "UPDATE public_access_grants SET revoked_at = %s "
+            "WHERE token_hash = %s AND revoked_at IS NULL",
+            (at, token_hash),
+        )
+
+    def revoke_public_access_grants_for_object(self, oid: str, at: int) -> int:
+        return self._run(
+            "UPDATE public_access_grants SET revoked_at = %s "
+            "WHERE object_id = %s AND revoked_at IS NULL",
+            (at, oid),
+        )
+
+    def purge_expired_public_access_grants(self, now: int) -> int:
+        return self._run(
+            "DELETE FROM public_access_grants WHERE expires_at < %s", (now,)
+        )
+
     def create_collection(
         self, cid: str, space_id: str, owner_id, slug: str,
         title: str, description: str,

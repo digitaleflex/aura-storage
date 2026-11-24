@@ -495,6 +495,30 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "409": { description: Object not abortable }
+  /api/v1/objects/{oid}/public-access:
+    post:
+      summary: Mint a short revocable public media URL (objects:write)
+      tags: [objects]
+      description: >-
+        Gate D-08. Reserved for a trusted service after its own entitlement
+        decision: returns a one-time token and an /a/{token} URL. The token is
+        stored only as a SHA-256 fingerprint and never logged.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Short-lived grant created }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not available }
+    delete:
+      summary: Revoke every public media grant of an object (objects:write)
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Grants revoked }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
   /api/v1/objects/{oid}/multipart:
     get:
       summary: Multipart upload status — plan and parts already held (objects:write)
@@ -2307,6 +2331,30 @@ paths:
         "403": { description: "Not authorised" }
         "404": { description: "Object not found or not visible" }
         "409": { description: "Object is not in the trash" }
+  /api/v1/objects/{oid}/public-access:
+    post:
+      summary: Mint a short revocable public media URL (objects:write)
+      tags: [objects]
+      description: >-
+        Gate D-08. Reserved for a trusted service after its own entitlement
+        decision: returns a one-time token and an /a/{token} URL. The token is
+        stored only as a SHA-256 fingerprint and never logged.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Short-lived grant created }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
+        "409": { description: Object not available }
+    delete:
+      summary: Revoke every public media grant of an object (objects:write)
+      tags: [objects]
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      responses:
+        "200": { description: Grants revoked }
+        "401": { description: Authentication required }
+        "404": { description: Object not found or not visible }
   /api/v1/objects/{oid}/multipart:
     get:
       summary: "Multipart upload state: parts already held by the storage, for resuming (objects:write)"

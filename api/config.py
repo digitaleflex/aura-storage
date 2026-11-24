@@ -255,6 +255,9 @@ class Settings:
     # and buffered playback once the browser followed the /m/<slug> redirect.
     # This TTL applies only to published public media, never to upload intents.
     public_media_ttl: int = _int("AURA_PUBLIC_MEDIA_TTL", 12 * 3600)
+    # Lifetime of a service-issued /a/<token> media grant (gate D-08). The
+    # audiobook service mints one only after its own entitlement decision.
+    public_access_grant_ttl: int = _int("AURA_PUBLIC_ACCESS_GRANT_TTL", 12 * 3600)
     # Gate D-08: slugs listed here stop resolving through the permanent public
     # URL. Paid/entitled titles must instead be served by a short service-issued
     # URL decided by the audiobook service (docs/audiobook/README.md §2.3).

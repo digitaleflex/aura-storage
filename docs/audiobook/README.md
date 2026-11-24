@@ -85,6 +85,15 @@ déclarer les slugs dont le contenu ne doit plus être servi par `/m/{slug}` (r�
 un interrupteur d'endiguement. La décision d'accès définitive reste celle de l'API
 audiobook via son identité de service.
 
+**Mécanisme livré (issue #301) :** une identité de service disposant de `objects:write`
+peut appeler `POST /api/v1/objects/{oid}/public-access` après sa décision d'accès.
+L'API renvoie un token à usage de capability et l'URL courte `/a/{token}` ; seul le
+SHA‑256 du token est stocké (`public_access_grants`), jamais le token en clair ni dans
+les logs. `DELETE /api/v1/objects/{oid}/public-access` révoque tous les grants d'un
+objet, et le sweep périodique purge les grants expirés. Les compteurs de débit publics
+sont désormais partagés en base (`public_rate_counters`) : plusieurs workers API
+appliquent la même limite.
+
 ### 2.4 Le modèle d'écoute : événements + projection, pas un champ « position »
 
 Le prototype stocke une seule ligne `(user_id, object_id, position_seconds)` et

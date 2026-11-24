@@ -282,13 +282,17 @@ def test_filter_by_creation_period():
     _set_created_at(old, base - 10_000)
     _set_created_at(new, base)
 
+    # Scope the query to this test's objects: other modules share the in-memory
+    # catalogue and can otherwise push these rows past the default page size.
     after = c.get(
-        "/api/v1/objects", params={"created_after": base - 60}, headers=headers
+        "/api/v1/objects",
+        params={"q": tag, "created_after": base - 60, "limit": 100}, headers=headers,
     ).json()
     assert new in _ids(after) and old not in _ids(after)
 
     before = c.get(
-        "/api/v1/objects", params={"created_before": base - 60}, headers=headers
+        "/api/v1/objects",
+        params={"q": tag, "created_before": base - 60, "limit": 100}, headers=headers,
     ).json()
     assert old in _ids(before) and new not in _ids(before)
 

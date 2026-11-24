@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0024_listen_bookmarks"
+SCHEMA_VERSION = "0025_public_access_grants"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -557,6 +557,35 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_transfer_records_terminal "
         "ON transfer_records(terminal_at)"
+    )
+    # Shared public rate counters: process-local dictionaries can be bypassed
+    # with several API workers. One row per (kind, client) and rolling window.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS public_rate_counters ("
+        "key TEXT PRIMARY KEY, "
+        "window_start REAL NOT NULL, "
+        "hits INTEGER NOT NULL DEFAULT 1)"
+    )
+    # Short, revocable public media grants (gate D-08). The token is stored as a
+    # SHA-256 fingerprint, never in clear, and never logged. The audiobook
+    # service asks for one after its own entitlement decision.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS public_access_grants ("
+        "token_hash TEXT PRIMARY KEY, "
+        "object_id TEXT NOT NULL REFERENCES objects(id), "
+        "space_id TEXT NOT NULL, "
+        "actor_id TEXT NOT NULL, "
+        "created_at INTEGER NOT NULL, "
+        "expires_at INTEGER NOT NULL, "
+        "revoked_at INTEGER)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_public_access_grants_object "
+        "ON public_access_grants(object_id)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_public_access_grants_expiry "
+        "ON public_access_grants(expires_at)"
     )
     # Byte counts must be 64-bit: a 5 GiB object already overflows PostgreSQL's
     # INTEGER (2 147 483 647), and quotas are set in TiB. SQLite INTEGER is

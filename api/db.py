@@ -1811,6 +1811,77 @@ class Repository:
         )
         return self.conn.execute(sql, params + [limit]).fetchall()
 
+    # -- Shared public rate limits and revocable media grants ---------------
+    def rate_hit(self, key: str, *, now: float, window: float, limit: int) -> tuple[bool, int]:
+        """Atomically count one hit. Returns ``(allowed, retry_after_seconds)``.
+
+        The counter lives in the catalogue so every API worker enforces the
+        same limit; a process-local dict allowed bypassing it with --workers>1.
+        """
+        self.conn.execute(
+            "INSERT INTO public_rate_counters(key, window_start, hits) VALUES(?,?,1) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "window_start = CASE WHEN public_rate_counters.window_start < ? "
+            "THEN excluded.window_start ELSE public_rate_counters.window_start END, "
+            "hits = CASE WHEN public_rate_counters.window_start < ? THEN 1 "
+            "ELSE MIN(public_rate_counters.hits + 1, ?) END",
+            (key, now, now - window, now - window, limit + 1),
+        )
+        row = self.conn.execute(
+            "SELECT window_start, hits FROM public_rate_counters WHERE key = ?", (key,)
+        ).fetchone()
+        self.conn.commit()
+        if row is None or int(row["hits"]) <= limit:
+            return True, 0
+        retry = max(1, int(window - (now - float(row["window_start"]))))
+        return False, retry
+
+    def clear_rate_counters(self) -> None:
+        self.conn.execute("DELETE FROM public_rate_counters")
+        self.conn.commit()
+
+    def create_public_access_grant(
+        self, token_hash: str, oid: str, space_id: str, actor_id: str,
+        created_at: int, expires_at: int,
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO public_access_grants"
+            "(token_hash, object_id, space_id, actor_id, created_at, expires_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (token_hash, oid, space_id, actor_id, created_at, expires_at),
+        )
+        self.conn.commit()
+
+    def get_public_access_grant(self, token_hash: str):
+        return self.conn.execute(
+            "SELECT * FROM public_access_grants WHERE token_hash = ?", (token_hash,)
+        ).fetchone()
+
+    def revoke_public_access_grant(self, token_hash: str, at: int) -> int:
+        cur = self.conn.execute(
+            "UPDATE public_access_grants SET revoked_at = ? "
+            "WHERE token_hash = ? AND revoked_at IS NULL",
+            (at, token_hash),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def revoke_public_access_grants_for_object(self, oid: str, at: int) -> int:
+        cur = self.conn.execute(
+            "UPDATE public_access_grants SET revoked_at = ? "
+            "WHERE object_id = ? AND revoked_at IS NULL",
+            (at, oid),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def purge_expired_public_access_grants(self, now: int) -> int:
+        cur = self.conn.execute(
+            "DELETE FROM public_access_grants WHERE expires_at < ?", (now,)
+        )
+        self.conn.commit()
+        return cur.rowcount
+
     def create_collection(
         self, cid: str, space_id: str, owner_id: Optional[str], slug: str,
         title: str, description: str,

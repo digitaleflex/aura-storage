@@ -93,6 +93,10 @@ def sweep(repo, s3ops, settings, *, now=time.time, audit=None) -> dict:
             out[key] = out.get(key, 0) + value
         else:
             out[key] = value
+    try:
+        out["expired_public_grants"] = repo.purge_expired_public_access_grants(started_at)
+    except Exception:
+        out["expired_public_grants"] = 0
     out.update(purge_transfer_history(
         repo, retention_days=settings.transfer_history_retention_days,
         limit=limit, now=now,

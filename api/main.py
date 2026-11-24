@@ -430,7 +430,8 @@ def _public_login_clear(client_ip: str) -> None:
 # request, not only failures: a scraper or a runaway client must not be able to
 # mint unlimited presigned URLs or write unlimited rows. Limits are per client
 # address and per minute, generous for a person (a 100-cover grid is one burst).
-_PUBLIC_RATE: dict[str, list[float]] = {}
+# Counters live in the catalogue (``public_rate_counters``), not in a process:
+# several API workers must enforce the same limit.
 _PUBLIC_RATE_WINDOW = 60.0
 # HLS segments are many small requests (a few per minute per viewer), subtitles
 # are fetched once per media: both are public capabilities and were previously
@@ -441,41 +442,37 @@ _PUBLIC_RATE_LIMITS = {
 }
 
 
+def _rate_exceeded(retry: int) -> None:
+    raise HTTPException(status_code=429, detail="too many requests",
+                        headers={"Retry-After": str(retry)})
+
+
 def _public_rate_hit(key: str, limit: int, window: float, raise_429: bool = True) -> bool:
     """Count one hit on ``key``; False (or HTTP 429) once ``limit`` hits fit in ``window``."""
-    now = time.time()
-    recent = [t for t in _PUBLIC_RATE.get(key, []) if now - t < window]
-    if len(recent) >= limit:
-        _PUBLIC_RATE[key] = recent
-        if raise_429:
-            retry = max(1, int(window - (now - recent[0])))
-            raise HTTPException(status_code=429, detail="too many requests",
-                                headers={"Retry-After": str(retry)})
-        return False
-    recent.append(now)
-    _PUBLIC_RATE[key] = recent
-    _prune_attempt_table(_PUBLIC_RATE, window)
-    return True
+    allowed, retry = repo.rate_hit(key, now=time.time(), window=window, limit=limit)
+    if not allowed and raise_429:
+        _rate_exceeded(retry)
+    return allowed
 
 
 def _public_rate_check(kind: str, request: Request) -> None:
-    now = time.time()
     key = f"{kind}:{_client_ip(request)}"
-    recent = [t for t in _PUBLIC_RATE.get(key, []) if now - t < _PUBLIC_RATE_WINDOW]
-    if len(recent) >= _PUBLIC_RATE_LIMITS[kind]:
-        _PUBLIC_RATE[key] = recent
-        retry = max(1, int(_PUBLIC_RATE_WINDOW - (now - recent[0])))
-        raise HTTPException(status_code=429, detail="too many requests",
-                            headers={"Retry-After": str(retry)})
-    recent.append(now)
-    _PUBLIC_RATE[key] = recent
-    _prune_attempt_table(_PUBLIC_RATE, _PUBLIC_RATE_WINDOW)
+    allowed, retry = repo.rate_hit(
+        key, now=time.time(), window=_PUBLIC_RATE_WINDOW,
+        limit=_PUBLIC_RATE_LIMITS[kind],
+    )
+    if not allowed:
+        _rate_exceeded(retry)
 
 
 def reset_login_attempts() -> None:
     _LOGIN_ATTEMPTS.clear()
     _PUBLIC_LOGIN_ATTEMPTS.clear()
-    _PUBLIC_RATE.clear()
+    try:
+        repo.clear_rate_counters()
+    except Exception:
+        # Test-only reset: never let a catalogue hiccup break a request path.
+        pass
 
 s3, s3ops = make_clients(
     settings.s3_endpoint, settings.s3_internal_endpoint,
@@ -3545,6 +3542,49 @@ def abort_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
     return {"id": oid, "status": ABORTED, "aborted": True}
 
 
+@app.post("/api/v1/objects/{oid}/public-access")
+def create_public_access(
+    oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Mint a short revocable public URL after an external entitlement decision.
+
+    Reserved for machine identities acting as a trusted service (the audiobook
+    API). The returned token is shown once; only its SHA-256 is stored.
+    """
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != AVAILABLE:
+        raise HTTPException(status_code=409, detail="object not available")
+    token = secrets.token_urlsafe(32)
+    now = int(time.time())
+    expires_at = now + settings.public_access_grant_ttl
+    repo.create_public_access_grant(
+        hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        oid, row["space_id"], principal["id"], now, expires_at,
+    )
+    audit_event("public-access-grant", principal["id"], "created",
+                {"object_id": oid, "expires_at": expires_at})
+    return {"token": token, "url": f"/a/{token}", "expires_at": expires_at}
+
+
+@app.delete("/api/v1/objects/{oid}/public-access")
+def revoke_public_access(
+    oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Revoke every outstanding public grant for one object."""
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    revoked = repo.revoke_public_access_grants_for_object(oid, int(time.time()))
+    audit_event("public-access-grant", principal["id"], "revoked",
+                {"object_id": oid, "count": revoked})
+    return {"revoked": revoked}
+
+
 def _query_tags(value: str | None) -> list[str]:
     """Normalize a comma-separated tag filter like stored tags (max 10)."""
     if not value:
@@ -4302,6 +4342,44 @@ def public_media(slug: str, request: Request):
         "Referrer-Policy": "no-referrer",
         "X-Robots-Tag": "noindex, nofollow",
         "X-Content-Type-Options": "nosniff",
+    })
+
+
+@app.get("/a/{token}")
+def public_granted_media(token: str, request: Request):
+    """Short, revocable media URL issued by a service after an entitlement check.
+
+    Gate D-08: paid or rights-restricted content must never rely on the permanent
+    ``/m/{slug}`` capability. The token is a bearer capability, stored only as a
+    SHA-256 fingerprint and never logged.
+    """
+    _public_rate_check("media", request)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    grant = repo.get_public_access_grant(token_hash)
+    now = int(time.time())
+    if (
+        grant is None or grant["revoked_at"] is not None
+        or int(grant["expires_at"]) <= now
+    ):
+        raise HTTPException(status_code=404, detail="not found")
+    row = _as_dict(repo.get_object_unscoped(grant["object_id"]) or {})
+    if not row or row["status"] != AVAILABLE:
+        raise HTTPException(status_code=404, detail="not found")
+    set_request_principal(row["space_id"], None)
+    inline = is_previewable(row["content_type"])
+    url = presigned_get(
+        s3, row["bucket"], row["object_key"], settings.public_media_ttl,
+        content_disposition=shares.content_disposition_header(
+            "inline" if inline else "attachment", row["display_name"]
+        ),
+        content_type=row["content_type"],
+    )
+    _record_object_event(row["id"], int(row["size_bytes"]), "view")
+    audit_event("public-access-grant", grant["actor_id"], "redeemed",
+                {"object_id": row["id"]})
+    return RedirectResponse(url, status_code=302, headers={
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow", "X-Content-Type-Options": "nosniff",
     })
 
 
