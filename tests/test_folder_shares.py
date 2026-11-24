@@ -21,6 +21,7 @@ import time
 import uuid
 
 import pytest
+from fastapi import HTTPException
 
 os.environ.setdefault("AURA_API_ADMIN_PASSWORD", "test-admin-password")
 os.environ.setdefault("AURA_S3_ACCESS_KEY", "testaccess12345678")
@@ -147,6 +148,26 @@ def test_folder_share_round_trip_lists_tree_and_redirects_files():
     assert _download(token, outside_file).status_code == 404
     assert _download(token, _object(c, headers, None, "unfiled.pdf")).status_code == 404
     assert _page(token, d=str(uuid.uuid4())).status_code == 404
+
+
+def test_published_object_in_folder_share_is_premium_only(monkeypatch):
+    c, headers = _account(role="admin")
+    root = _folder(c, headers)
+    oid = _object(c, headers, root["id"], "livre-publie.mp3", "audio/mpeg")
+    main.repo.set_object_publication(oid, f"livre-{uuid.uuid4().hex[:8]}", int(time.time()))
+    token = _share(c, headers, root["id"])["token"]
+
+    def deny(_request):
+        raise HTTPException(status_code=403, detail="premium account required")
+
+    monkeypatch.setattr(main.settings, "public_download_require_premium", True)
+    monkeypatch.setattr(main, "_require_premium", deny)
+    denied = _download(token, oid)
+    assert denied.status_code == 404
+    assert "Lien introuvable" in denied.text
+
+    monkeypatch.setattr(main, "_require_premium", lambda request: {})
+    assert _download(token, oid).status_code == 302
 
 
 def test_unknown_malformed_expired_and_revoked_links_are_indistinguishable():

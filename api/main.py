@@ -1444,7 +1444,9 @@ def view_folder_share(
 
 
 @app.get("/f/{token}/o/{oid}")
-def redeem_folder_share_object(token: str, oid: str, download: bool = False):
+def redeem_folder_share_object(
+    token: str, oid: str, request: Request, download: bool = False,
+):
     """Redirect one file of a folder share to a presigned GET, or 404.
 
     The object must be ``available`` and filed inside the shared subtree. Every
@@ -1469,6 +1471,14 @@ def redeem_folder_share_object(token: str, oid: str, download: bool = False):
     ):
         # An object outside the shared tree must look exactly like a missing one.
         return _folder_share_denied("outside_share", row)
+
+    # A folder link must not distribute published books outside the paid gate:
+    # the same rule as /s/{token} and /d/{slug}. Keep the uniform 404 page.
+    if settings.public_download_require_premium and obj.get("published_at"):
+        try:
+            _require_premium(request)
+        except HTTPException:
+            return _folder_share_denied("premium_required", row)
 
     try:
         _check_egress_quota(row["space_id"], int(obj["size_bytes"]))
