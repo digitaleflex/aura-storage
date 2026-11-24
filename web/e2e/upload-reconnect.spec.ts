@@ -134,7 +134,7 @@ test("a file whose upload died with the link is replayed when the network return
   });
   await expect(status.getByText("Échec", { exact: true })).toHaveCount(0);
   await expect(
-    page.getByText(/Connexion rétablie : 1 fichier relancé automatiquement/),
+    page.getByText(/Nouvelle tentative automatique : 1 fichier relancé/),
   ).toBeVisible();
   await expect(page.getByText("Connexion perdue")).toHaveCount(0);
 });
