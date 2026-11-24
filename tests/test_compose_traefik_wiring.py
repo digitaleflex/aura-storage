@@ -126,7 +126,7 @@ def test_bearer_grant_paths_are_not_written_to_access_logs() -> None:
     data = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     command = data["services"]["traefik"]["command"]
     assert "--accesslog.fields.queryparameters.defaultmode=drop" in command
-    assert "--accesslog.fields.requestpath.defaultmode=drop" in command
+    assert "--accesslog.fields.names.RequestPath=drop" in command
     dockerfile = COMPOSE.with_name("api") / "Dockerfile"
     assert '"--no-access-log"' in dockerfile.read_text(encoding="utf-8")
 

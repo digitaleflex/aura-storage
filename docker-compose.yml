@@ -34,7 +34,7 @@ services:
       # string, and /a/<token> carries a bearer grant in the path. Drop both so
       # docker logs never become a credential store.
       - --accesslog.fields.queryparameters.defaultmode=drop
-      - --accesslog.fields.requestpath.defaultmode=drop
+      - --accesslog.fields.names.RequestPath=drop
       - --log.level=INFO
       - --ping=true
     environment:
