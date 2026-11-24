@@ -1,3 +1,5 @@
+> **Document historique (octobre 2026).** Chiffres et statuts périmés (multipart annoncé désactivé, statuts « tout résolu » contradictoires). Source de vérité : [`docs/ETAT-DES-FONCTIONNALITES.md`](../docs/ETAT-DES-FONCTIONNALITES.md) et son journal [`verification-log-2026-11-24-portail-perf.md`](../docs/verification-log-2026-11-24-portail-perf.md). Suivi : issue #324.
+
 # AURA Storage — Structured Map for Product/Engineering Suggestions
 
 **Repository**: AURA Storage (private S3-compatible storage with SeaweedFS, Traefik, FastAPI, PostgreSQL, React/Vite)

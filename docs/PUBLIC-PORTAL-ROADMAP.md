@@ -2,7 +2,7 @@
 
 > **Date :** 2026-11-24 · **Périmètre :** `PUBLIC_DOMAIN` (vitrine, catalogue, lecteur, profil), liens publics (`/s/`, `/f/`, `/m/`, `/p/`, HLS, sous-titres) et service `audiobook/`.
 > **Source :** inventaire du code et des docs (preuves `fichier:ligne` dans chaque issue) + comparatif Spotify/Audible 2026.
-> **Statut :** proposition de séquencement. Les 14 fiches sont publiées dans [le dépôt GitHub](https://github.com/digitaleflex/aura-storage/issues?q=label%3Aroadmap).
+> **Statut (2026-11-24) :** les 14 fiches #293-#306 sont **fermées** et le code est poussé sur `main`. Les suivants restent ouverts dans la série `reste` : #315 déploiement global, #316/#317 preuves multipart, #318 tests audiobook PostgreSQL, #319-#324 dette fonctionnelle/docs, #325 pool DB. Voir le [journal de vérification](verification-log-2026-11-24-portail-perf.md) et [l'état des fonctionnalités](ETAT-DES-FONCTIONNALITES.md) §10.
 
 ---
 

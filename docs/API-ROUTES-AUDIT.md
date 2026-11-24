@@ -1,5 +1,7 @@
 # Audit des routes API réelles (réconciliation docs/OpenAPI)
 
+> **Document historique (2026-10-24).** Le nombre de routes et les statuts décrits ici ne reflètent pas les ajouts de novembre 2026. La parité est vérifiée automatiquement par `tests/test_openapi_contract.py` ; la source de vérité est [`ETAT-DES-FONCTIONNALITES.md`](ETAT-DES-FONCTIONNALITES.md) et [`openapi.yaml`](openapi.yaml). Suivi : issue #324.
+
 Source : `api/main.py` — **63 routes applicatives** détectées (hors `/docs`, `/redoc`, `/openapi.json` et `/docs/oauth2-redirect`, fournis par FastAPI).
 Régénéré le 2026-10-24. La parité avec `docs/openapi.yaml` est vérifiée automatiquement par `tests/test_openapi_contract.py` (chemins + méthodes).
 

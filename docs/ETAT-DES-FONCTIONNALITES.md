@@ -1,6 +1,6 @@
 # État des fonctionnalités — AURA Storage
 
-> **Date :** 2026-11-05 · **Périmètre :** dépôt `main`, API FastAPI, frontend React, infrastructure Docker Compose.
+> **Date :** 2026-11-05, **révision :** 2026-11-24 (voir §10) · **Périmètre :** dépôt `main`, API FastAPI, frontend React, infrastructure Docker Compose.
 > **Méthode :** lecture du code et des routes, exécution des suites de tests, vérification statique de la configuration. Aucun test sur le VPS réel n'a été exécuté pour ce document.
 > **But :** distinguer clairement ce qui est **spécifié**, **implémenté** et **validé**, afin d'éviter de compter une spec comme une fonctionnalité livrée.
 
@@ -199,3 +199,42 @@
 - Ne jamais marquer une fonctionnalité « validée » sans une preuve exécutée (test réel, log daté ou vérification sur le VPS).
 - Distinguer systématiquement : **spécifié** / **implémenté** / **validé**.
 - Les sources de vérité restent le code, `docs/openapi.yaml` et les logs de vérification datés.
+
+---
+
+## 10. Révision du 2026-11-24
+
+Preuves détaillées : [journal de vérification](verification-log-2026-11-24-portail-perf.md) et [roadmap portail](PUBLIC-PORTAL-ROADMAP.md).
+
+### 10.1 Chiffres actualisés
+
+| Indicateur | Valeur au 2026-11-24 |
+|---|---|
+| Tests backend | **661 passés, 39 skippés** |
+| Tests unitaires frontend | **75 passés** |
+| Migration de catalogue | **`0027_perf_indexes`** appliquée sur le pilote |
+| CI | `Quality` et `Validate storage configuration` au vert |
+| Issues roadmap #293-#306 | **14/14 fermées** |
+
+### 10.2 Nouveautés implémentées et validées
+
+- **Transfert** : nettoyage des sessions multipart à l'expiration, CAS avant suppression dans le sweep, scrubber qui masque les objets corrompus, compteurs de débit partagés en base, grants média `/a/<token>` révocables, timeout de PUT basé sur l'inactivité, polling de vérification borné, deadlines des appels de contrôle.
+- **Portail public** : lecteur accessible (dialogs natifs, VTT, `aria-valuetext`, focus trap), catalogue paginé (60 titres), recommandations réutilisant le scoring audiobook avec raisons affichées, playlists privées, statistiques auditeur, récap de série sans spoiler, recherche en langage naturel limitée aux motifs français courants.
+- **Infrastructure** : HTTP/3 et `responseHeaderTimeout=120s` sur Traefik, volumeSeaweedFS 10 Gio, vacuum nocturne automatisé, index composites `objects(space_id, application_id, folder_id)` et `objects(status, intent_expires_at)`, garde-fou de capacité à 1 Tio (valeur d'endiguement).
+- **Médias** : `Range` validé en réel (`206`, `Accept-Ranges: bytes`, sans `Content-Encoding`) ; pas de `buffering` sur la route S3 ; `Cache-Control: immutable` volontairement **non** appliqué aux URL mutables `/m/` et `/a/`.
+
+### 10.3 État des gardes
+
+| Gate | État |
+|---|---|
+| Capacité de stockage réelle (panneau InterServer) | **Ouvert** — valeur d'endiguement 1 Tio en place, issue #314 |
+| Déploiement complet de la roadmap sur le pilote | **Partiel** — API/migrations et config rechargées ; rebuild global suivi par #315 |
+| Backup local + vérification | **En cours** — script corrigé (`38f762e`), archive en cours de génération |
+| Copie hors-site, restore isolé, reboot, E2E réel | **Ouverts** — issues #5, #9, #10, #11, #23 |
+| Preuves multipart (reclaim après abort, 10 000 parties) | **Ouvertes** — issues #316, #317 ; plafond opérationnel 5 000 parties en mitigation |
+| Tests audiobook PostgreSQL | **Ouvert** — issue #318 |
+| Pool de connexions PostgreSQL | **Ouvert** — issue #325 |
+
+### 10.4 Documents périmés
+
+`docs/STRUCTURED_MAP.md`, `docs/API-ROUTES-AUDIT.md` et `docs/ISSUES-AUDIT-2026-11.md` datent de l'audit d'octobre et contiennent des chiffres et statuts contradictoires. Ils sont conservés à titre historique et **ne doivent pas être utilisés comme source de vérité** ; le suivi de leur réconciliation est l'issue #324.
