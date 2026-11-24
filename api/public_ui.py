@@ -105,7 +105,18 @@ def page_head(title: str, description: str = "", meta: list | None = None) -> st
     return "".join(tags)
 
 
-def login_page() -> str:
+def email_form(next_label: str = "Ou recevez un lien par e-mail") -> str:
+    """Sign-in by mailed link; only shown when the server can send mail."""
+    return (
+        '<form class="email-form" method="post" action="/api/public/auth/email">'
+        f'<label for="email">{ESC(next_label)}</label>'
+        '<div class="email-row"><input id="email" type="email" name="email" required '
+        'autocomplete="email" inputmode="email" maxlength="254" placeholder="vous@exemple.fr">'
+        '<button type="submit">Recevoir le lien</button></div></form>'
+    )
+
+
+def login_page(with_email: bool = False) -> str:
     return _HEAD + _title("AURA — Votre bibliothèque audio") + """
 <div class="stage">
   <main class="intro">
@@ -129,6 +140,7 @@ def login_page() -> str:
         <span>Continuer avec Google</span>
       </a>
       <p class="fine">Connexion sécurisée · Vos lectures restent privées.</p>
+      """ + (email_form() if with_email else "") + """
     </div>
     <div class="rule" aria-hidden="true"><span></span><i></i><span></span></div>
     <p class="foot">AURA · Écoute privée</p>

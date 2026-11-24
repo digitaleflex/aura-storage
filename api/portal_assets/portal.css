@@ -470,3 +470,15 @@ html.is-offline .track-button:not([data-offline]){opacity:.45}
   .player-bar{background:rgba(24,34,44,.985)}
   body.full-player .player-bar{background:rgba(16,23,30,.995)}
 }
+
+/* ---- connexion par e-mail --------------------------------------------- */
+.email-form{margin:1.4rem 0 0;text-align:left}
+.email-form label{display:block;margin:0 0 .45rem;font-size:.85rem;color:var(--muted)}
+.email-row{display:flex;gap:.5rem}
+.email-row input{flex:1;min-width:0;font:inherit;padding:.7rem .9rem;color:var(--ink);
+  background:var(--surface-hi);border:1px solid var(--line-strong);border-radius:10px}
+.email-row input:focus-visible,.email-row button:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.email-row button{font:inherit;padding:.7rem 1rem;border:1px solid var(--ink);background:var(--ink);
+  color:var(--surface);border-radius:10px;cursor:pointer;white-space:nowrap}
+.welcome .email-form{max-width:30rem}
+@media (max-width:420px){.email-row{flex-direction:column}}

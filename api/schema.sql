@@ -371,6 +371,17 @@ CREATE TABLE IF NOT EXISTS listen_progress (
 CREATE INDEX IF NOT EXISTS idx_listen_progress_user
   ON listen_progress(user_id, updated_at);
 
+-- E-mail sign-in links. Only the SHA-256 of the token is stored; a link works
+-- once (used_at) and expires on its own. Cleaned up opportunistically.
+CREATE TABLE IF NOT EXISTS login_links (
+  token_hash TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_login_links_expiry ON login_links(expires_at);
+
 -- Public portal favourites: a heart on a book, private to the visitor.
 CREATE TABLE IF NOT EXISTS listen_favorites (
   user_id TEXT NOT NULL REFERENCES users(id),

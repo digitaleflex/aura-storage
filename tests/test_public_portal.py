@@ -826,3 +826,187 @@ def test_player_offers_the_offline_download_button():
     page = _sign_in(TestClient(main.app)).get("/").text
     assert 'id="offline-toggle"' in page and "/portal-assets/offline.js?v=" in page
     _assert_strict_markup(page)
+
+
+# --------------------------------------------------------------------------
+# Sign-in by e-mailed link
+# --------------------------------------------------------------------------
+from api import magic_link  # noqa: E402
+
+SENT: list[tuple[str, str]] = []
+
+
+@pytest.fixture
+def mail(monkeypatch):
+    """Enable the feature and capture mails instead of talking to an SMTP server."""
+    SENT.clear()
+    monkeypatch.setattr(main.settings, "smtp_host", "smtp.example.org")
+    monkeypatch.setattr(main.settings, "smtp_from", "AURA <no-reply@example.org>")
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    monkeypatch.setattr(magic_link, "send", lambda settings, to, link: SENT.append((to, link)))
+    return SENT
+
+
+def _token_of(link: str) -> str:
+    return parse_qs(urlsplit(link).query)["token"][0]
+
+
+def test_email_sign_in_is_off_until_a_mail_server_is_configured():
+    c = TestClient(main.app)
+    assert 'name="email"' not in c.get("/").text
+    assert c.post("/api/public/auth/email", data={"email": "a@b.fr"}).status_code == 404
+    assert c.get("/connexion/lien?token=x").status_code == 404
+    assert c.post("/api/public/auth/email/confirm", data={"token": "x"}).status_code == 404
+
+
+def test_email_link_full_flow_single_use_and_hashed_at_rest(mail):
+    anon = TestClient(main.app)
+    assert 'action="/api/public/auth/email"' in anon.get("/").text
+    r = anon.post("/api/public/auth/email", data={"email": "  Lecteur@Example.ORG "})
+    assert r.status_code == 200 and "Vérifiez votre boîte mail" in r.text
+    assert len(mail) == 1 and mail[0][0] == "lecteur@example.org"
+    link = mail[0][1]
+    assert link.startswith("https://testserver/connexion/lien?token=")
+    token = _token_of(link)
+    stored = catalogue_sql.fetch_all("SELECT * FROM login_links")
+    assert token not in str([tuple(x) for x in stored])  # only the hash is stored
+
+    # Opening the link (a mail scanner would too) does NOT use it up.
+    for _ in range(2):
+        page = anon.get(f"/connexion/lien?token={token}")
+        assert page.status_code == 200 and "Me connecter" in page.text
+        assert page.headers["referrer-policy"] == "no-referrer"
+        _assert_strict_markup(page.text)
+    reader = TestClient(main.app)
+    done = reader.post("/api/public/auth/email/confirm", data={"token": token}, follow_redirects=False)
+    assert done.status_code == 302 and done.headers["location"] == "/"
+    assert reader.cookies.get("aura_public_session")
+    me = reader.get("/api/public/me").json()
+    assert me["email"] == "lecteur@example.org" and me["role"] == "public"
+    # Single use: the same token cannot open another session.
+    again = TestClient(main.app).post("/api/public/auth/email/confirm", data={"token": token})
+    assert again.status_code == 400 and "Lien expiré" in again.text
+    assert "Lien expiré" in anon.get(f"/connexion/lien?token={token}").text
+    # A second sign-in by link lands on the same account.
+    main.reset_login_attempts()
+    anon.post("/api/public/auth/email", data={"email": "lecteur@example.org"})
+    second = TestClient(main.app)
+    second.post("/api/public/auth/email/confirm", data={"token": _token_of(mail[-1][1])})
+    assert second.get("/api/public/me").json()["id"] == me["id"]
+
+
+def test_email_link_expires(mail, monkeypatch):
+    anon = TestClient(main.app)
+    anon.post("/api/public/auth/email", data={"email": "late@example.org"})
+    token = _token_of(mail[0][1])
+    real = main.time.time
+    monkeypatch.setattr(main.time, "time", lambda: real() + main.settings.email_link_ttl + 5)
+    assert anon.get(f"/connexion/lien?token={token}").status_code == 400
+    assert anon.post("/api/public/auth/email/confirm", data={"token": token}).status_code == 400
+
+
+def test_email_request_never_reveals_whether_an_address_is_valid_or_known(mail, monkeypatch):
+    anon = TestClient(main.app)
+    answers = []
+    for value in ("pas-un-mail", "", "a@b", "x@example.org"):
+        r = anon.post("/api/public/auth/email", data={"email": value})
+        answers.append((r.status_code, r.text))
+    assert len({a for a in answers}) == 1  # identical answer, valid or not
+    assert [m[0] for m in mail] == ["x@example.org"]
+    # Domain restriction applies to the link too, with the same neutral answer.
+    monkeypatch.setattr(main.settings, "google_allowed_email_domains", ("ecole.fr",))
+    r = anon.post("/api/public/auth/email", data={"email": "intrus@example.org"})
+    assert r.status_code == 200 and len(mail) == 1
+
+
+def test_email_requests_are_rate_limited_per_address_and_per_client(mail):
+    anon = TestClient(main.app)
+    for _ in range(5):
+        assert anon.post("/api/public/auth/email", data={"email": "spam@example.org"}).status_code == 200
+    assert len([m for m in mail if m[0] == "spam@example.org"]) == 3  # the rest silently dropped
+    blocked = None
+    for n in range(12):
+        blocked = anon.post("/api/public/auth/email", data={"email": f"u{n}@example.org"})
+    assert blocked.status_code == 429 and int(blocked.headers["retry-after"]) >= 1
+
+
+def test_email_forms_refuse_another_sites_post(mail):
+    anon = TestClient(main.app)
+    evil = {"Origin": "https://evil.example"}
+    assert anon.post("/api/public/auth/email", data={"email": "a@b.fr"}, headers=evil).status_code == 403
+    assert anon.post("/api/public/auth/email/confirm", data={"token": "t"}, headers=evil).status_code == 403
+    ok = {"Origin": "https://testserver"}
+    assert anon.post("/api/public/auth/email", data={"email": "a@b.fr"}, headers=ok).status_code == 200
+    assert mail == [("a@b.fr", mail[0][1])]
+
+
+def test_wrong_tokens_count_against_the_public_login_budget(mail, monkeypatch):
+    monkeypatch.setattr(main.settings, "login_rate_limit", 3)
+    anon = TestClient(main.app)
+    codes = [anon.post("/api/public/auth/email/confirm", data={"token": f"bad{n}"}).status_code
+             for n in range(5)]
+    assert codes[:3] == [400, 400, 400] and codes[3:] == [429, 429]
+
+
+def _google_as(monkeypatch, sub: str, email: str):
+    monkeypatch.setattr(google_oauth, "verify_id_token", lambda token: {
+        "sub": sub, "email": email, "email_verified": True,
+        "aud": CLIENT_ID, "iss": "https://accounts.google.com", "exp": 4102444800})
+    return _sign_in(TestClient(main.app))
+
+
+def test_email_and_google_sign_ins_share_one_account(mail, monkeypatch):
+    tag = uuid.uuid4().hex[:8]
+    google = _google_as(monkeypatch, f"sub-{tag}", f"lecteur-{tag}@example.org")
+    gid = google.get("/api/public/me").json()["id"]
+    anon = TestClient(main.app)
+    anon.post("/api/public/auth/email", data={"email": f"Lecteur-{tag}@Example.org"})
+    via_mail = TestClient(main.app)
+    via_mail.post("/api/public/auth/email/confirm", data={"token": _token_of(mail[-1][1])})
+    assert via_mail.get("/api/public/me").json()["id"] == gid  # mail -> existing Google account
+
+    # The other way round: e-mail account first, Google afterwards -> same account.
+    main.reset_login_attempts()
+    anon.post("/api/public/auth/email", data={"email": f"nouveau-{tag}@example.net"})
+    first = TestClient(main.app)
+    first.post("/api/public/auth/email/confirm", data={"token": _token_of(mail[-1][1])})
+    nid = first.get("/api/public/me").json()["id"]
+    later = _google_as(monkeypatch, f"new-sub-{tag}", f"nouveau-{tag}@example.net")
+    assert later.get("/api/public/me").json()["id"] == nid
+
+    # Two different Google identities are never merged on a shared address.
+    other = _google_as(monkeypatch, f"other-sub-{tag}", f"lecteur-{tag}@example.org")
+    assert other.get("/api/public/me").json()["id"] not in (None, "")
+    assert other.get("/api/public/me").json()["id"] != nid
+
+
+def test_magic_link_helpers_and_smtp_delivery(monkeypatch):
+    assert magic_link.normalize_email(" A@b.fr ") == "a@b.fr"
+    for bad in ("", "a@b", "a b@c.fr", "a@@b.fr", "x@y.z", "a@b.fr\nBcc: v@x.fr", "é" * 300 + "@b.fr"):
+        assert magic_link.normalize_email(bad) is None, bad
+    assert magic_link.hash_token("t") == magic_link.hash_token("t") != magic_link.hash_token("u")
+    assert magic_link.new_token() != magic_link.new_token()
+
+    class FakeSMTP:
+        instances = []
+
+        def __init__(self, host, port, timeout=None, context=None):
+            self.calls = [("connect", host, port)]
+            FakeSMTP.instances.append(self)
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def starttls(self, context=None): self.calls.append(("starttls",))
+        def login(self, user, password): self.calls.append(("login", user))
+        def send_message(self, msg): self.calls.append(("send", msg["To"], msg["Subject"], msg.get_content()))
+
+    monkeypatch.setattr(magic_link.smtplib, "SMTP", FakeSMTP)
+    cfg = main.settings
+    for attr, value in (("smtp_host", "smtp.example.org"), ("smtp_port", 587), ("smtp_user", "u"),
+                        ("smtp_password", "p"), ("smtp_from", "no-reply@example.org"), ("smtp_starttls", True)):
+        monkeypatch.setattr(cfg, attr, value)
+    magic_link.send(cfg, "x@example.org", "https://p.example/connexion/lien?token=abc")
+    calls = FakeSMTP.instances[0].calls
+    assert [c[0] for c in calls] == ["connect", "starttls", "login", "send"]
+    assert calls[-1][1] == "x@example.org" and "https://p.example/connexion/lien?token=abc" in calls[-1][3]
+    assert "15 minutes" in calls[-1][3]

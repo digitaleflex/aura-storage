@@ -64,6 +64,43 @@ class Repository:
             (provider, subject),
         ).fetchone()
 
+    def get_public_user_by_email(self, email: str) -> Optional[sqlite3.Row]:
+        """The oldest public-portal account using this (lower-cased) address."""
+        return self.conn.execute(
+            "SELECT * FROM users WHERE role = 'public' AND lower(email) = ? "
+            "ORDER BY created_at LIMIT 1", (email.lower(),),
+        ).fetchone()
+
+    # -- e-mail sign-in links ---------------------------------------------
+    def create_login_link(self, token_hash: str, email: str, now: int, expires_at: int) -> None:
+        self.conn.execute("DELETE FROM login_links WHERE expires_at < ?", (now - 86400,))
+        self.conn.execute(
+            "INSERT INTO login_links (token_hash, email, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?)", (token_hash, email, now, expires_at),
+        )
+        self.conn.commit()
+
+    def peek_login_link(self, token_hash: str, now: int) -> bool:
+        """Whether the link exists, is unused and not expired (nothing is consumed)."""
+        return self.conn.execute(
+            "SELECT 1 FROM login_links WHERE token_hash = ? AND used_at IS NULL "
+            "AND expires_at > ?", (token_hash, now),
+        ).fetchone() is not None
+
+    def consume_login_link(self, token_hash: str, now: int) -> Optional[str]:
+        """Use a link once: returns its e-mail, or None if unknown, used or expired."""
+        cur = self.conn.execute(
+            "UPDATE login_links SET used_at = ? WHERE token_hash = ? "
+            "AND used_at IS NULL AND expires_at > ?", (now, token_hash, now),
+        )
+        self.conn.commit()
+        if cur.rowcount != 1:
+            return None
+        row = self.conn.execute(
+            "SELECT email FROM login_links WHERE token_hash = ?", (token_hash,),
+        ).fetchone()
+        return row["email"] if row else None
+
     def create_oauth_user(
         self, username: str, pass_hash: str, provider: str, subject: str,
         email: str, role: str = "public",

@@ -256,6 +256,17 @@ class Settings:
         "0", "false", "no", "off")
     # Free preview length for anonymous visitors (MP3 only); 0 disables it.
     public_preview_seconds: int = _int("AURA_PUBLIC_PREVIEW_SECONDS", 120)
+    # E-mail sign-in link ("magic link") for visitors without a Google account.
+    # Disabled until a mail server is configured; the link is single-use and
+    # short-lived, and it only confirms control of the mailbox.
+    smtp_host: str = os.environ.get("AURA_SMTP_HOST", "").strip()
+    smtp_port: int = _int("AURA_SMTP_PORT", 587)
+    smtp_user: str = os.environ.get("AURA_SMTP_USER", "").strip()
+    smtp_password: str = os.environ.get("AURA_SMTP_PASSWORD", "")
+    smtp_from: str = os.environ.get("AURA_SMTP_FROM", "").strip()
+    smtp_starttls: bool = os.environ.get("AURA_SMTP_STARTTLS", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+    email_link_ttl: int = _int("AURA_EMAIL_LINK_TTL", 900)
     # Google OAuth 2.0 Authorization Code + PKCE. No secret is hard-coded; both
     # values come from .env and are passed to the API container explicitly.
     google_client_id: str = os.environ.get("GOOGLE_CLIENT_ID", "")
