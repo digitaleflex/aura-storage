@@ -268,6 +268,20 @@ def _warn_on_unbounded_multipart() -> None:
 
 
 @app.on_event("startup")
+def _warn_on_process_local_rate_limits() -> None:
+    """Public rate counters live in this process; several workers bypass them."""
+    try:
+        workers = int(os.environ.get("WEB_CONCURRENCY", "1"))
+    except ValueError:
+        workers = 1
+    if workers > 1:
+        log.warning(
+            "WEB_CONCURRENCY=%d: public rate limits are process-local and can be "
+            "bypassed by spreading requests across workers", workers,
+        )
+
+
+@app.on_event("startup")
 def _start_verifier() -> None:
     # Large objects are hashed outside the commit request (N5).
     if settings.verify_worker == "inline":
@@ -418,7 +432,13 @@ def _public_login_clear(client_ip: str) -> None:
 # address and per minute, generous for a person (a 100-cover grid is one burst).
 _PUBLIC_RATE: dict[str, list[float]] = {}
 _PUBLIC_RATE_WINDOW = 60.0
-_PUBLIC_RATE_LIMITS = {"media": 120, "cover": 600, "progress": 120, "preview": 30}
+# HLS segments are many small requests (a few per minute per viewer), subtitles
+# are fetched once per media: both are public capabilities and were previously
+# exempt from any per-client throttling.
+_PUBLIC_RATE_LIMITS = {
+    "media": 120, "cover": 600, "progress": 120, "preview": 30,
+    "hls": 240, "subtitle": 120,
+}
 
 
 def _public_rate_hit(key: str, limit: int, window: float, raise_429: bool = True) -> bool:
@@ -1899,7 +1919,10 @@ def _public_profile_headers(indexable: bool = False) -> dict:
         headers["Cache-Control"] = "public, max-age=60"
         headers["Vary"] = "Cookie"
     else:
-        headers["Cache-Control"] = "no-store"
+        # Personalised HTML (CSRF token, favourites, shelves) must never be
+        # reused by another visitor — not even by a shared proxy.
+        headers["Cache-Control"] = "private, no-store"
+        headers["Vary"] = "Cookie"
         headers["X-Robots-Tag"] = "noindex, nofollow"
     return headers
 
@@ -2317,7 +2340,9 @@ def public_book_page(oid: str, request: Request):
             preview_seconds=settings.public_preview_seconds if _preview_bytes(row) else 0,
             up_next=up_next,
         ),
-        headers=_public_profile_headers(indexable=True),
+        # The HTML contains the CSRF token and the visitor's favourite state:
+        # only the anonymous version may be cached and indexed.
+        headers=_public_profile_headers(indexable=principal is None),
     )
 
 
@@ -4238,6 +4263,10 @@ def public_media(slug: str, request: Request):
     _public_rate_check("media", request)
     if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
         raise HTTPException(status_code=404, detail="not found")
+    # D-08: a restricted slug is not an access-control bypass. Answer 404 with
+    # no presign, no view event and no audit trail of a "successful" access.
+    if slug in settings.public_media_restricted_slugs:
+        raise HTTPException(status_code=404, detail="not found")
     row = repo.get_object_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -4399,7 +4428,8 @@ def set_subtitle(
 
 
 @app.get("/hls/{slug}.m3u8")
-def public_hls_playlist(slug: str):
+def public_hls_playlist(slug: str, request: Request):
+    _public_rate_check("hls", request)
     if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
         raise HTTPException(status_code=404, detail="not found")
     row = repo.get_object_by_slug(slug)
@@ -4414,7 +4444,8 @@ def public_hls_playlist(slug: str):
 
 
 @app.get("/hls/{slug}/{segment}")
-def public_hls_segment(slug: str, segment: str):
+def public_hls_segment(slug: str, segment: str, request: Request):
+    _public_rate_check("hls", request)
     if not _PUBLIC_SLUG_RE.fullmatch(slug or "") or not _HLS_SEGMENT_RE.fullmatch(segment):
         raise HTTPException(status_code=404, detail="not found")
     row = repo.get_object_by_slug(slug)
@@ -4431,7 +4462,8 @@ def public_hls_segment(slug: str, segment: str):
 
 
 @app.get("/m/{slug}/subtitles.vtt")
-def public_subtitle(slug: str):
+def public_subtitle(slug: str, request: Request):
+    _public_rate_check("subtitle", request)
     if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
         raise HTTPException(status_code=404, detail="not found")
     row = repo.get_object_by_slug(slug)

@@ -255,6 +255,14 @@ class Settings:
     # and buffered playback once the browser followed the /m/<slug> redirect.
     # This TTL applies only to published public media, never to upload intents.
     public_media_ttl: int = _int("AURA_PUBLIC_MEDIA_TTL", 12 * 3600)
+    # Gate D-08: slugs listed here stop resolving through the permanent public
+    # URL. Paid/entitled titles must instead be served by a short service-issued
+    # URL decided by the audiobook service (docs/audiobook/README.md §2.3).
+    public_media_restricted_slugs: tuple[str, ...] = tuple(
+        part.strip()
+        for part in os.environ.get("AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS", "").split(",")
+        if part.strip()
+    )
     # Anonymous browsing of the published catalogue (landing, book pages, sitemap).
     # Listening in full still goes through the signed-in portal; set to 0 to
     # restore the sign-in-only front page.

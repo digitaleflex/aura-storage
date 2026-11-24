@@ -238,6 +238,8 @@ services:
       # Published media: a book is hours long, so its presigned URL must outlive
       # the 15-minute upload intent TTL (default 12 h).
       AURA_PUBLIC_MEDIA_TTL: ${AURA_PUBLIC_MEDIA_TTL:-43200}
+      # D-08 guard: slugs excluded from the permanent public media URL.
+      AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS: "${AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS:-}"
       GOOGLE_ALLOWED_EMAIL_DOMAINS: ${GOOGLE_ALLOWED_EMAIL_DOMAINS:-}
       # Optional e-mail sign-in link: active only when a mail server is set.
       AURA_SMTP_HOST: ${AURA_SMTP_HOST:-}

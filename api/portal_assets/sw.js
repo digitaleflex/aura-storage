@@ -3,7 +3,8 @@
 //  - Fichiers statiques versionnés : cache d'abord.
 //  - Livres téléchargés (cache « aura-audio ») : servis avec la prise en charge
 //    de « Range », donc lecture et déplacement dans le livre sans réseau.
-//  - Déconnexion : les pages mises en cache (progression, favoris) sont effacées ;
+//  - Fin de session (logout, suppression de compte, 401, message explicite) :
+//    les pages mises en cache (progression, favoris, CSRF) sont effacées ;
 //    les livres téléchargés restent (contenu public choisi par le visiteur).
 var VERSION = 'v1';
 var PAGES = 'aura-pages-' + VERSION;
@@ -37,6 +38,12 @@ async function forgetPages() {
     if (new URL(keys[i].url).pathname !== OFFLINE_URL) await cache.delete(keys[i]);
   }
 }
+
+// Any code that learns the session ended (page script, redirect after a 401)
+// can ask the worker to drop personal pages without waiting for a navigation.
+self.addEventListener('message', function (event) {
+  if (event.data && event.data.type === 'forget-pages') event.waitUntil(forgetPages());
+});
 
 function cacheablePage(url) {
   return url.pathname === '/' || url.pathname.indexOf('/livre/') === 0;
@@ -97,11 +104,24 @@ self.addEventListener('fetch', function (event) {
   var request = event.request;
   var url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (request.method === 'POST' && url.pathname === '/api/public/logout') {
+  if (request.method === 'POST' && (
+    url.pathname === '/api/public/logout' || url.pathname === '/profil/supprimer'
+  )) {
     event.waitUntil(forgetPages());
-    return; // la déconnexion se déroule normalement
+    return; // la déconnexion / suppression se déroule normalement
   }
   if (request.method !== 'GET') return;
+  // A 401 on any public API call means the session expired or the account was
+  // removed without the logout form ever being submitted. Drop personal pages
+  // at that moment instead of leaving them available to the next visitor.
+  if (url.pathname.indexOf('/api/public/') === 0) {
+    event.respondWith((async function () {
+      var response = await fetch(request);
+      if (response.status === 401) await forgetPages();
+      return response;
+    })());
+    return;
+  }
   if (url.pathname.indexOf('/m/') === 0) { event.respondWith(media(request)); return; }
   if (url.pathname.indexOf('/portal-assets/') === 0) { event.respondWith(staticFile(request)); return; }
   if (request.mode === 'navigate') { event.respondWith(page(request)); }

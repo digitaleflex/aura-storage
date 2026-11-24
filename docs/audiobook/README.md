@@ -76,6 +76,13 @@ cours public ou une préview, pas pour un livre payant.
 demande à AURA une URL courte via son identité de service. Le slug public
 d'AURA reste réservé aux previews explicitement gratuites et non sensibles.
 
+**Garde-fou provisoire (2026-11-24, issue #295) :** tant que l'API audiobook ne délivre
+pas encore ses propres URL signées, `AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS` permet de
+déclarer les slugs dont le contenu ne doit plus être servi par `/m/{slug}` (réponse
+404, sans présign ni événement de lecture). Ce n'est pas un contrôle d'accès : c'est
+un interrupteur d'endiguement. La décision d'accès définitive reste celle de l'API
+audiobook via son identité de service.
+
 ### 2.4 Le modèle d'écoute : événements + projection, pas un champ « position »
 
 Le prototype stocke une seule ligne `(user_id, object_id, position_seconds)` et
