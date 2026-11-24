@@ -31,8 +31,10 @@ services:
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
       - --accesslog=true
       # Presigned URLs carry X-Amz-Signature/X-Amz-Credential in the query
-      # string: leaving them in docker logs hands out short-lived credentials.
+      # string, and /a/<token> carries a bearer grant in the path. Drop both so
+      # docker logs never become a credential store.
       - --accesslog.fields.queryparameters.defaultmode=drop
+      - --accesslog.fields.requestpath.defaultmode=drop
       - --log.level=INFO
       - --ping=true
     environment:
@@ -250,7 +252,7 @@ services:
       # D-08 guard: slugs excluded from the permanent public media URL.
       AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS: "${AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS:-}"
       # Lifetime of short service-issued /a/<token> media grants.
-      AURA_PUBLIC_ACCESS_GRANT_TTL: ${AURA_PUBLIC_ACCESS_GRANT_TTL:-43200}
+      AURA_PUBLIC_ACCESS_GRANT_TTL: ${AURA_PUBLIC_ACCESS_GRANT_TTL:-900}
       # Shared scoring for the public "Pour vous" shelf (local = legacy heuristic).
       AURA_PUBLIC_RECOMMENDATIONS_ENGINE: ${AURA_PUBLIC_RECOMMENDATIONS_ENGINE:-audiobook}
       GOOGLE_ALLOWED_EMAIL_DOMAINS: ${GOOGLE_ALLOWED_EMAIL_DOMAINS:-}
@@ -407,7 +409,7 @@ services:
       # This is the ONLY unauthenticated API surface; the token is the
       # credential, so the guard here is the edge rate limit rather than a
       # second factor. No CORS: a share link is navigated, not fetched.
-      - traefik.http.routers.aura-share.rule=Host(`${APP_DOMAIN:?Set APP_DOMAIN in .env}`) && (PathPrefix(`/s/`) || PathPrefix(`/f/`) || PathPrefix(`/m/`) || PathPrefix(`/p/`) || PathPrefix(`/hls/`))
+      - traefik.http.routers.aura-share.rule=Host(`${APP_DOMAIN:?Set APP_DOMAIN in .env}`) && (PathPrefix(`/s/`) || PathPrefix(`/f/`) || PathPrefix(`/m/`) || PathPrefix(`/a/`) || PathPrefix(`/p/`) || PathPrefix(`/hls/`))
       - traefik.http.routers.aura-share.priority=200
       - traefik.http.routers.aura-share.entrypoints=websecure
       - traefik.http.routers.aura-share.tls=true
@@ -418,11 +420,11 @@ services:
       # answers with index.html instead of the API's 302/404.
       - traefik.http.routers.aura-share.service=aura-share
       - traefik.http.services.aura-share.loadbalancer.server.port=8000
-      # Public portal: dedicated subdomain. Only the HTML root, /api/public/*
-      # and the public media redirects /m/* reach the API here. /api/v1/* stays
-      # on the private app host, so a portal visitor can never reach object,
-      # folder or administration endpoints.
-      - traefik.http.routers.aura-public.rule=Host(`${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN in .env}`) && (Path(`/`) || PathPrefix(`/api/public/`) || PathPrefix(`/m/`) || PathPrefix(`/covers/`) || PathPrefix(`/portal-assets/`) || PathPrefix(`/profil`) || PathPrefix(`/livre/`) || PathPrefix(`/extrait/`) || Path(`/sitemap.xml`) || Path(`/robots.txt`) || Path(`/sw.js`) || Path(`/hors-ligne`) || PathPrefix(`/connexion/`))
+      # Public portal: dedicated subdomain. Only the HTML root, /api/public/*,
+      # media grants /a/*, permanent media /m/* and HLS derivatives /hls/* reach
+      # the API here. /api/v1/* stays on the private app host, so a portal
+      # visitor can never reach object, folder or administration endpoints.
+      - traefik.http.routers.aura-public.rule=Host(`${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN in .env}`) && (Path(`/`) || PathPrefix(`/api/public/`) || PathPrefix(`/m/`) || PathPrefix(`/a/`) || PathPrefix(`/hls/`) || PathPrefix(`/covers/`) || PathPrefix(`/portal-assets/`) || PathPrefix(`/profil`) || PathPrefix(`/livre/`) || PathPrefix(`/extrait/`) || Path(`/sitemap.xml`) || Path(`/robots.txt`) || Path(`/sw.js`) || Path(`/hors-ligne`) || PathPrefix(`/connexion/`))
       - traefik.http.routers.aura-public.priority=210
       - traefik.http.routers.aura-public.entrypoints=websecure
       - traefik.http.routers.aura-public.tls=true

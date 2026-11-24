@@ -82,6 +82,7 @@ def test_share_router_is_reachable_past_the_spa(
     share = _index(labels, ROUTER)["aura-share"]
     assert "PathPrefix(`/s/`)" in share.get("rule", "")
     assert "PathPrefix(`/f/`)" in share.get("rule", "")
+    assert "PathPrefix(`/a/`)" in share.get("rule", "")
     assert share.get("service") == "aura-share"
     assert int(share.get("priority", "0")) > 0
 
@@ -102,9 +103,37 @@ def test_public_router_exposes_only_portal_paths(
     # The HTML player uses relative /m/<slug> URLs: the media redirect must be
     # reachable on this host or every <audio> element returns 404 at the edge.
     assert "PathPrefix(`/m/`)" in rule
+    assert "PathPrefix(`/a/`)" in rule
+    assert "PathPrefix(`/hls/`)" in rule
     assert "PathPrefix(`/covers/`)" in rule
     assert "PathPrefix(`/api/v1/`)" not in rule
     assert public.get("service") == "aura-public"
+
+
+def test_nginx_fallback_forwards_service_media_grants() -> None:
+    nginx = COMPOSE.with_name("app") / "nginx.conf"
+    source = nginx.read_text(encoding="utf-8")
+    block = source.split("location /a/ {", 1)[1].split("}", 1)[0]
+    assert "access_log off;" in block
+    assert "error_log /dev/null;" in block
+    assert "proxy_pass http://api:8000;" in block
+
+
+def test_bearer_grant_paths_are_not_written_to_access_logs() -> None:
+    data = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    command = data["services"]["traefik"]["command"]
+    assert "--accesslog.fields.queryparameters.defaultmode=drop" in command
+    assert "--accesslog.fields.requestpath.defaultmode=drop" in command
+    dockerfile = COMPOSE.with_name("api") / "Dockerfile"
+    assert '"--no-access-log"' in dockerfile.read_text(encoding="utf-8")
+
+
+def test_public_access_grant_default_is_bounded() -> None:
+    data = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    environment = data["services"]["api"]["environment"]
+    assert environment["AURA_PUBLIC_ACCESS_GRANT_TTL"] == (
+        "${AURA_PUBLIC_ACCESS_GRANT_TTL:-900}"
+    )
 
 
 def test_api_has_dedicated_oauth_egress_network() -> None:

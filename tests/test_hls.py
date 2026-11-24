@@ -74,6 +74,7 @@ def test_hls_enqueue_and_status():
 
 
 def test_playlist_is_rewritten_for_auth_and_public(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_media_require_auth", False)
     c, headers = _admin()
     video = _object(c, headers)
     monkeypatch.setattr(main, "s3ops", PlaylistS3())
@@ -93,7 +94,8 @@ def test_playlist_is_rewritten_for_auth_and_public(monkeypatch):
     assert client.get(f"/hls/{slug}/../secret").status_code == 404
 
 
-def test_subtitle_must_be_vtt_and_is_published_with_the_video():
+def test_subtitle_must_be_vtt_and_is_published_with_the_video(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_media_require_auth", False)
     c, headers = _admin()
     video = _object(c, headers)
     vtt = _object(c, headers, ctype="text/vtt", name="fr.vtt", size=200)

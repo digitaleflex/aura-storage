@@ -19,6 +19,15 @@ def _int(name: str, default: int) -> int:
         raise RuntimeError(f"Environment variable {name} must be an integer")
 
 
+def _csv_lower(name: str) -> tuple[str, ...]:
+    """Parse a comma-separated setting into normalized, non-empty values."""
+    return tuple(
+        part.strip().lower()
+        for part in os.environ.get(name, "").split(",")
+        if part.strip()
+    )
+
+
 class Settings:
     # Admin bootstrap credential (initial password; hashed into the DB on boot).
     admin_user: str = os.environ.get("AURA_API_ADMIN_USER", "admin")
@@ -256,8 +265,10 @@ class Settings:
     # This TTL applies only to published public media, never to upload intents.
     public_media_ttl: int = _int("AURA_PUBLIC_MEDIA_TTL", 12 * 3600)
     # Lifetime of a service-issued /a/<token> media grant (gate D-08). The
-    # audiobook service mints one only after its own entitlement decision.
-    public_access_grant_ttl: int = _int("AURA_PUBLIC_ACCESS_GRANT_TTL", 12 * 3600)
+    # audiobook service mints one only after its own entitlement decision. Keep
+    # this shorter than the permanent /m/ playback TTL: the storage redirect
+    # issued on redemption is capped by the grant's remaining lifetime.
+    public_access_grant_ttl: int = _int("AURA_PUBLIC_ACCESS_GRANT_TTL", 15 * 60)
     # Recommendation engine for the public "Pour vous" shelf. "audiobook"
     # reuses the scoring extracted from the audiobook service; "local" keeps
     # the historical author-only recommender.
@@ -267,10 +278,8 @@ class Settings:
     # Gate D-08: slugs listed here stop resolving through the permanent public
     # URL. Paid/entitled titles must instead be served by a short service-issued
     # URL decided by the audiobook service (docs/audiobook/README.md §2.3).
-    public_media_restricted_slugs: tuple[str, ...] = tuple(
-        part.strip()
-        for part in os.environ.get("AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS", "").split(",")
-        if part.strip()
+    public_media_restricted_slugs: tuple[str, ...] = _csv_lower(
+        "AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS"
     )
     # /m/{slug} used to be a permanent anonymous download URL. Full listening is
     # now reserved to signed-in visitors by default; only explicitly allowlisted
@@ -279,10 +288,8 @@ class Settings:
     public_media_require_auth: bool = os.environ.get(
         "AURA_PUBLIC_MEDIA_REQUIRE_AUTH", "1"
     ).strip().lower() not in ("0", "false", "no", "off")
-    public_media_open_slugs: tuple[str, ...] = tuple(
-        part.strip()
-        for part in os.environ.get("AURA_PUBLIC_MEDIA_OPEN_SLUGS", "").split(",")
-        if part.strip()
+    public_media_open_slugs: tuple[str, ...] = _csv_lower(
+        "AURA_PUBLIC_MEDIA_OPEN_SLUGS"
     )
     # Anonymous browsing of the published catalogue (landing, book pages, sitemap).
     # Listening in full still goes through the signed-in portal; set to 0 to
