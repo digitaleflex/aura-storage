@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import api.main as main  # noqa: E402
 from api.auth import hash_password  # noqa: E402
 from api import google_oauth  # noqa: E402
+from tests import catalogue_sql  # noqa: E402
 from api.google_oauth import verify_id_token as real_verify_id_token  # noqa: E402
 
 CLIENT_ID = "test-client.apps.googleusercontent.com"
@@ -445,9 +446,8 @@ def test_cover_redirect_may_be_cached_briefly(monkeypatch):
     _published_pack()
     c = _sign_in(TestClient(main.app))
     item = c.get("/api/public/library").json()["collections"][0]["items"][0]
-    main.repo.conn.execute(
+    catalogue_sql.execute(
         "UPDATE objects SET cover_key = ? WHERE id = ?", ("covers/x.jpg", item["id"]))
-    main.repo.conn.commit()
     monkeypatch.setattr(main, "presigned_get", lambda *a, **k: "https://s3.example/c.jpg")
     r = c.get(f"/covers/{item['id']}.jpg", follow_redirects=False)
     assert r.status_code == 302
@@ -566,10 +566,9 @@ def _book(duration=600, size=60000, content_type="audio/mpeg"):
     """A published one-book pack; returns (collection slug, object slug, object id)."""
     slug = _published_pack()
     row = main.repo.get_object_by_slug(f"{slug}-ch1")
-    main.repo.conn.execute(
+    catalogue_sql.execute(
         "UPDATE objects SET duration_seconds = ?, size_bytes = ?, content_type = ? WHERE id = ?",
         (duration, size, content_type, row["id"]))
-    main.repo.conn.commit()
     return slug, f"{slug}-ch1", row["id"]
 
 
@@ -609,8 +608,7 @@ def test_book_page_has_share_metadata_chapters_and_the_right_call_to_action(monk
         {"index": 0, "title": "Ouverture", "start": 0.0, "end": 60.0},
         {"index": 1, "title": "La rencontre", "start": 65.0, "end": 900.0},
     ])
-    main.repo.conn.execute("UPDATE objects SET cover_key = 'c.jpg' WHERE id = ?", (oid,))
-    main.repo.conn.commit()
+    catalogue_sql.execute("UPDATE objects SET cover_key = 'c.jpg' WHERE id = ?", (oid,))
     anon = TestClient(main.app)
     page = anon.get(f"/livre/{oid}")
     assert page.status_code == 200, page.text
@@ -870,7 +868,7 @@ def test_email_link_full_flow_single_use_and_hashed_at_rest(mail):
     link = mail[0][1]
     assert link.startswith("https://testserver/connexion/lien?token=")
     token = _token_of(link)
-    stored = main.repo.conn.execute("SELECT * FROM login_links").fetchall()
+    stored = catalogue_sql.fetch_all("SELECT * FROM login_links")
     assert token not in str([tuple(x) for x in stored])  # only the hash is stored
 
     # Opening the link (a mail scanner would too) does NOT use it up.
