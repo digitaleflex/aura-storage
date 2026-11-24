@@ -58,6 +58,16 @@ par des variables CSS ; `color-scheme: light dark` adapte aussi lecteur natif et
 sur chaque livre (catalogue et page livre) alimente l'étagère « Mes favoris » ; l'état est privé,
 supprimé avec le compte, et le clic est annulé côté page si le serveur refuse.
 
+## Marque-pages et reprise depuis un autre appareil
+
+- **Marque-pages** : bouton « + Ici » dans le panneau Chapitres du lecteur (note facultative de 200
+  caractères), liste triée par position, clic = se placer à cet endroit, × = supprimer. 50 maximum
+  par livre et par visiteur ; privés, supprimés avec le compte (table `listen_bookmarks`, migration
+  `0024`). API : `GET/POST /api/public/bookmarks`, `DELETE /api/public/bookmarks/{id}` (CSRF).
+- **Reprise** : au retour sur l'onglet, si le serveur connaît une position plus avancée de plus de
+  20 s (écoute faite sur un autre appareil) et que le lecteur est en pause, une bulle propose
+  « Vous en étiez à 0:40 sur un autre appareil. Reprendre ». API : `GET /api/public/progress?object_id=`.
+
 ## Statistiques (administration)
 
 `GET /api/v1/admin/portal-stats` (`admin:read`) et la carte **Portail public** de l'onglet Vue

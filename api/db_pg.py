@@ -157,6 +157,7 @@ class Repository:
         """Delete a public portal account and its portal-owned data."""
         self._run("DELETE FROM listen_progress WHERE user_id = %s", (uid,))
         self._run("DELETE FROM listen_favorites WHERE user_id = %s", (uid,))
+        self._run("DELETE FROM listen_bookmarks WHERE user_id = %s", (uid,))
         self._run("DELETE FROM sessions WHERE user_id = %s", (uid,))
         self._run(
             "DELETE FROM users WHERE id = %s AND role = 'public'", (uid,)
@@ -241,6 +242,35 @@ class Repository:
         )
         accounts = self._one("SELECT COUNT(*) AS n FROM users WHERE role = 'public'")["n"]
         return {"books": [dict(b) for b in books], "accounts": accounts}
+
+    # -- public portal bookmarks -------------------------------------------
+    def list_bookmarks(self, user_id: str, object_id: str) -> list:
+        return [dict(r) for r in self._all(
+            "SELECT id, position_seconds, note, created_at FROM listen_bookmarks "
+            "WHERE user_id = %s AND object_id = %s ORDER BY position_seconds, created_at",
+            (user_id, object_id),
+        )]
+
+    def add_bookmark(self, user_id: str, object_id: str, position: float, note: str,
+                     now: int, limit: int) -> Optional[dict]:
+        """Store a bookmark; None when the visitor already has ``limit`` on this book."""
+        count = self._one(
+            "SELECT COUNT(*) AS n FROM listen_bookmarks WHERE user_id = %s AND object_id = %s",
+            (user_id, object_id),
+        )["n"]
+        if count >= limit:
+            return None
+        bid = self.new_id()
+        self._run(
+            "INSERT INTO listen_bookmarks (id, user_id, object_id, position_seconds, note, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s)", (bid, user_id, object_id, position, note, now),
+        )
+        return {"id": bid, "position_seconds": position, "note": note, "created_at": now}
+
+    def delete_bookmark(self, user_id: str, bookmark_id: str) -> bool:
+        return self._run(
+            "DELETE FROM listen_bookmarks WHERE id = %s AND user_id = %s", (bookmark_id, user_id),
+        ) == 1
 
     def get_favorite_ids(self, user_id: str, object_ids: list) -> set:
         """Which of ``object_ids`` the visitor has put in their favourites."""

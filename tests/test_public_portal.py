@@ -1121,3 +1121,79 @@ def test_portal_stats_require_admin_read():
     assert TestClient(main.app).get("/api/v1/admin/portal-stats").status_code in (401, 403)
     reader = _sign_in(TestClient(main.app))  # a public visitor is not an admin
     assert reader.get("/api/v1/admin/portal-stats").status_code in (401, 403)
+
+
+# --------------------------------------------------------------------------
+# Bookmarks and "resume from your other device"
+# --------------------------------------------------------------------------
+def _reader_with_book():
+    _, _, oid = _book()
+    r = _sign_in(TestClient(main.app))
+    hdr = {"X-CSRF-Token": r.get("/api/public/me").json()["csrf_token"]}
+    return r, hdr, oid
+
+
+def test_bookmarks_are_added_listed_in_order_and_deleted():
+    r, hdr, oid = _reader_with_book()
+    later = r.post("/api/public/bookmarks", headers=hdr,
+                   json={"object_id": oid, "position_seconds": 300.26, "note": "  Belle citation \n"})
+    assert later.status_code == 200, later.text
+    r.post("/api/public/bookmarks", headers=hdr, json={"object_id": oid, "position_seconds": 12})
+    got = r.get(f"/api/public/bookmarks?object_id={oid}").json()["bookmarks"]
+    assert [b["position_seconds"] for b in got] == [12, 300.3]  # ordered by position, rounded
+    assert [b["note"] for b in got] == ["", "Belle citation"]
+    assert r.delete(f"/api/public/bookmarks/{got[0]['id']}", headers=hdr).status_code == 200
+    assert len(r.get(f"/api/public/bookmarks?object_id={oid}").json()["bookmarks"]) == 1
+    assert r.delete(f"/api/public/bookmarks/{got[0]['id']}", headers=hdr).status_code == 404  # already gone
+
+
+def test_bookmarks_are_private_validated_and_capped(monkeypatch):
+    r, hdr, oid = _reader_with_book()
+    mine = r.post("/api/public/bookmarks", headers=hdr,
+                  json={"object_id": oid, "position_seconds": 5}).json()
+    assert r.post("/api/public/bookmarks", json={"object_id": oid, "position_seconds": 5}).status_code == 403  # CSRF
+    for bad in ({"object_id": oid, "position_seconds": -1}, {"object_id": oid, "position_seconds": 5, "note": "x" * 201},
+                {"object_id": oid, "position_seconds": 5, "extra": 1}, {"object_id": "pas-un-uuid", "position_seconds": 5}):
+        assert r.post("/api/public/bookmarks", headers=hdr, json=bad).status_code == 422
+    assert r.post("/api/public/bookmarks", headers=hdr,
+                  json={"object_id": str(uuid.uuid4()), "position_seconds": 5}).status_code == 404
+    # Another visitor sees none of it and cannot delete it.
+    globals()["SUBJECT"] = "bookmark-other-subject"
+    try:
+        other = _sign_in(TestClient(main.app))
+        ohdr = {"X-CSRF-Token": other.get("/api/public/me").json()["csrf_token"]}
+        assert other.get(f"/api/public/bookmarks?object_id={oid}").json()["bookmarks"] == []
+        assert other.delete(f"/api/public/bookmarks/{mine['id']}", headers=ohdr).status_code == 404
+    finally:
+        globals()["SUBJECT"] = "google-subject-123456"
+    assert len(r.get(f"/api/public/bookmarks?object_id={oid}").json()["bookmarks"]) == 1
+    monkeypatch.setattr(main, "_BOOKMARKS_PER_BOOK", 2)
+    assert r.post("/api/public/bookmarks", headers=hdr, json={"object_id": oid, "position_seconds": 6}).status_code == 200
+    assert r.post("/api/public/bookmarks", headers=hdr, json={"object_id": oid, "position_seconds": 7}).status_code == 409
+    assert TestClient(main.app).get(f"/api/public/bookmarks?object_id={oid}").status_code in (401, 403)
+
+
+def test_account_deletion_removes_bookmarks():
+    r, hdr, oid = _reader_with_book()
+    uid = r.get("/api/public/me").json()["id"]
+    r.post("/api/public/bookmarks", headers=hdr, json={"object_id": oid, "position_seconds": 5})
+    assert main.repo.list_bookmarks(uid, oid)
+    assert r.delete("/api/public/me", headers=hdr).status_code == 200
+    assert main.repo.list_bookmarks(uid, oid) == []
+
+
+def test_progress_can_be_read_back_for_the_resume_prompt():
+    r, hdr, oid = _reader_with_book()
+    assert r.get(f"/api/public/progress?object_id={oid}").json()["position_seconds"] == 0
+    r.post("/api/public/progress", headers=hdr, json={"object_id": oid, "position_seconds": 321.5})
+    assert r.get(f"/api/public/progress?object_id={oid}").json() == {"object_id": oid, "position_seconds": 321.5}
+    assert r.get(f"/api/public/progress?object_id={uuid.uuid4()}").status_code == 404
+    assert TestClient(main.app).get(f"/api/public/progress?object_id={oid}").status_code in (401, 403)
+
+
+def test_player_ships_the_bookmark_panel_and_resume_prompt():
+    _book()
+    page = _sign_in(TestClient(main.app)).get("/").text
+    assert 'id="bookmark-add"' in page and 'id="bookmarks-list"' in page
+    assert 'id="sync-prompt"' in page and "/portal-assets/bookmarks.js?v=" in page
+    _assert_strict_markup(page)

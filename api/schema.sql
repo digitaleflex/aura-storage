@@ -371,6 +371,18 @@ CREATE TABLE IF NOT EXISTS listen_progress (
 CREATE INDEX IF NOT EXISTS idx_listen_progress_user
   ON listen_progress(user_id, updated_at);
 
+-- Public portal bookmarks: a named position in a book, private to the visitor.
+CREATE TABLE IF NOT EXISTS listen_bookmarks (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  object_id TEXT NOT NULL REFERENCES objects(id),
+  position_seconds REAL NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_listen_bookmarks_user
+  ON listen_bookmarks(user_id, object_id);
+
 -- E-mail sign-in links. Only the SHA-256 of the token is stored; a link works
 -- once (used_at) and expires on its own. Cleaned up opportunistically.
 CREATE TABLE IF NOT EXISTS login_links (

@@ -482,3 +482,15 @@ html.is-offline .track-button:not([data-offline]){opacity:.45}
   color:var(--surface);border-radius:10px;cursor:pointer;white-space:nowrap}
 .welcome .email-form{max-width:30rem}
 @media (max-width:420px){.email-row{flex-direction:column}}
+
+/* ---- marque-pages et reprise ------------------------------------------ */
+.bookmarks{margin-top:1rem;padding-top:.8rem;border-top:1px solid var(--line)}
+.bookmarks-head{display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin:0 .5rem .4rem}
+.bookmarks-head h4{margin:0;font-size:.9rem}
+.bookmark-row{display:flex;align-items:center}
+.queue-panel .bookmark-row>button:first-child{flex:1 1 auto;width:auto;min-width:0;text-align:left}
+.queue-panel .bookmark-row>.bookmark-del{flex:none;width:2.2rem;text-align:center;color:var(--muted)}
+.sync-prompt{position:fixed;left:50%;bottom:calc(8.2rem + env(safe-area-inset-bottom));transform:translateX(-50%);
+  z-index:30;margin:0;padding:.55rem .9rem;border:1px solid var(--line-strong);border-radius:999px;
+  background:var(--surface);box-shadow:0 10px 26px -14px rgba(29,43,57,.55);font-size:.9rem;max-width:calc(100vw - 2rem)}
+.sync-prompt[hidden]{display:none}

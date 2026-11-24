@@ -160,6 +160,7 @@ class Repository:
         """Delete a public portal account and its portal-owned data."""
         self.conn.execute("DELETE FROM listen_progress WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM listen_favorites WHERE user_id = ?", (uid,))
+        self.conn.execute("DELETE FROM listen_bookmarks WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
         self.conn.execute(
             "DELETE FROM users WHERE id = ? AND role = 'public'", (uid,)
@@ -248,6 +249,38 @@ class Repository:
         accounts = self.conn.execute(
             "SELECT COUNT(*) AS n FROM users WHERE role = 'public'").fetchone()["n"]
         return {"books": books, "accounts": accounts}
+
+    # -- public portal bookmarks -------------------------------------------
+    def list_bookmarks(self, user_id: str, object_id: str) -> list:
+        return [dict(r) for r in self.conn.execute(
+            "SELECT id, position_seconds, note, created_at FROM listen_bookmarks "
+            "WHERE user_id = ? AND object_id = ? ORDER BY position_seconds, created_at",
+            (user_id, object_id),
+        ).fetchall()]
+
+    def add_bookmark(self, user_id: str, object_id: str, position: float, note: str,
+                     now: int, limit: int) -> Optional[dict]:
+        """Store a bookmark; None when the visitor already has ``limit`` on this book."""
+        count = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM listen_bookmarks WHERE user_id = ? AND object_id = ?",
+            (user_id, object_id),
+        ).fetchone()["n"]
+        if count >= limit:
+            return None
+        bid = self.new_id()
+        self.conn.execute(
+            "INSERT INTO listen_bookmarks (id, user_id, object_id, position_seconds, note, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)", (bid, user_id, object_id, position, note, now),
+        )
+        self.conn.commit()
+        return {"id": bid, "position_seconds": position, "note": note, "created_at": now}
+
+    def delete_bookmark(self, user_id: str, bookmark_id: str) -> bool:
+        cur = self.conn.execute(
+            "DELETE FROM listen_bookmarks WHERE id = ? AND user_id = ?", (bookmark_id, user_id),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
 
     def get_favorite_ids(self, user_id: str, object_ids: list) -> set:
         """Which of ``object_ids`` the visitor has put in their favourites."""
