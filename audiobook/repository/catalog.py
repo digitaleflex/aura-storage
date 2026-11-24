@@ -12,7 +12,7 @@ from ..domain import (
     ProgressState,
     apply_event,
 )
-from ..errors import ConflictError, NotFoundError
+from ..errors import ConflictError, NotFoundError, ValidationError
 from ..ids import new_id, normalize_email
 from .base import BaseRepository, _jsonable
 
@@ -144,6 +144,39 @@ class CatalogRepository(BaseRepository):
                 )
                 return cur.fetchone()
 
+    def get_asset(self, asset_id: UUID) -> dict | None:
+        with self.db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM assets WHERE id = %s", (asset_id,))
+                return cur.fetchone()
+
+    def link_ebook_asset(
+        self, edition_id: UUID, *, asset_id: UUID, format: str
+    ) -> dict:
+        if format not in {"epub", "pdf"}:
+            raise ValidationError("unsupported ebook format", code="EBOOK_FORMAT_INVALID")
+        with self.db.transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM editions WHERE id = %s", (edition_id,))
+                if cur.fetchone() is None:
+                    raise NotFoundError("edition not found", code="EDITION_NOT_FOUND")
+                cur.execute("SELECT id, kind, status FROM assets WHERE id = %s", (asset_id,))
+                asset = cur.fetchone()
+                if asset is None:
+                    raise NotFoundError("asset not found", code="ASSET_NOT_FOUND")
+                if asset["kind"] != "ebook":
+                    raise ConflictError("asset is not an ebook", code="ASSET_NOT_EBOOK")
+                cur.execute(
+                    """
+                    INSERT INTO ebook_assets (edition_id, asset_id, format)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (edition_id, asset_id) DO UPDATE SET format = EXCLUDED.format
+                    RETURNING *
+                    """,
+                    (edition_id, asset_id, format),
+                )
+                return cur.fetchone()
+
     def mark_asset_ready(self, asset_id: UUID) -> dict:
         with self.db.transaction() as conn:
             with conn.cursor() as cur:
@@ -173,6 +206,7 @@ class CatalogRepository(BaseRepository):
         publication_date=None,
         cover_asset_id: UUID | None = None,
         access_model: str = "free",
+        publication_kind: str = "audiobook",
     ) -> dict:
         with self.db.transaction() as conn:
             with conn.cursor() as cur:
@@ -180,8 +214,9 @@ class CatalogRepository(BaseRepository):
                     """
                     INSERT INTO editions
                       (id, work_id, title, language, publisher, publication_date,
-                       description, slug, duration_ms, cover_asset_id, access_model)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       description, slug, duration_ms, cover_asset_id, access_model,
+                       publication_kind)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                     """,
                     (
@@ -196,6 +231,7 @@ class CatalogRepository(BaseRepository):
                         duration_ms,
                         cover_asset_id,
                         access_model,
+                        publication_kind,
                     ),
                 )
                 return cur.fetchone()
@@ -353,6 +389,20 @@ class CatalogRepository(BaseRepository):
                 tracks = list(cur.fetchall())
                 cur.execute(
                     """
+                    SELECT a.id AS id, ea.edition_id, ea.asset_id, ea.format,
+                           ea.created_at, a.status AS asset_status,
+                           a.storage_object_id, a.content_type, a.size_bytes,
+                           a.checksum_sha256
+                    FROM ebook_assets ea
+                    JOIN assets a ON a.id = ea.asset_id
+                    WHERE ea.edition_id = %s
+                    ORDER BY ea.format, ea.created_at
+                    """,
+                    (edition_id,),
+                )
+                ebook_assets = list(cur.fetchall())
+                cur.execute(
+                    """
                     SELECT * FROM chapters WHERE edition_id = %s ORDER BY position
                     """,
                     (edition_id,),
@@ -370,6 +420,7 @@ class CatalogRepository(BaseRepository):
                     "edition": edition,
                     "contributors": contributors,
                     "tracks": tracks,
+                    "ebook_assets": ebook_assets,
                     "chapters": chapters,
                     "rights": rights,
                 }
@@ -425,7 +476,11 @@ class CatalogRepository(BaseRepository):
                                   JOIN assets a ON a.id = t.asset_id
                                   WHERE t.edition_id = e.id
                                     AND t.status = 'ready' AND a.status = 'ready')
-                                 AS ready_track_count
+                                 AS ready_track_count,
+                                (SELECT count(*) FROM ebook_assets ea
+                                 JOIN assets a ON a.id = ea.asset_id
+                                 WHERE ea.edition_id = e.id AND a.status = 'ready')
+                                  AS ebook_asset_count
                         FROM editions e JOIN works w ON w.id = e.work_id
                         WHERE e.status = 'published' AND e.language = %s
                         ORDER BY e.published_at DESC NULLS LAST, e.id
@@ -444,7 +499,11 @@ class CatalogRepository(BaseRepository):
                                   JOIN assets a ON a.id = t.asset_id
                                   WHERE t.edition_id = e.id
                                     AND t.status = 'ready' AND a.status = 'ready')
-                                 AS ready_track_count
+                                 AS ready_track_count,
+                                (SELECT count(*) FROM ebook_assets ea
+                                 JOIN assets a ON a.id = ea.asset_id
+                                 WHERE ea.edition_id = e.id AND a.status = 'ready')
+                                  AS ebook_asset_count
                         FROM editions e JOIN works w ON w.id = e.work_id
                         WHERE e.status = 'published'
                         ORDER BY e.published_at DESC NULLS LAST, e.id

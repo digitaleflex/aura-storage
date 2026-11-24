@@ -9,7 +9,9 @@ from .audit import AuditRepository
 from .base import _jsonable
 from .catalog import CatalogRepository
 from .identity import IdentityRepository
+from .ingestion import IngestRepository
 from .library import LibraryRepository
+from .metadata import MetadataRepository
 from .playback import PlaybackRepository
 from .recommendations import RecommendationsRepository
 
@@ -17,7 +19,9 @@ from .recommendations import RecommendationsRepository
 class Repository(
     IdentityRepository,
     CatalogRepository,
+    IngestRepository,
     LibraryRepository,
+    MetadataRepository,
     PlaybackRepository,
     AuditRepository,
     RecommendationsRepository,

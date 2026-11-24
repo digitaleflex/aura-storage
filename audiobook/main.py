@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import secrets
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, Query, Request, Response
@@ -34,6 +34,11 @@ from .errors import (
     UnavailableError,
 )
 from .ids import constant_time_equal, new_token
+from .metadata import (
+    ITunesMetadataProvider,
+    OpenLibraryMetadataProvider,
+    UrllibJsonTransport,
+)
 from .repository import Repository
 from .services import AudiobookService
 from .storage import AuraStoragePort, FakeStoragePort, StoragePort
@@ -90,6 +95,7 @@ def create_app(
     storage: StoragePort | None = None,
     *,
     initialize_schema: bool = True,
+    metadata_providers: tuple[Any, ...] | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     db = db or Database(settings.dsn, settings.schema)
@@ -97,7 +103,19 @@ def create_app(
         db.init_schema()
     repo = Repository(db)
     storage = storage or _build_storage(settings)
-    service = AudiobookService(repo, settings, storage)
+    if metadata_providers is None:
+        transport = UrllibJsonTransport(
+            timeout_seconds=settings.metadata_provider_timeout_seconds
+        )
+        metadata_providers = (
+            OpenLibraryMetadataProvider(transport),
+            ITunesMetadataProvider(
+                transport, country=settings.metadata_itunes_country
+            ),
+        )
+    service = AudiobookService(
+        repo, settings, storage, metadata_providers=metadata_providers
+    )
 
     app = FastAPI(
         title="AURA Audiobook API",
@@ -110,6 +128,7 @@ def create_app(
     app.state.db = db
     app.state.repo = repo
     app.state.storage = storage
+    app.state.metadata_providers = metadata_providers
     app.state.service = service
 
     if settings.cors_origins:

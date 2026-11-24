@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,27 @@ def client(app):
 
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def ingest_client(settings: Settings, db: Database, storage: FakeStoragePort, tmp_path):
+    ingest_settings = replace(
+        settings,
+        ingest_staging_dir=str(tmp_path),
+        ingest_ffprobe_command="",
+        ingest_av_command="",
+    )
+    app = create_app(
+        ingest_settings,
+        db,
+        storage,
+        initialize_schema=False,
+        metadata_providers=(),
+    )
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as test_client:
+        yield test_client, app, storage, tmp_path
 
 
 @pytest.fixture

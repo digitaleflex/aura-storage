@@ -70,6 +70,17 @@ class Settings:
     aura_api_base_url: str = ""
     aura_service_token: str = ""
     aura_intent_ttl_seconds: int = 900
+    metadata_cache_ttl_seconds: int = 300
+    metadata_provider_timeout_seconds: int = 5
+    metadata_itunes_country: str = "FR"
+    ingest_staging_dir: str = ""
+    ingest_max_bytes: int = 5_368_709_120
+    ingest_av_command: str = ""
+    ingest_ffprobe_command: str = ""
+    ingest_timeout_seconds: int = 30
+    ingest_retry_delay_seconds: int = 60
+    ingest_retry_max_attempts: int = 5
+    ingest_stale_import_seconds: int = 600
     cookie_name: str = "audiobook_session"
     csrf_cookie_name: str = "audiobook_csrf"
     oauth_cookie_name: str = "audiobook_oauth"
@@ -98,6 +109,20 @@ class Settings:
             raise ConfigError("max_simultaneous_playback_sessions must be positive")
         if self.deletion_grace_days < 0:
             raise ConfigError("deletion_grace_days must be non-negative")
+        if self.metadata_cache_ttl_seconds < 0:
+            raise ConfigError("metadata cache TTL must not be negative")
+        if self.metadata_provider_timeout_seconds <= 0:
+            raise ConfigError("metadata provider timeout must be positive")
+        if self.ingest_max_bytes <= 0:
+            raise ConfigError("ingest max bytes must be positive")
+        if self.ingest_timeout_seconds <= 0:
+            raise ConfigError("ingest timeout must be positive")
+        if self.ingest_retry_delay_seconds < 0:
+            raise ConfigError("ingest retry delay must not be negative")
+        if self.ingest_retry_max_attempts < 1:
+            raise ConfigError("ingest retry max attempts must be positive")
+        if self.ingest_stale_import_seconds <= 0:
+            raise ConfigError("stale import timeout must be positive")
         if self.cookie_secure and urlparse(self.public_base_url).scheme != "https":
             # Never silently insecure: a secure session cookie on an HTTP base
             # URL means sign-in can never work. Local development must opt out
@@ -156,6 +181,25 @@ class Settings:
             aura_api_base_url=_env("AURA_API_BASE_URL").rstrip("/"),
             aura_service_token=_env("AURA_SERVICE_TOKEN"),
             aura_intent_ttl_seconds=_int("AUDIOBOOK_AURA_INTENT_TTL_SECONDS", 900),
+            metadata_cache_ttl_seconds=_int("AUDIOBOOK_METADATA_CACHE_TTL_SECONDS", 300),
+            metadata_provider_timeout_seconds=_int(
+                "AUDIOBOOK_METADATA_TIMEOUT_SECONDS", 5
+            ),
+            metadata_itunes_country=_env("AUDIOBOOK_METADATA_ITUNES_COUNTRY", "FR"),
+            ingest_staging_dir=_env("AUDIOBOOK_INGEST_STAGING_DIR").strip(),
+            ingest_max_bytes=_int("AUDIOBOOK_INGEST_MAX_BYTES", 5_368_709_120),
+            ingest_av_command=_env("AUDIOBOOK_INGEST_AV_CMD"),
+            ingest_ffprobe_command=_env("AUDIOBOOK_INGEST_FFPROBE_CMD"),
+            ingest_timeout_seconds=_int("AUDIOBOOK_INGEST_TIMEOUT_SECONDS", 30),
+            ingest_retry_delay_seconds=_int(
+                "AUDIOBOOK_INGEST_RETRY_DELAY_SECONDS", 60
+            ),
+            ingest_retry_max_attempts=_int(
+                "AUDIOBOOK_INGEST_RETRY_MAX_ATTEMPTS", 5
+            ),
+            ingest_stale_import_seconds=_int(
+                "AUDIOBOOK_INGEST_STALE_IMPORT_SECONDS", 600
+            ),
             cookie_name=_env("AUDIOBOOK_COOKIE_NAME", "audiobook_session"),
             csrf_cookie_name=_env(
                 "AUDIOBOOK_CSRF_COOKIE_NAME", "audiobook_csrf"

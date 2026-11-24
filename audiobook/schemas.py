@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 class DevLoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
@@ -31,17 +31,31 @@ class EditionIn(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     language: str = Field(min_length=2, max_length=16)
     description: str = Field(min_length=1, max_length=50_000)
-    duration_ms: int = Field(gt=0)
+    duration_ms: int = Field(default=0, ge=0)
     slug: str | None = Field(default=None, max_length=140)
     publisher: str = Field(default="", max_length=300)
     publication_date: date | None = None
     cover_asset_id: UUID | None = None
     access_model: Literal["free", "paid", "subscription"] = "free"
+    publication_kind: Literal["audiobook", "ebook"] = "audiobook"
+
+    @model_validator(mode="after")
+    def _kind_consistency(self) -> "EditionIn":
+        if self.publication_kind == "audiobook" and self.duration_ms <= 0:
+            raise ValueError("audiobook editions require a positive duration_ms")
+        if self.publication_kind == "ebook" and self.duration_ms > 0:
+            raise ValueError("ebook editions must not declare a duration_ms")
+        return self
+
+
+class EbookAssetIn(BaseModel):
+    asset_id: UUID
+    format: Literal["epub", "pdf"]
 
 
 class AssetIn(BaseModel):
     storage_object_id: str = Field(min_length=1, max_length=200)
-    kind: Literal["source", "hls", "cover", "subtitle", "derivative"] = "source"
+    kind: Literal["source", "hls", "cover", "subtitle", "derivative", "ebook"] = "source"
     content_type: str = Field(default="", max_length=200)
     size_bytes: int = Field(default=-1, ge=-1)
     checksum_sha256: str = Field(default="", max_length=128)
@@ -182,6 +196,54 @@ class ContractIn(BaseModel):
 
 class EntitlementRevokeIn(BaseModel):
     reason: str = Field(default="revoked", max_length=500)
+
+
+class MetadataSearchIn(BaseModel):
+    text: str = Field(default="", max_length=500)
+    kind: Literal["ebook", "audiobook", "unknown"] = "unknown"
+    language: str = Field(default="", max_length=16)
+    limit: int = Field(default=10, ge=1, le=50)
+    identifier: str = Field(default="", max_length=200)
+    identifier_kind: Literal[
+        "", "isbn", "isbn10", "isbn13", "asin", "openlibrary", "itunes", "google_books"
+    ] = ""
+
+    @model_validator(mode="after")
+    def _requires_term(self) -> "MetadataSearchIn":
+        if not self.text and not self.identifier:
+            raise ValueError("text or identifier is required")
+        return self
+
+
+class MetadataReviewIn(BaseModel):
+    decision: Literal["link_existing", "reject"]
+    target_entity_type: Literal["work", "edition"] | None = None
+    target_entity_id: UUID | None = None
+    reason: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _target_required_for_link(self) -> "MetadataReviewIn":
+        if self.decision == "link_existing":
+            if not self.target_entity_type or not self.target_entity_id:
+                raise ValueError("link_existing requires a work or edition target")
+        return self
+
+
+class IngestStartIn(BaseModel):
+    source: Literal["manual", "shelfmark", "partner"] = "manual"
+    source_ref: str = Field(default="", max_length=200)
+    filename: str = Field(min_length=1, max_length=255)
+    staged_path: str = Field(min_length=1, max_length=2000)
+    declared_content_type: str = Field(default="", max_length=200)
+    batch_id: UUID | None = None
+    target_edition_id: UUID | None = None
+    track_position: int | None = Field(default=None, ge=1, le=100_000)
+    track_title: str = Field(default="", max_length=500)
+    duration_ms: int | None = Field(default=None, ge=0)
+
+
+class IngestRejectIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
 
 
 # ---------------------------------------------------------------------------

@@ -130,3 +130,21 @@ def register_playback_routes(app):
         result["decision"] = decision_payload(result["decision"])
         return result
 
+    @app.get("/api/v1/ebooks/{edition_id}/url")
+    def ebook_url(
+        edition_id: UUID,
+        request: Request,
+        principal: auth.Principal = Depends(get_principal),
+        territory: str | None = Header(default=None, alias="X-Territory", max_length=32),
+        device_id: UUID | None = Header(default=None, alias="X-Device-Id"),
+    ) -> dict:
+        result = request.app.state.service.authorize_ebook(
+            principal,
+            edition_id,
+            territory_code=territory,
+            device_id=device_id,
+            request_id=request_id(request),
+        )
+        result["decision"] = decision_payload(result["decision"])
+        return result
+

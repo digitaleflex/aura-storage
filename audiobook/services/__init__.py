@@ -11,7 +11,9 @@ from .analytics import AnalyticsService
 from .auth import AuthService
 from .catalog import CatalogService
 from .entitlements import EntitlementsService
+from .ingestion import IngestService
 from .library import LibraryService
+from .metadata import MetadataService
 from .personal_collections import PersonalCollectionsService
 from .playback import PlaybackService
 from .recommendations import RecommendationsService
@@ -24,10 +26,12 @@ class AudiobookService(
     LibraryService,
     PlaybackService,
     EntitlementsService,
+    IngestService,
     AccountService,
     PersonalCollectionsService,
     AdminCatalogService,
     AnalyticsService,
+    MetadataService,
     RecommendationsService,
     SerializationService,
 ):

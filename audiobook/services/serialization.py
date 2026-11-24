@@ -18,11 +18,13 @@ class SerializationService(BaseService):
             "description": row["description"],
             "slug": row["slug"],
             "duration_ms": int(row["duration_ms"]),
+            "publication_kind": row.get("publication_kind") or "audiobook",
             "access_model": row["access_model"],
             "published_at": row["published_at"],
             "cover_asset_id": row["cover_asset_id"],
             "track_count": int(row.get("track_count", 0)),
             "ready_track_count": int(row.get("ready_track_count", 0)),
+            "ebook_asset_count": int(row.get("ebook_asset_count", 0)),
         }
 
     @classmethod
@@ -52,6 +54,15 @@ class SerializationService(BaseService):
                     "status": t["status"],
                 }
                 for t in bundle["tracks"]
+            ],
+            "ebook_assets": [
+                {
+                    "id": asset["id"],
+                    "format": asset["format"],
+                    "content_type": asset["content_type"],
+                    "status": asset["asset_status"],
+                }
+                for asset in bundle.get("ebook_assets", [])
             ],
             "chapters": [
                 {

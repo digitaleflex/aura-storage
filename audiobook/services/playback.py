@@ -91,9 +91,16 @@ class PlaybackService(BaseService):
                 )
                 for e in entitlements
             ),
-            asset_ready=any(
-                t["status"] == "ready" and t["asset_status"] == "ready"
-                for t in bundle["tracks"]
+            asset_ready=(
+                any(
+                    t["status"] == "ready" and t["asset_status"] == "ready"
+                    for t in bundle["tracks"]
+                )
+                if str(edition.get("publication_kind") or "audiobook") == "audiobook"
+                else any(
+                    asset["asset_status"] == "ready"
+                    for asset in bundle.get("ebook_assets", [])
+                )
             ),
             device_authorized=device_authorized,
             decision_ttl_seconds=self.settings.access_decision_ttl_seconds,
@@ -170,6 +177,60 @@ class PlaybackService(BaseService):
         return {
             "edition_id": edition_id,
             "track_id": track_id,
+            "url": issued.url,
+            "expires_at": issued.expires_at,
+            "content_type": issued.content_type,
+            "decision": decision,
+        }
+
+    def authorize_ebook(
+        self,
+        principal: auth.Principal,
+        edition_id: UUID,
+        *,
+        territory_code: str | None = None,
+        device_id: UUID | None = None,
+        request_id: str = "",
+    ) -> dict:
+        decision, bundle = self.evaluate_access(
+            principal,
+            edition_id,
+            action="stream",
+            territory_code=territory_code,
+            device_id=device_id,
+            request_id=request_id,
+        )
+        if str(bundle["edition"].get("publication_kind") or "audiobook") != "ebook":
+            raise ValidationError("edition is not an ebook", code="EDITION_NOT_EBOOK")
+        if not decision.allowed:
+            raise ForbiddenError(
+                "access denied",
+                code=decision.reason_code,
+                details={"reason_code": decision.reason_code},
+            )
+        asset = next(
+            (
+                item
+                for item in bundle.get("ebook_assets", [])
+                if item["asset_status"] == "ready"
+            ),
+            None,
+        )
+        if asset is None:
+            raise ConflictError("ebook asset is not ready", code="EBOOK_ASSET_UNAVAILABLE")
+        issued = self.storage.presigned_playback_url(asset)
+        self.repo.record_audit(
+            actor_type="listener",
+            actor_id=str(principal.listener_id),
+            action="ebook.url.issued",
+            target_type="ebook_asset",
+            target_id=str(asset["id"]),
+            outcome="success",
+            request_id=request_id,
+        )
+        return {
+            "edition_id": edition_id,
+            "asset_id": asset["id"],
             "url": issued.url,
             "expires_at": issued.expires_at,
             "content_type": issued.content_type,

@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 
 from .. import auth, google_oidc
 from ..config import Settings
@@ -16,8 +17,9 @@ from ..ids import constant_time_equal, new_token
 from ..schemas import (
     AssetIn, CategoryIn, ChapterIn, ContractIn, ContributorIn, DevLoginIn, DeviceIn, EditionIn,
     EditorialCollectionIn, EditorialCollectionItemIn, EntitlementIn, EntitlementRevokeIn, EventIn,
-    LibraryIn, PersonalCollectionIn, PersonalCollectionItemIn, ProfileIn, RightsIn, SessionIn,
-    TrackIn, WorkIn,
+    EbookAssetIn, IngestRejectIn, IngestStartIn, LibraryIn, MetadataReviewIn,
+    MetadataSearchIn, PersonalCollectionIn, PersonalCollectionItemIn, ProfileIn,
+    RightsIn, SessionIn, TrackIn, WorkIn,
 )
 
 
@@ -84,6 +86,7 @@ def register_admin_routes(app):
             publication_date=body.publication_date,
             cover_asset_id=body.cover_asset_id,
             access_model=body.access_model,
+            publication_kind=body.publication_kind,
             actor_id=admin["id"],
             request_id=request_id(request),
         )
@@ -96,6 +99,21 @@ def register_admin_routes(app):
     ) -> dict:
         return request.app.state.service.create_asset(
             **body.model_dump(),
+            actor_id=admin["id"],
+            request_id=request_id(request),
+        )
+
+    @app.post("/api/v1/admin/editions/{edition_id}/ebook-assets")
+    def admin_link_ebook_asset(
+        edition_id: UUID,
+        body: EbookAssetIn,
+        request: Request,
+        admin: dict = Depends(get_admin),
+    ) -> dict:
+        return request.app.state.service.link_ebook_asset(
+            edition_id,
+            asset_id=body.asset_id,
+            format=body.format,
             actor_id=admin["id"],
             request_id=request_id(request),
         )
@@ -322,4 +340,155 @@ def register_admin_routes(app):
     ) -> dict:
         del admin
         return {"items": request.app.state.repo.list_audit(limit=limit)}
+
+    @app.post("/api/v1/admin/metadata/search")
+    async def admin_metadata_search(
+        body: MetadataSearchIn,
+        request: Request,
+        admin: dict = Depends(get_admin),
+    ) -> dict:
+        return await run_in_threadpool(
+            request.app.state.service.search_metadata,
+            text=body.text,
+            kind=body.kind,
+            language=body.language,
+            limit=body.limit,
+            identifier=body.identifier,
+            identifier_kind=body.identifier_kind,
+            actor_id=admin["id"],
+            request_id=request_id(request),
+        )
+
+    @app.get("/api/v1/admin/metadata/candidates")
+    async def admin_metadata_candidates(
+        request: Request,
+        admin: dict = Depends(get_admin),
+        limit: int = Query(default=50, ge=1, le=200),
+        provider: str = Query(default="", max_length=80),
+        status: str = Query(default="", pattern="^(new|applied|rejected)?$"),
+    ) -> dict:
+        del admin
+        return await run_in_threadpool(
+            request.app.state.service.list_metadata_candidates,
+            limit=limit,
+            provider=provider,
+            status=status,
+        )
+
+    @app.post("/api/v1/admin/metadata/candidates/{candidate_id}/review")
+    async def admin_metadata_review(
+        candidate_id: UUID,
+        body: MetadataReviewIn,
+        request: Request,
+        admin: dict = Depends(get_admin),
+    ) -> dict:
+        return await run_in_threadpool(
+            request.app.state.service.review_metadata_candidate,
+            candidate_id,
+            decision=body.decision,
+            target_entity_type=body.target_entity_type,
+            target_entity_id=body.target_entity_id,
+            reason=body.reason,
+            actor_id=admin["id"],
+            request_id=request_id(request),
+        )
+
+    @app.post("/api/v1/admin/ingestions")
+    async def admin_start_ingestion(
+        body: IngestStartIn,
+        request: Request,
+        admin: dict = Depends(get_admin),
+    ) -> dict:
+        return await run_in_threadpool(
+            request.app.state.service.start_ingestion,
+            source=body.source,
+            source_ref=body.source_ref,
+            filename=body.filename,
+            staged_path=body.staged_path,
+            declared_content_type=body.declared_content_type,
+            batch_id=body.batch_id,
+            target_edition_id=body.target_edition_id,
+            track_position=body.track_position,
+            track_title=body.track_title,
+            duration_ms=body.duration_ms,
+            actor_id=admin["id"],
+            request_id=request_id(request),
+        )
+
+    @app.get("/api/v1/admin/ingestions")
+    async def admin_list_ingestions(
+        request: Request,
+        admin: dict = Depends(get_admin),
+        limit: int = Query(default=50, ge=1, le=200),
+        state: str = Query(
+            default="",
+            pattern="^(received|validating|awaiting_rights|importing|retryable_failed|completed|rejected)?$",
+        ),
+    ) -> dict:
+        del admin
+        return await run_in_threadpool(
+            request.app.state.service.list_ingest_items, limit=limit, state=state
+        )
+
+    @app.post("/api/v1/admin/ingestions/reconcile")
+    async def admin_reconcile_ingestions(
+        request: Request,
+        admin: dict = Depends(get_admin),
+    ) -> dict:
+        del admin
+        return await run_in_threadpool(
+            request.app.state.service.reconcile_ingestions,
+            actor_id="admin",
+            request_id=request_id(request),
+        )
+
+    @app.get("/api/v1/admin/ingestions/{item_id}")
+    async def admin_get_ingestion(
+        item_id: UUID,
+        request: Request,
+        admin: dict = Depends(get_admin),
+    ) -> dict:
+        del admin
+        return await run_in_threadpool(request.app.state.repo.get_ingest_item, item_id)
+
+    @app.post("/api/v1/admin/ingestions/{item_id}/import")
+    async def admin_import_ingestion(
+        item_id: UUID,
+        request: Request,
+        admin: dict = Depends(get_admin),
+    ) -> dict:
+        return await run_in_threadpool(
+            request.app.state.service.import_item,
+            item_id,
+            actor_id=admin["id"],
+            request_id=request_id(request),
+        )
+
+    @app.post("/api/v1/admin/ingestions/{item_id}/retry")
+    async def admin_retry_ingestion(
+        item_id: UUID,
+        request: Request,
+        admin: dict = Depends(get_admin),
+    ) -> dict:
+        return await run_in_threadpool(
+            request.app.state.service.retry_item,
+            item_id,
+            actor_id=admin["id"],
+            request_id=request_id(request),
+        )
+
+    @app.post("/api/v1/admin/ingestions/{item_id}/reject")
+    async def admin_reject_ingestion(
+        item_id: UUID,
+        body: IngestRejectIn,
+        request: Request,
+        admin: dict = Depends(get_admin),
+    ) -> dict:
+        return await run_in_threadpool(
+            request.app.state.service.reject_item,
+            item_id,
+            reason=body.reason,
+            actor_id=admin["id"],
+            request_id=request_id(request),
+        )
 

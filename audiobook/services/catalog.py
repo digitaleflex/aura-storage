@@ -9,6 +9,7 @@ from .. import auth, google_oidc
 from ..domain import (
     AccessDecision,
     AccessFacts,
+    EbookAssetFact,
     EntitlementFact,
     PlaybackEvent,
     PublicationFacts,
@@ -95,15 +96,22 @@ class CatalogService(BaseService):
         title: str,
         language: str,
         description: str,
-        duration_ms: int,
+        duration_ms: int = 0,
         slug: str | None = None,
         publisher: str = "",
         publication_date=None,
         cover_asset_id: UUID | None = None,
         access_model: str = "free",
+        publication_kind: str = "audiobook",
         actor_id: str = "admin",
         request_id: str = "",
     ) -> dict:
+        if publication_kind not in {"audiobook", "ebook"}:
+            raise ValidationError("unsupported publication kind")
+        if publication_kind == "audiobook" and duration_ms <= 0:
+            raise ValidationError("audiobook editions require a positive duration")
+        if publication_kind == "ebook" and duration_ms > 0:
+            raise ValidationError("ebook editions must not declare a duration")
         edition_id = new_id()
         chosen_slug = slug or slugify(title or "livre", str(edition_id))
         edition = self.repo.create_edition(
@@ -117,6 +125,7 @@ class CatalogService(BaseService):
             publication_date=publication_date,
             cover_asset_id=cover_asset_id,
             access_model=access_model,
+            publication_kind=publication_kind,
         )
         self.repo.record_audit(
             actor_type="admin",
@@ -152,6 +161,23 @@ class CatalogService(BaseService):
             action="catalog.asset.created", target_type="asset", target=asset,
         )
         return asset
+
+    def link_ebook_asset(
+        self,
+        edition_id: UUID,
+        *,
+        asset_id: UUID,
+        format: str,
+        actor_id: str = "admin",
+        request_id: str = "",
+    ) -> dict:
+        linked = self.repo.link_ebook_asset(edition_id, asset_id=asset_id, format=format)
+        self._audit_admin_change(
+            actor_id=actor_id, request_id=request_id,
+            action="catalog.ebook_asset.linked", target_type="edition",
+            target={"id": edition_id},
+        )
+        return linked
 
     def create_track(
         self, edition_id: UUID, *, actor_id: str = "admin",
@@ -235,6 +261,15 @@ class CatalogService(BaseService):
                 for r in bundle["rights"]
             ),
             now=utcnow(),
+            publication_kind=str(edition.get("publication_kind") or "audiobook"),
+            ebook_assets=tuple(
+                EbookAssetFact(
+                    id=asset["id"],
+                    format=str(asset["format"]),
+                    asset_status=asset["asset_status"],
+                )
+                for asset in bundle["ebook_assets"]
+            ),
         )
         try:
             require_publishable(facts)

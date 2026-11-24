@@ -397,6 +397,13 @@ class TrackFact:
 
 
 @dataclass(frozen=True)
+class EbookAssetFact:
+    id: UUID
+    format: str
+    asset_status: str | None
+
+
+@dataclass(frozen=True)
 class PublicationFacts:
     work_id: UUID
     work_title: str
@@ -412,6 +419,8 @@ class PublicationFacts:
     tracks: tuple[TrackFact, ...]
     rights: tuple[RightsWindowFact, ...]
     now: datetime
+    publication_kind: str = "audiobook"
+    ebook_assets: tuple[EbookAssetFact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -435,7 +444,9 @@ def validate_publication(facts: PublicationFacts) -> tuple[PublicationBlocker, .
         add("WORK_LANGUAGE_MISSING", "work.language")
     if not facts.authors:
         add("AUTHOR_MISSING", "work.authors")
-    if not facts.narrators:
+    if facts.publication_kind not in {"audiobook", "ebook"}:
+        add("PUBLICATION_KIND_INVALID", "edition.publication_kind")
+    if facts.publication_kind == "audiobook" and not facts.narrators:
         add("NARRATOR_MISSING", "work.narrators")
     if not facts.edition_title.strip():
         add("EDITION_TITLE_MISSING", "edition.title")
@@ -443,15 +454,28 @@ def validate_publication(facts: PublicationFacts) -> tuple[PublicationBlocker, .
         add("EDITION_LANGUAGE_MISSING", "edition.language")
     if not facts.edition_description.strip():
         add("EDITION_DESCRIPTION_MISSING", "edition.description")
-    if facts.duration_ms <= 0:
-        add("DURATION_INVALID", "edition.duration_ms")
     if facts.cover_asset_id is None:
         add("COVER_MISSING", "edition.cover_asset_id")
-    if not facts.tracks:
-        add("TRACKS_MISSING", "edition.tracks")
-    for track in facts.tracks:
-        if track.status != "ready" or track.asset_status != "ready":
-            add("TRACK_NOT_READY", f"track[{track.position}]")
+    if facts.publication_kind == "audiobook":
+        if facts.duration_ms <= 0:
+            add("DURATION_INVALID", "edition.duration_ms")
+        if not facts.tracks:
+            add("TRACKS_MISSING", "edition.tracks")
+        for track in facts.tracks:
+            if track.status != "ready" or track.asset_status != "ready":
+                add("TRACK_NOT_READY", f"track[{track.position}]")
+    else:
+        if facts.duration_ms > 0:
+            add("DURATION_NOT_APPLICABLE", "edition.duration_ms")
+        if facts.tracks:
+            add("TRACKS_NOT_APPLICABLE", "edition.tracks")
+        if not facts.ebook_assets:
+            add("NO_EBOOK_ASSET", "edition.ebook_assets")
+        for asset in facts.ebook_assets:
+            if asset.asset_status != "ready":
+                add("EBOOK_ASSET_NOT_READY", f"ebook_asset[{asset.id}]")
+            if asset.format not in {"epub", "pdf"}:
+                add("EBOOK_FORMAT_INVALID", f"ebook_asset[{asset.id}]")
     if not any(
         window.status in {"planned", "active"} and window.ends_at > facts.now
         for window in facts.rights
