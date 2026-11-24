@@ -25,3 +25,10 @@ def fetch_one(sql: str, params: tuple = ()):
     if repo.dialect == "sqlite":
         return repo.conn.execute(sql, params).fetchone()
     return repo._one(_translate_placeholders(sql), params)
+
+
+def fetch_all(sql: str, params: tuple = ()) -> list:
+    repo = main.repo
+    if repo.dialect == "sqlite":
+        return repo.conn.execute(sql, params).fetchall()
+    return repo._all(_translate_placeholders(sql), params)
