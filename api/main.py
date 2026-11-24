@@ -2131,7 +2131,10 @@ def _public_collections(principal: dict) -> list:
     return collections
 
 
-def _filter_collections(collections: list, query: str, author: str, sort: str = "") -> list:
+def _filter_collections(
+    collections: list, query: str, author: str, sort: str = "",
+    *, min_seconds: int | None = None, max_seconds: int | None = None,
+) -> list:
     """Search (accent-insensitive, every word must match), author filter and sort."""
     words = public_ui.fold(query).split()
     out = []
@@ -3804,6 +3807,16 @@ def abort_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
     return {"id": oid, "status": ABORTED, "aborted": True}
 
 
+def _require_public_access_scopes(principal: dict) -> None:
+    """Issuing or revoking a public read grant requires read and write.
+
+    A write-only service identity must not gain read access by minting a bearer
+    grant for an object it can upload but is not allowed to read.
+    """
+    if not {OBJECTS_READ, OBJECTS_WRITE}.issubset(effective_scopes(principal)):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+
 @app.post("/api/v1/objects/{oid}/public-access")
 def create_public_access(
     oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
@@ -3813,6 +3826,7 @@ def create_public_access(
     Reserved for machine identities acting as a trusted service (the audiobook
     API). The returned token is shown once; only its SHA-256 is stored.
     """
+    _require_public_access_scopes(principal)
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -3837,6 +3851,7 @@ def revoke_public_access(
     oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
 ):
     """Revoke every outstanding public grant for one object."""
+    _require_public_access_scopes(principal)
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -4554,20 +4569,22 @@ def replace_object_content(
     return _object_public(updated)
 
 
-@app.get("/m/{slug}")
-def public_media(slug: str, request: Request):
-    """Permanent published URL: 302 to a short-lived presigned GET, or 404.
+def _guard_public_media_slug(slug: str, request: Request) -> None:
+    """Apply the published-media policy before any catalogue lookup.
 
-    Only an object with `published_at` resolves. The slug survives content
-    replacement, so course sites embed one stable URL. Bytes still come from
-    the storage host; the API never proxies them.
+    The permanent media URL, its HLS derivatives and linked subtitles are one
+    access-controlled resource. They must share the same authentication,
+    premium and restricted-slug decisions so a derivative cannot bypass the
+    policy applied to ``/m/{slug}``.
     """
-    _public_rate_check("media", request)
     if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
         raise HTTPException(status_code=404, detail="not found")
-    # Full listening is a signed-in feature. Check before the lookup so an
-    # anonymous caller cannot use this route to probe which slugs exist.
-    # Trusted course embeds can be allowlisted explicitly with
+    # D-08: a restricted slug is not an access-control bypass. Answer 404 before
+    # any session check, lookup, presign, view event or successful-access audit.
+    if slug in settings.public_media_restricted_slugs:
+        raise HTTPException(status_code=404, detail="not found")
+    # Check before the lookup so an anonymous caller cannot probe which slugs
+    # exist. Trusted course embeds can be allowlisted explicitly with
     # AURA_PUBLIC_MEDIA_OPEN_SLUGS (they stay permanently public on purpose).
     if settings.public_media_require_auth and slug not in settings.public_media_open_slugs:
         # A free account may browse and listen to the excerpt, but the full
@@ -4580,10 +4597,18 @@ def public_media(slug: str, request: Request):
                 authenticate_public(request)
             except HTTPException:
                 raise HTTPException(status_code=401, detail="authentication required")
-    # D-08: a restricted slug is not an access-control bypass. Answer 404 with
-    # no presign, no view event and no audit trail of a "successful" access.
-    if slug in settings.public_media_restricted_slugs:
-        raise HTTPException(status_code=404, detail="not found")
+
+
+@app.get("/m/{slug}")
+def public_media(slug: str, request: Request):
+    """Permanent published URL: 302 to a short-lived presigned GET, or 404.
+
+    Only an object with `published_at` resolves. The slug survives content
+    replacement, so course sites embed one stable URL. Bytes still come from
+    the storage host; the API never proxies them.
+    """
+    _public_rate_check("media", request)
+    _guard_public_media_slug(slug, request)
     row = repo.get_object_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -4635,8 +4660,13 @@ def public_granted_media(token: str, request: Request):
         raise HTTPException(status_code=404, detail="not found")
     set_request_principal(row["space_id"], None)
     inline = is_previewable(row["content_type"])
+    # A storage URL must never outlive the grant that authorised its creation.
+    # The permanent /m/ route keeps its longer playback TTL; service-issued
+    # grants use the shorter public-access lifetime and can be revoked before
+    # redemption. An already emitted storage URL remains valid until this TTL.
+    redirect_ttl = max(1, min(settings.public_media_ttl, int(grant["expires_at"]) - now))
     url = presigned_get(
-        s3, row["bucket"], row["object_key"], settings.public_media_ttl,
+        s3, row["bucket"], row["object_key"], redirect_ttl,
         content_disposition=shares.content_disposition_header(
             "inline" if inline else "attachment", row["display_name"]
         ),
@@ -4785,8 +4815,7 @@ def set_subtitle(
 @app.get("/hls/{slug}.m3u8")
 def public_hls_playlist(slug: str, request: Request):
     _public_rate_check("hls", request)
-    if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
-        raise HTTPException(status_code=404, detail="not found")
+    _guard_public_media_slug(slug, request)
     row = repo.get_object_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -4795,13 +4824,19 @@ def public_hls_playlist(slug: str, request: Request):
         raise HTTPException(status_code=404, detail="not found")
     text = _hls_playlist(row, f"/hls/{slug}")
     return Response(content=text, media_type="application/vnd.apple.mpegurl",
-                    headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+                    headers={
+                        "Cache-Control": "no-store",
+                        "Referrer-Policy": "no-referrer",
+                        "X-Content-Type-Options": "nosniff",
+                        "X-Robots-Tag": "noindex, nofollow",
+                    })
 
 
 @app.get("/hls/{slug}/{segment}")
 def public_hls_segment(slug: str, segment: str, request: Request):
     _public_rate_check("hls", request)
-    if not _PUBLIC_SLUG_RE.fullmatch(slug or "") or not _HLS_SEGMENT_RE.fullmatch(segment):
+    _guard_public_media_slug(slug, request)
+    if not _HLS_SEGMENT_RE.fullmatch(segment):
         raise HTTPException(status_code=404, detail="not found")
     row = repo.get_object_by_slug(slug)
     if row is None:
@@ -4813,14 +4848,18 @@ def public_hls_segment(slug: str, segment: str, request: Request):
         s3, row["bucket"], f"{row['hls_prefix']}/{segment}", 300,
         content_type="video/mp2t",
     )
-    return RedirectResponse(url, status_code=302)
+    return RedirectResponse(url, status_code=302, headers={
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Robots-Tag": "noindex, nofollow",
+    })
 
 
 @app.get("/m/{slug}/subtitles.vtt")
 def public_subtitle(slug: str, request: Request):
     _public_rate_check("subtitle", request)
-    if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
-        raise HTTPException(status_code=404, detail="not found")
+    _guard_public_media_slug(slug, request)
     row = repo.get_object_by_slug(slug)
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -4839,7 +4878,10 @@ def public_subtitle(slug: str, request: Request):
         content_disposition="inline", content_type="text/vtt",
     )
     return RedirectResponse(url, status_code=302, headers={
-        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Robots-Tag": "noindex, nofollow",
     })
 
 
