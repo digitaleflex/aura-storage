@@ -51,8 +51,10 @@
     say('Téléchargement en cours… Gardez cette page ouverte.');
     try {
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
-      // /m/{slug} is a premium capability served from a public-session cookie.
-      var response = await fetch(url, { credentials: 'same-origin' });
+      // /d/{slug} is the premium download endpoint; cache it under the /m/
+      // path so the normal player finds it offline.
+      var source = (track && track.getAttribute('data-download')) || url;
+      var response = await fetch(source, { credentials: 'same-origin' });
       if (!response.ok) throw new Error('http ' + response.status);
       await cache.put(key, response);
       say('Disponible hors connexion : « ' + (track.getAttribute('data-title') || 'livre') + ' ».');

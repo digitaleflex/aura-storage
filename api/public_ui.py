@@ -377,9 +377,14 @@ def _track_html(item: dict) -> str:
     cover_inner = fallback_cover_inner(label, author)
     if cover:
         cover_inner += f'<img src="{ESC(cover)}" alt="" loading="lazy" data-fallback>'
+    stream_url = str(item.get("url") or "")
+    download_url = "/d/" + stream_url[3:] if stream_url.startswith("/m/") else ""
     return "".join([
         '<li><button type="button" class="track-button"',
-        f' data-url="{ESC(item.get("url") or "")}"',
+        f' data-url="{ESC(stream_url)}"',
+        # The offline button fetches /d/ (premium) but caches it under the
+        # streaming /m/ path so the player can serve it while offline.
+        f' data-download="{ESC(download_url)}"',
         # Only advertise WebVTT when the catalogue links an actual subtitle
         # object; otherwise every audio track would request a missing .vtt file.
         f' data-subtitle="{ESC(item.get("subtitle_url") or "")}"',

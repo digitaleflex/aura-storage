@@ -1267,9 +1267,9 @@ def redeem_share(token: str, request: Request):
     obj = _as_dict(target)
 
     # Published objects are portal/audiobook content: serving one through an
-    # anonymous share link would bypass the premium gate on /m/{slug}. Answer
-    # the same 404 as every other denial so the share stays unguessable.
-    if settings.public_require_premium and obj.get("published_at"):
+    # anonymous share link would bypass the paid download gate. Answer the same
+    # 404 as every other denial so the share stays unguessable.
+    if settings.public_download_require_premium and obj.get("published_at"):
         try:
             _require_premium(request)
         except HTTPException:
@@ -2518,12 +2518,10 @@ def _require_premium(request: Request) -> dict:
     """Authenticate the public session and require the premium product plan.
 
     This is a product gate, not an authorization scope: a public principal
-    still has zero object capabilities. Full-file routes call it before they
-    mint any presigned URL.
+    still has zero object capabilities. Download routes call it before they
+    mint any presigned URL; streaming only needs a public session.
     """
     principal = authenticate_public(request)
-    if not settings.public_require_premium:
-        return principal
     if str(principal.get("plan") or "free").lower() != "premium":
         raise HTTPException(status_code=403, detail="premium account required")
     return principal
@@ -4573,13 +4571,15 @@ def replace_object_content(
     return _object_public(updated)
 
 
-def _guard_public_media_slug(slug: str, request: Request) -> None:
+def _guard_public_media_slug(
+    slug: str, request: Request, require_premium: bool = False,
+) -> None:
     """Apply the published-media policy before any catalogue lookup.
 
-    The permanent media URL, its HLS derivatives and linked subtitles are one
-    access-controlled resource. They must share the same authentication,
-    premium and restricted-slug decisions so a derivative cannot bypass the
-    policy applied to ``/m/{slug}``.
+    Streaming (``/m/{slug}``, HLS, subtitles) only needs a public session:
+    signed-in free accounts may listen to the whole book. An explicit download
+    (``/d/{slug}``) is the paid capability and always checks the plan, even for
+    a slug allowlisted for public embeds.
     """
     if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
         raise HTTPException(status_code=404, detail="not found")
@@ -4587,20 +4587,18 @@ def _guard_public_media_slug(slug: str, request: Request) -> None:
     # any session check, lookup, presign, view event or successful-access audit.
     if slug in settings.public_media_restricted_slugs:
         raise HTTPException(status_code=404, detail="not found")
+    paid = require_premium and settings.public_download_require_premium
+    open_slug = slug in settings.public_media_open_slugs
     # Check before the lookup so an anonymous caller cannot probe which slugs
     # exist. Trusted course embeds can be allowlisted explicitly with
-    # AURA_PUBLIC_MEDIA_OPEN_SLUGS (they stay permanently public on purpose).
-    if settings.public_media_require_auth and slug not in settings.public_media_open_slugs:
-        # A free account may browse and listen to the excerpt, but the full
-        # file URL is a premium capability. _require_premium also authenticates
-        # the session, so anonymous callers still get 401 here.
-        if settings.public_require_premium:
-            _require_premium(request)
-        else:
-            try:
-                authenticate_public(request)
-            except HTTPException:
-                raise HTTPException(status_code=401, detail="authentication required")
+    # AURA_PUBLIC_MEDIA_OPEN_SLUGS: they stay public for *listening* only.
+    if paid:
+        _require_premium(request)
+    elif settings.public_media_require_auth and not open_slug:
+        try:
+            authenticate_public(request)
+        except HTTPException:
+            raise HTTPException(status_code=401, detail="authentication required")
 
 
 @app.get("/m/{slug}")
@@ -4633,6 +4631,51 @@ def public_media(slug: str, request: Request):
     )
     _record_object_event(row["id"], int(row["size_bytes"]), "view")
     audit_event("public-access", None, "success",
+                {"object_id": row["id"], "slug": slug})
+    return RedirectResponse(url, status_code=302, headers={
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+@app.get("/d/{slug}")
+def public_download(slug: str, request: Request):
+    """Explicit, premium-only download of a published book.
+
+    ``/m/{slug}`` stays a streaming URL for every signed-in listener. This
+    route is the one the offline button uses: it always forces an attachment
+    response and checks the product plan, including for allowlisted embeds.
+    """
+    _public_rate_check("media", request)
+    if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
+        raise HTTPException(status_code=404, detail="not found")
+    if slug in settings.public_media_restricted_slugs:
+        raise HTTPException(status_code=404, detail="not found")
+    if settings.public_download_require_premium:
+        _require_premium(request)  # anonymous -> 401, free -> 403
+    else:
+        try:
+            authenticate_public(request)  # never an anonymous download URL
+        except HTTPException:
+            raise HTTPException(status_code=401, detail="authentication required")
+    row = repo.get_object_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    row = _as_dict(row)
+    if row["status"] != AVAILABLE or not row.get("published_at"):
+        raise HTTPException(status_code=404, detail="not found")
+    set_request_principal(row["space_id"], None)
+    url = presigned_get(
+        s3, row["bucket"], row["object_key"], settings.public_media_ttl,
+        content_disposition=shares.content_disposition_header(
+            "attachment", row["display_name"]
+        ),
+        content_type=row["content_type"],
+    )
+    _record_object_event(row["id"], int(row["size_bytes"]), "download")
+    audit_event("public-download", None, "success",
                 {"object_id": row["id"], "slug": slug})
     return RedirectResponse(url, status_code=302, headers={
         "Cache-Control": "no-store",
