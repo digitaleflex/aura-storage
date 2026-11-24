@@ -967,6 +967,22 @@ class Repository:
             ).fetchall()
         ]
 
+    def get_audio_chapters_map(self, oids: list) -> dict:
+        """Chapters of many objects in a few queries: ``{object_id: [chapter]}``."""
+        result: dict = {oid: [] for oid in oids}
+        for start in range(0, len(oids), 500):  # SQLite caps bound variables
+            batch = oids[start:start + 500]
+            marks = ",".join("?" for _ in batch)
+            for r in self.conn.execute(
+                "SELECT object_id, chapter_index, title, start_seconds, end_seconds "
+                f"FROM audio_chapters WHERE object_id IN ({marks}) "
+                "ORDER BY object_id, chapter_index",
+                tuple(batch),
+            ).fetchall():
+                row = dict(r)
+                result[row.pop("object_id")].append(row)
+        return result
+
     def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
         """Point ``target_id`` at ``source_id``'s bytes, keeping id and slug.
 

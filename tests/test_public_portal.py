@@ -415,3 +415,65 @@ def test_public_account_delete_clears_portal_data():
     item2 = c2.get("/api/public/library").json()["collections"][0]["items"][0]
     assert item2["id"] == item["id"]
     assert item2["progress_seconds"] == 0
+
+
+def test_chapters_are_loaded_with_one_batched_query_not_one_per_book():
+    _published_pack()
+    c = _sign_in(TestClient(main.app))
+    item = c.get("/api/public/library").json()["collections"][0]["items"][0]
+    main.repo.replace_audio_chapters(item["id"], [
+        {"index": 1, "title": "Deux", "start": 60.0, "end": 120.0},
+        {"index": 0, "title": "Un", "start": 0.0, "end": 60.0},
+    ])
+    got = main.repo.get_audio_chapters_map([item["id"], "absent-id"])
+    assert [ch["title"] for ch in got[item["id"]]] == ["Un", "Deux"]  # ordered
+    assert got["absent-id"] == []
+    assert main.repo.get_audio_chapters_map([]) == {}
+
+    calls = []
+    real = main.repo.get_audio_chapters
+    main.repo.get_audio_chapters = lambda oid: calls.append(oid) or real(oid)
+    try:
+        library = c.get("/api/public/library").json()["collections"][0]["items"]
+    finally:
+        main.repo.get_audio_chapters = real
+    assert calls == [], "the per-book query must not be used any more"
+    assert [ch["title"] for ch in library[0]["chapters"]] == ["Un", "Deux"]
+
+
+def test_cover_redirect_may_be_cached_briefly(monkeypatch):
+    _published_pack()
+    c = _sign_in(TestClient(main.app))
+    item = c.get("/api/public/library").json()["collections"][0]["items"][0]
+    main.repo.conn.execute(
+        "UPDATE objects SET cover_key = ? WHERE id = ?", ("covers/x.jpg", item["id"]))
+    main.repo.conn.commit()
+    monkeypatch.setattr(main, "presigned_get", lambda *a, **k: "https://s3.example/c.jpg")
+    r = c.get(f"/covers/{item['id']}.jpg", follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["cache-control"] == "private, max-age=300"
+
+
+def test_public_endpoints_are_rate_limited_per_client(monkeypatch):
+    monkeypatch.setitem(main._PUBLIC_RATE_LIMITS, "media", 3)
+    monkeypatch.setitem(main._PUBLIC_RATE_LIMITS, "cover", 2)
+    codes = [TestClient(main.app).get("/m/inconnu-slug").status_code for _ in range(5)]
+    assert codes[:3] == [404, 404, 404]
+    assert codes[3:] == [429, 429]
+    blocked = TestClient(main.app).get("/m/inconnu-slug")
+    assert blocked.status_code == 429 and int(blocked.headers["retry-after"]) >= 1
+    oid = str(uuid.uuid4())
+    codes = [TestClient(main.app).get(f"/covers/{oid}.jpg").status_code for _ in range(3)]
+    assert codes == [404, 404, 429]
+
+
+def test_progress_is_rate_limited(monkeypatch):
+    _published_pack()
+    reader = _sign_in(TestClient(main.app))
+    csrf = reader.get("/api/public/me").json()["csrf_token"]
+    item = reader.get("/api/public/library").json()["collections"][0]["items"][0]
+    monkeypatch.setitem(main._PUBLIC_RATE_LIMITS, "progress", 2)
+    body = {"object_id": item["id"], "position_seconds": 5}
+    codes = [reader.post("/api/public/progress", json=body,
+                         headers={"X-CSRF-Token": csrf}).status_code for _ in range(3)]
+    assert codes == [200, 200, 429]

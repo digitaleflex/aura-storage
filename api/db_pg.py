@@ -845,6 +845,21 @@ class Repository:
             (oid,),
         )
 
+    def get_audio_chapters_map(self, oids: list) -> dict:
+        """Chapters of many objects in one query: ``{object_id: [chapter]}``."""
+        result: dict = {oid: [] for oid in oids}
+        if not oids:
+            return result
+        for row in self._all(
+            "SELECT object_id, chapter_index, title, start_seconds, end_seconds "
+            "FROM audio_chapters WHERE object_id = ANY(%s) "
+            "ORDER BY object_id, chapter_index",
+            (list(oids),),
+        ):
+            row = dict(row)
+            result[row.pop("object_id")].append(row)
+        return result
+
     def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
         with self.conn.transaction():
             self._run("DELETE FROM objects WHERE id = %s", (source_id,))

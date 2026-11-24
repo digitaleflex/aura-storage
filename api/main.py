@@ -392,9 +392,33 @@ def _public_login_clear(client_ip: str) -> None:
     _PUBLIC_LOGIN_ATTEMPTS.pop(client_ip, None)
 
 
+# Public read endpoints (media redirect, covers, listening position) count EVERY
+# request, not only failures: a scraper or a runaway client must not be able to
+# mint unlimited presigned URLs or write unlimited rows. Limits are per client
+# address and per minute, generous for a person (a 100-cover grid is one burst).
+_PUBLIC_RATE: dict[str, list[float]] = {}
+_PUBLIC_RATE_WINDOW = 60.0
+_PUBLIC_RATE_LIMITS = {"media": 120, "cover": 600, "progress": 120}
+
+
+def _public_rate_check(kind: str, request: Request) -> None:
+    now = time.time()
+    key = f"{kind}:{_client_ip(request)}"
+    recent = [t for t in _PUBLIC_RATE.get(key, []) if now - t < _PUBLIC_RATE_WINDOW]
+    if len(recent) >= _PUBLIC_RATE_LIMITS[kind]:
+        _PUBLIC_RATE[key] = recent
+        retry = max(1, int(_PUBLIC_RATE_WINDOW - (now - recent[0])))
+        raise HTTPException(status_code=429, detail="too many requests",
+                            headers={"Retry-After": str(retry)})
+    recent.append(now)
+    _PUBLIC_RATE[key] = recent
+    _prune_attempt_table(_PUBLIC_RATE, _PUBLIC_RATE_WINDOW)
+
+
 def reset_login_attempts() -> None:
     _LOGIN_ATTEMPTS.clear()
     _PUBLIC_LOGIN_ATTEMPTS.clear()
+    _PUBLIC_RATE.clear()
 
 s3, s3ops = make_clients(
     settings.s3_endpoint, settings.s3_internal_endpoint,
@@ -1726,7 +1750,7 @@ def _split_audio_name(display_name: str) -> tuple[str, str]:
 
 def _library_items(col: dict, only_published: bool = False) -> list:
     """Items of a published pack, with their public media URL when available."""
-    items = []
+    rows = []
     for pos, row in enumerate(repo.get_collection_items(col["id"])):
         row = _as_dict(row)
         if row["status"] != AVAILABLE:
@@ -1734,6 +1758,11 @@ def _library_items(col: dict, only_published: bool = False) -> list:
         published = bool(row.get("published_at") and row.get("public_slug"))
         if only_published and not published:
             continue
+        rows.append((pos, row, published))
+    # One query for every chapter of the pack instead of one per book.
+    chapters = repo.get_audio_chapters_map([row["id"] for _, row, _ in rows])
+    items = []
+    for pos, row, published in rows:
         author, title = _split_audio_name(row["display_name"])
         items.append({
             "position": pos,
@@ -1745,7 +1774,7 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             "content_type": row["content_type"],
             "size_bytes": row["size_bytes"],
             "duration_seconds": row.get("duration_seconds"),
-            "chapters": repo.get_audio_chapters(row["id"]),
+            "chapters": chapters.get(row["id"], []),
             "published_slug": row.get("public_slug"),
             "cover_url": f"/covers/{row['id']}.jpg" if row.get("cover_key") else None,
             "url": f"/m/{row['public_slug']}" if published else None,
@@ -1782,8 +1811,11 @@ def public_library(principal: dict = Depends(require_public)):
 
 
 @app.post("/api/public/progress")
-def public_progress(body: ProgressIn, principal: dict = Depends(require_public)):
+def public_progress(
+    body: ProgressIn, request: Request, principal: dict = Depends(require_public),
+):
     """Persist a listening position for the signed-in visitor."""
+    _public_rate_check("progress", request)
     oid = _canonical_id(body.object_id, "object id")
     # Public users are not scoped to the publisher's space: they may only save
     # progress for an object that is actually published, nothing else.
@@ -3642,13 +3674,14 @@ def replace_object_content(
 
 
 @app.get("/m/{slug}")
-def public_media(slug: str):
+def public_media(slug: str, request: Request):
     """Permanent published URL: 302 to a short-lived presigned GET, or 404.
 
     Only an object with `published_at` resolves. The slug survives content
     replacement, so course sites embed one stable URL. Bytes still come from
     the storage host; the API never proxies them.
     """
+    _public_rate_check("media", request)
     if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
         raise HTTPException(status_code=404, detail="not found")
     row = repo.get_object_by_slug(slug)
@@ -3681,12 +3714,13 @@ def public_media(slug: str):
 
 
 @app.get("/covers/{oid}.jpg")
-def public_cover(oid: str):
+def public_cover(oid: str, request: Request):
     """Cover art extracted locally from a published audio file, or 404.
 
     No external cover API is contacted: the JPEG is stored next to the object
     in the same bucket by scripts/generate_audiobook_covers.py.
     """
+    _public_rate_check("cover", request)
     oid = _canonical_id(oid, "object id")
     row = _as_dict(repo.get_object_unscoped(oid) or {})
     if (
@@ -3699,8 +3733,11 @@ def public_cover(oid: str):
         s3, row["bucket"], row["cover_key"], settings.intent_ttl,
         content_disposition="inline", content_type="image/jpeg",
     )
+    # The redirect target is valid for `intent_ttl`; letting the browser reuse
+    # the redirect for 5 minutes spares a signed URL per cover on every visit
+    # (a unpublished cover may stay visible that long in a warm cache).
     return RedirectResponse(url, status_code=302, headers={
-        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "Cache-Control": "private, max-age=300", "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
     })
 
