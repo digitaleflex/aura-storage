@@ -20,13 +20,21 @@ fi
 
 LIMIT="${AURA_REFRESH_LIMIT:-20}"
 CONTAINER_ROOT=/srv/api
+COVER_LOCK_FILE="${TMPDIR:-/tmp}/aura-cover-review.lock"
+exec 8>"$COVER_LOCK_FILE"
 
 echo "== public library refresh $(date -u +%FT%TZ) =="
 
 # Covers: embedded artwork then sibling images, bounded, dry-run disabled.
-AURA_REPO_ROOT="$CONTAINER_ROOT" docker compose exec -T \
-  -e AURA_REPO_ROOT="$CONTAINER_ROOT" \
-  api python - --apply --limit "$LIMIT" < scripts/generate_audiobook_covers.py
+# Share the external-cover lock so two writers cannot replace the same S3 key.
+if flock -n 8; then
+  AURA_REPO_ROOT="$CONTAINER_ROOT" docker compose exec -T \
+    -e AURA_REPO_ROOT="$CONTAINER_ROOT" \
+    api python - --apply --limit "$LIMIT" < scripts/generate_audiobook_covers.py
+  flock -u 8
+else
+  echo "covers: another cover operation is running; skipping this refresh"
+fi
 
 # Duration + chapters: local ffprobe, bounded.
 AURA_REPO_ROOT="$CONTAINER_ROOT" docker compose exec -T \
