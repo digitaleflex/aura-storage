@@ -298,11 +298,16 @@ class Settings:
         "0", "false", "no", "off")
     # Free preview length for anonymous visitors (MP3 only); 0 disables it.
     public_preview_seconds: int = _int("AURA_PUBLIC_PREVIEW_SECONDS", 60)
-    # Full-file access is a paid feature by default: /m/{slug} and share links
-    # for published objects require a public session whose plan is "premium".
-    # Set to 0 to restore the previous "any signed-in listener" behaviour.
+    # Legacy switch kept for compatibility: it used to gate full-file access.
+    # Listening is now always available to signed-in listeners (/m/{slug});
+    # use public_download_require_premium for the paid capability.
     public_require_premium: bool = os.environ.get(
         "AURA_PUBLIC_REQUIRE_PREMIUM", "1"
+    ).strip().lower() not in ("0", "false", "no", "off")
+    # Download is the paid capability: /d/{slug} and share links for published
+    # objects always require a "premium" plan unless explicitly set to 0.
+    public_download_require_premium: bool = os.environ.get(
+        "AURA_PUBLIC_DOWNLOAD_REQUIRE_PREMIUM", "1"
     ).strip().lower() not in ("0", "false", "no", "off")
     # Bootstrap: verified e-mail addresses promoted to "premium" at sign-in.
     # Existing premium rows are never downgraded when this list changes.

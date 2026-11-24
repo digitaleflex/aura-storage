@@ -89,7 +89,7 @@ def test_restricted_slug_blocks_every_public_media_route(monkeypatch):
     # A restricted title must not resolve through its permanent URL, HLS
     # derivatives or VTT, even before the authentication/premium gate runs.
     monkeypatch.setattr(main.settings, "public_media_require_auth", True)
-    monkeypatch.setattr(main.settings, "public_require_premium", True)
+    monkeypatch.setattr(main.settings, "public_download_require_premium", True)
     monkeypatch.setattr(main.settings, "public_media_open_slugs", ())
     monkeypatch.setattr(main.settings, "public_media_restricted_slugs", (SLUG,))
     monkeypatch.setattr(
@@ -159,7 +159,7 @@ def _stub_public_video(monkeypatch):
 
 def test_public_media_derivatives_require_the_same_session_gate(monkeypatch):
     monkeypatch.setattr(main.settings, "public_media_require_auth", True)
-    monkeypatch.setattr(main.settings, "public_require_premium", False)
+    monkeypatch.setattr(main.settings, "public_download_require_premium", False)
     monkeypatch.setattr(main.settings, "public_media_open_slugs", ())
     monkeypatch.setattr(main.settings, "public_media_restricted_slugs", ())
     client = TestClient(main.app)
@@ -176,7 +176,7 @@ def test_public_media_derivatives_require_the_same_session_gate(monkeypatch):
 def test_signed_in_session_unlocks_streaming_and_all_derivatives(monkeypatch):
     _stub_public_video(monkeypatch)
     monkeypatch.setattr(main.settings, "public_media_require_auth", True)
-    monkeypatch.setattr(main.settings, "public_require_premium", True)
+    monkeypatch.setattr(main.settings, "public_download_require_premium", True)
     monkeypatch.setattr(main.settings, "public_media_open_slugs", ())
     monkeypatch.setattr(main.settings, "public_media_restricted_slugs", ())
     calls = []
@@ -201,7 +201,7 @@ def test_signed_in_session_unlocks_streaming_and_all_derivatives(monkeypatch):
 def test_explicit_download_requires_premium_even_when_streaming_is_open(monkeypatch):
     _stub_public_video(monkeypatch)
     monkeypatch.setattr(main.settings, "public_media_require_auth", True)
-    monkeypatch.setattr(main.settings, "public_require_premium", True)
+    monkeypatch.setattr(main.settings, "public_download_require_premium", True)
     monkeypatch.setattr(main.settings, "public_media_open_slugs", ())
     monkeypatch.setattr(main.settings, "public_media_restricted_slugs", ())
     calls = []
@@ -214,7 +214,7 @@ def test_explicit_download_requires_premium_even_when_streaming_is_open(monkeypa
 def test_allowlisted_slug_is_open_for_media_and_derivatives(monkeypatch):
     _stub_public_video(monkeypatch)
     monkeypatch.setattr(main.settings, "public_media_require_auth", True)
-    monkeypatch.setattr(main.settings, "public_require_premium", True)
+    monkeypatch.setattr(main.settings, "public_download_require_premium", True)
     monkeypatch.setattr(main.settings, "public_media_open_slugs", (SLUG,))
     monkeypatch.setattr(main.settings, "public_media_restricted_slugs", ())
     calls = []

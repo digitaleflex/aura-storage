@@ -245,9 +245,12 @@ services:
       # Full listening requires a public session; trusted embeds can be allowlisted.
       AURA_PUBLIC_MEDIA_REQUIRE_AUTH: ${AURA_PUBLIC_MEDIA_REQUIRE_AUTH:-1}
       AURA_PUBLIC_MEDIA_OPEN_SLUGS: "${AURA_PUBLIC_MEDIA_OPEN_SLUGS:-}"
-      # Full-file URLs are premium. Verified e-mails listed here are promoted
-      # to the premium plan on sign-in (never downgraded afterwards).
+      # Listening is signed-in. Downloads (/d/) and published share links are
+      # premium. Verified e-mails here are promoted at sign-in, never downgraded.
       AURA_PUBLIC_REQUIRE_PREMIUM: ${AURA_PUBLIC_REQUIRE_PREMIUM:-1}
+      # Dedicated download gate: stays premium even when the legacy flag above
+      # is set to 0 in .env (which only disabled the old full-file restriction).
+      AURA_PUBLIC_DOWNLOAD_REQUIRE_PREMIUM: ${AURA_PUBLIC_DOWNLOAD_REQUIRE_PREMIUM:-1}
       AURA_PREMIUM_EMAILS: "${AURA_PREMIUM_EMAILS:-}"
       # D-08 guard: slugs excluded from the permanent public media URL.
       AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS: "${AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS:-}"

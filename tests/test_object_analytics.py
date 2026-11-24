@@ -54,6 +54,7 @@ def test_counts_views_downloads_shares_and_egress(monkeypatch):
     monkeypatch.setattr(main, "s3ops", DummyS3(data))
     monkeypatch.setattr(main.settings, "public_media_require_auth", False)
     monkeypatch.setattr(main.settings, "public_require_premium", False)
+    monkeypatch.setattr(main.settings, "public_download_require_premium", False)
     c, headers = _admin()
     oid = _object(c, headers, size=len(data))
     slug = f"stats-{uuid.uuid4().hex[:8]}"
