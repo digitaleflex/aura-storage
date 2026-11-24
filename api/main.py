@@ -15,13 +15,14 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, Literal
+from html import escape as html_escape
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, folder_shares, google_oauth, ids, netinfo, public_ui, shares
+from . import authz, folder_shares, google_oauth, ids, netinfo, public_book, public_ui, shares
 from .audit import (
     audit_event,
     audit_path,
@@ -398,7 +399,7 @@ def _public_login_clear(client_ip: str) -> None:
 # address and per minute, generous for a person (a 100-cover grid is one burst).
 _PUBLIC_RATE: dict[str, list[float]] = {}
 _PUBLIC_RATE_WINDOW = 60.0
-_PUBLIC_RATE_LIMITS = {"media": 120, "cover": 600, "progress": 120}
+_PUBLIC_RATE_LIMITS = {"media": 120, "cover": 600, "progress": 120, "preview": 30}
 
 
 def _public_rate_check(kind: str, request: Request) -> None:
@@ -1708,13 +1709,20 @@ def _portal_csp() -> str:
     )
 
 
-def _public_profile_headers() -> dict:
-    """Headers of every portal HTML page (login, catalogue, profile)."""
-    return {
-        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
-        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
+def _public_profile_headers(indexable: bool = False) -> dict:
+    """Headers of every portal HTML page; only browse pages may be indexed."""
+    headers = {
+        "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": _portal_csp(),
     }
+    if indexable:
+        # Same content for every anonymous visitor: cacheable for a minute.
+        headers["Cache-Control"] = "public, max-age=60"
+        headers["Vary"] = "Cookie"
+    else:
+        headers["Cache-Control"] = "no-store"
+        headers["X-Robots-Tag"] = "noindex, nofollow"
+    return headers
 
 
 @app.get("/portal-assets/{name}")
@@ -1821,8 +1829,8 @@ def _library_items(col: dict, only_published: bool = False) -> list:
     return items
 
 
-def _public_collections(principal: dict) -> list:
-    """Published catalogue with each visitor's own listening position."""
+def _public_catalog() -> list:
+    """Published catalogue, identical for every visitor (no listening position)."""
     collections = []
     for col in repo.list_published_collections():
         col = _as_dict(col)
@@ -1832,12 +1840,38 @@ def _public_collections(principal: dict) -> list:
             "updated_at": col["updated_at"],
             "items": _library_items(col, only_published=True),
         })
+    return collections
+
+
+def _public_collections(principal: dict) -> list:
+    """Published catalogue with each visitor's own listening position."""
+    collections = _public_catalog()
     object_ids = [item["id"] for col in collections for item in col["items"]]
     progress = repo.get_progress_map(principal["id"], object_ids)
     for col in collections:
         for item in col["items"]:
             item["progress_seconds"] = progress.get(item["id"], 0)
     return collections
+
+
+def _filter_collections(collections: list, query: str, author: str) -> list:
+    """Keep the books matching the search text and/or the author; drop empty packs."""
+    if query:
+        needle = query.lower()
+        collections = [
+            {**col, "items": [i for i in col["items"] if needle in i["display_name"].lower()]}
+            for col in collections
+        ]
+    if author:
+        collections = [
+            {**col, "items": [i for i in col["items"] if i["author"] == author]}
+            for col in collections
+        ]
+    return [col for col in collections if col["items"]]
+
+
+def _catalog_authors(collections: list) -> list:
+    return sorted({i["author"] for col in collections for i in col["items"] if i["author"]})
 
 
 @app.get("/api/public/library")
@@ -1881,41 +1915,161 @@ def public_portal(request: Request):
         principal = authenticate_public(request)
     except HTTPException:
         principal = None
-    page_headers = _public_profile_headers()
-    if principal is None:
-        return HTMLResponse(public_ui.login_page(), headers=page_headers)
     query = (request.query_params.get("q") or "").strip()[:120]
+    author = (request.query_params.get("auteur") or "").strip()[:120]
+    if principal is None:
+        if not settings.public_browse:
+            return HTMLResponse(
+                public_ui.login_page(), headers=_public_profile_headers(),
+            )
+        catalog = _public_catalog()
+        return HTMLResponse(
+            public_book.landing_page(
+                _filter_collections(catalog, query, author), query=query,
+                authors=_catalog_authors(catalog), active_author=author,
+                base_url=_public_base_url(),
+            ),
+            headers=_public_profile_headers(indexable=not (query or author)),
+        )
     view = request.query_params.get("vue", "liste").strip().lower()
     if view not in ("liste", "grille", "immersif"):
         view = "liste"
-    author = (request.query_params.get("auteur") or "").strip()[:120]
     collections = _public_collections(principal)
-    authors = sorted({
-        item["author"] for col in collections for item in col["items"]
-        if item["author"]
-    })
-    if query:
-        needle = query.lower()
-        collections = [
-            {**col, "items": [
-                item for item in col["items"]
-                if needle in item["display_name"].lower()
-            ]}
-            for col in collections
-        ]
-    if author:
-        collections = [
-            {**col, "items": [i for i in col["items"] if i["author"] == author]}
-            for col in collections
-        ]
-    collections = [col for col in collections if col["items"]]
+    authors = _catalog_authors(collections)
+    collections = _filter_collections(collections, query, author)
     return HTMLResponse(
         public_ui.catalog_page(
             principal, collections, query=query, view=view,
             authors=authors, active_author=author,
         ),
-        headers=page_headers,
+        headers=_public_profile_headers(),
     )
+
+
+def _public_base_url() -> str:
+    return f"https://{settings.public_domain}" if settings.public_domain else ""
+
+
+def _optional_public_principal(request: Request):
+    try:
+        return authenticate_public(request)
+    except HTTPException:
+        return None
+
+
+def _find_public_book(oid: str):
+    """``(item, collection)`` of a published book, or ``(None, None)``."""
+    for col in _public_catalog():
+        for item in col["items"]:
+            if item["id"] == oid:
+                return item, col
+    return None, None
+
+
+def _preview_bytes(row: dict) -> int:
+    """Size of the free preview in bytes, 0 when the format cannot be cut safely."""
+    seconds = settings.public_preview_seconds
+    duration = float(row.get("duration_seconds") or 0)
+    size = int(row.get("size_bytes") or 0)
+    if seconds <= 0 or duration <= 0 or size <= 0:
+        return 0
+    if (row.get("content_type") or "").split(";")[0].strip().lower() != "audio/mpeg":
+        return 0  # only MPEG frames survive a cut at an arbitrary byte
+    return min(size, int(size * min(seconds, duration) / duration) + 4096)
+
+
+@app.get("/livre/{oid}", response_class=HTMLResponse)
+def public_book_page(oid: str, request: Request):
+    """One book of the published catalogue, readable without signing in."""
+    if not _public_host_ok(request) or not settings.public_browse:
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        oid = _canonical_id(oid, "object id")
+    except HTTPException:
+        item = None
+    else:
+        item, col = _find_public_book(oid)
+    if item is None:
+        return HTMLResponse(
+            public_book.message_page("Livre introuvable", "Ce livre n'existe pas ou n'est plus publié."),
+            status_code=404, headers=_public_profile_headers(),
+        )
+    principal = _optional_public_principal(request)
+    related = [
+        i for i in col["items"] if i["author"] and i["author"] == item["author"] and i["id"] != oid
+    ][:6]
+    row = _as_dict(repo.get_object_unscoped(oid) or {})
+    return HTMLResponse(
+        public_book.book_page(
+            item, col["title"], related, principal, base_url=_public_base_url(),
+            preview_seconds=settings.public_preview_seconds if _preview_bytes(row) else 0,
+        ),
+        headers=_public_profile_headers(indexable=True),
+    )
+
+
+@app.get("/extrait/{oid}")
+def public_preview(oid: str, request: Request):
+    """Free preview: only the first minutes of a published MP3, cut server-side."""
+    _public_rate_check("preview", request)
+    if not _public_host_ok(request) or not settings.public_browse:
+        raise HTTPException(status_code=404, detail="not found")
+    oid = _canonical_id(oid, "object id")
+    row = _as_dict(repo.get_object_unscoped(oid) or {})
+    if (
+        not row or row.get("status") != AVAILABLE or not row.get("published_at")
+        or not _preview_bytes(row)
+    ):
+        raise HTTPException(status_code=404, detail="not found")
+    length = _preview_bytes(row)
+    set_request_principal(row.get("space_id"), None)
+    try:
+        body = s3ops.get_object(
+            Bucket=row["bucket"], Key=row["object_key"], Range=f"bytes=0-{length - 1}",
+        )["Body"]
+    except Exception:
+        raise HTTPException(status_code=404, detail="not found")
+    _record_object_event(oid, length, "view")
+    return StreamingResponse(
+        body.iter_chunks(64 * 1024), media_type="audio/mpeg",
+        headers={
+            "Content-Length": str(length), "Accept-Ranges": "none",
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline",
+        },
+    )
+
+
+@app.get("/robots.txt")
+def public_robots(request: Request):
+    if not _public_host_ok(request) or not settings.public_domain:
+        raise HTTPException(status_code=404, detail="not found")
+    lines = ["User-agent: *"]
+    if settings.public_browse:
+        lines += ["Allow: /$", "Allow: /livre/", "Disallow: /",
+                  f"Sitemap: {_public_base_url()}/sitemap.xml"]
+    else:
+        lines.append("Disallow: /")
+    return Response("\n".join(lines) + "\n", media_type="text/plain; charset=utf-8",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/sitemap.xml")
+def public_sitemap(request: Request):
+    if not _public_host_ok(request) or not settings.public_domain or not settings.public_browse:
+        raise HTTPException(status_code=404, detail="not found")
+    base = _public_base_url()
+    urls = [f"{base}/"] + [
+        f"{base}/livre/{i['id']}" for col in _public_catalog() for i in col["items"]
+    ]
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        + "".join(f"<url><loc>{html_escape(u)}</loc></url>" for u in urls)
+        + "</urlset>"
+    )
+    return Response(xml, media_type="application/xml",
+                    headers={"Cache-Control": "public, max-age=3600"})
 
 
 # ---------------------------------------------------------------------------
