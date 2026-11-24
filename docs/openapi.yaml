@@ -1716,6 +1716,19 @@ paths:
         "403": { description: Not authorised }
         "404": { description: Space not found }
         "422": { description: Identifier is not a canonical UUID v4 }
+  /api/v1/admin/portal-stats:
+    get:
+      summary: Aggregate public-portal figures per published book (admin:read)
+      tags: [administration]
+      description: >-
+        Listeners, completions (visitor reached 90 % of the duration), favourites
+        and monthly opens per published book, plus totals. Counts only: no
+        visitor, e-mail or listening history is returned. At most the 50 most
+        listened books are listed.
+      responses:
+        "200": { description: "measured_at, period, totals and books (id, title, author, listeners, completed, completion_rate, favorites, views_month)" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
   /api/v1/admin/health:
     get:
       summary: Supervision snapshot for api, database, storage and disk (admin:read)

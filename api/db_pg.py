@@ -225,6 +225,23 @@ class Repository:
         )
         return {r["object_id"]: float(r["position_seconds"]) for r in rows}
 
+    def portal_stats(self, period: str, available: str) -> dict:
+        """Aggregate portal figures per published book: no visitor is identifiable."""
+        books = self._all(
+            "SELECT o.id, o.display_name, o.duration_seconds, "
+            "(SELECT COUNT(*) FROM listen_progress p WHERE p.object_id = o.id "
+            "  AND p.position_seconds > 0) AS listeners, "
+            "(SELECT COUNT(*) FROM listen_progress p WHERE p.object_id = o.id "
+            "  AND o.duration_seconds > 0 AND p.position_seconds >= 0.9 * o.duration_seconds) AS completed, "
+            "(SELECT COUNT(*) FROM listen_favorites f WHERE f.object_id = o.id) AS favorites, "
+            "COALESCE((SELECT u.views FROM object_usage_monthly u "
+            "  WHERE u.object_id = o.id AND u.period = %s), 0) AS views_month "
+            "FROM objects o WHERE o.published_at IS NOT NULL AND o.status = %s",
+            (period, available),
+        )
+        accounts = self._one("SELECT COUNT(*) AS n FROM users WHERE role = 'public'")["n"]
+        return {"books": [dict(b) for b in books], "accounts": accounts}
+
     def get_favorite_ids(self, user_id: str, object_ids: list) -> set:
         """Which of ``object_ids`` the visitor has put in their favourites."""
         if not object_ids:

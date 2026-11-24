@@ -58,6 +58,15 @@ par des variables CSS ; `color-scheme: light dark` adapte aussi lecteur natif et
 sur chaque livre (catalogue et page livre) alimente l'étagère « Mes favoris » ; l'état est privé,
 supprimé avec le compte, et le clic est annulé côté page si le serveur refuse.
 
+## Statistiques (administration)
+
+`GET /api/v1/admin/portal-stats` (`admin:read`) et la carte **Portail public** de l'onglet Vue
+d'ensemble de la console : comptes visiteurs, livres publiés, et pour chaque livre (50 premiers,
+classés par auditeurs) : auditeurs, livres **terminés** (≥ 90 % de la durée), favoris, ouvertures du
+mois. Ce sont des **comptages agrégés** calculés à partir de `listen_progress`, `listen_favorites` et
+`object_usage_monthly` : aucune table de suivi n'a été ajoutée, aucun visiteur, e-mail ou historique
+individuel n'est renvoyé. Les ouvertures comptent les redirections `/m/` et les extraits.
+
 ## Recherche, tri et recommandations
 
 - **Recherche** (`?q=`) : insensible aux accents et à la casse, tous les mots doivent correspondre

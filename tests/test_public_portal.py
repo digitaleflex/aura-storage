@@ -1085,3 +1085,41 @@ def test_unknown_portal_address_gets_an_html_404_but_the_api_keeps_json(monkeypa
 def test_player_allows_airplay():
     _published_pack()
     assert 'x-webkit-airplay="allow"' in _sign_in(TestClient(main.app)).get("/").text
+
+
+# --------------------------------------------------------------------------
+# Admin: aggregate portal statistics
+# --------------------------------------------------------------------------
+def test_portal_stats_count_listeners_completions_and_favorites_without_naming_anyone():
+    _, media_slug, oid = _book(duration=1000)
+    catalogue_sql.execute("UPDATE objects SET display_name = 'Zola - Germinal.mp3' WHERE id = ?", (oid,))
+    readers = []
+    for n, position in enumerate((10, 950, 0)):  # started, finished (>=90 %), opened only
+        globals()["SUBJECT"] = f"stats-subject-{uuid.uuid4().hex[:6]}-{n}"
+        r = _sign_in(TestClient(main.app))
+        hdr = {"X-CSRF-Token": r.get("/api/public/me").json()["csrf_token"]}
+        r.post("/api/public/progress", json={"object_id": oid, "position_seconds": position}, headers=hdr)
+        if n < 2:
+            r.put(f"/api/public/favorites/{oid}", headers=hdr)
+        readers.append(r)
+    globals()["SUBJECT"] = "google-subject-123456"
+
+    c, headers = _admin()
+    out = c.get("/api/v1/admin/portal-stats", headers=headers)
+    assert out.status_code == 200, out.text
+    body = out.json()
+    book = next(b for b in body["books"] if b["id"] == oid)
+    assert (book["title"], book["author"]) == ("Germinal", "Zola")
+    assert book["listeners"] == 2 and book["completed"] == 1 and book["favorites"] == 2
+    assert book["completion_rate"] == 0.5
+    assert body["totals"]["accounts"] >= 3 and body["totals"]["published_books"] >= 1
+    flat = out.text
+    assert "reader@example.com" not in flat and media_slug not in flat  # nobody identifiable, no media slug
+    assert set(book) == {"id", "title", "author", "listeners", "completed", "completion_rate",
+                         "favorites", "views_month"}
+
+
+def test_portal_stats_require_admin_read():
+    assert TestClient(main.app).get("/api/v1/admin/portal-stats").status_code in (401, 403)
+    reader = _sign_in(TestClient(main.app))  # a public visitor is not an admin
+    assert reader.get("/api/v1/admin/portal-stats").status_code in (401, 403)
