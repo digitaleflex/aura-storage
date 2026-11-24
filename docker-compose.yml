@@ -106,7 +106,7 @@ services:
       - -ip=seaweed-master
       - -ip.bind=0.0.0.0
       - -mdir=/data
-      - -volumeSizeLimitMB=${SEAWEED_VOLUME_SIZE_LIMIT_MB:-30000}
+      - -volumeSizeLimitMB=${SEAWEED_VOLUME_SIZE_LIMIT_MB:-10240}
     volumes:
       - ${AURA_DATA_DIR:-./data}/master:/data
     networks:

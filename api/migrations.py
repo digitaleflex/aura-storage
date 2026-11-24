@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0026_listen_playlists"
+SCHEMA_VERSION = "0027_perf_indexes"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -642,6 +642,16 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_revisions_purge "
         "ON object_revisions(purged_at, created_at) WHERE purged_at IS NULL"
+    )
+    # Composite indexes for the portal/API hot paths: folder listings and the
+    # reconciliation sweep that expires stale upload intents (#320 optimisation).
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_objects_space_app_folder "
+        "ON objects(space_id, application_id, folder_id)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_objects_status_expiry "
+        "ON objects(status, intent_expires_at)"
     )
     runner.commit()
     _canonicalize_legacy_ids(runner)

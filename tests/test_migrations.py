@@ -2,7 +2,18 @@
 
 Runs entirely on a disposable SQLite file; no PostgreSQL or S3 endpoint needed.
 """
+import os
 import sqlite3
+
+# The hot-path test imports api.main, which requires the standard env contract.
+for _name, _value in {
+    "AURA_API_ADMIN_PASSWORD": "test-admin-password",
+    "AURA_S3_ACCESS_KEY": "testaccess12345678",
+    "AURA_S3_SECRET_KEY": "testsecret45678901234567890123456789",
+    "AURA_API_DB": ":memory:",
+    "AURA_COOKIE_SECURE": "0",
+}.items():
+    os.environ.setdefault(_name, _value)
 
 from api import ids, migrations
 from api.db import SCHEMA
@@ -291,4 +302,6 @@ def test_hot_path_indexes_exist():
         found = {r["indexname"]: r["indexdef"] for r in cur.fetchall()}
     assert "idx_objects_idem" in found
     assert "idx_objects_inflight" in found
+    assert "idx_objects_space_app_folder" in found
+    assert "idx_objects_status_expiry" in found
     assert "verifying" in found["idx_objects_inflight"]  # partial index
