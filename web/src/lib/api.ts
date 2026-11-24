@@ -134,8 +134,12 @@ export interface ObjectQuery {
   status?: string;
   /** Exact media type (compared case-insensitively by the API). */
   contentType?: string;
-  /** Exact normalized tag. */
+  /** Exact normalized tag (single-tag shorthand). */
   tag?: string;
+  /** Several normalized tags; combined with `tagMode`. */
+  tags?: string[];
+  /** `all` = object must carry every tag, `any` = at least one. */
+  tagMode?: "all" | "any";
   minSize?: number;
   maxSize?: number;
   /** Inclusive epoch-second bounds on creation time. */
@@ -984,6 +988,11 @@ export const api = {
     if (q) params.set("q", q);
     if (query.status) params.set("status", query.status);
     if (query.contentType) params.set("content_type", query.contentType);
+    if (query.tag) params.set("tag", query.tag.trim().toLowerCase());
+    if (query.tags?.length) {
+      params.set("tags", query.tags.join(","));
+      params.set("tag_mode", query.tagMode ?? "all");
+    }
     if (query.minSize !== undefined) params.set("min_size", String(query.minSize));
     if (query.maxSize !== undefined) params.set("max_size", String(query.maxSize));
     if (query.createdAfter !== undefined) {
@@ -1052,14 +1061,14 @@ export const api = {
     return request<SessionInfo>("/api/v1/me");
   },
 
-  getObject(id: string): Promise<ObjectItem> {
-    return request<ObjectItem>(`/api/v1/objects/${encodeURIComponent(id)}`);
+  getObject(id: string, timeoutMs?: number): Promise<ObjectItem> {
+    return request<ObjectItem>(`/api/v1/objects/${encodeURIComponent(id)}`, { timeoutMs });
   },
 
   createUploadIntent(
     input: UploadIntentRequest,
     csrf: string,
-    options?: { idempotencyKey?: string },
+    options?: { idempotencyKey?: string; timeoutMs?: number },
   ): Promise<UploadIntentResponse> {
     const headers = options?.idempotencyKey
       ? { "Idempotency-Key": options.idempotencyKey }
@@ -1069,21 +1078,27 @@ export const api = {
       body: input,
       csrf,
       headers,
+      timeoutMs: options?.timeoutMs,
     });
   },
 
-  commitObject(id: string, csrf: string): Promise<CommitResponse> {
+  commitObject(id: string, csrf: string, timeoutMs?: number): Promise<CommitResponse> {
     return request<CommitResponse>(`/api/v1/objects/${encodeURIComponent(id)}/commit`, {
       method: "POST",
       csrf,
+      timeoutMs,
     });
   },
 
   /** Cancel a pending upload intent (the only backend-supported cancellation). */
-  abortObject(id: string, csrf: string): Promise<{ id: string; status: string }> {
+  abortObject(
+    id: string,
+    csrf: string,
+    timeoutMs?: number,
+  ): Promise<{ id: string; status: string }> {
     return request<{ id: string; status: string }>(
       `/api/v1/objects/${encodeURIComponent(id)}/abort`,
-      { method: "POST", csrf },
+      { method: "POST", csrf, timeoutMs },
     );
   },
 
@@ -1228,6 +1243,13 @@ export const api = {
     );
   },
 
+  /** Distinct tags visible to the caller, with their object counts. */
+  listObjectTags(): Promise<{ items: { tag: string; count: number }[] }> {
+    return request<{ items: { tag: string; count: number }[] }>(
+      "/api/v1/objects/tags",
+    );
+  },
+
   // --- Packs (human only) ---
   listCollections(): Promise<ListResponse<CollectionItem>> {
     return request<ListResponse<CollectionItem>>("/api/v1/collections");
@@ -1295,8 +1317,10 @@ export const api = {
   },
 
   /** Multipart plan and the parts the storage already holds (resume). */
-  multipartStatus(id: string): Promise<MultipartStatus> {
-    return request<MultipartStatus>(`/api/v1/objects/${encodeURIComponent(id)}/multipart`);
+  multipartStatus(id: string, timeoutMs?: number): Promise<MultipartStatus> {
+    return request<MultipartStatus>(`/api/v1/objects/${encodeURIComponent(id)}/multipart`, {
+      timeoutMs,
+    });
   },
 
   /** Short-lived presigned PUTs for up to 100 parts. */
@@ -1304,10 +1328,11 @@ export const api = {
     id: string,
     partNumbers: number[],
     csrf: string,
+    timeoutMs?: number,
   ): Promise<MultipartPartUrls> {
     return request<MultipartPartUrls>(
       `/api/v1/objects/${encodeURIComponent(id)}/multipart/parts`,
-      { method: "POST", csrf, body: { part_numbers: partNumbers } },
+      { method: "POST", csrf, body: { part_numbers: partNumbers }, timeoutMs },
     );
   },
 
@@ -1695,7 +1720,7 @@ export const api = {
     oid: string,
     input: UploadIntentRequest,
     csrf: string,
-    options?: { idempotencyKey?: string },
+    options?: { idempotencyKey?: string; timeoutMs?: number },
   ): Promise<UploadIntentResponse> {
     return request<UploadIntentResponse>(
       `/api/v1/objects/${encodeURIComponent(oid)}/replace-intents`,
@@ -1706,6 +1731,7 @@ export const api = {
         headers: options?.idempotencyKey
           ? { "idempotency-key": options.idempotencyKey }
           : undefined,
+        timeoutMs: options?.timeoutMs,
       },
     );
   },
@@ -1739,7 +1765,11 @@ export interface PutOptions {
   /** Real byte progress, available because XHR exposes upload progress. */
   onProgress?: (loaded: number, total: number) => void;
   signal?: AbortSignal;
-  /** Idle-transfer deadline; a silent server must not pin a concurrency slot. */
+  /**
+   * Idle deadline, rearmed on every upload progress event (default 120 s).
+   * This is *not* a total transfer deadline: a slow link that keeps sending
+   * bytes must never be cut just because it has been uploading for a while.
+   */
   timeoutMs?: number;
 }
 
@@ -1774,7 +1804,19 @@ export function putToPresignedUrl(
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let settled = false;
+    const idleMs = options.timeoutMs ?? 120_000;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const armIdleTimer = () => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        // Fail before abort(): abort() fires `onabort`, and only the first
+        // terminal event is allowed to settle the promise.
+        fail(new PresignedUploadError("network", xhr.status || 0, "Délai dépassé."));
+        xhr.abort();
+      }, idleMs);
+    };
     const cleanup = () => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
       options.signal?.removeEventListener("abort", onAbort);
     };
     const settle = (fn: () => void) => {
@@ -1798,13 +1840,15 @@ export function putToPresignedUrl(
     }
 
     xhr.open("PUT", url, true);
-    // A presigned PUT that never answers used to hold its concurrency slot
-    // forever (ontimeout was wired but no timeout was ever armed).
-    xhr.timeout = options.timeoutMs ?? 120_000;
+    // XHR's own `timeout` is a *total* deadline and would kill a slow but
+    // progressing part (a 16 MiB part at 600 kbit/s takes ~224 s). Use a
+    // rearmed idle timer instead: only a silent transfer loses its slot.
+    xhr.timeout = 0;
     for (const [name, value] of Object.entries(options.headers ?? {})) {
       xhr.setRequestHeader(name, value);
     }
     xhr.upload.onprogress = (event) => {
+      armIdleTimer();
       const total = event.lengthComputable ? event.total : file.size;
       options.onProgress?.(event.loaded, total);
     };
@@ -1843,6 +1887,7 @@ export function putToPresignedUrl(
       fail(new PresignedUploadError("aborted", 0, "Transfert annulé."));
 
     try {
+      armIdleTimer();
       xhr.send(file);
     } catch (err) {
       fail(

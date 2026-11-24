@@ -123,15 +123,17 @@ def test_intact_objects_are_marked_ok_and_not_rechecked_before_the_interval(stor
     assert scrub_one(main.repo, store, main.settings, now=lambda: later)[0] == "ok"
 
 
-def test_silently_corrupted_bytes_are_reported_not_changed(store):
+def test_silently_corrupted_bytes_are_reported_and_hidden(store):
     c, headers = _admin()
     oid, key = _stored(store, c, headers, b"original contents")
     store.objects[key] = b"original c0ntents"  # bit rot, same size
     assert scrub_one(main.repo, store, main.settings)[0] == "mismatch"
-    # Read-only: the object stays available, its digest untouched.
+    # No byte is rewritten: the digest stays the one verified at commit, but a
+    # confirmed finding hides the object until an operator re-verifies it.
     obj = c.get(f"/api/v1/objects/{oid}").json()
-    assert obj["status"] == "available"
+    assert obj["status"] == "suspect"
     assert obj["checksum_sha256"] == hashlib.sha256(b"original contents").hexdigest()
+    assert c.post(f"/api/v1/objects/{oid}/download-intent", headers=headers).status_code == 409
 
     report = c.get("/api/v1/admin/integrity", headers=headers).json()
     assert [p["id"] for p in report["problems"]] == [oid]
@@ -144,6 +146,7 @@ def test_a_lost_object_is_reported_missing(store):
     del store.objects[key]
     assert scrub_one(main.repo, store, main.settings)[0] == "missing"
     assert _result(oid) == "missing"
+    assert _sql("SELECT status FROM objects WHERE id = ?", (oid,))["status"] == "suspect"
 
 
 def test_a_storage_outage_is_not_a_finding(store):

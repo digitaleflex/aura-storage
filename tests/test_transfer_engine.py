@@ -329,6 +329,38 @@ def test_commit_past_the_global_deadline_hands_over_to_the_verifier(monkeypatch)
     assert c.get(f"/api/v1/objects/{oid}").json()["status"] == "available"
 
 
+def test_commit_uses_one_deadline_for_head_and_hash(monkeypatch):
+    """The hash must share the request-start budget, not get a fresh 300 s."""
+    from api.s3 import stream_sha256 as real_stream
+
+    class FakeTime:
+        def __init__(self):
+            self.ticks = iter([100, 200])
+
+        def monotonic(self):
+            return next(self.ticks, 200)
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+    seen: dict = {}
+
+    def spy(body, max_bytes, chunk_bytes, deadline=None):
+        seen["deadline"] = deadline
+        return real_stream(body, max_bytes, chunk_bytes)  # no in-test deadline check
+
+    monkeypatch.setattr(main, "time", FakeTime())
+    monkeypatch.setattr(main, "stream_sha256", spy)
+    monkeypatch.setattr(main.settings, "commit_deadline_s", 10)
+    data = b"x" * 4096
+    monkeypatch.setattr(main, "s3ops", DummyS3(data))
+    c, headers = _admin()
+    oid = _intent(c, headers, size_bytes=len(data)).json()["id"]
+
+    assert c.post(f"/api/v1/objects/{oid}/commit", headers=headers).status_code == 200
+    assert seen["deadline"] == 110  # 100 at request start, not 200 + 10 after HEAD
+
+
 def test_stream_sha256_checks_the_deadline_between_chunks():
     from api.s3 import CommitDeadlineExceeded, stream_sha256
 

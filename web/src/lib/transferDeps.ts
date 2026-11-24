@@ -2,6 +2,14 @@ import { api, putToPresignedUrl } from "./api";
 import type { TransferDeps } from "./transfer";
 
 /**
+ * Control-plane calls are small and quick: a hung one must free its queue slot
+ * instead of holding it. The commit is the exception — the API deliberately
+ * spends up to 300 s hashing, under a 310 s proxy deadline, so give it margin.
+ */
+const CONTROL_TIMEOUT_MS = 60_000;
+const COMMIT_TIMEOUT_MS = 330_000;
+
+/**
  * Wire the transfer engine to the real API for one authenticated session.
  *
  * The engine stays dependency-injected (see `lib/transfer.ts`): this module is
@@ -27,7 +35,7 @@ export function transferDeps(
             : {}),
         },
         activeCsrf,
-        { idempotencyKey: input.idempotencyKey },
+        { idempotencyKey: input.idempotencyKey, timeoutMs: CONTROL_TIMEOUT_MS },
       ),
     requestReplaceIntent: (targetId, input) =>
       api.createReplaceIntent(
@@ -42,7 +50,7 @@ export function transferDeps(
             : {}),
         },
         activeCsrf,
-        { idempotencyKey: input.idempotencyKey },
+        { idempotencyKey: input.idempotencyKey, timeoutMs: CONTROL_TIMEOUT_MS },
       ),
     upload: (url, selected, opts) =>
       putToPresignedUrl(url, selected, {
@@ -50,12 +58,12 @@ export function transferDeps(
         onProgress: opts.onProgress,
         signal: opts.signal,
       }),
-    commit: (id) => api.commitObject(id, activeCsrf),
-    multipartStatus: (id) => api.multipartStatus(id),
-    objectStatus: (id) => api.getObject(id),
-    partUrls: (id, numbers) => api.multipartPartUrls(id, numbers, activeCsrf),
+    commit: (id) => api.commitObject(id, activeCsrf, COMMIT_TIMEOUT_MS),
+    multipartStatus: (id) => api.multipartStatus(id, CONTROL_TIMEOUT_MS),
+    objectStatus: (id) => api.getObject(id, CONTROL_TIMEOUT_MS),
+    partUrls: (id, numbers) => api.multipartPartUrls(id, numbers, activeCsrf, CONTROL_TIMEOUT_MS),
     abortIntent: async (id) => {
-      await api.abortObject(id, activeCsrf);
+      await api.abortObject(id, activeCsrf, CONTROL_TIMEOUT_MS);
     },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     random: Math.random,

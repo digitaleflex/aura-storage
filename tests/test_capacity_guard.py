@@ -1,6 +1,7 @@
 """Capacity guard: uploads reserve their declared size and are refused (507)
 once the store would pass its high watermark. Off when no capacity is set."""
 import os
+import time
 
 import pytest
 
@@ -86,6 +87,46 @@ def test_a_replayed_intent_is_not_refused_or_counted_twice(capacity):
     assert first.status_code == 200
     again = _intent(c, headers, 100, idem="same-key")
     assert again.status_code == 200 and again.json()["id"] == first.json()["id"]
+
+
+def _owner_baseline() -> int:
+    """Live bytes already reserved by the admin in this shared test catalogue."""
+    admin = main.repo.get_user_by_name("admin")
+    return main.repo.reserved_bytes_for(
+        space_id=main.repo.default_scope()[1],
+        owner_id=admin["id"],
+        min_expires_at=int(time.time()) - main.settings.intent_grace_s,
+    )
+
+
+def _backdate_expiry(oid: str) -> None:
+    expired_at = int(time.time()) - main.settings.intent_grace_s - 10
+    if main.repo.dialect == "sqlite":
+        main.repo.conn.execute(
+            "UPDATE objects SET intent_expires_at = ? WHERE id = ?", (expired_at, oid)
+        )
+        main.repo.conn.commit()
+    else:  # pragma: no cover - offline suite runs on SQLite
+        main.repo._run(
+            "UPDATE objects SET intent_expires_at = %s WHERE id = %s", (expired_at, oid)
+        )
+
+
+def test_expired_intents_stop_counting_toward_the_owner_cap(monkeypatch):
+    """A stale intent awaiting the sweep must not block a fresh upload (429)."""
+    c, headers = _admin()
+    monkeypatch.setattr(main.settings, "max_pending_bytes_per_owner", _owner_baseline() + 80)
+    oid = _intent(c, headers, 80).json()["id"]
+    _backdate_expiry(oid)
+    assert _intent(c, headers, 80).status_code == 200
+
+
+def test_a_live_intent_still_counts_toward_the_owner_cap(monkeypatch):
+    c, headers = _admin()
+    monkeypatch.setattr(main.settings, "max_pending_bytes_per_owner", _owner_baseline() + 80)
+    assert _intent(c, headers, 80).status_code == 200
+    r = _intent(c, headers, 80)
+    assert r.status_code == 429 and r.json()["detail"] == "too many pending bytes"
 
 
 def test_usage_reports_the_fill_level(capacity):

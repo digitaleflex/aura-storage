@@ -867,6 +867,7 @@ class Repository:
         search: Optional[str] = None,
         status: Optional[str] = None, hide_deleted: bool = False,
         content_type: Optional[str] = None, tag: Optional[str] = None,
+        tags: Optional[list[str]] = None, tag_mode: str = "all",
         min_size: Optional[int] = None, max_size: Optional[int] = None,
         created_after: Optional[int] = None, created_before: Optional[int] = None,
         sort: str = "created_at", order: str = "desc",
@@ -878,7 +879,8 @@ class Repository:
             ph="%s", space_id=space_id, owner_id=owner_id, folder_id=folder_id,
             q=q, search=search,
             status=status, hide_deleted=hide_deleted,
-            content_type=content_type, tag=tag, min_size=min_size,
+            content_type=content_type, tag=tag, tags=tags, tag_mode=tag_mode,
+            min_size=min_size,
             max_size=max_size, created_after=created_after,
             created_before=created_before,
         )
@@ -907,7 +909,8 @@ class Repository:
         return int(row["n"])
 
     def reserved_bytes_for(self, *, space_id: str,
-                           owner_id: Optional[str] = None) -> int:
+                           owner_id: Optional[str] = None,
+                           min_expires_at: Optional[int] = None) -> int:
         """PostgreSQL twin of ``SqliteRepository.reserved_bytes_for``."""
         sql = (
             "SELECT COALESCE(SUM(expected_size_bytes), 0) AS n FROM objects "
@@ -919,6 +922,9 @@ class Repository:
             params.append(owner_id)
         else:
             sql += " AND owner_id IS NULL"
+        if min_expires_at is not None:
+            sql += " AND (intent_expires_at IS NULL OR intent_expires_at >= %s)"
+            params.append(min_expires_at)
         row = self._one(sql, tuple(params))
         return int(row["n"])
 
@@ -1036,7 +1042,7 @@ class Repository:
     def integrity_summary(self) -> dict:
         rows = self._all(
             "SELECT COALESCE(scrub_result, 'unchecked') AS result, COUNT(*) AS n, "
-            "MIN(scrubbed_at) AS oldest FROM objects WHERE status = 'available' "
+            "MIN(scrubbed_at) AS oldest FROM objects WHERE status IN ('available', 'suspect') "
             "GROUP BY COALESCE(scrub_result, 'unchecked')"
         )
         return {r["result"]: {"count": int(r["n"]), "oldest": r["oldest"]} for r in rows}
@@ -1044,7 +1050,7 @@ class Repository:
     def list_integrity_problems(self, limit: int = 100):
         return self._all(
             "SELECT id, space_id, display_name, size_bytes, scrub_result, scrubbed_at "
-            "FROM objects WHERE status = 'available' "
+            "FROM objects WHERE status IN ('available', 'suspect') "
             "AND scrub_result IN ('mismatch', 'missing') "
             "ORDER BY scrubbed_at DESC LIMIT %s",
             (limit,),
@@ -1445,6 +1451,21 @@ class Repository:
         for row in rows:
             out.setdefault(row["object_id"], []).append(row["tag"])
         return out
+
+    def list_tag_counts(
+        self, *, space_id: str, owner_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> list:
+        """PostgreSQL twin of Repository.list_tag_counts (same visibility)."""
+        where, params = build_object_where(
+            ph="%s", space_id=space_id, owner_id=owner_id, hide_deleted=True,
+        )
+        sql = (
+            "SELECT t.tag AS tag, COUNT(*) AS n FROM object_tags t "
+            "JOIN objects ON objects.id = t.object_id "
+            f"WHERE {where} GROUP BY t.tag ORDER BY n DESC, t.tag ASC LIMIT %s"
+        )
+        return self._all(sql, tuple(params) + (limit,))
 
     def create_collection(
         self, cid: str, space_id: str, owner_id, slug: str,

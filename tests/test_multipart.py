@@ -288,6 +288,15 @@ def test_abort_frees_the_parts(_multipart):
     assert fake.aborted == [upload_id] and upload_id not in fake.sessions
 
 
+def test_plan_parts_stays_below_the_operational_cap(_multipart, monkeypatch):
+    """Mitigation while the ~10k-part SeaweedFS proof is still open."""
+    monkeypatch.setattr(s3mod, "MIN_PART_BYTES", 5 * 1024 * 1024)
+    monkeypatch.setattr(s3mod, "_MIB", 1024 * 1024)
+    part, count = s3mod.plan_parts(50 * 1024 ** 3, 5 * 1024 * 1024)
+    assert count <= s3mod.MAX_OPERATIONAL_PARTS < s3mod.MAX_PARTS
+    assert part % (1024 * 1024) == 0
+
+
 def test_commit_after_a_crash_between_complete_and_record(_multipart):
     fake = _multipart
     c, headers = _admin()
@@ -327,6 +336,53 @@ def test_reconcile_keeps_a_live_session_and_sweeps_an_expired_one(_multipart):
     reconcile_pending(main.repo, fake, expire_after_s=3600, limit=5000)
     assert _object_status(oid) == "expired"
     assert upload_id in fake.aborted
+
+
+def test_replay_of_an_expired_intent_aborts_its_multipart_session(_multipart):
+    fake = _multipart
+    c, headers = _admin()
+    first = _intent(c, headers, len(DATA), idem="replay-expired")
+    oid = first.json()["id"]
+    upload_id = _upload_id(oid)
+    _send(fake, oid, DATA, [1])
+    # Past the grace window: the replay retires the old intent and its session.
+    _sql("UPDATE objects SET intent_expires_at = ? WHERE id = ?",
+         (int(time.time()) - main.settings.intent_grace_s - 10, oid))
+    replay = _intent(c, headers, len(DATA), idem="replay-expired")
+    assert replay.status_code == 200
+    assert replay.json()["id"] != oid
+    assert upload_id in fake.aborted
+    assert _object_status(oid) == "expired"
+
+
+def test_commit_of_an_expired_intent_aborts_its_multipart_session(_multipart):
+    fake = _multipart
+    c, headers = _admin()
+    oid = _intent(c, headers, len(DATA)).json()["id"]
+    upload_id = _upload_id(oid)
+    _send(fake, oid, DATA, [1])
+    _sql("UPDATE objects SET intent_expires_at = ? WHERE id = ?",
+         (int(time.time()) - main.settings.intent_grace_s - 10, oid))
+    r = c.post(f"/api/v1/objects/{oid}/commit", headers=headers)
+    assert r.status_code == 410, r.text
+    assert upload_id in fake.aborted
+    assert _object_status(oid) == "expired"
+
+
+def test_terminal_sweep_aborts_the_session_of_an_expired_row(_multipart):
+    fake = _multipart
+    c, headers = _admin()
+    oid = _intent(c, headers, len(DATA)).json()["id"]
+    upload_id = _upload_id(oid)
+    _send(fake, oid, DATA, [1])
+    old = int(time.time()) - 8 * 24 * 3600
+    _sql("UPDATE objects SET status = 'expired', terminal_since = ?, updated_at = ? "
+         "WHERE id = ?", (old, old, oid))
+    from api.lifecycle import reconcile_terminal
+    out = reconcile_terminal(main.repo, fake, limit=5000)
+    assert out["cleaned"] >= 1
+    assert upload_id in fake.aborted
+    assert _sql("SELECT id FROM objects WHERE id = ?", (oid,)) is None
 
 
 def test_admin_usage_reports_the_multipart_ceiling(_multipart):

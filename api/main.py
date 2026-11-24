@@ -248,6 +248,23 @@ def _enforce_session_ttl() -> None:
 
 
 @app.on_event("startup")
+def _warn_on_unbounded_multipart() -> None:
+    """Make the unproven multipart + no-capacity-guard combination visible.
+
+    Neither the disk reclaim after abort nor the ~10 000-part completion is a
+    closed proof on the pinned SeaweedFS. With the capacity guard off nothing
+    refuses uploads before the disk fills, so an operator must see this on
+    every boot rather than discover it from a 507-less incident.
+    """
+    if settings.multipart_enabled and settings.storage_capacity_bytes <= 0:
+        log.warning(
+            "AURA_MULTIPART_ENABLED=1 with AURA_STORAGE_CAPACITY_BYTES=0: "
+            "no capacity refusal (507) and unproven abort reclaim — "
+            "set the usable capacity and monitor multipart sessions"
+        )
+
+
+@app.on_event("startup")
 def _start_verifier() -> None:
     # Large objects are hashed outside the commit request (N5).
     if settings.verify_worker == "inline":
@@ -2033,6 +2050,10 @@ def upload_intent(
             # out a URL whose commits are refused for most of its life. Retire
             # the old intent and fall through to mint a fresh one.
             if expires_at and (now_ts + settings.replay_refresh_margin_s) > grace_deadline:
+                # Retire the old intent: abort its multipart session first,
+                # otherwise its parts linger until the session TTL with no
+                # catalogue row left for the sweep to act on.
+                _abort_multipart_session(existing)
                 try:
                     s3ops.delete_object(Bucket=existing["bucket"], Key=existing["object_key"])
                 except Exception:
@@ -2103,7 +2124,9 @@ def upload_intent(
         ) >= settings.max_pending_intents:
             raise HTTPException(status_code=429, detail="too many pending uploads")
         if settings.max_pending_bytes_per_owner > 0:
-            reserved = repo.reserved_bytes_for(space_id=space_id, owner_id=owner_id)
+            reserved = repo.reserved_bytes_for(
+                space_id=space_id, owner_id=owner_id, min_expires_at=live_since,
+            )
             if reserved + body.size_bytes > settings.max_pending_bytes_per_owner:
                 audit_event("upload-intent", principal["id"], "reservation_cap", {
                     "size_bytes": body.size_bytes, "reserved_bytes": reserved,
@@ -2240,7 +2263,9 @@ def create_replace_intent(
         ) >= settings.max_pending_intents:
             raise HTTPException(status_code=429, detail="too many pending uploads")
         if settings.max_pending_bytes_per_owner > 0:
-            reserved = repo.reserved_bytes_for(space_id=space_id, owner_id=owner_id)
+            reserved = repo.reserved_bytes_for(
+                space_id=space_id, owner_id=owner_id, min_expires_at=live_since,
+            )
             if reserved + body.size_bytes > settings.max_pending_bytes_per_owner:
                 raise HTTPException(status_code=429, detail="too many pending bytes")
         _check_capacity(body.size_bytes)
@@ -2710,6 +2735,14 @@ def commit_object(
 
     expires_at = row.get("intent_expires_at")
     if expires_at and int(time.time()) > int(expires_at) + settings.intent_grace_s:
+        # Clean up before closing the intent: an expired row is no longer
+        # selected by reconcile_pending, so any multipart session or partial
+        # bytes left here would be orphaned until the terminal sweep finds it.
+        _abort_multipart_session(row)
+        try:
+            s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            pass
         repo.set_status(
             oid, "expired",
             failure_kind="expired",
@@ -2790,7 +2823,9 @@ def commit_object(
     hash_started = time.perf_counter()
     try:
         body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
-        deadline = time.monotonic() + settings.commit_deadline_s if settings.commit_deadline_s is not None else None
+        # Reuse the single deadline set at request start: resetting it here
+        # silently doubled the budget (HEAD + hash) past the proxy's 310 s,
+        # so the structured 504 never reached the client.
         total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes, deadline=deadline)
     except ObjectTooLarge:
         repo.set_status(
@@ -2967,6 +3002,20 @@ def abort_object(oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE))):
     return {"id": oid, "status": ABORTED, "aborted": True}
 
 
+def _query_tags(value: str | None) -> list[str]:
+    """Normalize a comma-separated tag filter like stored tags (max 10)."""
+    if not value:
+        return []
+    out: list[str] = []
+    for part in value.split(","):
+        tag = part.strip().lower()
+        if tag and tag not in out:
+            out.append(tag)
+        if len(out) == 10:
+            break
+    return out
+
+
 @app.get("/api/v1/objects")
 def list_objects(
     principal: dict = Depends(authorize(OBJECTS_READ)), limit: int = 50, offset: int = 0,
@@ -2980,6 +3029,8 @@ def list_objects(
     created_after: int | None = Query(default=None, ge=0),
     created_before: int | None = Query(default=None, ge=0),
     tag: str | None = Query(default=None, max_length=32),
+    tags: str | None = Query(default=None, max_length=400),
+    tag_mode: Literal["all", "any"] = "all",
     sort: ObjectSort = "created_at",
     order: SortOrder = "desc",
 ):
@@ -3003,6 +3054,7 @@ def list_objects(
         min_size=min_size, max_size=max_size,
         created_after=created_after, created_before=created_before,
         tag=(tag.strip().lower() or None) if tag else None,
+        tags=_query_tags(tags), tag_mode=tag_mode,
         sort=sort, order=order, limit=limit, offset=offset,
     )
     tag_map = repo.list_tags_for_objects([r["id"] for r in rows])
@@ -3011,6 +3063,22 @@ def list_objects(
             _object_public(r, tag_map.get(r["id"])) for r in rows
         ]
     }
+
+
+@app.get("/api/v1/objects/tags")
+def list_object_tags(
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+    limit: int = Query(default=200, ge=1, le=500),
+):
+    """Distinct tags the caller may see, with the count of visible objects.
+
+    Declared before ``/objects/{oid}`` so "tags" is never parsed as an id. Uses
+    the same space/owner and hide-deleted rules as the object list: a tag must
+    not disclose an object the caller cannot list. No folder filter — this is
+    the caller's whole tag vocabulary, not the current folder's.
+    """
+    rows = repo.list_tag_counts(**_object_scope(principal), limit=limit)
+    return {"items": [{"tag": row["tag"], "count": row["n"]} for row in rows]}
 
 
 @app.get("/api/v1/objects/{oid}")

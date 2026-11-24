@@ -49,11 +49,13 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
     """Expire pending objects older than the grace period.
 
     Administrative sweep across every space; the route that calls it requires
-    the ``admin:write`` capability (#36). A catalogue row is marked ``expired``
-    only after its storage bytes were actually removed: a storage failure keeps
-    the intent ``pending`` for a later sweep and is reported in
-    ``storage_failures`` instead of being counted as cleaned (M06). Returns
-    counts for observability.
+    the ``admin:write`` capability (#36). The row is first reserved with a
+    compare-and-swap to ``purging`` (a state commits refuse), then its storage
+    bytes are removed, then it becomes ``expired``. A storage failure puts the
+    row back to ``pending`` for a later sweep and is reported in
+    ``storage_failures`` instead of being counted as cleaned (M06). The CAS
+    guarantees a concurrent commit can never have its bytes deleted by this
+    sweep. Returns counts for observability.
     """
     cutoff = int(time.time()) - expire_after_s
     expired = 0
@@ -65,6 +67,18 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
         cutoff, limit=max(1, limit), multipart_expired_before=multipart_expired_before,
     ):
         row = dict(r) if not isinstance(r, dict) else r
+        version = row.get("version")
+        next_version = int(version) + 1 if version is not None else None
+        # Reserve the transition *before* touching storage. A commit (or an
+        # abort) that wins the race must never have its bytes deleted by a
+        # sweep that selected this row earlier: ``purging`` is not committable,
+        # and the compare-and-swap fails if the row changed since the SELECT.
+        if not repo.set_status(
+            row["id"], PURGING,
+            expected_version=version,
+            allowed_from=("pending",),
+        ):
+            continue
         try:
             if row.get("multipart_upload_id"):
                 # Free the parts of an abandoned multipart upload (#72).
@@ -80,17 +94,25 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
             _delete_thumbnail(s3ops, row)
             _delete_hls(s3ops, row)
         except Exception:
-            # Keep the pending reference so the next sweep retries; never
-            # declare a failed cleanup as expired.
+            # Put the row back so the next sweep retries; never declare a
+            # failed cleanup as expired (M06). If we crash before this revert,
+            # ``resume_purges`` finishes the cleanup and removes the row.
+            repo.set_status(
+                row["id"], "pending",
+                expected_version=next_version,
+                allowed_from=(PURGING,),
+            )
             storage_failures += 1
             continue
         storage_deletes += 1
-        repo.set_status(
+        if repo.set_status(
             row["id"], "expired",
+            expected_version=next_version,
+            allowed_from=(PURGING,),
             failure_kind="expired",
             error_message="upload intent expired before commit",
-        )
-        expired += 1
+        ):
+            expired += 1
     return {
         "expired": expired,
         "storage_deletes_attempted": storage_deletes,
@@ -98,13 +120,16 @@ def reconcile_pending(repo, s3ops, expire_after_s: int = 3600,
     }
 
 
-def reconcile_terminal(repo, s3ops, *, statuses=("failed", "aborted", "deleted"),
+def reconcile_terminal(repo, s3ops, *, statuses=("failed", "aborted", "deleted", "expired"),
                       retention_s: int = 7 * 24 * 3600, limit: int = 500) -> dict:
     """Clean up bytes for terminal rows older than ``retention_s``.
 
     Administrative sweep across every space. A row is removed (row deleted) only
     after its bytes were actually deleted: a storage failure keeps the row for a
-    later sweep and is reported in ``storage_failures``.
+    later sweep and is reported in ``storage_failures``. ``expired`` rows are
+    included so bytes left behind by an expiry whose cleanup failed are retried
+    and the catalogue row is eventually removed. Any multipart session still
+    attached to a terminal row is aborted first.
     """
     now_ts = int(time.time())
     cutoff = now_ts - retention_s
@@ -118,6 +143,19 @@ def reconcile_terminal(repo, s3ops, *, statuses=("failed", "aborted", "deleted")
             if int(ts) > cutoff:
                 continue
             try:
+                # An expired terminal row can still carry a live multipart
+                # session (e.g. one whose abort failed at commit time). Abort
+                # it before deleting the catalogue row, otherwise its parts
+                # would linger until the session TTL with nothing to clean them.
+                if row.get("multipart_upload_id"):
+                    try:
+                        s3ops.abort_multipart_upload(
+                            Bucket=row["bucket"], Key=row["object_key"],
+                            UploadId=row["multipart_upload_id"],
+                        )
+                    except Exception as exc:
+                        if not is_no_such_upload(exc):
+                            raise
                 s3ops.delete_object(Bucket=row["bucket"], Key=row["object_key"])
                 _delete_thumbnail(s3ops, row)
                 _delete_hls(s3ops, row)

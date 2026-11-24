@@ -185,7 +185,12 @@ def stream_sha256(body, max_bytes: int, chunk_bytes: int = 1024 * 1024,
 # image are part of the compatibility gate in docs/MULTIPART-UPLOAD-PLAN.md):
 # every part but the last is at least 5 MiB, and an upload has at most 10 000.
 MIN_PART_BYTES = 5 * 1024 * 1024
+# Hard S3 ceiling. The real ~10 000-part completion path is still unproven on
+# the pinned SeaweedFS (docs/verification-log-2026-11-16-multipart-proofs-4.48),
+# so plan for half that until the proof is closed. The part size is raised
+# automatically: a 50 GiB object gets ~11 MiB parts (~4 600 parts), not ~10 000.
 MAX_PARTS = 10_000
+MAX_OPERATIONAL_PARTS = 5_000
 _MIB = 1024 * 1024
 
 
@@ -198,7 +203,7 @@ def plan_parts(size_bytes: int, preferred_part_bytes: int) -> tuple[int, int]:
     """
     if size_bytes <= 0:
         raise ValueError("multipart needs a positive size")
-    part = max(preferred_part_bytes, MIN_PART_BYTES, -(-size_bytes // MAX_PARTS))
+    part = max(preferred_part_bytes, MIN_PART_BYTES, -(-size_bytes // MAX_OPERATIONAL_PARTS))
     part = -(-part // _MIB) * _MIB
     count = -(-size_bytes // part)
     return part, count

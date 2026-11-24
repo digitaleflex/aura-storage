@@ -995,6 +995,7 @@ class Repository:
         search: Optional[str] = None,
         status: Optional[str] = None, hide_deleted: bool = False,
         content_type: Optional[str] = None, tag: Optional[str] = None,
+        tags: Optional[list[str]] = None, tag_mode: str = "all",
         min_size: Optional[int] = None, max_size: Optional[int] = None,
         created_after: Optional[int] = None, created_before: Optional[int] = None,
         sort: str = "created_at", order: str = "desc",
@@ -1008,7 +1009,8 @@ class Repository:
             space_id=space_id, owner_id=owner_id, folder_id=folder_id, q=q,
             search=search,
             status=status, hide_deleted=hide_deleted,
-            content_type=content_type, tag=tag, min_size=min_size,
+            content_type=content_type, tag=tag, tags=tags, tag_mode=tag_mode,
+            min_size=min_size,
             max_size=max_size, created_after=created_after,
             created_before=created_before,
         )
@@ -1036,8 +1038,13 @@ class Repository:
         return int(self.conn.execute(sql, params).fetchone()["n"])
 
     def reserved_bytes_for(self, *, space_id: str,
-                           owner_id: Optional[str] = None) -> int:
-        """Declared bytes of live uploads reserved by one owner (or services)."""
+                           owner_id: Optional[str] = None,
+                           min_expires_at: Optional[int] = None) -> int:
+        """Declared bytes of live uploads reserved by one owner (or services).
+
+        Expired intents still awaiting the sweep must not block new uploads,
+        just like they are excluded from the pending-intent count.
+        """
         sql = (
             "SELECT COALESCE(SUM(expected_size_bytes), 0) AS n FROM objects "
             "WHERE status = 'pending' AND space_id = ?"
@@ -1048,6 +1055,9 @@ class Repository:
             params.append(owner_id)
         else:
             sql += " AND owner_id IS NULL"
+        if min_expires_at is not None:
+            sql += " AND (intent_expires_at IS NULL OR intent_expires_at >= ?)"
+            params.append(min_expires_at)
         return int(self.conn.execute(sql, params).fetchone()["n"])
 
     def get_pending_by_idempotency(
@@ -1192,7 +1202,7 @@ class Repository:
     def integrity_summary(self) -> dict:
         rows = self.conn.execute(
             "SELECT COALESCE(scrub_result, 'unchecked') AS result, COUNT(*) AS n, "
-            "MIN(scrubbed_at) AS oldest FROM objects WHERE status = 'available' "
+            "MIN(scrubbed_at) AS oldest FROM objects WHERE status IN ('available', 'suspect') "
             "GROUP BY COALESCE(scrub_result, 'unchecked')"
         ).fetchall()
         return {r["result"]: {"count": int(r["n"]), "oldest": r["oldest"]} for r in rows}
@@ -1200,7 +1210,7 @@ class Repository:
     def list_integrity_problems(self, limit: int = 100):
         return self.conn.execute(
             "SELECT id, space_id, display_name, size_bytes, scrub_result, scrubbed_at "
-            "FROM objects WHERE status = 'available' "
+            "FROM objects WHERE status IN ('available', 'suspect') "
             "AND scrub_result IN ('mismatch', 'missing') "
             "ORDER BY scrubbed_at DESC LIMIT ?",
             (limit,),
@@ -1648,6 +1658,26 @@ class Repository:
         for row in rows:
             out.setdefault(row["object_id"], []).append(row["tag"])
         return out
+
+    def list_tag_counts(
+        self, *, space_id: str, owner_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> list:
+        """Distinct tags on objects the caller may list, with their counts.
+
+        The visibility clause comes from the shared object-list grammar, so a
+        tag can never reveal an object outside the caller's space/ownership or
+        a soft-deleted object. No folder filter: this is the whole vocabulary.
+        """
+        where, params = build_object_where(
+            space_id=space_id, owner_id=owner_id, hide_deleted=True,
+        )
+        sql = (
+            "SELECT t.tag AS tag, COUNT(*) AS n FROM object_tags t "
+            "JOIN objects ON objects.id = t.object_id "
+            f"WHERE {where} GROUP BY t.tag ORDER BY n DESC, t.tag ASC LIMIT ?"
+        )
+        return self.conn.execute(sql, params + [limit]).fetchall()
 
     def create_collection(
         self, cid: str, space_id: str, owner_id: Optional[str], slug: str,

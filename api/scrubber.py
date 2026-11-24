@@ -9,9 +9,11 @@ first) and compares the digest with the catalogue:
 - ``mismatch``: bytes differ from the verified digest (restore from backup);
 - ``missing``: the storage no longer has the object.
 
-It is **read-only**: nothing is deleted, rewritten or hidden. Problems are
-audited and listed by ``GET /api/v1/admin/integrity``. A storage outage is not a
-finding: the object is released unchecked and retried on the next run.
+It never deletes or rewrites bytes. A confirmed finding (``mismatch`` or
+``missing``) marks the object ``suspect`` so it stops being downloadable until
+an operator re-verifies it; nothing is deleted. Problems are audited and listed
+by ``GET /api/v1/admin/integrity``. A storage outage is not a finding: the
+object is released unchecked and retried on the next run.
 
 Each run stops after ``AURA_SCRUB_BYTES_PER_RUN`` so the disk is never
 saturated; runs repeat every ``AURA_SCRUB_PERIOD_SECONDS``. A lease on each
@@ -23,6 +25,7 @@ import threading
 import time
 
 from .s3 import ObjectTooLarge
+from .transfer import SUSPECT
 from .verifier import _stream_sha256
 
 # Long enough for one very large object at a slow disk; released on finish.
@@ -33,6 +36,19 @@ def _is_missing(exc: Exception) -> bool:
     response = getattr(exc, "response", None) or {}
     code = str(response.get("Error", {}).get("Code", ""))
     return code in ("404", "NoSuchKey", "NotFound")
+
+
+def _mark_suspect(repo, oid: str) -> None:
+    """Hide bytes the scrubber found corrupt/missing until re-verification.
+
+    A CAS on ``available`` keeps a concurrent delete or restore from being
+    overwritten by a stale scrub result. The finding is still recorded even if
+    the transition cannot be applied.
+    """
+    try:
+        repo.set_status(oid, SUSPECT, allowed_from=("available",))
+    except Exception:
+        pass
 
 
 def scrub_one(repo, s3ops, settings, *, now=time.time, audit=None) -> tuple[str, int] | None:
@@ -53,6 +69,7 @@ def scrub_one(repo, s3ops, settings, *, now=time.time, audit=None) -> tuple[str,
     except Exception as exc:
         if _is_missing(exc):
             repo.record_scrub(oid, "missing", int(now()))
+            _mark_suspect(repo, oid)
             if audit:
                 audit("scrub", "system", "missing", {"object_id": oid})
             return "missing", 0
@@ -63,6 +80,8 @@ def scrub_one(repo, s3ops, settings, *, now=time.time, audit=None) -> tuple[str,
     ok = total == int(row["size_bytes"]) and digest == row["checksum_sha256"]
     result = "ok" if ok else "mismatch"
     repo.record_scrub(oid, result, int(now()))
+    if not ok:
+        _mark_suspect(repo, oid)
     if audit and not ok:
         audit("scrub", "system", "mismatch", {"object_id": oid, "size_bytes": total})
     return result, max(0, total)

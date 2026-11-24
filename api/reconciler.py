@@ -12,7 +12,9 @@ What a sweep does:
   first — a row is only expired once the storage bytes are really gone
   (``api/lifecycle.py::reconcile_pending``);
 - finishes purges interrupted between their two steps (a crash between
-  "delete the bytes" and "delete the row").
+  "delete the bytes" and "delete the row");
+- retries byte cleanup for terminal rows (including ``expired``) whose
+  best-effort cleanup failed at request time, then removes the row.
 
 Safety rules (a sweep deletes user bytes, so it is deliberately conservative):
 
@@ -36,7 +38,12 @@ from __future__ import annotations
 import threading
 import time
 
-from .lifecycle import purge_transfer_history, reconcile_pending, resume_purges
+from .lifecycle import (
+    purge_transfer_history,
+    reconcile_pending,
+    reconcile_terminal,
+    resume_purges,
+)
 
 _state_lock = threading.Lock()
 _last_sweep: dict | None = None
@@ -77,6 +84,15 @@ def sweep(repo, s3ops, settings, *, now=time.time, audit=None) -> dict:
         multipart_expired_before=started_at - settings.intent_grace_s,
     )
     out.update(resume_purges(repo, s3ops, limit=limit, now=now))
+    # Terminal rows (failed/aborted/deleted/expired) can still hold bytes when
+    # their best-effort cleanup failed at request time. Retry it here and drop
+    # the row only once storage confirms the delete. Add the counters: both
+    # sweeps report ``storage_deletes_attempted``/``storage_failures``.
+    for key, value in reconcile_terminal(repo, s3ops, limit=limit).items():
+        if isinstance(value, int):
+            out[key] = out.get(key, 0) + value
+        else:
+            out[key] = value
     out.update(purge_transfer_history(
         repo, retention_days=settings.transfer_history_retention_days,
         limit=limit, now=now,

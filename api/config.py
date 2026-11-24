@@ -174,7 +174,13 @@ class Settings:
     # intent_grace_s): a slow upload in progress must never lose its bytes to
     # a sweep, so the automatic window is wider than the manual route's.
     reconcile_enabled: bool = os.environ.get("AURA_RECONCILE_ENABLED", "1") == "1"
-    reconcile_interval_s: int = _int("AURA_RECONCILE_INTERVAL_S", 300)
+    # Compose historically injected AURA_RECONCILE_INTERVAL_SECONDS while the
+    # code read AURA_RECONCILE_INTERVAL_S: raising the interval in .env had no
+    # effect. Accept both names; the short one wins when both are set.
+    reconcile_interval_s: int = _int(
+        "AURA_RECONCILE_INTERVAL_S",
+        _int("AURA_RECONCILE_INTERVAL_SECONDS", 300),
+    )
     reconcile_limit: int = _int("AURA_RECONCILE_LIMIT", 500)
     reconcile_extra_grace_s: int = _int("AURA_RECONCILE_EXTRA_GRACE_SECONDS", 3600)
 

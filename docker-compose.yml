@@ -310,10 +310,19 @@ services:
       # Automatic reconciliation sweep (#144): stale intents and half-done
       # purges are cleaned without an operator.
       AURA_RECONCILE_ENABLED: ${AURA_RECONCILE_ENABLED:-1}
+      # The API reads AURA_RECONCILE_INTERVAL_S; the longer name is kept as a
+      # legacy fallback (api/config.py) so existing .env files still work.
+      AURA_RECONCILE_INTERVAL_S: ${AURA_RECONCILE_INTERVAL_S:-${AURA_RECONCILE_INTERVAL_SECONDS:-300}}
       AURA_RECONCILE_INTERVAL_SECONDS: ${AURA_RECONCILE_INTERVAL_SECONDS:-300}
       AURA_RECONCILE_LIMIT: ${AURA_RECONCILE_LIMIT:-500}
       AURA_RECONCILE_EXTRA_GRACE_SECONDS: ${AURA_RECONCILE_EXTRA_GRACE_SECONDS:-3600}
       AURA_MAX_PENDING_INTENTS: ${AURA_MAX_PENDING_INTENTS:-100}
+      # Daily upload quota (D3) and the optional AV hook are read by the API
+      # but were missing here, so setting them in .env could never take effect.
+      # Both default to off: 0 / empty.
+      AURA_QUOTA_BYTES_PER_DAY: ${AURA_QUOTA_BYTES_PER_DAY:-0}
+      AURA_QUOTA_FILES_PER_DAY: ${AURA_QUOTA_FILES_PER_DAY:-0}
+      AURA_AV_SCAN_CMD: "${AURA_AV_SCAN_CMD:-}"
       AURA_ALLOW_EMPTY_OBJECTS: ${AURA_ALLOW_EMPTY_OBJECTS:-0}
       AURA_ALLOWED_CONTENT_TYPES: "${AURA_ALLOWED_CONTENT_TYPES:-}"
       AURA_IDEMPOTENCY_KEY_MAX: ${AURA_IDEMPOTENCY_KEY_MAX:-200}

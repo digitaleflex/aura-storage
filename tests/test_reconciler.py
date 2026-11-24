@@ -79,6 +79,16 @@ def _status(oid: str) -> str:
     return dict(main.repo.get_object(oid, space_id=main.repo.default_scope()[1]))["status"]
 
 
+def _sql(sql: str, params: tuple = ()):
+    """Test-only statement, portable across the SQLite and PostgreSQL suites."""
+    if main.repo.dialect == "sqlite":
+        row = main.repo.conn.execute(sql, params).fetchone()
+        main.repo.conn.commit()
+        return row
+    cur = main.repo.conn.execute(sql.replace("?", "%s"), params)
+    return cur.fetchone() if cur.description else None
+
+
 def _admin():
     c = TestClient(main.app)
     r = c.post("/api/v1/login", json={
@@ -188,6 +198,54 @@ def test_last_sweep_is_published_after_a_run():
     state = reconciler.last_sweep()
     assert state is not None
     assert "expired" in state and "at" in state
+
+
+def test_sweep_also_cleans_terminal_rows_left_by_failed_requests():
+    """Expired rows whose best-effort delete failed must be retried by the sweep."""
+    age = main.settings.intent_ttl + main.settings.intent_grace_s + 7200
+    oid = _pending("leftover.bin", age_s=age)
+    old = int(time.time()) - 8 * 24 * 3600
+    _sql("UPDATE objects SET status = 'expired', terminal_since = ?, updated_at = ? "
+         "WHERE id = ?", (old, old, oid))
+    s3 = FakeS3()
+
+    out = reconciler.sweep(main.repo, s3, main.settings)
+
+    assert out["cleaned"] >= 1, out
+    assert ("aura", "pending/leftover.bin") in s3.deleted
+    assert _sql("SELECT id FROM objects WHERE id = ?", (oid,)) is None
+
+
+def test_sweep_cas_never_deletes_bytes_of_a_concurrently_committed_object():
+    """A commit winning the race between SELECT and CAS must keep its bytes."""
+    age = main.settings.intent_ttl + main.settings.intent_grace_s + 7200
+    oid = _pending("raced.bin", age_s=age)
+    s3 = FakeS3()
+    real_set_status = main.repo.set_status
+
+    class RacingRepo:
+        """Simulates a concurrent commit publishing the row just before the CAS."""
+
+        def __init__(self):
+            self.raced = False
+
+        def set_status(self, object_id, status, **kwargs):
+            if status == "purging" and not self.raced:
+                self.raced = True
+                real_set_status(object_id, "available")
+                return 0  # the sweep's reservation loses the race
+            return real_set_status(object_id, status, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(main.repo, name)
+
+    racing = RacingRepo()
+
+    reconciler.sweep(racing, s3, main.settings)
+
+    assert racing.raced, "the sweep never attempted the reservation"
+    assert ("aura", "pending/raced.bin") not in s3.deleted
+    assert _status(oid) == "available"
 
 
 # ---------------------------------------------------------------------------

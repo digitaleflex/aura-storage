@@ -102,6 +102,8 @@ export interface TransferConfig {
   partConcurrency: number;
   /** Attempts per part, including the first; a failed part only resends itself. */
   partMaxAttempts: number;
+  /** Upper bound on polls of a server-side `verifying` object (never infinite). */
+  maxVerifyPolls: number;
 }
 
 export const DEFAULT_TRANSFER_CONFIG: TransferConfig = {
@@ -111,6 +113,9 @@ export const DEFAULT_TRANSFER_CONFIG: TransferConfig = {
   maxIntentRefreshes: 2,
   partConcurrency: 4,
   partMaxAttempts: 6,
+  // ~10 minutes at the 5 s poll ceiling: enough for a large object's integrity
+  // check, short enough that a stuck object cannot pin a queue slot forever.
+  maxVerifyPolls: 120,
 };
 
 /** Part URLs requested per call (the API accepts up to 100). */
@@ -361,13 +366,15 @@ export async function runTransfer(
       Math.max(0, Math.min(partBytes, file.size - (n - 1) * partBytes));
 
     // Control-plane calls (status, part URLs, commit) get the same bounded
-    // retry as the single-PUT intent request.
+    // retry as the single-PUT intent request (maxAttempts, not the larger
+    // partMaxAttempts: resending a small control call cannot mean resending a
+    // whole part, so it must not get six tries).
     const withRetry = async <T>(call: () => Promise<T>): Promise<T> => {
       for (let tries = 0; ; tries += 1) {
         try {
           return await call();
         } catch (err) {
-          if (aborted() || classifyError(err) !== "retryable" || tries >= config.partMaxAttempts - 1) {
+          if (aborted() || classifyError(err) !== "retryable" || tries >= config.maxAttempts - 1) {
             throw err;
           }
           attempts += 1;
@@ -395,6 +402,7 @@ export async function runTransfer(
         heldParts: held.length,
         missingParts: queue.length,
         resumed: state.intentReplay === true || held.length > 0,
+        error: null,
       });
 
       let doneBytes = held.reduce((sum, n) => sum + lengthOf(n), 0);
@@ -406,6 +414,7 @@ export async function runTransfer(
           phase: "uploading",
           transferredBytes: moving,
           progress: file.size > 0 ? Math.min(1, moving / file.size) : 1,
+          error: null,
         });
       };
       report();
@@ -507,7 +516,7 @@ export async function runTransfer(
     const commitTiming = committed.commit_timing ?? null;
     let current = committed;
     if (current.status === "verifying") options.onVerifying?.();
-    for (let polls = 0; current.status === "verifying"; polls += 1) {
+    for (let polls = 0; current.status === "verifying" && polls < config.maxVerifyPolls; polls += 1) {
       if (aborted()) return cancel();
       if (!deps.objectStatus) break;
       emit({ phase: "validating", error: null, verifyMode: "background" });
@@ -526,7 +535,7 @@ export async function runTransfer(
         phase: "failed",
         error:
           current.status === "verifying"
-            ? "Vérification d'intégrité en cours côté serveur."
+            ? `Vérification d'intégrité toujours en cours après ${config.maxVerifyPolls} contrôles ; vérifiez le serveur.`
             : "La vérification d'intégrité a échoué.",
         // A server-side verdict does not change by retrying the same bytes.
         failureKind: "fatal",
@@ -584,6 +593,7 @@ export async function runTransfer(
               phase: "uploading",
               transferredBytes: loaded,
               progress: total > 0 ? Math.min(1, loaded / total) : 0,
+              error: null,
             }),
           signal: options.signal,
         });
