@@ -827,6 +827,13 @@ def test_fallback_cover_shows_the_title_and_author():
     assert 'class="cover-author">Alice Auteur</span>' in cover
 
 
+def test_track_only_requests_subtitles_when_one_is_linked():
+    item = {"id": "book-id", "title": "Livre", "url": "/m/livre"}
+    assert 'data-subtitle=""' in main.public_ui._track_html(item)
+    item["subtitle_url"] = "/m/livre/subtitles.vtt"
+    assert 'data-subtitle="/m/livre/subtitles.vtt"' in main.public_ui._track_html(item)
+
+
 # --------------------------------------------------------------------------
 # Installable app and offline listening
 # --------------------------------------------------------------------------

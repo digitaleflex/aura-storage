@@ -2100,6 +2100,10 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             "published_slug": row.get("public_slug"),
             "cover_url": f"/covers/{row['id']}.jpg" if row.get("cover_key") else None,
             "url": f"/m/{row['public_slug']}" if published else None,
+            "subtitle_url": (
+                f"/m/{row['public_slug']}/subtitles.vtt"
+                if published and row.get("subtitle_object_id") else None
+            ),
         })
     return items
 

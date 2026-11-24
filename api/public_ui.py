@@ -380,9 +380,9 @@ def _track_html(item: dict) -> str:
     return "".join([
         '<li><button type="button" class="track-button"',
         f' data-url="{ESC(item.get("url") or "")}"',
-        # Public VTT is served under /m/<slug>/subtitles.vtt when the object
-        # has one; the player attaches it as a real <track> (issue #297).
-        f' data-subtitle="{ESC((str(item.get("url") or "") + "/subtitles.vtt") if str(item.get("url") or "").startswith("/m/") else "")}"',
+        # Only advertise WebVTT when the catalogue links an actual subtitle
+        # object; otherwise every audio track would request a missing .vtt file.
+        f' data-subtitle="{ESC(item.get("subtitle_url") or "")}"',
         f' data-object-id="{ESC(item.get("id") or "")}"',
         f' data-title="{ESC(label)}"',
         f' data-author="{ESC(author)}"',
