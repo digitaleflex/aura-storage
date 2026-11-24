@@ -59,7 +59,26 @@ for d in master volume filer; do
   [ -d "${AURA_DATA_DIR}/${d}" ] && SEAWEED_DIRS+=("$d")
 done
 if [ "${#SEAWEED_DIRS[@]}" -gt 0 ]; then
-  tar -czf "${BACKUP_DIR}/seaweedfs-data.tar.gz" -C "${AURA_DATA_DIR}" "${SEAWEED_DIRS[@]}"
+  # SeaweedFS keeps appending to .dat files, so GNU tar can exit 1 with
+  # "file changed as we read it" even though the archive is usable. Treat only
+  # that exact warning as acceptable; any other message is a real failure.
+  set +e
+  tar_output=$(tar --warning=no-file-changed -czf \
+    "${BACKUP_DIR}/seaweedfs-data.tar.gz" -C "${AURA_DATA_DIR}" \
+    "${SEAWEED_DIRS[@]}" 2>&1)
+  tar_rc=$?
+  set -e
+  if [ "${tar_rc}" -ne 0 ]; then
+    if [ "${tar_rc}" -eq 1 ] \
+       && printf '%s\n' "${tar_output}" | grep -q 'file changed as we read it' \
+       && ! printf '%s\n' "${tar_output}" | grep -qiE 'error|cannot|denied|no space'; then
+      echo "[aura-backup] ATTENTION : un fichier de volume a changé pendant la lecture ; archive conservée, à vérifier avec aura-backup-verify.sh."
+    else
+      printf '%s\n' "${tar_output}" >&2
+      echo "[aura-backup] ERREUR : échec de l'archive SeaweedFS (code ${tar_rc})" >&2
+      exit 1
+    fi
+  fi
 else
   echo "[aura-backup] ATTENTION : répertoires SeaweedFS introuvables, ignorés." >&2
   exit 1
