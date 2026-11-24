@@ -8,7 +8,10 @@ Environment-specific values belong in the local `.env`. Keep service topology an
 
 - `AURA_INSTANCE_ID`: local container name prefix, e.g. `aura-001`.
 - `TZ`: container timezone.
-- `TRAEFIK_IMAGE`, `SEAWEEDFS_IMAGE`: reviewed image references.
+- `TRAEFIK_IMAGE`, `SEAWEEDFS_IMAGE`: reviewed image references. The committed
+  `docker-compose.override.yml` currently pins Traefik `v3.7.20` for plain
+  `docker compose` deployments (the HTTP/3 and QUIC fixes reviewed in 2026-11),
+  even if an older `.env` still contains `v3.7.14`.
 - `S3_DOMAIN`: public hostname routed to the S3 gateway.
 - `ACME_EMAIL`: certificate notifications.
 - `AURA_DATA_DIR`: persistent data root. Prefer an absolute path on the intended filesystem.
