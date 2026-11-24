@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, PresignedUploadError } from "./api";
 import type { CommitResponse, UploadIntentResponse } from "./api";
-import { runTransfer } from "./transfer";
+import { runTransfer, startUploadQueue } from "./transfer";
 import type { TransferDeps, TransferState } from "./transfer";
 
 const FILE = { name: "gros.bin", size: 1000, type: "application/octet-stream" } as unknown as File;
@@ -112,5 +112,90 @@ describe("runTransfer — retry feedback", () => {
 
     expect(multipartStatus).toHaveBeenCalledTimes(2);
     expect(result.state.phase).toBe("failed");
+  });
+});
+
+describe("startUploadQueue — automatic batch retry", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function file(name: string): File {
+    return { name, size: 10, type: "application/octet-stream" } as File;
+  }
+
+  function options(onAutoRetry: (count: number) => void) {
+    return {
+      folderId: null,
+      // One transport failure is terminal at transfer level, so the replay has
+      // to come from the queue, not from runTransfer's own bounded attempts.
+      config: { maxAttempts: 1 },
+      startStaggerMs: 0,
+      adaptiveConcurrency: false,
+      autoRetryFailures: true,
+      autoRetryDelayMs: 50,
+      maxAutoRetries: 1,
+      onAutoRetry,
+    };
+  }
+
+  it("replays all retryable failures together without a click", async () => {
+    vi.useFakeTimers();
+    const attempts = new Map<string, number>();
+    const deps = makeDeps({
+      upload: async (_url, blob) => {
+        const name = (blob as File).name;
+        const count = (attempts.get(name) ?? 0) + 1;
+        attempts.set(name, count);
+        if (count === 1) throw new PresignedUploadError("network", 0, "Réseau interrompu.");
+      },
+    });
+    const onAutoRetry = vi.fn();
+    const queue = startUploadQueue([file("a.bin"), file("b.bin")], deps, options(onAutoRetry));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onAutoRetry).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(onAutoRetry).toHaveBeenCalledTimes(1);
+    expect(onAutoRetry).toHaveBeenCalledWith(2);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const final = await queue.done;
+    expect(final.items.map((item) => item.state.phase)).toEqual(["available", "available"]);
+  });
+
+  it("stops at maxAutoRetries instead of looping forever", async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps({
+      upload: async () => {
+        throw new PresignedUploadError("rejected", 503, "Indisponible.");
+      },
+    });
+    const onAutoRetry = vi.fn();
+    const queue = startUploadQueue([file("a.bin")], deps, options(onAutoRetry));
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onAutoRetry).toHaveBeenCalledTimes(1);
+    const final = await queue.done;
+    expect(final.items[0]?.state.phase).toBe("failed");
+  });
+
+  it("never replays a fatal rejection", async () => {
+    vi.useFakeTimers();
+    const upload = vi.fn(async () => {
+      throw new ApiError(507, "Stockage plein.");
+    });
+    const onAutoRetry = vi.fn();
+    const queue = startUploadQueue([file("a.bin")], makeDeps({ upload }), options(onAutoRetry));
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onAutoRetry).not.toHaveBeenCalled();
+    const final = await queue.done;
+    expect(final.items[0]?.state.phase).toBe("failed");
+    expect(upload).toHaveBeenCalledTimes(1);
   });
 });
