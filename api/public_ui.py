@@ -196,6 +196,20 @@ def _position_text(seconds) -> str:
     return f"{m}:{s:02d}"
 
 
+def _heart_button(item: dict, label: bool = False) -> str:
+    """Favourite toggle (needs favorites.js and the CSRF token of #player-bar / body)."""
+    on = bool(item.get("favorite"))
+    title = str(item.get("title") or item.get("display_name") or "Livre")
+    text = ("Dans mes favoris" if on else "Ajouter aux favoris") if label else ""
+    return (
+        f'<button type="button" class="fav-button{" fav-labeled" if label else ""}" '
+        f'data-favorite="{ESC(item.get("id") or "")}" aria-pressed="{"true" if on else "false"}" '
+        f'aria-label="Favori : {ESC(title)}" title="Favori">'
+        f'<span aria-hidden="true" class="fav-icon">{"♥" if on else "♡"}</span>'
+        f'{f"<span class=fav-text>{ESC(text)}</span>" if label else ""}</button>'
+    )
+
+
 def _track_html(item: dict) -> str:
     label = str(item.get("title") or item.get("display_name") or "Livre")
     author = str(item.get("author") or "")
@@ -225,7 +239,9 @@ def _track_html(item: dict) -> str:
         f'<span class="track-progress"><i style="width:{pct:.1f}%"></i></span>',
         '</span>',
         f'<span class="track-duration">{ESC(_duration_text(duration))}</span>',
-        '</button></li>',
+        '</button>',
+        _heart_button(item),
+        '</li>',
     ])
 
 
@@ -278,6 +294,7 @@ def catalog_page(
         if len(newest) >= 8:
             break
     discover = [item for item in all_items[::7] if item.get("id") not in seen][:8]
+    favorites = [item for item in all_items if item.get("favorite")]
 
     id_to_index = {str(item.get("id")): i for i, item in enumerate(all_items)}
     featured = resume[0] if resume else (all_items[0] if all_items else None)
@@ -380,6 +397,8 @@ def catalog_page(
     discovery_links = []
     if resume:
         discovery_links.append(("#resume" if resume_shelf else "#resume-card", "Reprendre l'écoute"))
+    if favorites:
+        discovery_links.append(("#favoris", "Mes favoris"))
     if newest:
         discovery_links.append(("#nouveautes", "Nouveautés"))
     if discover:
@@ -470,6 +489,7 @@ def catalog_page(
         parts.append('</ul></section>')
 
     shelf("resume", "Reprendre l'écoute", resume_shelf, "Vos autres lectures en cours, à la dernière position.")
+    shelf("favoris", "Mes favoris", favorites, "Les livres que vous avez marqués d'un cœur.")
     shelf("nouveautes", "Nouveautés", newest, "Les titres récemment ajoutés à votre bibliothèque.")
     shelf("decouvrir", "À découvrir", discover, "Une sélection pour varier vos prochaines écoutes.")
     for col in collections:
@@ -549,6 +569,7 @@ def catalog_page(
 
         '<script src="' + asset_url("player.js") + '"></script>',
         '<script src="' + asset_url("shelf.js") + '"></script>',
+        '<script src="' + asset_url("favorites.js") + '"></script>',
         '</main></body></html>',
     ])
     return "".join(parts)

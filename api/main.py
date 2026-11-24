@@ -1848,9 +1848,11 @@ def _public_collections(principal: dict) -> list:
     collections = _public_catalog()
     object_ids = [item["id"] for col in collections for item in col["items"]]
     progress = repo.get_progress_map(principal["id"], object_ids)
+    favorites = repo.get_favorite_ids(principal["id"], object_ids)
     for col in collections:
         for item in col["items"]:
             item["progress_seconds"] = progress.get(item["id"], 0)
+            item["favorite"] = item["id"] in favorites
     return collections
 
 
@@ -1900,6 +1902,28 @@ def public_progress(
         principal["id"], oid, body.position_seconds, int(time.time())
     )
     return {"object_id": oid, "position_seconds": body.position_seconds}
+
+
+def _set_public_favorite(oid: str, request: Request, principal: dict, favorite: bool) -> dict:
+    _public_rate_check("progress", request)
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object_unscoped(oid)
+    row = _as_dict(row) if row is not None else None
+    if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
+        raise HTTPException(status_code=404, detail="object not found")
+    repo.set_favorite(principal["id"], oid, favorite, int(time.time()))
+    return {"object_id": oid, "favorite": favorite}
+
+
+@app.put("/api/public/favorites/{oid}")
+def public_favorite_add(oid: str, request: Request, principal: dict = Depends(require_public)):
+    """Put a published book in the visitor's favourites (CSRF-protected)."""
+    return _set_public_favorite(oid, request, principal, True)
+
+
+@app.delete("/api/public/favorites/{oid}")
+def public_favorite_remove(oid: str, request: Request, principal: dict = Depends(require_public)):
+    return _set_public_favorite(oid, request, principal, False)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1999,6 +2023,8 @@ def public_book_page(oid: str, request: Request):
         i for i in col["items"] if i["author"] and i["author"] == item["author"] and i["id"] != oid
     ][:6]
     row = _as_dict(repo.get_object_unscoped(oid) or {})
+    if principal is not None:
+        item["favorite"] = oid in repo.get_favorite_ids(principal["id"], [oid])
     return HTMLResponse(
         public_book.book_page(
             item, col["title"], related, principal, base_url=_public_base_url(),

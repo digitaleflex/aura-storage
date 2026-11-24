@@ -698,3 +698,69 @@ def test_sitemap_and_robots_describe_only_the_browsable_pages(monkeypatch):
     assert "Allow: /livre/" in robots and "Disallow: /" in robots
     assert "Sitemap: https://portail.example.org/sitemap.xml" in robots
     assert web.get("/api/public/library").status_code in (401, 403)  # still private
+
+
+# --------------------------------------------------------------------------
+# Favourites and dark mode
+# --------------------------------------------------------------------------
+def test_favorites_are_private_idempotent_csrf_protected_and_shown_in_the_catalogue():
+    _, _, oid = _book()
+    reader = _sign_in(TestClient(main.app))
+    csrf = reader.get("/api/public/me").json()["csrf_token"]
+    hdr = {"X-CSRF-Token": csrf}
+    assert reader.put(f"/api/public/favorites/{oid}").status_code == 403  # no CSRF
+    for _ in range(2):  # twice: idempotent
+        r = reader.put(f"/api/public/favorites/{oid}", headers=hdr)
+        assert r.status_code == 200 and r.json() == {"object_id": oid, "favorite": True}
+    cols = reader.get("/api/public/library").json()["collections"]
+    mine = next(i for col in cols for i in col["items"] if i["id"] == oid)
+    assert mine["favorite"] is True
+    page = reader.get("/").text
+    assert 'id="favoris"' in page and "Mes favoris" in page
+    assert f'data-favorite="{oid}" aria-pressed="true"' in page
+    _assert_strict_markup(page)
+    assert f'data-favorite="{oid}" aria-pressed="true"' in reader.get(f"/livre/{oid}").text
+
+    globals()["SUBJECT"] = "another-favorites-subject"
+    try:
+        other = _sign_in(TestClient(main.app))
+        assert f'data-favorite="{oid}" aria-pressed="false"' in other.get("/").text
+        assert 'id="favoris"' not in other.get("/").text
+    finally:
+        globals()["SUBJECT"] = "google-subject-123456"
+
+    r = reader.delete(f"/api/public/favorites/{oid}", headers=hdr)
+    assert r.status_code == 200 and r.json()["favorite"] is False
+    assert 'id="favoris"' not in reader.get("/").text
+
+
+def test_favorites_refuse_unpublished_unknown_and_anonymous():
+    _, media_slug, oid = _book()
+    reader = _sign_in(TestClient(main.app))
+    hdr = {"X-CSRF-Token": reader.get("/api/public/me").json()["csrf_token"]}
+    assert reader.put(f"/api/public/favorites/{uuid.uuid4()}", headers=hdr).status_code == 404
+    assert reader.put("/api/public/favorites/pas-un-uuid", headers=hdr).status_code in (400, 404, 422)
+    assert TestClient(main.app).put(f"/api/public/favorites/{oid}").status_code in (401, 403)
+    c, h = _admin()
+    assert c.put(f"/api/v1/objects/{oid}/publication",
+                 json={"slug": media_slug, "published": False}, headers=h).status_code == 200
+    assert reader.put(f"/api/public/favorites/{oid}", headers=hdr).status_code == 404
+
+
+def test_deleting_the_account_removes_the_favorites():
+    _, _, oid = _book()
+    reader = _sign_in(TestClient(main.app))
+    hdr = {"X-CSRF-Token": reader.get("/api/public/me").json()["csrf_token"]}
+    uid = reader.get("/api/public/me").json()["id"]
+    reader.put(f"/api/public/favorites/{oid}", headers=hdr)
+    assert main.repo.get_favorite_ids(uid, [oid]) == {oid}
+    assert reader.delete("/api/public/me", headers=hdr).status_code == 200
+    assert main.repo.get_favorite_ids(uid, [oid]) == set()
+
+
+def test_stylesheet_follows_the_system_dark_setting():
+    css = main.public_ui.ASSETS["portal.css"][0].decode()
+    assert "color-scheme:light dark" in css
+    assert "@media (prefers-color-scheme: dark)" in css
+    dark = css[css.index("@media (prefers-color-scheme: dark)"):]
+    assert "--bg:#10171e" in dark and "--ink:#EDE6D8" in dark
