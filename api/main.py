@@ -4263,6 +4263,15 @@ def public_media(slug: str, request: Request):
     _public_rate_check("media", request)
     if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
         raise HTTPException(status_code=404, detail="not found")
+    # Full listening is a signed-in feature. Check before the lookup so an
+    # anonymous caller cannot use this route to probe which slugs exist.
+    # Trusted course embeds can be allowlisted explicitly with
+    # AURA_PUBLIC_MEDIA_OPEN_SLUGS (they stay permanently public on purpose).
+    if settings.public_media_require_auth and slug not in settings.public_media_open_slugs:
+        try:
+            authenticate_public(request)
+        except HTTPException:
+            raise HTTPException(status_code=401, detail="authentication required")
     # D-08: a restricted slug is not an access-control bypass. Answer 404 with
     # no presign, no view event and no audit trail of a "successful" access.
     if slug in settings.public_media_restricted_slugs:

@@ -456,6 +456,7 @@ def test_cover_redirect_may_be_cached_briefly(monkeypatch):
 
 def test_public_endpoints_are_rate_limited_per_client(monkeypatch):
     monkeypatch.setitem(main._PUBLIC_RATE_LIMITS, "media", 3)
+    monkeypatch.setattr(main.settings, "public_media_require_auth", False)
     monkeypatch.setitem(main._PUBLIC_RATE_LIMITS, "cover", 2)
     codes = [TestClient(main.app).get("/m/inconnu-slug").status_code for _ in range(5)]
     assert codes[:3] == [404, 404, 404]
@@ -590,6 +591,17 @@ def test_anonymous_landing_lists_books_and_never_exposes_the_media_slug(monkeypa
     assert none.headers["x-robots-tag"] == "noindex, nofollow"
 
 
+def test_full_media_is_not_downloadable_without_a_session(monkeypatch):
+    _, media_slug, _ = _book()
+    anon = TestClient(main.app)
+    assert anon.get(f"/m/{media_slug}").status_code == 401
+    reader = _sign_in(TestClient(main.app))
+    assert reader.get(f"/m/{media_slug}", follow_redirects=False).status_code == 302
+    # An explicitly allowlisted course embed stays publicly resolvable.
+    monkeypatch.setattr(main.settings, "public_media_open_slugs", (media_slug,))
+    assert anon.get(f"/m/{media_slug}", follow_redirects=False).status_code == 302
+
+
 def test_landing_falls_back_to_sign_in_page_when_browsing_is_disabled(monkeypatch):
     monkeypatch.setattr(main.settings, "public_browse", False)
     _book()
@@ -619,6 +631,7 @@ def test_book_page_has_share_metadata_chapters_and_the_right_call_to_action(monk
     assert '"@type": "Audiobook"' in t and "Ouverture" in t and "La rencontre" in t
     assert "1 h 02 min" in t and "Extrait gratuit" in t
     assert f'src="/extrait/{oid}"' in t
+    assert 'controlsList="nodownload"' in t and "Extrait gratuit · 1 min, sans compte" in t
     assert "Continuer avec Google pour écouter en entier" in t
     assert media_slug not in t and "/m/" not in t
     assert "noindex" not in page.headers.get("x-robots-tag", "")
@@ -654,8 +667,8 @@ def test_free_preview_streams_only_the_first_part_of_an_mp3(monkeypatch):
     r = TestClient(main.app).get(f"/extrait/{oid}")
     assert r.status_code == 200
     assert r.headers["content-type"] == "audio/mpeg"
-    # 120 s of 600 s = a fifth of the file (+ a 4 KiB margin), never the whole file.
-    assert len(r.content) == 60000 // 5 + 4096 == int(r.headers["content-length"])
+    # 60 s of 600 s = a tenth of the file (+ a 4 KiB margin), never the whole file.
+    assert len(r.content) == 60000 // 10 + 4096 == int(r.headers["content-length"])
     assert asked["Range"] == f"bytes=0-{len(r.content) - 1}"
     assert r.headers["accept-ranges"] == "none"
 

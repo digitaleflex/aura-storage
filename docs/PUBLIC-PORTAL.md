@@ -13,7 +13,7 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 |---|---|
 | `GET /` | **anonyme** : vitrine du catalogue publié (recherche, filtre par auteur, bouton Google) ; **connecté** : catalogue avec lecteur `<audio>`. Avec `AURA_PUBLIC_BROWSE=0`, les anonymes voient seulement la page de connexion |
 | `GET /livre/{id}` | page d'un livre, lisible sans compte : couverture, durée, chapitres, extrait gratuit, partage (WhatsApp, copier le lien), balises Open Graph/Twitter et JSON-LD `Audiobook` |
-| `GET /extrait/{id}` | extrait gratuit : seuls les premières minutes d'un **MP3** publié, découpés côté serveur (`AURA_PUBLIC_PREVIEW_SECONDS`, 120 par défaut, 0 = désactivé) |
+| `GET /extrait/{id}` | extrait gratuit : **1 minute** d'un **MP3** publié, découpée côté serveur (`AURA_PUBLIC_PREVIEW_SECONDS`, 60 par défaut, 0 = désactivé), sans compte et sans téléchargement (`controlsList="nodownload"`, `Accept-Ranges: none`) |
 | `GET /sitemap.xml`, `GET /robots.txt` | référencement : accueil et pages livre uniquement |
 | `GET /api/public/auth/google` | démarre le flux Google (state + PKCE) |
 | `GET /api/public/auth/callback` | vérifie Google, crée la session, redirige vers `/` |
@@ -22,16 +22,21 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 | `GET /api/public/library` | catalogue publié (JSON), avec position d'écoute par visiteur |
 | `PUT/DELETE /api/public/favorites/{id}` | ajoute/retire un livre publié des favoris du visiteur (CSRF, idempotent ; table `listen_favorites`, migration `0022`) |
 | `POST /api/public/progress` | enregistre la position de lecture (CSRF, session publique) |
-| `GET /m/{slug}` | redirection média publique déjà existante, routée ici aussi pour le lecteur |
+| `GET /m/{slug}` | redirection média **du livre entier** : session publique requise par défaut (`AURA_PUBLIC_MEDIA_REQUIRE_AUTH=1`) ; slugs d'intégration de confiance via `AURA_PUBLIC_MEDIA_OPEN_SLUGS` |
 | `GET /portal-assets/{nom}` | feuille de style et scripts du portail (empreinte dans l'URL, cache immuable) |
 | `GET /profil` | page de profil du visiteur (nom affiché, suppression du compte) |
 
 **Navigation sans compte.** Les pages anonymes n'affichent jamais le lien `/m/{slug}` : les
-livres s'ouvrent par leur identifiant (`/livre/{id}`) et l'extrait est coupé côté serveur.
-Attention : `/m/{slug}` reste une URL publique permanente (c'est son rôle, pour l'intégration
-dans des sites de cours) ; toute personne qui connaît un slug peut donc télécharger le
-fichier complet. Si l'écoute complète doit vraiment être réservée aux comptes, il faudra
-des slugs non devinables ou une authentification sur `/m/`.
+livres s'ouvrent par leur identifiant (`/livre/{id}`) et l'extrait d'une minute est coupé
+côté serveur. Le bouton « Continuer avec Google » concerne **la suite du livre** : l'extrait
+lui-même ne demande aucun compte. La session publique dure 7 jours (`AURA_PUBLIC_SESSION_TTL`) ;
+une reconnexion après ce délai — ou si le navigateur refuse les cookies — est normale.
+
+Depuis `AURA_PUBLIC_MEDIA_REQUIRE_AUTH=1`, `/m/{slug}` renvoie **401** sans session publique :
+un visiteur non inscrit ne peut ni écouter le livre entier ni le télécharger. Les intégrations
+de confiance (sites de cours) peuvent être exemptées nommément avec
+`AURA_PUBLIC_MEDIA_OPEN_SLUGS=slug-1,slug-2`. Leurs URLs redeviennent alors publiques par
+décision explicite de l'opérateur.
 
 **Décision (issue #295) :** le contenu payant ne passe jamais par `/m/{slug}`. L'API
 audiobook prend la décision d'accès puis demande une URL courte à AURA avec son

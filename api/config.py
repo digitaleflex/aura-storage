@@ -263,13 +263,25 @@ class Settings:
         for part in os.environ.get("AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS", "").split(",")
         if part.strip()
     )
+    # /m/{slug} used to be a permanent anonymous download URL. Full listening is
+    # now reserved to signed-in visitors by default; only explicitly allowlisted
+    # slugs (trusted course embeds) remain open. Set to 0 to restore the old
+    # behaviour, but that also restores anonymous full-book downloads.
+    public_media_require_auth: bool = os.environ.get(
+        "AURA_PUBLIC_MEDIA_REQUIRE_AUTH", "1"
+    ).strip().lower() not in ("0", "false", "no", "off")
+    public_media_open_slugs: tuple[str, ...] = tuple(
+        part.strip()
+        for part in os.environ.get("AURA_PUBLIC_MEDIA_OPEN_SLUGS", "").split(",")
+        if part.strip()
+    )
     # Anonymous browsing of the published catalogue (landing, book pages, sitemap).
     # Listening in full still goes through the signed-in portal; set to 0 to
     # restore the sign-in-only front page.
     public_browse: bool = os.environ.get("AURA_PUBLIC_BROWSE", "1").strip().lower() not in (
         "0", "false", "no", "off")
     # Free preview length for anonymous visitors (MP3 only); 0 disables it.
-    public_preview_seconds: int = _int("AURA_PUBLIC_PREVIEW_SECONDS", 120)
+    public_preview_seconds: int = _int("AURA_PUBLIC_PREVIEW_SECONDS", 60)
     # E-mail sign-in link ("magic link") for visitors without a Google account.
     # Disabled until a mail server is configured; the link is single-use and
     # short-lived, and it only confirms control of the mailbox.

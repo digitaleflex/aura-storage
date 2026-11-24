@@ -170,8 +170,9 @@ def book_page(
     parts.append('<p class="book-facts">' + " · ".join(ESC(f) for f in facts) + '</p>')
     if preview_seconds:
         parts += [
-            '<div class="preview"><p class="eyebrow">Extrait gratuit</p>',
-            f'<audio controls preload="none" src="/extrait/{ESC(item["id"])}">'
+            '<div class="preview"><p class="eyebrow">Extrait gratuit · 1 min, sans compte</p>',
+            f'<audio controls controlsList="nodownload" disablePictureInPicture '
+            f'preload="none" src="/extrait/{ESC(item["id"])}">'
             'Votre navigateur ne sait pas lire l’audio.</audio></div>',
         ]
     if principal:

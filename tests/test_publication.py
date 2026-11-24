@@ -60,7 +60,8 @@ def _publish(c, headers, oid, slug, published=True):
     )
 
 
-def test_publish_redirects_and_unpublish_404():
+def test_publish_redirects_and_unpublish_404(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_media_require_auth", False)
     c, headers = _admin()
     oid = _object(c, headers)
     slug = f"cours-{uuid.uuid4().hex[:8]}"
@@ -106,6 +107,7 @@ def test_slug_is_unique_validated_and_human_only():
 
 
 def test_replacing_content_keeps_the_published_url(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_media_require_auth", False)
     c, headers = _admin()
     monkeypatch.setattr(main, "s3ops", DummyS3(b"x"))
     target = _object(c, headers, size=1000, name="cours.pdf")

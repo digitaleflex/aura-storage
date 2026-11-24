@@ -67,9 +67,11 @@ sont strictes (schéma dédié, aucune table partagée, adaptateur `StoragePort`
 
 ### 2.3 Le point critique : `/m/{slug}` n'est pas un contrôle d'accès
 
-Aujourd'hui, `GET /m/{slug}` (`api/main.py:3527`) renvoie une URL S3 présignée à
-**quiconque possède le slug**, sans session ni droit. C'est acceptable pour un
-cours public ou une préview, pas pour un livre payant.
+Depuis le 2026-11-24, `GET /m/{slug}` exige une **session publique** par défaut
+(`AURA_PUBLIC_MEDIA_REQUIRE_AUTH=1`). Le livre entier n'est plus téléchargeable par
+quiconque possède le slug. Les intégrations publiques de confiance restent possibles
+avec `AURA_PUBLIC_MEDIA_OPEN_SLUGS=slug-1,slug-2` (décision explicite de l'opérateur).
+L'extrait anonyme, lui, est limité à 1 minute côté serveur (`/extrait/{id}`).
 
 **Décision de conception :** aucun contenu payant ou soumis à des droits ne doit
 être exposé via `/m/{slug}`. L'API audiobook prend la décision d'accès, puis
