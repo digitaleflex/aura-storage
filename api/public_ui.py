@@ -659,12 +659,18 @@ def catalog_page(
         '<aside class="queue-panel" id="chapters-panel" hidden aria-label="Chapitres">',
         '<div class="queue-panel-head"><h3>Chapitres</h3>'
         '<button type="button" class="icon-button panel-close" data-close-panel="chapters-panel" aria-label="Fermer les chapitres" title="Fermer">×</button></div>'
-        '<div id="chapters-list" class="panel-list"></div></aside>',
+        '<div id="chapters-list" class="panel-list"></div>'
+        '<div class="bookmarks" id="bookmarks"><div class="bookmarks-head"><h4>Marque-pages</h4>'
+        '<button type="button" class="pill-button" id="bookmark-add" disabled>+ Ici</button></div>'
+        '<div id="bookmarks-list" class="panel-list"></div></div></aside>',
+        '<p class="sync-prompt" id="sync-prompt" role="status" hidden>'
+        '<span id="sync-text"></span> <button type="button" class="text-button" id="sync-go">Reprendre</button></p>',
 
         '<script src="' + asset_url("player.js") + '"></script>',
         '<script src="' + asset_url("shelf.js") + '"></script>',
         '<script src="' + asset_url("favorites.js") + '"></script>',
         '<script src="' + asset_url("offline.js") + '"></script>',
+        '<script src="' + asset_url("bookmarks.js") + '"></script>',
         '</main></body></html>',
     ])
     return "".join(parts)

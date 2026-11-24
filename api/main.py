@@ -765,6 +765,14 @@ class ProgressIn(BaseModel):
     position_seconds: float = Field(ge=0, le=864000)
 
 
+class BookmarkIn(BaseModel):
+    """A named position in a book, posted by the public player (CSRF-protected)."""
+    model_config = ConfigDict(extra="forbid")
+    object_id: Uuid4
+    position_seconds: float = Field(ge=0, le=864000)
+    note: str = Field(default="", max_length=200)
+
+
 class LoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     # Bounded so a failed attempt can never inject megabytes into the audit
@@ -2107,6 +2115,57 @@ def public_progress(
         principal["id"], oid, body.position_seconds, int(time.time())
     )
     return {"object_id": oid, "position_seconds": body.position_seconds}
+
+
+_BOOKMARKS_PER_BOOK = 50
+
+
+def _published_book_or_404(oid: str) -> str:
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object_unscoped(oid)
+    row = _as_dict(row) if row is not None else None
+    if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
+        raise HTTPException(status_code=404, detail="object not found")
+    return oid
+
+
+@app.get("/api/public/progress")
+def public_progress_get(object_id: str, principal: dict = Depends(require_public)):
+    """Where the visitor stopped on a book (used to offer 'resume from your other device')."""
+    oid = _published_book_or_404(object_id)
+    position = repo.get_progress_map(principal["id"], [oid]).get(oid, 0)
+    return {"object_id": oid, "position_seconds": position}
+
+
+@app.get("/api/public/bookmarks")
+def public_bookmarks(object_id: str, principal: dict = Depends(require_public)):
+    oid = _published_book_or_404(object_id)
+    return {"object_id": oid, "bookmarks": repo.list_bookmarks(principal["id"], oid)}
+
+
+@app.post("/api/public/bookmarks")
+def public_bookmark_add(body: BookmarkIn, request: Request, principal: dict = Depends(require_public)):
+    _public_rate_check("progress", request)
+    oid = _published_book_or_404(body.object_id)
+    note = "".join(ch for ch in body.note if ch.isprintable()).strip()
+    saved = repo.add_bookmark(
+        principal["id"], oid, round(body.position_seconds, 1), note, int(time.time()),
+        _BOOKMARKS_PER_BOOK,
+    )
+    if saved is None:
+        raise HTTPException(status_code=409, detail="too many bookmarks on this book")
+    return saved
+
+
+@app.delete("/api/public/bookmarks/{bookmark_id}")
+def public_bookmark_delete(
+    bookmark_id: str, request: Request, principal: dict = Depends(require_public),
+):
+    _public_rate_check("progress", request)
+    bid = _canonical_id(bookmark_id, "bookmark id")
+    if not repo.delete_bookmark(principal["id"], bid):
+        raise HTTPException(status_code=404, detail="bookmark not found")
+    return {"ok": True}
 
 
 def _set_public_favorite(oid: str, request: Request, principal: dict, favorite: bool) -> dict:
