@@ -13,6 +13,9 @@ services:
       - --providers.docker.network=aura-edge
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
+      # HTTP/3 (QUIC) removes head-of-line blocking on mobile/unstable links.
+      # Requires UDP/443 to be published below AND allowed by the host firewall.
+      - --entrypoints.websecure.http3=true
       # Uploads are direct presigned PUTs whose entire body is one request. The
       # Traefik default readTimeout (60s) cut large uploads mid-body -> HTTP 502
       # and the UI reported "Réseau interrompu.". 7200s covers the 900s
@@ -23,6 +26,9 @@ services:
       # protection stays; align it with the read timeout.
       - --entrypoints.websecure.transport.respondingTimeouts.writeTimeout=7200s
       - --entrypoints.websecure.transport.respondingTimeouts.idleTimeout=7200s
+      # A large multipart CompleteMultipartUpload can keep the backend busy
+      # before it sends headers. Keep Traefik from cutting it early (default 0).
+      - --serverstransport.forwardingtimeouts.responseheadertimeout=120s
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?Set ACME_EMAIL in .env}
@@ -42,6 +48,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp" # HTTP/3 (QUIC)
     volumes:
       # Direct socket: a filtered socket-proxy was evaluated on 2026-10-24 and
       # reverted — with a remote endpoint Traefik stopped loading the shared
@@ -174,6 +181,8 @@ services:
       - traefik.http.routers.aura-s3.entrypoints=websecure
       - traefik.http.routers.aura-s3.tls=true
       - traefik.http.routers.aura-s3.tls.certresolver=le
+      # No `buffering` middleware here on purpose: presigned PUT/GET bodies must
+      # be streamed to SeaweedFS, never buffered in Traefik RAM. Only HSTS.
       - traefik.http.routers.aura-s3.middlewares=aura-hsts@docker
       - traefik.http.services.aura-s3.loadbalancer.server.port=8333
     security_opt:
