@@ -353,3 +353,64 @@ def test_media_grant_redirect_is_capped_by_remaining_lifetime(monkeypatch):
     r = TestClient(main.app).get("/a/nearly-expired", follow_redirects=False)
     assert r.status_code == 302
     assert ttls and 1 <= ttls[0] <= 5
+
+
+def test_media_grant_expiring_during_lookup_is_not_presigned(monkeypatch):
+    grant = {
+        "object_id": OID,
+        "actor_id": "service",
+        "revoked_at": None,
+        "expires_at": int(time.time()) + 10,
+    }
+    row = {
+        "id": OID,
+        "status": "available",
+        "bucket": "aura",
+        "object_key": f"aura/{OID}",
+        "space_id": main.repo.default_scope()[1],
+        "content_type": "audio/mpeg",
+        "size_bytes": 1000,
+        "display_name": "Livre.mp3",
+    }
+    monkeypatch.setattr(main.repo, "get_public_access_grant", lambda token_hash: grant)
+
+    def slow_lookup(oid):
+        grant["expires_at"] = int(time.time())
+        return row
+
+    monkeypatch.setattr(main.repo, "get_object_unscoped", slow_lookup)
+    monkeypatch.setattr(
+        main, "presigned_get",
+        lambda *args, **kwargs: pytest.fail("expired grant was presigned"),
+    )
+    r = TestClient(main.app).get("/a/slow-lookup", follow_redirects=False)
+    assert r.status_code == 404
+    assert "location" not in r.headers
+
+
+def test_fractional_time_does_not_extend_a_media_grant(monkeypatch):
+    now = 1_800_000_000.9
+    monkeypatch.setattr(main.time, "time", lambda: now)
+    monkeypatch.setattr(main.repo, "get_public_access_grant", lambda token_hash: {
+        "object_id": OID,
+        "actor_id": "service",
+        "revoked_at": None,
+        "expires_at": int(now) + 2,
+    })
+    monkeypatch.setattr(main.repo, "get_object_unscoped", lambda oid: {
+        "id": OID,
+        "status": "available",
+        "bucket": "aura",
+        "object_key": f"aura/{OID}",
+        "space_id": main.repo.default_scope()[1],
+        "content_type": "audio/mpeg",
+        "size_bytes": 1000,
+        "display_name": "Livre.mp3",
+    })
+    monkeypatch.setattr(
+        main, "presigned_get",
+        lambda *args, **kwargs: pytest.fail("fractional grant was over-extended"),
+    )
+    r = TestClient(main.app).get("/a/fractional", follow_redirects=False)
+    assert r.status_code == 404
+    assert "location" not in r.headers

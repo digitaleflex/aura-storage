@@ -4665,10 +4665,13 @@ def public_granted_media(token: str, request: Request):
     set_request_principal(row["space_id"], None)
     inline = is_previewable(row["content_type"])
     # A storage URL must never outlive the grant that authorised its creation.
-    # The permanent /m/ route keeps its longer playback TTL; service-issued
-    # grants use the shorter public-access lifetime and can be revoked before
-    # redemption. An already emitted storage URL remains valid until this TTL.
-    redirect_ttl = max(1, min(settings.public_media_ttl, int(grant["expires_at"]) - now))
+    # Recompute after the catalogue read: a slow database must not turn an
+    # initially valid grant into a storage URL issued after its expiration. Keep
+    # a one-second margin because presigning starts its own TTL clock.
+    remaining = int(grant["expires_at"] - time.time())
+    if remaining <= 1:
+        raise HTTPException(status_code=404, detail="not found")
+    redirect_ttl = min(settings.public_media_ttl, remaining - 1)
     url = presigned_get(
         s3, row["bucket"], row["object_key"], redirect_ttl,
         content_disposition=shares.content_disposition_header(
