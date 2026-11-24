@@ -446,7 +446,8 @@ def test_cover_redirect_may_be_cached_briefly(monkeypatch):
     _published_pack()
     c = _sign_in(TestClient(main.app))
     item = c.get("/api/public/library").json()["collections"][0]["items"][0]
-    catalogue_sql.execute("UPDATE objects SET cover_key = ? WHERE id = ?", ("covers/x.jpg", item["id"]))
+    catalogue_sql.execute(
+        "UPDATE objects SET cover_key = ? WHERE id = ?", ("covers/x.jpg", item["id"]))
     monkeypatch.setattr(main, "presigned_get", lambda *a, **k: "https://s3.example/c.jpg")
     r = c.get(f"/covers/{item['id']}.jpg", follow_redirects=False)
     assert r.status_code == 302
@@ -565,7 +566,8 @@ def _book(duration=600, size=60000, content_type="audio/mpeg"):
     """A published one-book pack; returns (collection slug, object slug, object id)."""
     slug = _published_pack()
     row = main.repo.get_object_by_slug(f"{slug}-ch1")
-    catalogue_sql.execute("UPDATE objects SET duration_seconds = ?, size_bytes = ?, content_type = ? WHERE id = ?",
+    catalogue_sql.execute(
+        "UPDATE objects SET duration_seconds = ?, size_bytes = ?, content_type = ? WHERE id = ?",
         (duration, size, content_type, row["id"]))
     return slug, f"{slug}-ch1", row["id"]
 
@@ -1036,7 +1038,7 @@ def test_search_is_accent_insensitive_matches_every_word_and_sort_is_validated(m
     monkeypatch.setattr(main.settings, "public_domain", "testserver")
     _, _, oid = _book()
     catalogue_sql.execute("UPDATE objects SET display_name = ? WHERE id = ?",
-                          ("Éléonore Dupré - Le Grand Départ.mp3", oid))
+                           ("Éléonore Dupré - Le Grand Départ.mp3", oid))
     c = TestClient(main.app)
     assert f'href="/livre/{oid}"' in c.get("/?q=eleonore+depart").text
     assert f'href="/livre/{oid}"' in c.get("/?q=DUPRE").text
