@@ -98,6 +98,15 @@ Sur le VPS (sudo interactif requis) :
 - [ ] Aucun port SeaweedFS publié sur l'hôte
 - [ ] Console de secours confirmée et testable
 
+### Décision du 2026-11-24
+
+Le propriétaire a demandé de **laisser la configuration SSH en l'état**
+(`PasswordAuthentication yes`, `PermitRootLogin yes`). Le durcissement SSH n'est
+donc **pas appliqué** et ce sous-gate reste ouvert par choix explicite.
+
+Les règles UFW 22/80/443 ont été ajoutées, mais le firewall reste **inactif**
+car `ufw enable` n'est pas autorisé par le sudoers limité en place.
+
 ---
 
 ## Gate 3 — Persistance après redémarrage du host (ISSUE-004)
