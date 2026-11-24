@@ -5066,6 +5066,40 @@ def prune_audit(principal: dict = Depends(authorize(ADMIN_WRITE))):
     return out
 
 
+@app.get("/api/v1/admin/portal-stats")
+def admin_portal_stats(principal: dict = Depends(authorize(ADMIN_READ))):
+    """What the public portal is used for: per-book listeners, completions, favourites.
+
+    Counts only, computed from the listening-progress and favourites tables; no
+    visitor, e-mail or listening history is returned or stored for this purpose.
+    A book is "completed" once a visitor reached 90 % of its duration.
+    """
+    period = _usage_period()
+    raw = repo.portal_stats(period, AVAILABLE)
+    books = []
+    for row in raw["books"]:
+        author, title = _split_audio_name(row["display_name"])
+        listeners, completed = int(row["listeners"]), int(row["completed"])
+        books.append({
+            "id": row["id"], "title": title or row["display_name"], "author": author or "",
+            "listeners": listeners, "completed": completed,
+            "completion_rate": round(completed / listeners, 3) if listeners else 0.0,
+            "favorites": int(row["favorites"]), "views_month": int(row["views_month"]),
+        })
+    books.sort(key=lambda b: (-b["listeners"], -b["favorites"], -b["views_month"], b["title"].lower()))
+    return {
+        "measured_at": int(time.time()), "period": period,
+        "totals": {
+            "accounts": int(raw["accounts"]), "published_books": len(books),
+            "listeners": sum(b["listeners"] for b in books),
+            "completed": sum(b["completed"] for b in books),
+            "favorites": sum(b["favorites"] for b in books),
+            "views_month": sum(b["views_month"] for b in books),
+        },
+        "books": books[:50],
+    }
+
+
 @app.get("/api/v1/admin/usage")
 def admin_usage(
     space_id: str | None = None,

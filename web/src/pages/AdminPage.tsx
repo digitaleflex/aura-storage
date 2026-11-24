@@ -14,6 +14,7 @@ import type {
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { OneTimeToken } from "../components/OneTimeToken";
+import { PortalStats } from "../components/PortalStats";
 import { Loading, LoadError } from "../components/Loading";
 import { describeError } from "../lib/errors";
 
@@ -1220,6 +1221,10 @@ export function AdminPage() {
           </>
         )}
       </section>
+
+      <div hidden={tab !== "overview"}>
+        <PortalStats enabled={canAdmin} />
+      </div>
 
       <section
         className="section"
