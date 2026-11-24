@@ -33,6 +33,11 @@ dans des sites de cours) ; toute personne qui connaît un slug peut donc téléc
 fichier complet. Si l'écoute complète doit vraiment être réservée aux comptes, il faudra
 des slugs non devinables ou une authentification sur `/m/`.
 
+**Décision (issue #295) :** le contenu payant ne passe jamais par `/m/{slug}`. L'API
+audiobook prend la décision d'accès puis demande une URL courte à AURA avec son
+identité de service. En attendant, `AURA_PUBLIC_MEDIA_RESTRICTED_SLUGS` permet de
+bloquer nommément les slugs concernés (404). Voir `docs/audiobook/README.md` §2.3.
+
 Les fichiers eux-mêmes sont servis par les liens `/m/{slug}` déjà existants :
 une redirection 302 vers une URL S3 présignée de courte durée, avec `Range`
 (seek). Aucun octet ne traverse l'API. Le lecteur HTML pointe directement sur
@@ -51,12 +56,14 @@ inline : le CSS et le JS vivent dans `api/portal_assets/` (`portal.css`, `common
 
 `/api/v1/*`, `/s/*`, `/f/*`, `/p/*` et la console React restent sur `APP_DOMAIN`.
 
-## Mode sombre et favoris
+## Thème clair et favoris
 
-Le CSS suit le réglage du système (`prefers-color-scheme: dark`, palette nuit + laiton, tout passe
-par des variables CSS ; `color-scheme: light dark` adapte aussi lecteur natif et listes). Un cœur
-sur chaque livre (catalogue et page livre) alimente l'étagère « Mes favoris » ; l'état est privé,
-supprimé avec le compte, et le clic est annulé côté page si le serveur refuse.
+Le portail public reste toujours clair, quelle que soit la préférence système du visiteur :
+`portal.css` force `color-scheme: light` et ne contient pas de variante
+`prefers-color-scheme: dark`. La barre d'adresse de l'application installable utilise la même
+couleur claire (`theme-color`). Un cœur sur chaque livre (catalogue et page livre) alimente
+l'étagère « Mes favoris » ; l'état est privé, supprimé avec le compte, et le clic est annulé côté
+page si le serveur refuse.
 
 ## Marque-pages et reprise depuis un autre appareil
 
@@ -156,10 +163,46 @@ des noms `Auteur - Titre` et proposés comme filtres (`?auteur=`). Des boutons
 de découverte mènent à « Reprendre l'écoute », « Nouveautés », « À découvrir »
 et « Toute la bibliothèque ».
 
-Les couvertures sont extraites **localement** de l'artwork intégré aux fichiers
-(`scripts/generate_audiobook_covers.py`, ffmpeg) et servies par `/covers/{oid}.jpg`.
-Aucun service externe de métadonnées n'est contacté. Sans artwork intégré, une
-couverture typographique deterministe reste affichée.
+Les couvertures sont d'abord cherchées **localement** : tous les flux d'artwork
+intégrés au fichier, puis une image stockée à côté de l'audio dans le même bucket
+(`cover.jpg`, `folder.jpg`, image de même stem). L'image retenue est redimensionnée
+par ffmpeg et servie par `/covers/{oid}.jpg`. Sans image locale, une couverture
+typographique deterministe (titre, auteur, teinte stable) reste affichée.
+Deux voies optionnelles permettent d'enrichir les livres récalcitrants : des
+**candidats externes à valider** et l'**ajout manuel** d'une image (voir ci-dessous).
+Aucun service externe n'est contacté par le déploiement ni par le cron de
+rafraîchissement : les deux voies sont des commandes d'exploitation explicites.
+
+Après mise à jour du script, une passe unique de rattrapage des livres déjà
+sondés par l'ancienne version (premier flux seulement) se fait avec :
+
+```bash
+docker compose exec -T -e AURA_REPO_ROOT=/srv/api \
+  api python - --reprobe --apply --limit 100 \
+  < scripts/generate_audiobook_covers.py
+```
+
+Le timestamp de probe est rafraîchi, donc le cron quotidien ne retire pas ces
+livres indéfiniment.
+
+#### Candidats externes (validation obligatoire)
+
+`scripts/cover_candidates.sh [limite] [itunes|openlibrary|all]` interroge des API
+publiques (iTunes Search, Open Library) et écrit un fichier de revue dans
+`$AURA_DATA_DIR/cover-candidates.json`. **Aucune image n'est publiée** : le fichier
+liste les candidats par livre. Les résultats peuvent être erronés (mauvaise
+édition) et les droits d'image doivent être vérifiés avant publication.
+
+Une fois un candidat retenu :
+
+```bash
+scripts/apply_cover.sh OBJECT_ID https://.../couverture.jpg
+# ou, depuis un fichier local :
+scripts/apply_cover.sh OBJECT_ID /chemin/couverture.jpg
+```
+
+Les deux formes redimensionnent l'image avec ffmpeg, la stockent en S3 avec SSE et
+renseignent `cover_key`. Le fichier de revue marque le livre comme `applied`.
 
 La position est enregistrée via `/api/public/progress` (table `listen_progress`,
 ajoutée par la migration cumulative `0018`, aujourd'hui `0020_audio_chapters`)
@@ -226,7 +269,7 @@ même l'uploader via AURA ne le rend pas visible. La publication reste une
 décision manuelle (`PacksDialog` ou `scripts/publish_audiobooks.py --apply`).
 
 En revanche, l'enrichissement des livres **déjà publiés** est planifié :
-`scripts/refresh_public_library.sh` relance les extractions de couvertures,
+`scripts/refresh_public_library.sh` relance les extractions de couvertures locales,
 durées et chapitres avec une limite de 20 objets par passe, sous `flock`, et
 marque chaque tentative (`cover_probe_at` / `chapters_probe_at`, migration
 `0021`) pour ne jamais retraiter indéfiniment un fichier sans art intégré.

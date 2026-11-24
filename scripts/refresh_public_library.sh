@@ -23,7 +23,7 @@ CONTAINER_ROOT=/srv/api
 
 echo "== public library refresh $(date -u +%FT%TZ) =="
 
-# Covers: embedded artwork only, bounded, dry-run disabled.
+# Covers: embedded artwork then sibling images, bounded, dry-run disabled.
 AURA_REPO_ROOT="$CONTAINER_ROOT" docker compose exec -T \
   -e AURA_REPO_ROOT="$CONTAINER_ROOT" \
   api python - --apply --limit "$LIMIT" < scripts/generate_audiobook_covers.py

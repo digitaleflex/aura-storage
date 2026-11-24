@@ -758,12 +758,22 @@ def test_deleting_the_account_removes_the_favorites():
     assert main.repo.get_favorite_ids(uid, [oid]) == set()
 
 
-def test_stylesheet_follows_the_system_dark_setting():
+def test_stylesheet_stays_light_regardless_of_the_system_setting():
     css = main.public_ui.ASSETS["portal.css"][0].decode()
-    assert "color-scheme:light dark" in css
-    assert "@media (prefers-color-scheme: dark)" in css
-    dark = css[css.index("@media (prefers-color-scheme: dark)"):]
-    assert "--bg:#10171e" in dark and "--ink:#EDE6D8" in dark
+    assert "color-scheme:light;" in css
+    assert "prefers-color-scheme" not in css
+    assert "--bg:#F8F6F1" in css and "--ink:#1D2B39" in css
+
+
+def test_fallback_cover_shows_the_title_and_author():
+    item = {"id": "book-id", "title": "Le Grand Livre", "author": "Alice Auteur"}
+    track = main.public_ui._track_html(item)
+    assert 'class="cover-fallback"' in track
+    assert 'class="cover-title">Le Grand Livre</span>' in track
+    assert 'class="cover-author">Alice Auteur</span>' in track
+    cover = main.public_book._cover(item)
+    assert 'class="cover-title">Le Grand Livre</span>' in cover
+    assert 'class="cover-author">Alice Auteur</span>' in cover
 
 
 # --------------------------------------------------------------------------
@@ -798,7 +808,8 @@ def test_pages_declare_the_manifest_icons_and_theme_colours():
     for html in (TestClient(main.app).get("/").text, c.get("/").text, c.get("/profil").text):
         assert 'rel="manifest" href="/portal-assets/manifest.webmanifest?v=' in html
         assert 'rel="apple-touch-icon"' in html and 'rel="icon"' in html
-        assert 'name="theme-color"' in html and "prefers-color-scheme: dark" in html
+        assert 'name="theme-color" content="#F8F6F1"' in html
+        assert "prefers-color-scheme" not in html
     manifest = c.get(re.search(r'href="(/portal-assets/manifest\.webmanifest\?v=[0-9a-f]+)"',
                                c.get("/").text).group(1))
     assert manifest.headers["content-type"].startswith("application/manifest+json")

@@ -66,10 +66,10 @@ _GOOGLE = (
     '</svg>'
 )
 
-# Installable app: manifest, icons and theme colour (light / dark address bar).
+# Installable app: manifest, icons and theme colour. The public portal is
+# deliberately light-only, so the address bar keeps the light brand colour.
 _PWA_TAGS = (
-    '<meta name="theme-color" content="#F8F6F1" media="(prefers-color-scheme: light)">'
-    '<meta name="theme-color" content="#10171e" media="(prefers-color-scheme: dark)">'
+    '<meta name="theme-color" content="#F8F6F1">'
     '<link rel="manifest" href="' + asset_url("manifest.webmanifest") + '">'
     '<link rel="icon" href="' + asset_url("icon.svg") + '" type="image/svg+xml">'
     '<link rel="apple-touch-icon" href="' + asset_url("icon-192.png") + '">'
@@ -212,6 +212,26 @@ def _duration_text(seconds) -> str:
     return f"{secs} s"
 
 
+def cover_hue(label: str) -> int:
+    """Stable colour for a book with no artwork."""
+    return sum(ord(c) for c in str(label or "")) * 37 % 360
+
+
+def fallback_cover_inner(label: str, author: str = "") -> str:
+    """Typographic placeholder shown until/unless the real cover loads."""
+    title = str(label or "").strip() or "Livre"
+    byline = str(author or "").strip()
+    return "".join([
+        '<span class="cover-fallback" aria-hidden="true">',
+        f'<span class="cover-monogram">{ESC(title[:1].upper())}</span>',
+        '<span class="cover-copy">',
+        '<span class="cover-kicker">Livre audio</span>',
+        f'<span class="cover-title">{ESC(title)}</span>',
+        f'<span class="cover-author">{ESC(byline or "AURA")}</span>',
+        '</span></span>',
+    ])
+
+
 def _position_text(seconds) -> str:
     if not seconds:
         return "0:00"
@@ -292,13 +312,12 @@ def _heart_button(item: dict, label: bool = False) -> str:
 def _track_html(item: dict) -> str:
     label = str(item.get("title") or item.get("display_name") or "Livre")
     author = str(item.get("author") or "")
-    initial = label.strip()[:1].upper() or "A"
-    hue = sum(ord(c) for c in label) * 37 % 360
+    hue = cover_hue(label)
     duration = float(item.get("duration_seconds") or 0)
     progress = float(item.get("progress_seconds") or 0)
     pct = min(100.0, progress / duration * 100) if duration else 0.0
     cover = item.get("cover_url") or ""
-    cover_inner = f'<span>{ESC(initial)}</span>'
+    cover_inner = fallback_cover_inner(label, author)
     if cover:
         cover_inner += f'<img src="{ESC(cover)}" alt="" loading="lazy" data-fallback>'
     return "".join([
@@ -521,9 +540,9 @@ def catalog_page(
         fprogress = float(featured.get("progress_seconds") or 0)
         fduration = float(featured.get("duration_seconds") or 0)
         fpct = min(100.0, (fprogress / fduration * 100) if fduration else 0.0)
-        fhue = sum(ord(c) for c in flabel) * 37 % 360
+        fhue = cover_hue(flabel)
         fcover = featured.get("cover_url") or ""
-        fcover_inner = f'<span>{ESC(flabel[:1].upper() or "A")}</span>'
+        fcover_inner = fallback_cover_inner(flabel, featured.get("author") or "")
         if fcover:
             fcover_inner += f'<img src="{ESC(fcover)}" alt="" data-fallback>'
         fmeta = "Prêt à être écouté"
@@ -554,13 +573,14 @@ def catalog_page(
         cover = first.get("cover_url") or ""
         label = str(first.get("title") or first.get("display_name") or "Livre")
         author = str(first.get("author") or "Livre audio")
-        hue = sum(ord(c) for c in label) * 37 % 360
+        hue = cover_hue(label)
+        cover_inner = fallback_cover_inner(label, first.get("author") or "")
         img = f'<img src="{ESC(cover)}" alt="" data-fallback>' if cover else ""
         idx = id_to_index.get(str(first.get("id")), 0)
         parts.extend([
             '<section class="hero" id="resume-card" aria-label="Lecture immersive">',
             f'<div class="big-cover" style="--cover-h:{hue}" id="immersive-cover-host">',
-            f'<span>{ESC(label[:1].upper() or "A")}</span>{img}</div>',
+            f'{cover_inner}{img}</div>',
             '<div><p class="eyebrow">Lecture immersive</p>',
             f'<h2>{ESC(label)}</h2>',
             f'<p>{ESC(author)}</p>',

@@ -9,7 +9,7 @@ from urllib.parse import quote, urlencode
 
 from .public_ui import (
     ESC, SORTS, _BRAND, _GOOGLE, _duration_text, _heart_button, _position_text, asset_url,
-    email_form, page_head,
+    cover_hue, email_form, fallback_cover_inner, page_head,
 )
 
 SITE_NAME = "AURA"
@@ -19,16 +19,15 @@ def book_path(item: dict) -> str:
     return f"/livre/{item['id']}"
 
 
-def _hue(label: str) -> int:
-    return sum(ord(c) for c in label) * 37 % 360
-
-
 def _cover(item: dict) -> str:
     label = str(item.get("title") or item.get("display_name") or "Livre")
-    inner = f'<span>{ESC(label.strip()[:1].upper() or "A")}</span>'
+    inner = fallback_cover_inner(label, item.get("author") or "")
     if item.get("cover_url"):
         inner += f'<img src="{ESC(item["cover_url"])}" alt="" loading="lazy" data-fallback>'
-    return f'<span class="cover cover-large" style="--cover-h:{_hue(label)}" aria-hidden="true">{inner}</span>'
+    return (
+        f'<span class="cover cover-large" style="--cover-h:{cover_hue(label)}" '
+        f'aria-hidden="true">{inner}</span>'
+    )
 
 
 def _card(item: dict) -> str:

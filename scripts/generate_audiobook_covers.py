@@ -1,123 +1,78 @@
 #!/usr/bin/env python3
-"""Extract locally embedded cover art from published audiobooks.
+"""Enrich published audiobooks with a locally extracted cover.
 
-No external metadata or cover API is used. ffmpeg reads a short-lived presigned
-GET of the audio object, takes its first embedded image stream (ID3 APIC / MP4
-cover), resizes it and stores the JPEG next to the object in the same bucket.
-The catalogue column `cover_key` is then set so /covers/{oid}.jpg can redirect
-to it. Files without embedded art are simply left to the typographic fallback.
+No external metadata or cover API is used here. For each published audio object
+with no cover yet, this script tries in order:
 
-Bounded and resumable: only objects with no cover_key are considered, at most
---limit per run. Dry-run by default; pass --apply to write.
+1. every early artwork stream embedded in the audio file (ID3 APIC / MP4 cover),
+   not only the first video stream;
+2. an image object stored beside the audio in the same bucket (``cover.jpg``,
+   ``folder.jpg``, an image with the same stem, ...).
+
+The chosen image is resized with ffmpeg and stored as
+``{object_key}.cover.jpg`` with the same SSE settings as the payload. The
+catalogue column ``cover_key`` is then set so ``/covers/{oid}.jpg`` can redirect
+to it. Files with no local artwork keep the typographic fallback.
+
+Bounded and resumable: only objects with no cover_key and no previous probe are
+considered, at most --limit per run. Dry-run by default; pass --apply to write.
+Use --reprobe once after upgrading to retry objects marked by the older
+first-stream-only script (the probe timestamp is refreshed, so the daily cron
+does not retry them forever).
 """
 from __future__ import annotations
 
 import argparse
-import os
-import subprocess
-import sys
-import time
-from pathlib import Path
 
-ROOT = Path(os.environ.get("AURA_REPO_ROOT", str(Path(__file__).resolve().parents[1])))
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-_env_file = ROOT / ".env"
-for _line in (_env_file.read_text(encoding="utf-8").splitlines() if _env_file.exists() else []):
-    _line = _line.strip()
-    if _line and not _line.startswith("#") and "=" in _line:
-        k, v = _line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
-
-os.environ.setdefault("AURA_API_ADMIN_PASSWORD", os.environ.get("AURA_API_ADMIN_PASSWORD", ""))
-if os.environ.get("S3_API_ACCESS_KEY"):
-    os.environ.setdefault("AURA_S3_ACCESS_KEY", os.environ["S3_API_ACCESS_KEY"])
-    os.environ.setdefault("AURA_S3_SECRET_KEY", os.environ["S3_API_SECRET_KEY"])
-if os.environ.get("S3_DOMAIN"):
-    os.environ.setdefault("AURA_S3_ENDPOINT", f"https://{os.environ['S3_DOMAIN']}")
-if not os.environ.get("AURA_API_BACKEND") and os.environ.get("POSTGRES_USER"):
-    from urllib.parse import quote_plus
-    os.environ["AURA_API_BACKEND"] = "postgres"
-    os.environ["AURA_API_DSN"] = "postgresql://{u}:{p}@localhost:5432/{db}".format(
-        u=quote_plus(os.environ["POSTGRES_USER"]),
-        p=quote_plus(os.environ.get("POSTGRES_PASSWORD", "")),
-        db=os.environ.get("POSTGRES_DB", "aura"),
-    )
-
-import boto3  # noqa: E402
-
-from api.config import settings  # noqa: E402
-from api.s3 import SSE_ALGORITHM, presigned_get  # noqa: E402
-from api.store import repo  # noqa: E402
-
-AUDIO_TYPES = ("audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/flac", "audio/aac")
-TIMEOUT_S = 60
+from api import cover_enrichment as ce
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--reprobe", action="store_true",
+        help="also retry objects already probed by the old first-stream-only script",
+    )
     args = parser.parse_args()
 
-    ph = "?" if settings.db_backend == "sqlite" else "%s"
-    marks = ",".join(ph for _ in AUDIO_TYPES)
-    rows = repo.conn.execute(
-        "SELECT * FROM objects WHERE status = 'available' AND published_at IS NOT NULL "
-        f"AND cover_key IS NULL AND cover_probe_at IS NULL AND content_type IN ({marks}) "
-        "ORDER BY created_at ASC LIMIT " + ph,
-        (*AUDIO_TYPES, args.limit),
-    ).fetchall()
+    rows = ce.published_without_cover(args.limit, include_probed=args.reprobe)
     if not rows:
         print("aucun livre audio sans couverture")
         return 0
 
-    s3 = boto3.client(
-        "s3", endpoint_url=settings.s3_endpoint,
-        aws_access_key_id=settings.s3_access_key,
-        aws_secret_access_key=settings.s3_secret_key,
-        region_name=settings.s3_region,
-    )
+    client = ce.s3_client()
+    image_cache: dict[str, list[dict]] = {}
     made, skipped = 0, 0
     for row in rows:
-        obj = dict(row)
-        url = presigned_get(s3, obj["bucket"], obj["object_key"], 300)
-        args_ffmpeg = [
-            "ffmpeg", "-v", "error", "-i", url,
-            "-map", "0:v:0", "-frames:v", "1",
-            "-vf", "scale=480:-2", "-f", "mjpeg", "-q:v", "4", "pipe:1",
-        ]
-        try:
-            result = subprocess.run(
-                args_ffmpeg, capture_output=True, timeout=TIMEOUT_S, check=False
-            )
-        except (subprocess.TimeoutExpired, OSError):
-            result = None
-        jpeg = (result.stdout or b"") if result else b""
-        success = bool(
-            result and result.returncode == 0 and len(jpeg) >= 1024
-            and jpeg.startswith(b"\xff\xd8")
-        )
-        if success:
-            key = f"{obj['object_key']}.cover.jpg"
-            print(f"  couverture: {obj['display_name']}")
-            if args.apply:
-                extra = {"ServerSideEncryption": SSE_ALGORITHM} if settings.require_sse else {}
-                s3.put_object(
-                    Bucket=obj["bucket"], Key=key, Body=jpeg,
-                    ContentType="image/jpeg", **extra,
+        jpeg = None
+        source = ""
+        audio_url = ce.presigned_get(client, row["bucket"], row["object_key"], 300)
+        jpeg = ce.extract_embedded(audio_url)
+        if jpeg:
+            source = "artwork intégré"
+        else:
+            images = image_cache.setdefault(row["bucket"], ce.image_objects(row["bucket"]))
+            for candidate in ce.sibling_candidates(row, images):
+                image_url = ce.presigned_get(
+                    client, candidate["bucket"], candidate["object_key"], 300
                 )
-                repo.set_object_cover(obj["id"], key)
+                jpeg = ce.resize_image(ce.fetch_url(image_url) or b"")
+                if jpeg:
+                    source = f"image sœur {candidate['object_key']}"
+                    break
+        if jpeg:
+            key = ce.publish_cover(row, jpeg, client, args.apply)
+            print(f"  couverture ({source}): {row['display_name']} -> {key}")
             made += 1
         else:
+            ce.mark_miss(row, args.apply)
             skipped += 1
-        # Mark every attempt so a periodic cron never retries an un-enrichable
-        # file forever. Dry-run does not write anything.
-        if args.apply:
-            repo.mark_media_probe(obj["id"], "cover", int(time.time()))
-    print(f"couvertures: {made} traitees, {skipped} sans art integre "
-          f"({'APPLIQUE' if args.apply else 'DRY-RUN'})")
+    print(
+        f"couvertures: {made} traitees, {skipped} sans art local "
+        f"({'APPLIQUE' if args.apply else 'DRY-RUN'})"
+    )
     return 0
 
 
