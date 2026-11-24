@@ -219,6 +219,10 @@ export function TransfersProvider({ children }: { children: ReactNode }) {
         transferDeps(options.csrf, transferSessionIdRef.current),
         {
           folderId: options.folderId,
+          // The app wants recoverable failures to come back on their own: one
+          // delayed replay for the whole batch, bounded per file. The queue
+          // itself stays opt-in so direct users keep the manual contract.
+          autoRetryFailures: true,
           onUpdate: (next) => handleQueueUpdate(next, options.onUpdate),
           onAutoRetry: options.onAutoRetry,
         },

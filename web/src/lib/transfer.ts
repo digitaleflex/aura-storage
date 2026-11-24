@@ -787,6 +787,16 @@ export interface QueueOptions {
    * Default 3. The counter is reset by a manual retry.
    */
   maxReconnectRetries?: number;
+  /**
+   * When true a batch of files that ended on a retryable failure is re-queued
+   * automatically after a short backoff — no click needed. Fatal rejections
+   * and cancellations are never replayed. Opt-in (default false).
+   */
+  autoRetryFailures?: boolean;
+  /** Automatic batch retries granted per file. Default 2; 0 disables. */
+  maxAutoRetries?: number;
+  /** Base delay before an automatic batch retry, in ms. Default 3000. */
+  autoRetryDelayMs?: number;
   /** Called after a reconnect re-queued files, with how many (for the UI). */
   onAutoRetry?: (count: number) => void;
   signal?: AbortSignal;
@@ -930,6 +940,11 @@ export function startUploadQueue(
   const autoPauseOnOffline = options.autoPauseOnOffline ?? true;
   const autoRetryOnReconnect = options.autoRetryOnReconnect ?? true;
   const maxReconnectRetries = Math.max(0, options.maxReconnectRetries ?? 3);
+  // Opt-in at the app boundary: direct queue users (tests, embeds) keep the
+  // historical "failed stays failed until asked" contract.
+  const autoRetryFailures = options.autoRetryFailures ?? false;
+  const maxAutoRetries = Math.max(0, options.maxAutoRetries ?? 2);
+  const autoRetryDelayMs = Math.max(0, options.autoRetryDelayMs ?? 3000);
   const defaultFolder = options.folderId ?? null;
   const now = options.now ?? (() => Date.now());
 
@@ -1020,6 +1035,8 @@ export function startUploadQueue(
     paused: boolean;
     /** Automatic re-queues already granted by a reconnect. */
     reconnectRetries: number;
+    /** Automatic batch retries already granted to this file. */
+    autoRetries: number;
     /** Backend object id once committed (phase "available"). */
     objectId: string | null;
   }
@@ -1039,6 +1056,7 @@ export function startUploadQueue(
       reserved: false,
       paused: false,
       reconnectRetries: 0,
+      autoRetries: 0,
       objectId: null,
     };
   });
@@ -1050,6 +1068,14 @@ export function startUploadQueue(
   let finished = false;
   // Held while the scheduler must not start new files (explicit pause/offline).
   let schedulerPaused = false;
+  // One timer for the whole batch: failures that settle close together share
+  // one delayed replay instead of each starting their own timer.
+  let autoRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearAutoRetry = (): void => {
+    if (autoRetryTimer === null) return;
+    clearTimeout(autoRetryTimer);
+    autoRetryTimer = null;
+  };
   let resolveDone: (state: QueueState) => void = () => undefined;
   const done = new Promise<QueueState>((resolve) => {
     resolveDone = resolve;
@@ -1106,20 +1132,33 @@ export function startUploadQueue(
    * the queue detaches them as soon as the last file settles and a network
    * drop would leave the whole import failed until a manual retry.
    */
-  const awaitingReconnect = (): boolean =>
-    autoRetryOnReconnect &&
-    maxReconnectRetries > 0 &&
-    items.some(
-      (item) =>
-        item.state.phase === "failed" &&
-        item.state.failureKind === "retryable" &&
-        item.reconnectRetries < maxReconnectRetries,
-    );
+  const awaitingRecovery = (): boolean =>
+    autoRetryTimer !== null ||
+    (autoRetryOnReconnect &&
+      maxReconnectRetries > 0 &&
+      items.some(
+        (item) =>
+          item.state.phase === "failed" &&
+          item.state.failureKind === "retryable" &&
+          item.reconnectRetries < maxReconnectRetries,
+      )) ||
+    (autoRetryFailures &&
+      maxAutoRetries > 0 &&
+      items.some(
+        (item) =>
+          item.state.phase === "failed" &&
+          item.state.failureKind === "retryable" &&
+          item.autoRetries < maxAutoRetries,
+      ));
 
   const maybeFinish = () => {
-    if (!finished && active === 0 && items.every((item) => item.settled)) {
+    // A scheduled batch replay is real pending work: do not declare the queue
+    // finished (or resolve `done`) while it is waiting to fire. Merely waiting
+    // for a possible `online` event is passive and keeps the original contract.
+    if (finished || autoRetryTimer !== null) return;
+    if (active === 0 && items.every((item) => item.settled)) {
       finished = true;
-      if (!awaitingReconnect()) detachListeners();
+      if (!awaitingRecovery()) detachListeners();
       emit();
       resolveDone(snapshot());
     }
@@ -1156,6 +1195,43 @@ export function startUploadQueue(
       effectiveConcurrency -= 1;
       congestedStreak = 0;
     }
+  };
+
+  /**
+   * Replay retryable failures as one batch. A single debounced timer serves
+   * every file that settled close together; its delay grows with the attempt
+   * number (equal jitter, like the transfer's backoff) so a broken endpoint is
+   * never hammered. Fatal failures and cancellations are left untouched.
+   */
+  const scheduleAutoRetry = (item: Internal): void => {
+    if (!autoRetryFailures || maxAutoRetries === 0) return;
+    if (item.state.phase !== "failed" || item.state.failureKind !== "retryable") return;
+    if (item.autoRetries >= maxAutoRetries || autoRetryTimer !== null) return;
+    const ceiling = Math.min(30_000, autoRetryDelayMs * 2 ** item.autoRetries);
+    const delay = Math.round(ceiling * (0.5 + Math.random() * 0.5));
+    autoRetryTimer = setTimeout(() => {
+      autoRetryTimer = null;
+      // A known-down link is the reconnect path's job; do not spend a retry
+      // budget against it.
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      let requeued = 0;
+      for (const candidate of items) {
+        if (candidate.state.phase !== "failed") continue;
+        if (candidate.state.failureKind !== "retryable") continue;
+        if (candidate.autoRetries >= maxAutoRetries) continue;
+        candidate.autoRetries += 1;
+        candidate.state = idleTransfer(candidate.file);
+        candidate.settled = false;
+        candidate.reserved = false;
+        candidate.paused = false;
+        requeued += 1;
+      }
+      if (requeued === 0) return;
+      finished = false;
+      emit();
+      pump();
+      options.onAutoRetry?.(requeued);
+    }, delay);
   };
 
   const runItem = (item: Internal) => {
@@ -1263,6 +1339,9 @@ export function startUploadQueue(
             .catch(() => undefined);
         }
         adaptToOutcome(item, lastError);
+        if (item.state.phase === "failed" && item.state.failureKind === "retryable") {
+          scheduleAutoRetry(item);
+        }
         emit();
         pump();
         maybeFinish();
@@ -1369,7 +1448,7 @@ export function startUploadQueue(
     if (requeued === 0) {
       // Nothing left to replay (fatal failures only, or the cap is reached):
       // stop holding the window listeners for a link that will not help.
-      if (!awaitingReconnect() && active === 0 && items.every((item) => item.settled)) {
+      if (!awaitingRecovery() && active === 0 && items.every((item) => item.settled)) {
         detachListeners();
       }
       return;
@@ -1491,6 +1570,7 @@ export function startUploadQueue(
     resumeAll,
     retryTransient,
     retryFailed() {
+      clearAutoRetry();
       let requeued = false;
       for (const item of items) {
         if (item.state.phase === "failed" || item.state.phase === "cancelled") {
@@ -1499,6 +1579,7 @@ export function startUploadQueue(
           item.reserved = false;
           item.paused = false;
           item.reconnectRetries = 0;
+          item.autoRetries = 0;
           requeued = true;
         }
       }
@@ -1514,7 +1595,11 @@ export function startUploadQueue(
       // successes stay untouched.
       if (!item || item.controller !== null) return;
       if (item.state.phase !== "failed" && item.state.phase !== "cancelled") return;
+      // Keep a pending batch timer: it will simply skip this file (now idle)
+      // and still replay the other failures. Manual retry resets this file's
+      // budgets, as before.
       item.reconnectRetries = 0;
+      item.autoRetries = 0;
       item.state = idleTransfer(item.file);
       item.settled = false;
       item.reserved = false;
@@ -1524,6 +1609,7 @@ export function startUploadQueue(
       pump();
     },
     dispose() {
+      clearAutoRetry();
       detachListeners();
     },
     done,

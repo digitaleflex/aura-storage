@@ -842,15 +842,15 @@ export function ObjectsPage() {
       csrf: activeCsrf,
       folderId: currentFolderId,
       onUpdate: handleQueueUpdate,
-      // A file whose PUT died with the link is replayed by the queue as soon as
-      // the browser reports the network back: say so, instead of leaving the
-      // user in front of a tray full of "Échec" they did not ask to fix.
+      // The queue replays transient failures on its own (reconnect or delayed
+      // batch retry): say so instead of leaving a tray full of "Échec" the
+      // user never asked to fix.
       onAutoRetry: (count) =>
         notify(
           "ok",
-          `Connexion rétablie : ${count} fichier${count > 1 ? "s" : ""} relancé${
+          `Nouvelle tentative automatique : ${count} fichier${
             count > 1 ? "s" : ""
-          } automatiquement.`,
+          } relancé${count > 1 ? "s" : ""}.`,
         ),
     });
   }
