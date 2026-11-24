@@ -74,6 +74,7 @@ authorization or validation error.
 | Handle expired URLs and network errors | 403 → new intent; network/5xx → retry; both bounded |
 | Clean local state after failure | `failed`/`cancelled` states; a new submit mints a new idempotency key |
 | Survive a connectivity loss without a click | the queue suspends scheduling on `offline` (in-flight PUTs are not aborted) and, on `online`, replays every file whose `failureKind` is `retryable` (`QueueOptions.autoRetryOnReconnect`, capped by `maxReconnectRetries`, announced through `onAutoRetry`) |
+| Retry a batch of failures without clicking each file | one debounced timer in `startUploadQueue` replays all `retryable` failures together after a jittered, doubling delay (`QueueOptions.autoRetryFailures`, `maxAutoRetries`, `autoRetryDelayMs`); enabled by `transferContext` for the app, opt-in for direct queue users; fatal and cancelled rows are never replayed |
 | No success before backend confirmation | phase `available` is set only after `commit` resolves |
 | Server-side size/type limits | `api/transfer.py::validate_upload_policy` (see below) |
 
@@ -97,14 +98,25 @@ The queue therefore treats it as recoverable and rewinds it without asking.
   a human decision. They keep the manual "Réessayer les échecs" control.
 - `maxReconnectRetries` (default 3) bounds the automatic attempts per file, so a
   broken link cannot loop forever; a manual retry resets that budget.
+- The same recovery also works without a connectivity event. When a file ends
+  `failed` with `failureKind: "retryable"` (5xx, network error while the browser
+  still reports `onLine`), the queue schedules **one** delayed replay for the
+  whole batch: files that fail close together are retried together, not one by
+  one and not one timer per file. The delay grows with the attempt number
+  (jittered, capped at 30 s). `maxAutoRetries` (default 2) bounds it per file;
+  a manual retry resets the budget. If the browser goes offline before the
+  timer fires, the replay is left to the `online` path instead. The option is
+  opt-in at the queue level (`autoRetryFailures`, default false) and turned on
+  by `transferContext.tsx`, so direct queue users keep the manual contract.
 
 Limits, stated plainly:
 
 - The page must stay open. After a reload the browser cannot reopen a file by
   itself: the journal (`uploadJournal.ts`) keeps the metadata and the user
   re-selects the same files, and only the unconfirmed ones are sent again.
-- A server that is unreachable while the browser still reports `onLine` raises
-  no `online` event; those files stay `failed` and need the manual retry.
+- Automatic recovery is bounded. Once both budgets are spent, a still-failing
+  file stays `failed` and the manual "Réessayer les échecs" control remains the
+  explicit way to try again.
 
 ## Server-side transfer policy (authoritative)
 
