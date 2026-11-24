@@ -37,7 +37,7 @@ test("the tag input filters on the server and normalizes case", async ({ page })
 
   // The tag is an advanced filter: it counts in the badge and enables reset.
   await expect(page.getByRole("button", { name: /^Filtres/ })).toContainText("1");
-  const reset = page.getByRole("button", { name: "Réinitialiser" });
+  const reset = page.getByRole("button", { name: "Réinitialiser", exact: true });
   await expect(reset).toBeEnabled();
 
   await reset.click();
