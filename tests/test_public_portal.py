@@ -477,3 +477,72 @@ def test_progress_is_rate_limited(monkeypatch):
     codes = [reader.post("/api/public/progress", json=body,
                          headers={"X-CSRF-Token": csrf}).status_code for _ in range(3)]
     assert codes == [200, 200, 429]
+
+
+import re  # noqa: E402
+
+
+def _assert_strict_markup(html: str) -> None:
+    """No inline code: the page must pass a CSP without 'unsafe-inline' scripts/styles."""
+    assert "<style" not in html
+    for tag in re.findall(r"<script\b[^>]*>", html):
+        assert "src=" in tag or 'type="application/json"' in tag, tag
+    assert not re.search(r"\son[a-z]+\s*=", html), "inline event handler"
+    assert "javascript:" not in html
+
+
+def test_portal_pages_ship_a_strict_csp_and_no_inline_code(monkeypatch):
+    monkeypatch.setattr(main.settings, "s3_endpoint", "https://s3.example.org:8443/x")
+    _published_pack()
+    anon = TestClient(main.app)
+    login = anon.get("/")
+    c = _sign_in(TestClient(main.app))
+    for response in (login, c.get("/"), c.get("/?vue=grille"), c.get("/profil")):
+        assert response.status_code == 200
+        csp = response.headers["content-security-policy"]
+        assert "script-src 'self'" in csp and "style-src 'self'" in csp
+        assert "'unsafe-inline'" not in csp.split("style-src-attr")[0]
+        assert "default-src 'none'" in csp and "frame-ancestors 'none'" in csp
+        assert "media-src 'self' https://s3.example.org:8443" in csp
+        assert "img-src 'self' https://s3.example.org:8443" in csp
+        _assert_strict_markup(response.text)
+
+
+def test_portal_assets_are_served_immutable_and_only_from_the_public_host(monkeypatch):
+    c = TestClient(main.app)
+    page = c.get("/").text
+    css_url = re.search(r'href="(/portal-assets/portal\.css\?v=[0-9a-f]+)"', page).group(1)
+    js_url = re.search(r'src="(/portal-assets/common\.js\?v=[0-9a-f]+)"', page).group(1)
+    css = c.get(css_url)
+    assert css.status_code == 200
+    assert css.headers["content-type"].startswith("text/css")
+    assert "immutable" in css.headers["cache-control"]
+    assert css.headers["x-content-type-options"] == "nosniff"
+    assert "--bronze" in css.text
+    assert c.get(js_url).headers["content-type"].startswith("text/javascript")
+    again = c.get(css_url, headers={"If-None-Match": css.headers["etag"]})
+    assert again.status_code == 304
+    assert c.get("/portal-assets/secret.py").status_code == 404
+    assert c.get("/portal-assets/..%2Fmain.py").status_code == 404
+    monkeypatch.setattr(main.settings, "public_domain", "portail.example.org")
+    assert c.get(css_url).status_code == 404
+
+
+def test_catalogue_loads_player_scripts_and_hands_over_the_csrf_token():
+    _published_pack()
+    c = _sign_in(TestClient(main.app))
+    page = c.get("/").text
+    csrf = c.get("/api/public/me").json()["csrf_token"]
+    assert f'id="player-bar" data-csrf="{csrf}"' in page
+    for name in ("player.js", "shelf.js", "common.js"):
+        assert f"/portal-assets/{name}?v=" in page
+    player = c.get(re.search(r'src="(/portal-assets/player\.js\?v=[0-9a-f]+)"', page).group(1))
+    assert player.status_code == 200 and "__CSRF__" not in player.text
+    assert csrf not in player.text  # the token is never baked into a cacheable file
+
+
+def test_profile_delete_form_uses_data_confirm_instead_of_onsubmit():
+    c = _sign_in(TestClient(main.app))
+    html = c.get("/profil").text
+    assert 'data-confirm="Supprimer définitivement' in html
+    assert "onsubmit" not in html

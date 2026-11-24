@@ -19,13 +19,24 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 | `GET /api/public/library` | catalogue publié (JSON), avec position d'écoute par visiteur |
 | `POST /api/public/progress` | enregistre la position de lecture (CSRF, session publique) |
 | `GET /m/{slug}` | redirection média publique déjà existante, routée ici aussi pour le lecteur |
+| `GET /portal-assets/{nom}` | feuille de style et scripts du portail (empreinte dans l'URL, cache immuable) |
+| `GET /profil` | page de profil du visiteur (nom affiché, suppression du compte) |
 
 Les fichiers eux-mêmes sont servis par les liens `/m/{slug}` déjà existants :
 une redirection 302 vers une URL S3 présignée de courte durée, avec `Range`
 (seek). Aucun octet ne traverse l'API. Le lecteur HTML pointe directement sur
-ces URL. Les pages du portail n'ont pas de CSP dédiée pour l'instant : le middleware
-`api-secure-headers` pose HSTS/nosniff/frame/referrer, mais pas de `Content-Security-Policy`.
-Le JS du lecteur est donc inline et doit être pris en compte si une CSP est ajoutée.
+ces URL. Les pages du portail (connexion, catalogue, profil) portent une **Content-Security-Policy
+stricte** : `default-src 'none'; script-src 'self'; style-src 'self'`, `connect-src 'self'`,
+`form-action 'self'`, `frame-ancestors 'none'`, et `media-src`/`img-src` limités à l'origine
+et au stockage S3 (vers lequel `/m/` et `/covers/` redirigent). Aucun script ni `<style>`
+inline : le CSS et le JS vivent dans `api/portal_assets/` (`portal.css`, `common.js`,
+`player.js`, `shelf.js`), servis par `GET /portal-assets/{nom}?v=<empreinte>` en
+`immutable` (cache d'un an, l'empreinte change avec le fichier). Seuls les attributs
+`style="--cover-h:…"` / `width:…%` calculés par le serveur restent autorisés
+(`style-src-attr`). Le jeton CSRF n'est jamais écrit dans un fichier mis en cache : il passe par
+`data-csrf` sur `#player-bar`. Ajouter un fichier : le déposer dans `api/portal_assets/`
+(`.css` ou `.js`) et le référencer avec `asset_url("nom")` ; Traefik route déjà
+`/portal-assets/` et `/profil` vers l'API sur le domaine public.
 
 `/api/v1/*`, `/s/*`, `/f/*`, `/p/*` et la console React restent sur `APP_DOMAIN`.
 
