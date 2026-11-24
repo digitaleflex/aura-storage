@@ -424,3 +424,113 @@ Non livré : planification cron/systemd sur le VPS, tableau de bord des échecs 
 6. Politique de validation EPUB/PDF et outil antivirus retenu.
 
 Ces décisions ne remettent pas en cause la frontière : **métadonnées candidates, validation obligatoire, AURA pour les octets, droits décidés par le service métier.**
+
+---
+
+## 16. Préparation du déploiement sur le VPS
+
+Statut au 2026-11-24 : les tests complets passent sur le VPS pilote avec la
+vraie PostgreSQL (**690 passed, 3 skipped**). Le service n'est pas encore ajouté
+à Compose et aucun identifiant de service AURA n'a été créé.
+
+### 16.1 Identité de service AURA
+
+Créer une identité dédiée à `audiobook-api` via
+`POST /api/v1/admin/identities`, avec uniquement :
+
+- `objects:read`
+- `objects:write`
+
+Aucun scope `admin:*`, aucun scope `objects:purge`. Stocker le secret renvoyé
+dans `.env` sous `AUDIOBOOK_AURA_SERVICE_TOKEN`, jamais dans Git. Le révoquer
+avec `POST /api/v1/admin/identities/{id}/revoke` si le déploiement est annulé.
+
+### 16.2 Variables à ajouter à `.env`
+
+```text
+AUDIOBOOK_ADMIN_TOKEN=
+AUDIOBOOK_AURA_SERVICE_TOKEN=
+AUDIOBOOK_INGEST_STAGING_DIR=/srv/aura-storage/audiobook-ingest
+AUDIOBOOK_INGEST_AV_CMD=
+AUDIOBOOK_INGEST_FFPROBE_CMD=ffprobe
+AUDIOBOOK_PUBLIC_BASE_URL=https://<domaine-audiobook>
+```
+
+Tant qu'aucune route HTTPS publique n'existe, garder le conteneur sans router
+Traefik et utiliser `AUDIOBOOK_COOKIE_SECURE=0` uniquement en interne. Ne pas
+exposer ce réglage sur Internet.
+
+### 16.3 Service Compose proposé
+
+```yaml
+  audiobook-api:
+    build: ./audiobook
+    image: aura-audiobook-api:local
+    container_name: ${AURA_INSTANCE_ID:-aura-001}-audiobook-api
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Africa/Porto-Novo}
+      AUDIOBOOK_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AUDIOBOOK_SCHEMA: audiobook
+      AUDIOBOOK_PUBLIC_BASE_URL: ${AUDIOBOOK_PUBLIC_BASE_URL:?Set AUDIOBOOK_PUBLIC_BASE_URL}
+      AUDIOBOOK_ADMIN_TOKEN: ${AUDIOBOOK_ADMIN_TOKEN:?Set AUDIOBOOK_ADMIN_TOKEN}
+      AURA_API_BASE_URL: http://api:8000
+      AURA_SERVICE_TOKEN: ${AUDIOBOOK_AURA_SERVICE_TOKEN:?Set AUDIOBOOK_AURA_SERVICE_TOKEN}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      AUDIOBOOK_INGEST_STAGING_DIR: /srv/aura/ingest
+      AUDIOBOOK_INGEST_AV_CMD: ${AUDIOBOOK_INGEST_AV_CMD:-}
+      AUDIOBOOK_INGEST_FFPROBE_CMD: ${AUDIOBOOK_INGEST_FFPROBE_CMD:-ffprobe}
+    volumes:
+      - ${AURA_DATA_DIR:-./data}/audiobook-ingest:/srv/aura/ingest:rw
+    networks:
+      - storage
+      - oauth
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m
+```
+
+Le démarrage applique les migrations versionnées (`0001` à `0009`) dans le
+schéma `audiobook`. Aucun port hôte n'est publié et aucune route Traefik n'est
+ajoutée dans un premier temps.
+
+### 16.4 Réconciliation
+
+Passe manuelle :
+
+```bash
+set -a
+. ./.env
+set +a
+.venv/bin/python scripts/audiobook_reconcile.py
+```
+
+Exemple cron, après validation de l'environnement de production :
+
+```cron
+17 4 * * * cd /home/aura-admin/aura-storage && set -a && . ./.env && set +a && .venv/bin/python scripts/audiobook_reconcile.py >> /srv/aura-storage/audit/audiobook-reconcile.log 2>&1
+```
+
+### 16.5 Ce qui reste avant « go live »
+
+- [ ] créer l'identité de service et renseigner `.env` ;
+- [ ] ajouter le service Compose et valider `docker compose config --quiet` ;
+- [ ] démarrer uniquement `audiobook-api`, vérifier `/health/ready` ;
+- [ ] configurer l'antivirus et confirmer `ffprobe` dans le conteneur ;
+- [ ] décider du domaine/public route et du SSO admin ;
+- [ ] installer le cron de réconciliation ;
+- [ ] valider les trois gates VPS (backup/restore, SSH/firewall, reboot) ;
+- [ ] migrer l'ancien portail et retirer tout `/m/{slug}` payant.
