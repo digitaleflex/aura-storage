@@ -714,8 +714,9 @@ def test_favorites_are_private_idempotent_csrf_protected_and_shown_in_the_catalo
     for _ in range(2):  # twice: idempotent
         r = reader.put(f"/api/public/favorites/{oid}", headers=hdr)
         assert r.status_code == 200 and r.json() == {"object_id": oid, "favorite": True}
-    items = reader.get("/api/public/library").json()["collections"][0]["items"]
-    assert items[0]["id"] == oid
+    cols = reader.get("/api/public/library").json()["collections"]
+    mine = next(i for col in cols for i in col["items"] if i["id"] == oid)
+    assert mine["favorite"] is True
     page = reader.get("/").text
     assert 'id="favoris"' in page and "Mes favoris" in page
     assert f'data-favorite="{oid}" aria-pressed="true"' in page
