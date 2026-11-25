@@ -64,7 +64,9 @@ To advertise HTTP/3 before the first HTTPS response, publish a DNS `HTTPS`
 (SVCB) record for each public hostname with `alpn="h3,h2"`. The records do not
 change TLS, routing or ACME; they only give browsers an earlier h3 hint. Keep
 the values aligned with the Traefik entrypoint and remove the record before
-disabling HTTP/3.
+disabling HTTP/3. `scripts/ensure_https_dns.py` reads domains from `.env`,
+uses `CLOUDFLARE_API_TOKEN` (and optional `CLOUDFLARE_ZONE_ID`), and is
+idempotent; it defaults to dry-run and requires `--apply` to mutate DNS.
 
 AURA's media URLs are **mutable by design** (`/m/<slug>` survives content
 replacement, grants are revocable), so they must keep `no-store`/short-lived
