@@ -208,11 +208,19 @@ livres indéfiniment.
 
 `scripts/cover_candidates.sh [limite] [itunes|openlibrary|all]` interroge des API
 publiques (iTunes Search, Open Library) et écrit un fichier de revue dans
-`$AURA_DATA_DIR/cover-candidates.json`. **Aucune image n'est publiée** : le fichier
-liste les candidats par livre. Une régénération bornée conserve les livres déjà
-appliqués, leurs choix et les entrées hors limite. Les résultats peuvent être
-erronés (mauvaise édition) et les droits d'image doivent être vérifiés avant
-publication.
+`$AURA_DATA_DIR/cover-review/cover-candidates.json`. **Aucune image n'est publiée** :
+le fichier liste les candidats par livre. Une régénération bornée conserve les
+livres déjà appliqués, leurs choix et les entrées hors limite. Les résultats
+peuvent être erronés (mauvaise édition) et les droits d'image doivent être vérifiés
+avant publication.
+
+Pour automatiser la préparation (sans publication), `scripts/refresh_cover_review.sh`
+rafraîchit les candidats puis régénère `/srv/aura-storage/cover-review.html`.
+Exemple cron :
+
+```cron
+30 4 * * * cd /srv/aura-storage && ./scripts/refresh_cover_review.sh >> /var/log/aura-cover-review.log 2>&1
+```
 
 Une fois un candidat retenu :
 
@@ -231,7 +239,7 @@ Une page HTML locale facilite la revue des propositions :
 
 ```bash
 python3 scripts/render_cover_review.py \
-  /srv/aura-storage/cover-candidates.json \
+  /srv/aura-storage/cover-review/cover-candidates.json \
   --output /srv/aura-storage/cover-review.html
 ```
 
