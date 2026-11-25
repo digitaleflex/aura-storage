@@ -46,7 +46,7 @@ left alone, so a normal night is a no-op. Verify with `volume.list` that
 `DeletedBytes` does not keep growing. New volumes use the master setting
 `SEAWEED_VOLUME_SIZE_LIMIT_MB` (10 GiB by default); existing volumes are unchanged.
 
-## HTTP/3 and media caching
+## HTTP/3, idempotent retries and media caching
 
 Traefik publishes UDP/443 and enables HTTP/3 on `websecure`. On the current
 pilot UFW is disabled (`ENABLED=no`), so nothing blocks `443/udp`; if UFW is
@@ -54,6 +54,17 @@ ever enabled, allow it explicitly with `sudo ufw allow 443/udp`. There is
 deliberately **no buffering middleware** on the
 S3 router: presigned PUT/GET bodies stream straight to SeaweedFS. The S3 router
 only carries HSTS, and nginx gzip types exclude `audio/*` and `video/*`.
+
+GET/HEAD twin routers on the S3, share and public surfaces carry
+`api-get-retry` (2 attempts) so a transient network error is replayed only for
+idempotent reads. POST/PUT/DELETE stay on the original routers and are never
+retried.
+
+To advertise HTTP/3 before the first HTTPS response, publish a DNS `HTTPS`
+(SVCB) record for each public hostname with `alpn="h3,h2"`. The records do not
+change TLS, routing or ACME; they only give browsers an earlier h3 hint. Keep
+the values aligned with the Traefik entrypoint and remove the record before
+disabling HTTP/3.
 
 AURA's media URLs are **mutable by design** (`/m/<slug>` survives content
 replacement, grants are revocable), so they must keep `no-store`/short-lived

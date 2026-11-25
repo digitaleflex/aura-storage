@@ -155,3 +155,36 @@ def test_tested_traefik_version_is_pinned() -> None:
     override = COMPOSE.with_name("docker-compose.override.yml")
     data = yaml.safe_load(override.read_text(encoding="utf-8"))
     assert data["services"]["traefik"]["image"] == "traefik:v3.7.20"
+
+
+def test_idempotent_get_routes_have_retry_and_no_mutation_replay(
+    services: dict[str, list[str]],
+) -> None:
+    middleware_labels = next(
+        (
+            lbl
+            for lbl in services.values()
+            if "traefik.http.middlewares.api-get-retry.retry.attempts=2" in lbl
+        ),
+        None,
+    )
+    assert middleware_labels is not None, "shared GET retry middleware disappeared"
+
+    routers: dict[str, dict[str, str]] = {}
+    for lbl in services.values():
+        routers.update(_index(lbl, ROUTER))
+    for name, base, priority in (
+        ("aura-share-get", "aura-share", 205),
+        ("aura-public-get", "aura-public", 215),
+        ("aura-s3-get", "aura-s3", 10),
+    ):
+        router = routers[name]
+        assert "Method(`GET`)" in router.get("rule", "")
+        assert "Method(`HEAD`)" in router.get("rule", "")
+        assert int(router.get("priority", "0")) == priority
+        assert "api-get-retry" in router.get("middlewares", "")
+        assert router.get("service") == base
+
+    for mutation in ("aura-share", "aura-public", "aura-s3"):
+        middlewares = routers[mutation].get("middlewares", "")
+        assert "api-get-retry" not in middlewares, mutation

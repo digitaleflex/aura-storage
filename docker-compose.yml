@@ -185,6 +185,16 @@ services:
       # be streamed to SeaweedFS, never buffered in Traefik RAM. Only HSTS.
       - traefik.http.routers.aura-s3.middlewares=aura-hsts@docker
       - traefik.http.services.aura-s3.loadbalancer.server.port=8333
+      # Idempotent reads only: a transient network error is retried, but a
+      # presigned PUT/POST is never replayed. Lower priority than no other
+      # router on this host, so it wins for GET/HEAD without affecting writes.
+      - traefik.http.routers.aura-s3-get.rule=Host(`${S3_DOMAIN:?Set S3_DOMAIN in .env}`) && (Method(`GET`) || Method(`HEAD`))
+      - traefik.http.routers.aura-s3-get.priority=10
+      - traefik.http.routers.aura-s3-get.entrypoints=websecure
+      - traefik.http.routers.aura-s3-get.tls=true
+      - traefik.http.routers.aura-s3-get.tls.certresolver=le
+      - traefik.http.routers.aura-s3-get.middlewares=aura-hsts@docker,api-get-retry
+      - traefik.http.routers.aura-s3-get.service=aura-s3
     security_opt:
       - no-new-privileges:true
     # No SeaweedFS master/volume/filer admin ports are published to the host.
@@ -444,6 +454,23 @@ services:
       - traefik.http.routers.aura-public.middlewares=api-ratelimit,api-secure-headers
       - traefik.http.routers.aura-public.service=aura-public
       - traefik.http.services.aura-public.loadbalancer.server.port=8000
+      # GET/HEAD-only twins of the two API routers above. They carry the same
+      # guards plus a network-error retry; POST/PUT/DELETE keep the original
+      # routers and are never replayed.
+      - traefik.http.routers.aura-share-get.rule=Host(`${APP_DOMAIN:?Set APP_DOMAIN in .env}`) && (PathPrefix(`/s/`) || PathPrefix(`/f/`) || PathPrefix(`/m/`) || PathPrefix(`/d/`) || PathPrefix(`/a/`) || PathPrefix(`/p/`) || PathPrefix(`/hls/`)) && (Method(`GET`) || Method(`HEAD`))
+      - traefik.http.routers.aura-share-get.priority=205
+      - traefik.http.routers.aura-share-get.entrypoints=websecure
+      - traefik.http.routers.aura-share-get.tls=true
+      - traefik.http.routers.aura-share-get.tls.certresolver=le
+      - traefik.http.routers.aura-share-get.middlewares=api-ratelimit,api-secure-headers,api-get-retry
+      - traefik.http.routers.aura-share-get.service=aura-share
+      - traefik.http.routers.aura-public-get.rule=Host(`${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN in .env}`) && (Path(`/`) || PathPrefix(`/api/public/`) || PathPrefix(`/m/`) || PathPrefix(`/d/`) || PathPrefix(`/a/`) || PathPrefix(`/hls/`) || PathPrefix(`/covers/`) || PathPrefix(`/portal-assets/`) || PathPrefix(`/profil`) || PathPrefix(`/livre/`) || PathPrefix(`/extrait/`) || Path(`/sitemap.xml`) || Path(`/robots.txt`) || Path(`/sw.js`) || Path(`/hors-ligne`) || PathPrefix(`/connexion/`)) && (Method(`GET`) || Method(`HEAD`))
+      - traefik.http.routers.aura-public-get.priority=215
+      - traefik.http.routers.aura-public-get.entrypoints=websecure
+      - traefik.http.routers.aura-public-get.tls=true
+      - traefik.http.routers.aura-public-get.tls.certresolver=le
+      - traefik.http.routers.aura-public-get.middlewares=api-ratelimit,api-secure-headers,api-get-retry
+      - traefik.http.routers.aura-public-get.service=aura-public
     depends_on:
       postgres:
         condition: service_healthy
@@ -534,6 +561,9 @@ services:
       - traefik.http.middlewares.api-secure-headers.headers.contentTypeNosniff=true
       - traefik.http.middlewares.api-secure-headers.headers.frameDeny=true
       - traefik.http.middlewares.api-secure-headers.headers.referrerPolicy=no-referrer
+      # `api-get-retry`: replay only idempotent reads on transient network errors.
+      # Attached only to GET/HEAD twin routers below, never to POST/PUT/DELETE.
+      - traefik.http.middlewares.api-get-retry.retry.attempts=2
       # `api-docs-allowlist`: restriction choix utilisateur (2026-10-16) — docs internes
       # derrière firewall/VPN. Plages privées par défaut; ajoute ton IP publique opérateur
       # via `SWAGGER_ADMIN_IP` dans .env (ex: 203.0.113.10/32) avant go-live si accès distant.
