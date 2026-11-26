@@ -1823,63 +1823,6 @@ def _clean_display_name(value: str) -> str:
     return cleaned[:80]
 
 
-@app.get("/api/public/me")
-def public_me(request: Request, response: Response, principal: dict = Depends(require_public)):
-    sid = request.cookies.get(settings.public_session_cookie)
-    session_id = principal.get("session_id")
-    if sid and session_id:
-        now = int(time.time())
-        expires_at = now + settings.public_session_ttl
-        repo.extend_session(session_id, expires_at)
-        response.set_cookie(
-            settings.public_session_cookie, sid, httponly=True,
-            secure=settings.cookie_secure, samesite="lax",
-            max_age=settings.public_session_ttl, path="/",
-        )
-    return {
-        "id": principal["id"],
-        "name": principal.get("name"),
-        "display_name": principal.get("display_name", ""),
-        "email": principal.get("email"),
-        "role": principal["role"],
-        "plan": principal.get("plan", "free"),
-        "csrf_token": principal["csrf"],
-    }
-
-
-@app.patch("/api/public/me")
-def public_me_patch(body: PublicProfilePatch, principal: dict = Depends(require_public)):
-    display_name = _clean_display_name(body.display_name)
-    repo.update_user_display_name(principal["id"], display_name)
-    audit_event("public-profile", principal["id"], "success", {"action": "update"})
-    return {"ok": True, "display_name": display_name}
-
-
-@app.delete("/api/public/me")
-def public_me_delete(principal: dict = Depends(require_public)):
-    uid = principal["id"]
-    repo.delete_public_account(uid)
-    audit_event("public-account-delete", uid, "success")
-    out = JSONResponse({"ok": True})
-    out.delete_cookie(
-        settings.public_session_cookie, path="/", httponly=True,
-        secure=settings.cookie_secure, samesite="lax",
-    )
-    return out
-
-
-@app.post("/api/public/logout")
-def public_logout(principal: dict = Depends(require_public)):
-    repo.delete_session(principal["session_id"])
-    audit_event("public-logout", principal["id"], "success")
-    out = RedirectResponse("/", status_code=303)
-    out.delete_cookie(
-        settings.public_session_cookie, path="/", httponly=True,
-        secure=settings.cookie_secure, samesite="lax",
-    )
-    return out
-
-
 def _portal_csp() -> str:
     """Content-Security-Policy of the public portal pages.
 
@@ -2315,12 +2258,6 @@ def _public_listening_stats(principal: dict) -> dict:
         ],
         "series_in_progress": series[:5],
     }
-
-
-@app.get("/api/public/stats")
-def public_stats(principal: dict = Depends(require_public)):
-    """The listener's own listening summary (never another visitor's data)."""
-    return _public_listening_stats(principal)
 
 
 @app.get("/api/public/playlists")
@@ -6577,3 +6514,6 @@ def restore_object_revision(
         "head_revision_number": next_no,
         "status": "available",
     }
+
+from .routes_public_profile import router as public_profile_router  # noqa: E402
+app.include_router(public_profile_router)
