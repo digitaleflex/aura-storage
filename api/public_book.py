@@ -5,7 +5,7 @@ preview, chapters and share links. Same rules as public_ui: no inline script,
 no external resource, so the strict portal CSP applies unchanged.
 """
 import json
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, quote_plus, urlencode
 
 from .public_ui import (
     ESC, SORTS, _BRAND, _GOOGLE, _SKIP_LINK, _duration_text, _heart_button, _position_text, asset_url,
@@ -59,10 +59,24 @@ def landing_page(
     collections: list[dict], query: str = "", authors: list[str] | None = None,
     active_author: str = "", base_url: str = "", with_email: bool = False, sort: str = "",
     search_note: str = "",
+    facet_options: dict | None = None,
+    active_facets: dict | None = None,
+    filter_error: str = "",
+    page: int = 1,
+    page_size: int = 24,
 ) -> str:
     """Anonymous front page: the catalogue to browse, a clear way to sign in."""
     authors = authors or []
+    facet_options = facet_options or {}
+    active_facets = active_facets or {}
     items = [i for col in collections for i in col.get("items", [])]
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 24), 60))
+    total = len(items)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = min(page, pages)
+    start = (page - 1) * page_size
+    page_items = items[start:start + page_size]
     description = (
         f"{len(items)} livres audio à découvrir : écoutez un extrait gratuit, "
         "puis entrez avec Google pour tout écouter."
@@ -106,14 +120,36 @@ def landing_page(
         parts.append('<p class="filters-reset"><a class="facet-clear" href="/">Effacer les filtres</a></p>')
     if not items:
         parts.append('<p class="empty">Aucun livre ne correspond à votre recherche.</p>')
-    for col in collections:
-        parts.append(
-            f'<section class="shelf"><div class="shelf-head"><h2>{ESC(col["title"])}</h2>'
-            + (f'<p class="desc">{ESC(col["description"])}</p>' if col.get("description") else "")
-            + '</div><ul class="book-grid">'
-        )
-        parts.extend(_card(i) for i in col["items"])
-        parts.append('</ul></section>')
+    else:
+        title = collections[0]["title"] if len(collections) == 1 else "Tous les livres"
+        parts.append(f'<section class="shelf"><div class="shelf-head"><h2>{ESC(title)}</h2>'
+                     f'<p class="desc">Page {page} sur {pages} · {total} titre{"s" if total != 1 else ""}</p>'
+                     '</div><ul class="book-grid catalog-grid">')
+        parts.extend(_card(i) for i in page_items)
+        parts.append('</ul>')
+        if pages > 1:
+            def _page_href(pn: int) -> str:
+                qs = []
+                if query: qs.append(f"q={quote_plus(query)}")
+                if active_author: qs.append(f"auteur={quote_plus(active_author)}")
+                if sort: qs.append(f"tri={quote_plus(sort)}")
+                for k, v in (("collection", active_facets.get("collection")), ("categorie", active_facets.get("category")), ("theme", active_facets.get("theme")), ("langue", active_facets.get("language")), ("format", active_facets.get("format")), ("duree_min", active_facets.get("duration_min")), ("duree_max", active_facets.get("duration_max"))):
+                    if v: qs.append(f"{k}={quote_plus(str(v))}")
+                if pn > 1: qs.append(f"page={pn}")
+                return "/?" + "&".join(qs) if qs else "/"
+            parts.append('<nav class="pagination" aria-label="Pagination">')
+            if page > 1:
+                parts.append(f'<a class="page-link" href="{ESC(_page_href(page-1))}">Précédent</a>')
+            for pn in range(1, pages+1):
+                if pn == 1 or pn == pages or abs(pn-page) <= 2:
+                    cur = ' aria-current="page"' if pn == page else ''
+                    parts.append(f'<a class="page-link" href="{ESC(_page_href(pn))}"{cur}>{pn}</a>')
+                elif abs(pn-page) == 3:
+                    parts.append('<span class="page-ellipsis">…</span>')
+            if page < pages:
+                parts.append(f'<a class="page-link" href="{ESC(_page_href(page+1))}">Suivant</a>')
+            parts.append('</nav>')
+        parts.append('</section>')
     parts.append('</main><footer class="site-foot">AURA · Écoute privée</footer></body></html>')
     return "".join(parts)
 

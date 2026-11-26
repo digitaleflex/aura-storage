@@ -2433,14 +2433,19 @@ def public_portal(request: Request):
                 headers=_public_profile_headers(),
             )
         catalog = _public_catalog()
+        filtered = _filter_collections(catalog, query, author, sort, **duration_filters)
+        try:
+            page = max(1, int(request.query_params.get("page", "1")))
+        except ValueError:
+            page = 1
         return HTMLResponse(
             public_book.landing_page(
-                _filter_collections(catalog, query, author, sort, **duration_filters),
-                query=query, search_note=search_note,
+                filtered, query=query, search_note=search_note,
                 authors=_catalog_authors(catalog), active_author=author, sort=sort,
                 base_url=_public_base_url(), with_email=magic_link.enabled(settings),
+                page=page,
             ),
-            headers=_public_profile_headers(indexable=not (query or author or sort)),
+            headers=_public_profile_headers(indexable=not (query or author or sort or page > 1)),
         )
     view = request.query_params.get("vue", "liste").strip().lower()
     if view not in ("liste", "grille", "immersif"):
