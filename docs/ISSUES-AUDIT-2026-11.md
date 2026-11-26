@@ -1,8 +1,8 @@
-# Backlog d'issues — Audit AURA Storage (2026-11-05)
+# [ARCHIVÉ] Backlog d'issues — Audit AURA Storage (2026-11-05)
 
-> **Révision 2026-11-24 :** la roadmap portail #293-#306 est terminée et les nouveaux suivis sont #314-#325. Ce fichier reste un instantané de l'audit du 2026-11-05 ; voir [`ETAT-DES-FONCTIONNALITES.md`](ETAT-DES-FONCTIONNALITES.md) §10 et le [journal de vérification](verification-log-2026-11-24-portail-perf.md).
-
-> **Avertissement (2026-11-05) :** les statuts détaillés de ce fichier sont partiellement périmés et contradictoires (plusieurs issues marquées « Ouvert » dans le corps alors que la synthèse annonce « tout résolu » ; ISSUE-018/019/020 sont déclarées résolues alors qu'il n'existe que des spécifications). **La source de vérité est désormais [`docs/ETAT-DES-FONCTIONNALITES.md`](ETAT-DES-FONCTIONNALITES.md)**, qui distingue explicitement *spécifié*, *implémenté* et *validé*.
+> **Statut : archive historique. Ne pas utiliser comme source de vérité.**
+> **Source de vérité : [`ETAT-DES-FONCTIONNALITES.md`](ETAT-DES-FONCTIONNALITES.md)** (état réel, preuves, inconnues) et le tracker GitHub.
+> **Révision 2026-11-24 :** la roadmap portail #293-#306 est terminée ; les suivis actifs sont dans le milestone 27 / issues #314+. Ce fichier conserve l'instantané d'audit du 2026-11-05 et peut contenir des statuts périmés ou contradictoires.
 
 Ce fichier recense **toutes les issues identifiées** lors de l'audit de l'application dans son état actuel. Il sert de référence pour créer les issues réelles sur GitHub.
 
