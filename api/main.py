@@ -753,12 +753,7 @@ class CollectionItemsIn(BaseModel):
     object_ids: list[Uuid4] = Field(default_factory=list, max_length=500)
 
 
-class ProgressIn(BaseModel):
-    """Playback position posted by the public player (CSRF-protected)."""
-    model_config = ConfigDict(extra="forbid")
-    object_id: Uuid4
-    position_seconds: float = Field(ge=0, le=864000)
-
+from .routes_public_library import ProgressIn  # noqa: E402
 
 class BookmarkIn(BaseModel):
     """A named position in a book, posted by the public player (CSRF-protected)."""
@@ -2139,34 +2134,6 @@ def _catalog_authors(collections: list) -> list:
     return sorted({i["author"] for col in collections for i in col["items"] if i["author"]})
 
 
-@app.get("/api/public/library")
-def public_library(principal: dict = Depends(require_public)):
-    """Published catalogue for signed-in visitors (no object capability)."""
-    collections = _public_collections(principal)
-    set_request_principal(principal.get("space_id"), principal.get("application_id"))
-    audit_event("public-library", principal["id"], "success")
-    return {"collections": collections}
-
-
-@app.post("/api/public/progress")
-def public_progress(
-    body: ProgressIn, request: Request, principal: dict = Depends(require_public),
-):
-    """Persist a listening position for the signed-in visitor."""
-    _public_rate_check("progress", request)
-    oid = _canonical_id(body.object_id, "object id")
-    # Public users are not scoped to the publisher's space: they may only save
-    # progress for an object that is actually published, nothing else.
-    row = repo.get_object_unscoped(oid)
-    row = _as_dict(row) if row is not None else None
-    if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
-        raise HTTPException(status_code=404, detail="object not found")
-    repo.save_progress(
-        principal["id"], oid, body.position_seconds, int(time.time())
-    )
-    return {"object_id": oid, "position_seconds": body.position_seconds}
-
-
 _BOOKMARKS_PER_BOOK = 50
 
 
@@ -2177,14 +2144,6 @@ def _published_book_or_404(oid: str) -> str:
     if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
         raise HTTPException(status_code=404, detail="object not found")
     return oid
-
-
-@app.get("/api/public/progress")
-def public_progress_get(object_id: str, principal: dict = Depends(require_public)):
-    """Where the visitor stopped on a book (used to offer 'resume from your other device')."""
-    oid = _published_book_or_404(object_id)
-    position = repo.get_progress_map(principal["id"], [oid]).get(oid, 0)
-    return {"object_id": oid, "position_seconds": position}
 
 
 @app.get("/api/public/bookmarks")
@@ -2216,28 +2175,6 @@ def public_bookmark_delete(
     if not repo.delete_bookmark(principal["id"], bid):
         raise HTTPException(status_code=404, detail="bookmark not found")
     return {"ok": True}
-
-
-def _set_public_favorite(oid: str, request: Request, principal: dict, favorite: bool) -> dict:
-    _public_rate_check("progress", request)
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object_unscoped(oid)
-    row = _as_dict(row) if row is not None else None
-    if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
-        raise HTTPException(status_code=404, detail="object not found")
-    repo.set_favorite(principal["id"], oid, favorite, int(time.time()))
-    return {"object_id": oid, "favorite": favorite}
-
-
-@app.put("/api/public/favorites/{oid}")
-def public_favorite_add(oid: str, request: Request, principal: dict = Depends(require_public)):
-    """Put a published book in the visitor's favourites (CSRF-protected)."""
-    return _set_public_favorite(oid, request, principal, True)
-
-
-@app.delete("/api/public/favorites/{oid}")
-def public_favorite_remove(oid: str, request: Request, principal: dict = Depends(require_public)):
-    return _set_public_favorite(oid, request, principal, False)
 
 
 # --- Private playlists (#302) -------------------------------------------
@@ -6577,3 +6514,6 @@ def restore_object_revision(
         "head_revision_number": next_no,
         "status": "available",
     }
+
+from .routes_public_library import router as public_library_router  # noqa: E402
+app.include_router(public_library_router)
