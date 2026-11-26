@@ -706,52 +706,14 @@ def _normalize_tags(values: list[str]) -> list[str]:
     return out
 
 
-class TagsIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    tags: list[str] = Field(default_factory=list, max_length=20)
-
-    @field_validator("tags")
-    @classmethod
-    def valid_tags(cls, value: list[str]) -> list[str]:
-        return _normalize_tags(value)
-
+from .routes_collections import TagsIn  # noqa: E402
 
 class SubtitleIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     subtitle_object_id: Uuid4 | None = None
 
 
-class CollectionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    slug: str = Field(min_length=2, max_length=63)
-    title: str = Field(min_length=1, max_length=120)
-    description: str = Field(default="", max_length=2000)
-
-    @field_validator("slug")
-    @classmethod
-    def valid_slug(cls, value: str) -> str:
-        return _normalize_slug(value)
-
-    @field_validator("title")
-    @classmethod
-    def clean_title(cls, value: str) -> str:
-        cleaned = " ".join(value.split())
-        if not cleaned:
-            raise ValueError("title must not be blank")
-        return cleaned
-
-
-class CollectionPatchIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    title: str | None = Field(default=None, min_length=1, max_length=120)
-    description: str | None = Field(default=None, max_length=2000)
-    published: bool | None = None
-
-
-class CollectionItemsIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    object_ids: list[Uuid4] = Field(default_factory=list, max_length=500)
-
+from .routes_collections import CollectionIn, CollectionPatchIn, CollectionItemsIn  # noqa: E402
 
 class ProgressIn(BaseModel):
     """Playback position posted by the public player (CSRF-protected)."""
@@ -3897,22 +3859,6 @@ def list_objects(
     }
 
 
-@app.get("/api/v1/objects/tags")
-def list_object_tags(
-    principal: dict = Depends(authorize(OBJECTS_READ)),
-    limit: int = Query(default=200, ge=1, le=500),
-):
-    """Distinct tags the caller may see, with the count of visible objects.
-
-    Declared before ``/objects/{oid}`` so "tags" is never parsed as an id. Uses
-    the same space/owner and hide-deleted rules as the object list: a tag must
-    not disclose an object the caller cannot list. No folder filter — this is
-    the caller's whole tag vocabulary, not the current folder's.
-    """
-    rows = repo.list_tag_counts(**_object_scope(principal), limit=limit)
-    return {"items": [{"tag": row["tag"], "count": row["n"]} for row in rows]}
-
-
 @app.get("/api/v1/objects/{oid}")
 def get_object(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
     oid = _canonical_id(oid, "object id")
@@ -4907,158 +4853,6 @@ def public_subtitle(slug: str, request: Request):
 
 # ---------------------------------------------------------------------------
 # Tags and ordered packs (Sprint 2).
-# ---------------------------------------------------------------------------
-def _collection_public(col: dict) -> dict:
-    return {
-        "id": col["id"], "slug": col["slug"], "title": col["title"],
-        "description": col.get("description") or "",
-        "published_at": col.get("published_at"),
-        "published": bool(col.get("published_at")),
-        "item_count": int(col.get("item_count") or 0),
-        "created_at": col["created_at"], "updated_at": col["updated_at"],
-    }
-
-
-def _owned_collection(cid: str, principal: dict) -> dict:
-    cid = _canonical_id(cid, "collection id")
-    col = repo.get_collection(cid)
-    if col is None or col["owner_id"] != principal["id"]:
-        raise HTTPException(status_code=404, detail="collection not found")
-    return _as_dict(col)
-
-
-@app.put("/api/v1/objects/{oid}/tags")
-def set_object_tags(
-    oid: str, body: TagsIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    """Replace an object's tags (normalized, deduplicated, max 20)."""
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    repo.set_object_tags(oid, body.tags)
-    audit_event("object.tags", principal["id"], "success",
-                {"object_id": oid, "tags": body.tags})
-    fresh = repo.get_object(oid, **_object_scope(principal))
-    return _object_public(fresh, repo.get_object_tags(oid))
-
-
-@app.get("/api/v1/collections")
-def list_collections(principal: dict = Depends(authorize(OBJECTS_READ, human=True))):
-    items = repo.list_collections(principal["space_id"], owner_id=principal["id"])
-    return {"items": [_collection_public(c) for c in items]}
-
-
-@app.post("/api/v1/collections")
-def create_collection(
-    body: CollectionIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    if repo.get_collection_by_slug(body.slug) is not None:
-        raise HTTPException(status_code=409, detail="slug already in use")
-    cid = repo.new_id()
-    repo.create_collection(
-        cid, principal["space_id"], principal["id"], body.slug,
-        body.title, body.description,
-    )
-    audit_event("collection.create", principal["id"], "success",
-                {"collection_id": cid, "slug": body.slug})
-    return _collection_public(repo.get_collection(cid))
-
-
-@app.get("/api/v1/collections/{cid}")
-def get_collection(cid: str, principal: dict = Depends(authorize(OBJECTS_READ, human=True))):
-    col = _owned_collection(cid, principal)
-    items = repo.get_collection_items(col["id"])
-    return {
-        **_collection_public({**col, "item_count": len(items)}),
-        "items": [_object_public(row) for row in items],
-    }
-
-
-@app.patch("/api/v1/collections/{cid}")
-def update_collection(
-    cid: str, body: CollectionPatchIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    col = _owned_collection(cid, principal)
-    fields = body.model_fields_set
-    title = body.title if "title" in fields and body.title is not None else col["title"]
-    description = (
-        body.description if "description" in fields and body.description is not None
-        else (col.get("description") or "")
-    )
-    published_at = col.get("published_at")
-    if "published" in fields and body.published is not None:
-        if body.published:
-            if not repo.get_collection_items(col["id"]):
-                raise HTTPException(status_code=422, detail="a pack needs items to be published")
-            published_at = published_at or int(time.time())
-        else:
-            published_at = None
-    repo.update_collection(col["id"], " ".join(title.split()), description, published_at)
-    audit_event("collection.update", principal["id"], "success", {
-        "collection_id": col["id"], "published": published_at is not None,
-    })
-    return _collection_public(repo.get_collection(col["id"]))
-
-
-@app.put("/api/v1/collections/{cid}/items")
-def set_collection_items(
-    cid: str, body: CollectionItemsIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    col = _owned_collection(cid, principal)
-    seen: list[str] = []
-    for oid in body.object_ids:
-        row = repo.get_object(oid, **_object_scope(principal))
-        if row is None or row["status"] != AVAILABLE:
-            raise HTTPException(status_code=404, detail="object not found or available")
-        if oid not in seen:
-            seen.append(oid)
-    repo.replace_collection_items(col["id"], seen)
-    audit_event("collection.items", principal["id"], "success", {
-        "collection_id": col["id"], "count": len(seen),
-    })
-    fresh = repo.get_collection(col["id"])
-    return _collection_public({**fresh, "item_count": len(seen)})
-
-
-@app.delete("/api/v1/collections/{cid}")
-def delete_collection(cid: str, principal: dict = Depends(authorize(OBJECTS_WRITE, human=True))):
-    col = _owned_collection(cid, principal)
-    repo.delete_collection(col["id"])
-    audit_event("collection.delete", principal["id"], "success",
-                {"collection_id": col["id"], "slug": col["slug"]})
-    return {"id": col["id"], "deleted": True}
-
-
-@app.get("/p/{slug}.json")
-def public_collection_manifest(slug: str):
-    """Published pack manifest for a course site (no auth, JSON).
-
-    Ordering is the pack order. Each item exposes its stable `/m/<slug>` URL only
-    when that object is itself published; otherwise the item is listed without a
-    URL, so a manifest never leaks an unpublished object.
-    """
-    if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
-        raise HTTPException(status_code=404, detail="not found")
-    col = repo.get_collection_by_slug(slug)
-    if col is None or not col.get("published_at"):
-        raise HTTPException(status_code=404, detail="not found")
-    set_request_principal(col["space_id"], None)
-    items = _library_items(col)
-    audit_event("collection.access", None, "success", {
-        "collection_id": col["id"], "slug": slug,
-    })
-    return {
-        "slug": col["slug"], "title": col["title"],
-        "description": col.get("description") or "",
-        "updated_at": col["updated_at"], "items": items,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Logical folders (#61). Human-owned catalogue metadata: no bytes, no host
 # directories. A folder is addressed by its id and scoped to its owner, so one
@@ -6577,3 +6371,6 @@ def restore_object_revision(
         "head_revision_number": next_no,
         "status": "available",
     }
+
+from .routes_collections import router as collections_router  # noqa: E402
+app.include_router(collections_router)
