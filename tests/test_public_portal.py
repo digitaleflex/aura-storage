@@ -162,10 +162,10 @@ def test_view_modes_facets_and_cover_route():
     _published_pack()
     c = _sign_in(TestClient(main.app))
     page = c.get("/").text
-    assert "view-liste" in page
+    assert "view-grille" in page  # la grille est la vue par défaut
     assert "Auteur Test" in page  # facet derived from the file name
     assert "Reprendre l&#x27;écoute" in page or "Reprendre l'écoute" in page
-    assert "view-grille" in c.get("/?vue=grille").text
+    assert "view-liste" in c.get("/?vue=liste").text
     assert "class=\"hero\"" in c.get("/?vue=immersif").text
     assert "Chapitre 1" in c.get("/?q=chapitre").text
     assert c.get("/?vue=bogus").status_code == 200
@@ -215,7 +215,7 @@ def test_catalogue_keeps_the_filters_folded_and_lists_authors_in_a_select():
         assert '<details class="filters-fold" id="filters-fold" open>' in filtered
         assert re.search(r'<option value="Auteur Test" selected>', filtered)
         assert 'name="vue" value="grille"' in filtered  # the select keeps the view
-        assert "Effacer les filtres" in filtered
+        assert "Effacer tous les filtres" in filtered
 
 
 def test_resume_card_is_not_repeated_in_the_resume_shelf():
@@ -1127,6 +1127,103 @@ def test_search_is_accent_insensitive_matches_every_word_and_sort_is_validated(m
     assert 'option value="titre" selected' in page.text
     assert page.headers["x-robots-tag"] == "noindex, nofollow"  # sorted views are not indexed
     assert 'selected' not in c.get("/?tri=hacked%22%3E").text.split('name="tri"')[1].split("</select>")[0].replace('value="" selected', "")
+
+
+def test_public_catalog_filters_by_category_theme_language_format_collection_and_duration(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    collection_slug, _, oid = _book(duration=3600, content_type="audio/mpeg")
+    main.repo.set_object_tags(oid, [
+        "categorie-roman", "theme-histoire", "langue-fr", "interne-secret",
+    ])
+    client = TestClient(main.app)
+    for path in (
+        "/?categorie=roman",
+        "/?theme=histoire",
+        "/?langue=fr",
+        "/?format=mp3",
+        f"/?collection={collection_slug}",
+        "/?duree_min=30&duree_max=90",
+        "/?q=histoire",
+    ):
+        page = client.get(path)
+        assert page.status_code == 200, path
+        assert f'href="/livre/{oid}"' in page.text, path
+        assert page.headers["x-robots-tag"] == "noindex, nofollow", path
+    assert f'href="/livre/{oid}"' not in client.get("/?categorie=science").text
+    assert f'href="/livre/{oid}"' not in client.get("/?format=ogg").text
+    assert "interne-secret" not in client.get("/").text
+    invalid = client.get("/?duree_min=90&duree_max=30")
+    assert "Durée invalide" in invalid.text
+
+
+def test_connected_catalog_exposes_one_accessible_filter_form(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    _, _, oid = _book()
+    main.repo.set_object_tags(oid, ["categorie-roman", "theme-histoire", "langue-fr"])
+    reader = _sign_in(TestClient(main.app))
+    page = reader.get("/?categorie=roman&theme=histoire&langue=fr&format=mp3")
+    assert page.status_code == 200, page.text
+    assert 'name="categorie"' in page.text and 'value="roman" selected' in page.text
+    assert 'name="theme"' in page.text and 'value="histoire" selected' in page.text
+    assert 'name="langue"' in page.text and 'value="fr" selected' in page.text
+    assert 'name="format"' in page.text and 'value="mp3" selected' in page.text
+    assert '<button type="submit" class="filter-apply">Appliquer les filtres</button>' in page.text
+    assert "Effacer tous les filtres" in page.text
+
+
+def test_book_page_and_public_json_expose_only_approved_facets(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    _, _, oid = _book()
+    main.repo.set_object_tags(oid, [
+        "categorie-roman", "theme-histoire", "langue-fr", "interne-secret",
+    ])
+    client = TestClient(main.app)
+    page = client.get(f"/livre/{oid}")
+    assert page.status_code == 200, page.text
+    assert "Roman" in page.text and "Histoire" in page.text and "Français" in page.text
+    assert '"inLanguage": "fr"' in page.text and '"genre"' in page.text
+    assert "interne-secret" not in page.text
+
+    reader = _sign_in(client)
+    payload = reader.get("/api/public/library").json()
+    item = next(i for col in payload["collections"] for i in col["items"] if i["id"] == oid)
+    assert item["categories"] == ["roman"]
+    assert item["themes"] == ["histoire"]
+    assert item["language"] == "fr"
+    assert "interne-secret" not in item["public_tags"]
+
+
+def test_duration_filters_validate_effective_bounds_and_preserve_nlp_bounds():
+    from types import SimpleNamespace
+    from starlette.requests import Request
+
+    intent = SimpleNamespace(min_seconds=1800, max_seconds=5400)
+    request = Request({"type": "http", "query_string": b"q=moins+de+90+minutes&duree_min=120"})
+    _, bounds, error = main._catalog_filter_state(request, intent)
+    assert error and bounds == {"min_seconds": None, "max_seconds": None}
+
+    request = Request({"type": "http", "query_string": b""})
+    active, bounds, error = main._catalog_filter_state(request, intent)
+    assert not error and bounds == {"min_seconds": 1800, "max_seconds": 5400}
+    assert active["duration_min"] == "30" and active["duration_max"] == "90"
+
+    decimal_intent = SimpleNamespace(min_seconds=3636, max_seconds=3636)
+    active, bounds, error = main._catalog_filter_state(request, decimal_intent)
+    assert not error and bounds == {"min_seconds": 3600, "max_seconds": 3600}
+    assert active["duration_min"] == "60" and active["duration_max"] == "60"
+
+
+def test_zero_duration_bound_excludes_unknown_durations_and_search_keeps_author(monkeypatch):
+    unknown = {"id": "unknown", "display_name": "Anonyme", "author": "", "duration_seconds": None}
+    assert main._filter_collections(
+        [{"slug": "all", "items": [unknown]}], "", "", min_seconds=0,
+    ) == []
+
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    _book()
+    reader = _sign_in(TestClient(main.app))
+    page = reader.get("/?auteur=Auteur%20Test&q=introuvable").text
+    assert '<input type="hidden" name="auteur" value="Auteur Test">' in page
 
 
 def test_recommendations_follow_the_visitors_own_signals_only():

@@ -24,7 +24,7 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, folder_shares, google_oauth, ids, magic_link, netinfo, public_book, public_ui, shares
+from . import authz, folder_shares, google_oauth, ids, magic_link, netinfo, public_book, public_facets, public_ui, shares
 from .audit import (
     audit_event,
     audit_path,
@@ -1892,7 +1892,7 @@ def _portal_csp() -> str:
     s3 = f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
     media = f"'self' {s3}".strip()
     return (
-        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; "
         "style-src-attr 'unsafe-inline'; "
         f"img-src {media}; media-src {media}; connect-src {media}; "
         "manifest-src 'self'; worker-src 'self'; "
@@ -2078,6 +2078,22 @@ def _library_items(col: dict, only_published: bool = False) -> list:
     return items
 
 
+def _attach_public_facets(collections: list) -> list:
+    """Attach only approved public facets, loading tags in bounded batches."""
+    object_ids = list({
+        item["id"] for col in collections for item in col.get("items", [])
+    })
+    tags_by_object: dict[str, list[str]] = {}
+    for start in range(0, len(object_ids), 500):
+        tags_by_object.update(repo.list_tags_for_objects(object_ids[start:start + 500]))
+    for col in collections:
+        col["items"] = [
+            public_facets.enrich_public_item(item, tags_by_object.get(item["id"], []))
+            for item in col.get("items", [])
+        ]
+    return collections
+
+
 def _public_catalog() -> list:
     """Published catalogue, identical for every visitor (no listening position)."""
     collections = []
@@ -2089,7 +2105,7 @@ def _public_catalog() -> list:
             "updated_at": col["updated_at"],
             "items": _library_items(col, only_published=True),
         })
-    return collections
+    return _attach_public_facets(collections)
 
 
 def _public_collections(principal: dict) -> list:
@@ -2108,23 +2124,44 @@ def _public_collections(principal: dict) -> list:
 def _filter_collections(
     collections: list, query: str, author: str, sort: str = "",
     *, min_seconds: int | None = None, max_seconds: int | None = None,
+    collection: str = "", category: str = "", theme: str = "",
+    language: str = "", media_format: str = "",
 ) -> list:
-    """Search (accent-insensitive, every word must match), author filter and sort."""
+    """Search and combine public facets with AND semantics."""
     words = public_ui.fold(query).split()
+    raw_format = (media_format or "").strip().lower()
+    wanted_format = public_facets.normalize_format(raw_format, unknown=raw_format) if raw_format else ""
+    wanted_author = public_ui.fold(author) if author else ""
     out = []
     for col in collections:
-        items = col["items"]
-        if words:
-            items = [
-                i for i in items
-                if all(w in public_ui.fold(f'{i["display_name"]} {i["author"]}') for w in words)
-            ]
-        if author:
-            items = [i for i in items if i["author"] == author]
-        if min_seconds is not None:
-            items = [i for i in items if float(i.get("duration_seconds") or 0) >= min_seconds]
-        if max_seconds is not None:
-            items = [i for i in items if 0 < float(i.get("duration_seconds") or 0) <= max_seconds]
+        if collection and col.get("slug") != collection:
+            continue
+        prepared = []
+        for item in col["items"]:
+            facets = public_facets.item_facets(item)
+            searchable = public_ui.fold(
+                f'{item.get("display_name", "")} {item.get("author", "")} '
+                f'{item.get("title", "")} {" ".join(facets["categories"])} '
+                f'{" ".join(facets["themes"])}'
+            )
+            prepared.append((item, facets, searchable, float(item.get("duration_seconds") or 0)))
+        items = [
+            item for item, facets, searchable, duration in prepared
+            if (not words or all(word in searchable for word in words))
+            and (not wanted_author or public_ui.fold(item.get("author", "")) == wanted_author)
+            and (not category or category in facets["categories"])
+            and (not theme or theme in facets["themes"])
+            and (not language or language in facets["languages"])
+            and (not wanted_format or facets["format"] == wanted_format)
+            and (
+                (min_seconds is None and max_seconds is None)
+                or (
+                    duration > 0
+                    and (min_seconds is None or duration >= min_seconds)
+                    and (max_seconds is None or duration <= max_seconds)
+                )
+            )
+        ]
         if items:
             out.append({**col, "items": public_ui.sort_items(items, sort)})
     return out
@@ -2135,8 +2172,54 @@ def _sort_param(request: Request) -> str:
     return value if value in {v for _, v in public_ui.SORTS} else ""
 
 
+def _catalog_filter_state(request: Request, intent) -> tuple[dict, dict, str]:
+    """Parse explicit URL facets; explicit duration bounds override NLP ones."""
+    params = request.query_params
+    raw_format = (params.get("format") or "").strip().lower()
+    active = {
+        "collection": (params.get("collection") or "").strip()[:120],
+        "category": (params.get("categorie") or "").strip().lower()[:64],
+        "theme": (params.get("theme") or "").strip().lower()[:64],
+        "language": (params.get("langue") or "").strip().lower()[:16],
+        "format": public_facets.normalize_format(raw_format, unknown=raw_format)[:32],
+        "duration_min": (params.get("duree_min") or "").strip()[:6],
+        "duration_max": (params.get("duree_max") or "").strip()[:6],
+    }
+    error = ""
+    try:
+        explicit_min = public_facets.minutes_to_seconds(active["duration_min"])
+        explicit_max = public_facets.minutes_to_seconds(active["duration_max"])
+        min_seconds = explicit_min if active["duration_min"] else intent.min_seconds
+        max_seconds = explicit_max if active["duration_max"] else intent.max_seconds
+        # The form works in whole minutes. Round NLP-derived bounds down before
+        # filtering so submitting the form later cannot silently change results.
+        if not active["duration_min"] and min_seconds is not None:
+            min_seconds = (min_seconds // 60) * 60
+        if not active["duration_max"] and max_seconds is not None:
+            max_seconds = (max_seconds // 60) * 60
+        if min_seconds is not None and max_seconds is not None and min_seconds > max_seconds:
+            raise ValueError("duration")
+    except ValueError:
+        min_seconds = max_seconds = None
+        error = "Durée invalide : indiquez des minutes entières et une borne minimale inférieure à la maximale."
+    if not active["duration_min"] and min_seconds is not None:
+        active["duration_min"] = str(min_seconds // 60)
+    if not active["duration_max"] and max_seconds is not None:
+        active["duration_max"] = str(max_seconds // 60)
+    return active, {"min_seconds": min_seconds, "max_seconds": max_seconds}, error
+
+
 def _catalog_authors(collections: list) -> list:
     return sorted({i["author"] for col in collections for i in col["items"] if i["author"]})
+
+
+def _catalog_author_counts(collections: list) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in public_facets.unique_items(collections):
+        author = str(item.get("author") or "").strip()
+        if author:
+            counts[author] = counts.get(author, 0) + 1
+    return counts
 
 
 @app.get("/api/public/library")
@@ -2423,9 +2506,7 @@ def public_portal(request: Request):
         query = intent.q
         author = author or intent.author
         sort = sort or intent.sort
-    duration_filters = dict(
-        min_seconds=intent.min_seconds, max_seconds=intent.max_seconds,
-    )
+    active_facets, duration_filters, filter_error = _catalog_filter_state(request, intent)
     if principal is None:
         if not settings.public_browse:
             return HTMLResponse(
@@ -2433,21 +2514,55 @@ def public_portal(request: Request):
                 headers=_public_profile_headers(),
             )
         catalog = _public_catalog()
+        facet_options = public_facets.catalog_facets(catalog)
+        filtered = _filter_collections(
+            catalog, query, author, sort, **duration_filters,
+            collection=active_facets["collection"],
+            category=active_facets["category"],
+            theme=active_facets["theme"],
+            language=active_facets["language"],
+            media_format=active_facets["format"],
+        )
+        filters_active = bool(
+            query or author or sort or filter_error or
+            duration_filters["min_seconds"] is not None or
+            duration_filters["max_seconds"] is not None or
+            any(active_facets[key] for key in (
+                "collection", "category", "theme", "language", "format",
+                "duration_min", "duration_max",
+            ))
+        )
+        try:
+            page = max(1, int(request.query_params.get("page", "1")))
+        except ValueError:
+            page = 1
         return HTMLResponse(
             public_book.landing_page(
-                _filter_collections(catalog, query, author, sort, **duration_filters),
-                query=query, search_note=search_note,
+                filtered, query=query, search_note=search_note,
                 authors=_catalog_authors(catalog), active_author=author, sort=sort,
+                author_counts=_catalog_author_counts(catalog),
+                facet_options=facet_options, active_facets=active_facets,
+                filter_error=filter_error,
                 base_url=_public_base_url(), with_email=magic_link.enabled(settings),
+                page=page,
             ),
-            headers=_public_profile_headers(indexable=not (query or author or sort)),
+            headers=_public_profile_headers(indexable=not filters_active),
         )
-    view = request.query_params.get("vue", "liste").strip().lower()
+    view = request.query_params.get("vue", "grille").strip().lower()
     if view not in ("liste", "grille", "immersif"):
         view = "liste"
     collections = _public_collections(principal)
     authors = _catalog_authors(collections)
-    collections = _filter_collections(collections, query, author, sort, **duration_filters)
+    author_counts = _catalog_author_counts(collections)
+    facet_options = public_facets.catalog_facets(collections)
+    collections = _filter_collections(
+        collections, query, author, sort, **duration_filters,
+        collection=active_facets["collection"],
+        category=active_facets["category"],
+        theme=active_facets["theme"],
+        language=active_facets["language"],
+        media_format=active_facets["format"],
+    )
     try:
         page = max(1, int(request.query_params.get("page", "1")))
     except ValueError:
@@ -2460,6 +2575,9 @@ def public_portal(request: Request):
         public_ui.catalog_page(
             principal, collections, query=query, view=view, search_note=search_note,
             authors=authors, active_author=author, sort=sort,
+            author_counts=author_counts,
+            facet_options=facet_options, active_facets=active_facets,
+            filter_error=filter_error,
             premium=str(principal.get("plan") or "free").lower() == "premium",
             page=page, recommend_fn=recommend_fn,
         ),
@@ -2513,6 +2631,7 @@ def _find_public_book(oid: str):
     for col_row in repo.get_published_collections_for_object(oid):
         col = _as_dict(col_row)
         items = _library_items(col, only_published=True)
+        items = _attach_public_facets([{"items": items}])[0]["items"]
         item = next((i for i in items if i["id"] == oid), None)
         if item is not None:
             return item, {
@@ -5356,6 +5475,128 @@ def revoke_folder_share(
 # ---------------------------------------------------------------------------
 # Administration (#35, #36, #38): require the admin:* capabilities.
 # ---------------------------------------------------------------------------
+class CoverSelectionIn(BaseModel):
+    object_id: str = Field(min_length=1, max_length=64)
+    candidate_url: str | None = Field(default=None, max_length=2048)
+    model_config = ConfigDict(extra="forbid")
+
+
+class CoverSearchIn(BaseModel):
+    object_id: str = Field(min_length=1, max_length=64)
+    isbn: str | None = Field(default=None, max_length=32)
+    limit: int = Field(default=12, ge=1, le=20)
+    model_config = ConfigDict(extra="forbid")
+
+
+class CoverApplyIn(BaseModel):
+    dry_run: bool = True
+    confirm: bool = False
+    limit: int = Field(default=50, ge=1, le=200)
+    model_config = ConfigDict(extra="forbid")
+
+
+@app.get("/api/v1/admin/cover-candidates")
+def admin_cover_candidates(principal: dict = Depends(authorize(ADMIN_READ))):
+    """Operator review of external cover candidates. Never publishes anything."""
+    from . import cover_review as cr
+
+    return cr.public_review(cr.read_review())
+
+
+@app.post("/api/v1/admin/covers/select")
+def admin_select_cover(body: CoverSelectionIn,
+                       principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Record or clear one operator decision. The cover is not published yet."""
+    from . import cover_review as cr
+
+    path = cr.review_path()
+    with cr.review_lock(path):
+        review = cr.read_review(path, strict=True)
+        try:
+            book = cr.select_cover(review, body.object_id, body.candidate_url)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="book not in review")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        cr.write_review(review, path)
+    audit_event("admin.cover.select", principal["id"], "success", {
+        "object_id": body.object_id,
+        "chosen": bool(body.candidate_url),
+    })
+    return {"book": cr.public_review({"books": [book]})["books"][0]}
+
+
+@app.post("/api/v1/admin/covers/search")
+def admin_search_cover(body: CoverSearchIn,
+                       principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Search new candidates for one book; ISBN first, then title + author."""
+    from . import cover_enrichment as ce
+    from . import cover_review as cr
+
+    isbn = (body.isbn or "").strip()
+    if isbn and not re.fullmatch(r"[0-9Xx\- ]{8,20}", isbn):
+        raise HTTPException(status_code=400, detail="invalid ISBN")
+    path = cr.review_path()
+    with cr.review_lock(path):
+        review = cr.read_review(path, strict=True)
+        book = cr.find_book(review, body.object_id)
+        if book is None:
+            raise HTTPException(status_code=404, detail="book not in review")
+        title, author = _split_audio_name(
+            str(book.get("display_name") or book.get("title") or "")
+        )
+        found = ce.search_candidates(title, author, isbn, body.limit)
+        chosen_url = book.get("chosen_url")
+        if chosen_url and not any(candidate.get("url") == chosen_url for candidate in found):
+            previous = next(
+                (candidate for candidate in (book.get("candidates") or [])
+                 if candidate.get("url") == chosen_url),
+                None,
+            )
+            if previous:
+                found.append(previous)
+        merged = []
+        seen_urls = set()
+        for candidate in found + list(book.get("candidates") or []):
+            url = candidate.get("url")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            merged.append(candidate)
+        book["candidates"] = merged
+        book["last_search_at"] = int(time.time())
+        book["search_isbn"] = isbn or None
+        book["search_title"] = title
+        book["search_author"] = author
+        cr.write_review(review, path)
+        updated = cr.public_review({"books": [book]})["books"][0]
+    audit_event("admin.cover.search", principal["id"], "success", {
+        "object_id": body.object_id, "isbn": bool(isbn),
+        "candidates": len(updated["candidates"]),
+    })
+    return {"book": updated}
+
+
+@app.post("/api/v1/admin/covers/apply")
+def admin_apply_covers(body: CoverApplyIn,
+                       principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Publish the explicitly selected candidates, bounded and resumable."""
+    from . import cover_review as cr
+
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="confirm must be true")
+    path = cr.review_path()
+    with cr.review_lock(path):
+        review = cr.read_review(path, strict=True)
+        out = cr.apply_selected(
+            review, dry_run=body.dry_run, limit=body.limit,
+        )
+        if not body.dry_run:
+            cr.write_review(review, path)
+    audit_event("admin.cover.apply", principal["id"], "success", out)
+    return out
+
+
 @app.post("/api/v1/admin/reconcile")
 def reconcile(limit: int = 500,
               principal: dict = Depends(authorize(ADMIN_WRITE))):

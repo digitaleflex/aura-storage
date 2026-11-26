@@ -230,7 +230,6 @@ test("the cancel button asks before stopping, and keeping the import leaves it r
 test("a big batch lists only what needs attention; 'Tous' lists everything", async ({ page }) => {
   await installMocks(page, { putDelayMs: 300 });
   await login(page);
-  // Several files start the import by themselves (auto-queue).
   await page.getByTestId("files-input").setInputFiles(
     Array.from({ length: 40 }, (_, i) => ({
       name: `lot-${i}.pdf`,
@@ -238,6 +237,9 @@ test("a big batch lists only what needs attention; 'Tous' lists everything", asy
       buffer: Buffer.from("hello world"),
     })),
   );
+  const preflight = page.getByTestId("import-preflight");
+  await expect(preflight.locator('[data-status="ready"]')).toHaveCount(40);
+  await page.getByRole("button", { name: "Importer et valider" }).click();
   const tray = page.getByRole("region", { name: /Import ·/ }).getByTestId("transfer-status");
   await expect(tray.getByRole("group", { name: "Fichiers affichés" })).toBeVisible();
   // Finished files drop out of the default view: never all 40 rows at once.

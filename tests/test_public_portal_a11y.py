@@ -84,6 +84,9 @@ def test_catalog_page_renders_dialogs_and_no_false_aria_current():
     )
     assert 'id="sleep-dialog"' in html and 'id="note-dialog"' in html
     assert 'aria-current="false"' not in html
+    assert 'for="author-select"' in html and 'name="auteur"' in html
+    assert 'for="duration-min"' in html and 'name="duree_min"' in html
+    assert 'class="filter-apply"' in html
     assert 'aria-valuetext="0:00"' in html
     assert '<track' not in html  # attaché côté client quand la piste le porte
 

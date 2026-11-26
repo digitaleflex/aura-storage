@@ -22,6 +22,9 @@ import { RouteError, RouteNotFound } from "./components/RouteError";
 import { TransfersProvider } from "./lib/transferContext";
 
 const AdminPage = lazy(() => import("./pages/AdminPage").then((m) => ({ default: m.AdminPage })));
+const AdminCoversPage = lazy(() =>
+  import("./pages/AdminPage").then((m) => ({ default: m.AdminCoversPage })),
+);
 const DiagPage = lazy(() => import("./pages/DiagPage").then((m) => ({ default: m.DiagPage })));
 
 const rootRoute = createRootRoute({
@@ -62,6 +65,20 @@ const adminRoute = createRoute({
       <RequireAuth>
         <Suspense fallback={<Loading label="Chargement de l'administration" />}>
           <AdminPage />
+        </Suspense>
+      </RequireAuth>
+    </Layout>
+  ),
+});
+
+const adminCoversRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/covers",
+  component: () => (
+    <Layout>
+      <RequireAuth>
+        <Suspense fallback={<Loading label="Chargement des couvertures" />}>
+          <AdminCoversPage />
         </Suspense>
       </RequireAuth>
     </Layout>
@@ -170,6 +187,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   adminRoute,
+  adminCoversRoute,
   transfersRoute,
   dashboardRoute,
   sharesRoute,

@@ -1,16 +1,30 @@
-import { frenchNote, healthDetail } from "../lib/adminText";
-import { useEffect, useState } from "react";
+import { activeSpaces, frenchNote, healthDetail } from "../lib/adminText";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, hasAdminAccess, hasScope, SERVICE_SCOPES } from "../lib/api";
+import { ApiError, api, hasAdminAccess, hasScope, SERVICE_SCOPES } from "../lib/api";
 import type {
   ApplicationItem,
   AuditQuery,
   BucketListedItem,
+  CoverApplyResult,
+  CoverCandidate,
+  CoverCandidateBook,
+  CoverSearchInput,
   IdentityItem,
+  ObjectReverifyResult,
+  OrphanCleanupInput,
+  OrphanCleanupResult,
   PartnerSite,
   SpaceItem,
   SpaceQuota,
+  StorageOrphanReport,
 } from "../lib/api";
+import {
+  applyOrphanCleanupResult,
+  buildOrphanCleanupBatch,
+  mergeStorageOrphanPage,
+  type OrphanCleanupExclusions,
+} from "../lib/adminMaintenance";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { OneTimeToken } from "../components/OneTimeToken";
@@ -53,6 +67,24 @@ function partnerState(site: PartnerSite): { label: string; className: string } {
     return { label: "Clé expirée", className: "chip chip-warn" };
   }
   return { label: "Clé active", className: "chip chip-ok" };
+}
+
+/** Badge for a cover proposal: how confidently its metadata matched the book. */
+function coverMatch(match: CoverCandidate["match"]): { label: string; className: string } {
+  if (match === "exact") return { label: "Exact", className: "chip chip-ok" };
+  if (match === "title") return { label: "Titre", className: "chip chip-muted" };
+  return { label: "Approche", className: "chip chip-warn" };
+}
+
+/** Publication state of a book: a validated choice is not yet published. */
+function coverState(book: CoverCandidateBook): { label: string; className: string } {
+  if (book.status === "applied" || book.status === "already_applied") {
+    return { label: "Couverture publiée", className: "chip chip-ok" };
+  }
+  if (book.chosen_url) {
+    return { label: "Choix validé · à publier", className: "chip chip-warn" };
+  }
+  return { label: "Aucun choix", className: "chip chip-muted" };
 }
 
 const GIB = 1024 ** 3;
@@ -129,7 +161,36 @@ function formatBytes(size: number): string {
   return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
+/** The reverify route reports a checksum mismatch as a structured HTTP 409. */
+function isObjectReverifyResult(value: unknown): value is ObjectReverifyResult {
+  if (typeof value !== "object" || value === null) return false;
+  const result = value as Partial<ObjectReverifyResult>;
+  return (
+    typeof result.id === "string" &&
+    (result.status === "available" || result.status === "suspect") &&
+    typeof result.size_bytes === "number" &&
+    typeof result.checksum_sha256 === "string"
+  );
+}
+
+function orphanSkipReason(reason: string): string {
+  const labels: Record<string, string> = {
+    "outside the AURA prefix": "clé hors du préfixe AURA",
+    "revision key": "clé d'une révision conservée",
+    "now accounted for": "élément désormais référencé au catalogue",
+    "not found or storage unavailable": "introuvable ou stockage indisponible",
+    "too recent": "élément trop récent",
+    "storage delete failed": "échec de suppression au stockage",
+    "upload still active": "envoi multipart toujours actif",
+    "abort failed or already gone": "abandon impossible ou déjà effectué",
+  };
+  return labels[reason] ?? reason;
+}
+
 const AUDIT_PAGE_SIZE = 50;
+const TERMINAL_RECONCILE_LIMIT = 500;
+const STORAGE_ORPHANS_QUERY_KEY = ["admin", "storage-orphans"] as const;
+const STORAGE_ORPHANS_PAGE_SIZE = 5000;
 
 /** Sections of the console, one tab each (labels are what the user reads). */
 const ADMIN_TABS = [
@@ -139,6 +200,7 @@ const ADMIN_TABS = [
   { id: "buckets", label: "Buckets" },
   { id: "identities", label: "Identités de service" },
   { id: "partners", label: "Intégrations" },
+  { id: "covers", label: "Couvertures" },
 ] as const;
 
 type AdminTab = (typeof ADMIN_TABS)[number]["id"];
@@ -473,7 +535,13 @@ function SpaceQuotasDialog({
 }
 
 /** Administration console: registries plus `admin:write` mutations. */
-export function AdminPage() {
+type AdminPageProps = { onlyCovers?: boolean };
+
+export function AdminCoversPage() {
+  return <AdminPage onlyCovers />;
+}
+
+export function AdminPage({ onlyCovers = false }: AdminPageProps) {
   const { csrf } = useAuth();
   const session = useSession();
   const queryClient = useQueryClient();
@@ -526,6 +594,63 @@ export function AdminPage() {
   const [auditRequest, setAuditRequest] = useState("");
   const [auditApplied, setAuditApplied] = useState<AuditQuery>({});
   const [auditOffset, setAuditOffset] = useState(0);
+  // Cover validation: a missing entry means "keep the server's current choice";
+  // an explicit "" means "do not apply", exactly like candidate_url: null.
+  const [coverChoices, setCoverChoices] = useState<Record<string, string>>({});
+  const [coverIsbns, setCoverIsbns] = useState<Record<string, string>>({});
+  const [coverDryRun, setCoverDryRun] = useState(false);
+  const [coverLimit, setCoverLimit] = useState(200);
+  const [coverApplyResult, setCoverApplyResult] = useState<CoverApplyResult | null>(null);
+  // Persistent outcome of the last cover action; replaced by the next one.
+  const [coverMessage, setCoverMessage] = useState<string | null>(null);
+  const [coverZoom, setCoverZoom] = useState<{
+    url: string;
+    title: string;
+    author: string;
+    provider: string;
+    objectId: string;
+    status: string;
+  } | null>(null);
+  const coverClickTimer = useRef<number | null>(null);
+
+  function openCoverZoom(zoom: {
+    url: string;
+    title: string;
+    author: string;
+    provider: string;
+    objectId: string;
+    status: string;
+  }) {
+    setCoverZoom(zoom);
+  }
+
+  function quickSelectCover(zoom: {
+    objectId: string;
+    url: string;
+    title: string;
+    status: string;
+  }) {
+    if (zoom.status === "applied" || zoom.status === "already_applied") {
+      setCoverMessage(
+        `« ${zoom.title} » possède déjà une couverture publiée. Utilisez « Remplacer la couverture » pour la modifier.`,
+      );
+      return;
+    }
+    if (!canWrite) {
+      setCoverMessage("La validation exige le droit admin:write.");
+      return;
+    }
+    setCoverZoom(null);
+    setCoverChoices((current) => ({ ...current, [zoom.objectId]: zoom.url }));
+    selectCover.mutate({ object_id: zoom.objectId, candidate_url: zoom.url });
+  }
+  const [reverifyResults, setReverifyResults] = useState<Record<string, ObjectReverifyResult>>({});
+  const [orphanCleanupResults, setOrphanCleanupResults] = useState<
+    Record<string, OrphanCleanupResult>
+  >({});
+  const [orphanCleanupExclusions, setOrphanCleanupExclusions] = useState<
+    Record<string, OrphanCleanupExclusions>
+  >({});
 
   const stats = useQuery({
     queryKey: ["admin", "stats"],
@@ -583,7 +708,7 @@ export function AdminPage() {
   });
   // Lists whole buckets: only on demand, never on page load.
   const storageOrphans = useQuery({
-    queryKey: ["admin", "storage-orphans"],
+    queryKey: STORAGE_ORPHANS_QUERY_KEY,
     queryFn: () => api.adminStorageOrphans(),
     enabled: false,
     retry: false,
@@ -601,6 +726,22 @@ export function AdminPage() {
     enabled: canAdmin,
     retry: false,
   });
+  const coverCandidates = useQuery({
+    queryKey: ["admin", "cover-candidates"],
+    queryFn: () => api.adminCoverCandidates(),
+    enabled: canAdmin,
+    retry: false,
+  });
+
+  // A space deactivated in another tab must not remain silently selected in a
+  // create-identity/partner form; the backend correctly refuses those writes.
+  useEffect(() => {
+    const activeIds = new Set(
+      activeSpaces(spaces.data?.items).map((space) => space.id),
+    );
+    setIdSpace((current) => (current && !activeIds.has(current) ? "" : current));
+    setPartnerSpace((current) => (current && !activeIds.has(current) ? "" : current));
+  }, [spaces.data?.items]);
 
   /** Name a known actor: the signed-in account and service identities are
    * resolved from data already loaded; any other id stays shortened (the API
@@ -630,6 +771,16 @@ export function AdminPage() {
     setError(`${fallback} ${describeError(err, "")}`.trim());
   }
 
+  /** Readable book name for a cover action's confirmation message. */
+  function coverTitle(objectId: string, book?: CoverCandidateBook): string {
+    return (
+      book?.title ||
+      book?.display_name ||
+      coverCandidates.data?.books.find((item) => item.object_id === objectId)?.title ||
+      objectId
+    );
+  }
+
   const reconcile = useMutation({
     mutationFn: () => {
       if (!csrf) throw new Error("Session expirée.");
@@ -640,6 +791,138 @@ export function AdminPage() {
       refreshAdmin();
     },
     onError: (err) => fail(err, "Réconciliation impossible."),
+  });
+
+  const scrubIntegrity = useMutation({
+    mutationFn: () => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.scrubIntegrity(csrf);
+    },
+    onSuccess: () => {
+      setError(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Vérification d'intégrité impossible."),
+  });
+
+  const reverifyObject = useMutation({
+    mutationFn: (id: string) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.reverifyObject(id, csrf);
+    },
+    onMutate: (id) => {
+      setError(null);
+      setReverifyResults((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+    },
+    onSuccess: (result) => {
+      setError(null);
+      setReverifyResults((current) => ({ ...current, [result.id]: result }));
+      refreshAdmin();
+    },
+    onError: (err, id) => {
+      setReverifyResults((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      const payload = err instanceof ApiError ? err.payload : undefined;
+      if (err instanceof ApiError && err.status === 409 && isObjectReverifyResult(payload)) {
+        setError(null);
+        setReverifyResults((current) => ({ ...current, [id]: payload }));
+        refreshAdmin();
+        return;
+      }
+      fail(err, "Re-vérification impossible.");
+    },
+  });
+
+  const reconcileTerminal = useMutation({
+    mutationFn: () => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.reconcileTerminal(csrf, TERMINAL_RECONCILE_LIMIT);
+    },
+    onSuccess: () => {
+      setError(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Nettoyage des objets terminés impossible."),
+  });
+
+  const reconcileReverse = useMutation({
+    mutationFn: (dryRun: boolean) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.reconcileReverse(csrf, dryRun);
+    },
+    onSuccess: () => {
+      setError(null);
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Réconciliation inverse impossible."),
+  });
+
+  const cleanupStorageOrphans = useMutation({
+    mutationFn: (input: OrphanCleanupInput) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.cleanupStorageOrphans(input, csrf);
+    },
+    onMutate: (input) => {
+      setError(null);
+      setOrphanCleanupResults((current) => {
+        const next = { ...current };
+        delete next[input.bucket];
+        return next;
+      });
+      setOrphanCleanupExclusions((current) => {
+        const previous = current[input.bucket] ?? { keys: new Set<string>(), uploads: new Set<string>() };
+        return {
+          ...current,
+          [input.bucket]: {
+            keys: new Set([...previous.keys, ...(input.keys ?? [])]),
+            uploads: new Set([...previous.uploads, ...(input.uploads ?? []).map((upload) => upload.upload_id)]),
+          },
+        };
+      });
+    },
+    onSuccess: (result, input) => {
+      setError(null);
+      setOrphanCleanupResults((current) => ({ ...current, [input.bucket]: result }));
+      queryClient.setQueryData<StorageOrphanReport>(STORAGE_ORPHANS_QUERY_KEY, (current) =>
+        current ? applyOrphanCleanupResult(current, input.bucket, result) : current,
+      );
+      refreshAdmin();
+    },
+    onError: (err, input) => {
+      setOrphanCleanupResults((current) => {
+        const next = { ...current };
+        delete next[input.bucket];
+        return next;
+      });
+      fail(err, "Nettoyage des orphelins impossible.");
+    },
+  });
+
+  const loadMoreStorageOrphans = useMutation({
+    mutationFn: async (input: { bucket: string; startAfter: string }) => {
+      const report = await api.adminStorageOrphans({
+        bucket: input.bucket,
+        startAfter: input.startAfter,
+        maxKeys: STORAGE_ORPHANS_PAGE_SIZE,
+      });
+      const page = report.buckets.find((entry) => entry.bucket === input.bucket);
+      if (!page || page.error) throw new ApiError(502, "storage unavailable");
+      return report;
+    },
+    onSuccess: (report) => {
+      setError(null);
+      queryClient.setQueryData<StorageOrphanReport>(STORAGE_ORPHANS_QUERY_KEY, (current) =>
+        current ? mergeStorageOrphanPage(current, report) : report,
+      );
+    },
+    onError: (err) => fail(err, "Chargement de la suite du scan impossible."),
   });
 
   const pruneAudit = useMutation({
@@ -901,6 +1184,80 @@ export function AdminPage() {
     onError: (err) => fail(err, "Révocation impossible."),
   });
 
+  const searchCover = useMutation({
+    mutationFn: (input: CoverSearchInput) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.searchCover(input, csrf);
+    },
+    onMutate: () => setCoverMessage(null),
+    onSuccess: (result, input) => {
+      setError(null);
+      setCoverMessage(
+        `Recherche terminée pour « ${coverTitle(input.object_id, result.book)} » : ${result.book.candidates.length} candidat(s).`,
+      );
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Recherche de couverture impossible."),
+  });
+
+  const selectCover = useMutation({
+    mutationFn: (input: { object_id: string; candidate_url: string | null }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.selectCover(input, csrf);
+    },
+    onMutate: () => setCoverMessage(null),
+    onSuccess: (updated, input) => {
+      setError(null);
+      // Drop the local override: the refetched book now carries the choice.
+      setCoverChoices((current) => {
+        const next = { ...current };
+        delete next[input.object_id];
+        return next;
+      });
+      setCoverMessage(
+        `Choix enregistré pour « ${coverTitle(input.object_id, updated.book)} » — couverture NON encore publiée. Utilisez « Appliquer les couvertures validées » ci-dessous.`,
+      );
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Enregistrement du choix impossible."),
+  });
+
+  const clearCover = useMutation({
+    mutationFn: (objectId: string) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.selectCover({ object_id: objectId, candidate_url: null }, csrf);
+    },
+    onMutate: () => setCoverMessage(null),
+    onSuccess: (_updated, objectId) => {
+      setError(null);
+      setCoverChoices((current) => {
+        const next = { ...current };
+        delete next[objectId];
+        return next;
+      });
+      setCoverMessage("Ancien choix effacé. Sélectionnez une nouvelle couverture.");
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Effacement du choix impossible."),
+  });
+
+  const applySelectedCovers = useMutation({
+    mutationFn: (input: { dry_run: boolean; confirm: boolean; limit: number }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.applySelectedCovers(input, csrf);
+    },
+    onMutate: () => setCoverMessage(null),
+    onSuccess: (result) => {
+      setError(null);
+      setCoverApplyResult(result);
+      refreshAdmin();
+    },
+    onError: (err) => {
+      setCoverApplyResult(null);
+      fail(err, "Application des couvertures impossible.");
+    },
+  });
+
   // The backend is the authority; this only keeps the UI honest.
   if (!canAdmin) {
     return (
@@ -922,10 +1279,413 @@ export function AdminPage() {
   );
   const appItems = applications.data?.items ?? [];
   const spaceItems = spaces.data?.items ?? [];
+  const activeSpaceItems = activeSpaces(spaceItems);
   const bucketItems: BucketListedItem[] = buckets.data?.items ?? [];
 
   const objectsByStatus = stats.data?.objects_by_status ?? {};
   const objectsTotal = Object.values(objectsByStatus).reduce((a, b) => a + b, 0);
+
+  const coverSection = (
+      <section
+        className="section"
+        aria-labelledby="admin-covers-title"
+        hidden={!onlyCovers && tab !== "covers"}
+      >
+        <div className="section-head">
+          <h2 id="admin-covers-title">Validation des couvertures</h2>
+        </div>
+        <p className="muted">
+          Choisissez la couverture qui correspond à chaque livre, puis appliquez
+          les choix validés par lot. Les aperçus sont chargés directement chez le
+          fournisseur : ils ne transistent pas par AURA.
+        </p>
+        {coverMessage ? (
+          <p role="status" className="alert alert-ok">
+            {coverMessage}
+          </p>
+        ) : null}
+        {coverCandidates.isError ? (
+          <LoadError
+            message="Candidats de couvertures indisponibles."
+            error={coverCandidates.error}
+            retrying={coverCandidates.isFetching}
+            onRetry={() => void coverCandidates.refetch()}
+          />
+        ) : coverCandidates.isPending ? (
+          <Loading label="Chargement des candidats de couvertures" />
+        ) : (
+          <>
+            <div className="stat-grid">
+              <div className="stat">
+                <div className="value">{coverCandidates.data?.counts.books ?? 0}</div>
+                <div className="label">Livres</div>
+              </div>
+              <div className="stat">
+                <div className="value">
+                  {coverCandidates.data?.counts.with_candidates ?? 0}
+                </div>
+                <div className="label">Livres avec candidats</div>
+              </div>
+              <div className="stat">
+                <div className="value">
+                  {coverCandidates.data?.counts.candidates ?? 0}
+                </div>
+                <div className="label">Candidats</div>
+              </div>
+            </div>
+            <p className="muted">
+              Généré le {formatTs(coverCandidates.data?.generated_at)}
+            </p>
+            {(coverCandidates.data?.books.length ?? 0) === 0 ? (
+              <p className="empty">
+                Aucun livre à valider pour le moment.
+              </p>
+            ) : (
+              coverCandidates.data?.books.map((book) => {
+                const candidates = book.candidates;
+                const fallback =
+                  book.chosen_url &&
+                  candidates.some((candidate) => candidate.url === book.chosen_url)
+                    ? book.chosen_url
+                    : "";
+                const selected = coverChoices[book.object_id] ?? fallback;
+                const group = `cover-${book.object_id}`;
+                const state = coverState(book);
+                const published =
+                  book.status === "applied" || book.status === "already_applied";
+                return (
+                  <article className="card" key={book.object_id}>
+                    <div className="section-head">
+                      <h3>{book.title || book.display_name}</h3>
+                      <span className={state.className}>{state.label}</span>
+                    </div>
+                    <p className="muted">
+                      {book.author || "Auteur inconnu"} ·{" "}
+                      <span className="mono">{book.display_name}</span> ·{" "}
+                      {OBJECT_STATUS_LABELS[book.status] ?? book.status}
+                    </p>
+                    <div className="form form-inline">
+                      <label className="field">
+                        <span>ISBN (optionnel)</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="978…"
+                          aria-label={`ISBN pour ${book.title || book.display_name}`}
+                          value={coverIsbns[book.object_id] ?? ""}
+                          onChange={(event) =>
+                            setCoverIsbns((current) => ({
+                              ...current,
+                              [book.object_id]: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={!canWrite || searchCover.isPending}
+                        onClick={() =>
+                          searchCover.mutate({
+                            object_id: book.object_id,
+                            isbn: coverIsbns[book.object_id]?.trim() || null,
+                            limit: 12,
+                          })
+                        }
+                      >
+                        Rechercher une couverture
+                      </button>
+                      {!canWrite ? (
+                        <span className="muted">
+                          La recherche exige le droit admin:write.
+                        </span>
+                      ) : null}
+                    </div>
+                    {book.cover_url ? (
+                      <img
+                        src={book.cover_url}
+                        alt={`Couverture actuelle de ${book.title || book.display_name}`}
+                        referrerPolicy="no-referrer"
+                        loading="lazy"
+                        width={64}
+                        height={80}
+                        style={{ objectFit: "cover" }}
+                      />
+                    ) : null}
+                    <div className="table-wrap">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th scope="col">Aperçu</th>
+                            <th scope="col">Candidat</th>
+                            <th scope="col">Correspondance</th>
+                            <th scope="col">Choisir</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {candidates.length === 0 ? (
+                            <tr>
+                              <td className="muted" colSpan={4}>
+                                Aucun candidat proposé pour ce livre.
+                              </td>
+                            </tr>
+                          ) : (
+                            candidates.map((candidate, index) => {
+                              const badge = coverMatch(candidate.match);
+                              const radioId = `${group}-${index}`;
+                              return (
+                                <tr key={`${candidate.provider}-${candidate.url}`}>
+                                  <td>
+                                    <img
+                                      src={candidate.url}
+                                      alt={`Couverture proposée par ${candidate.provider} pour ${book.title || book.display_name}. Clic pour agrandir, double-clic pour valider.`}
+                                      title="Clic : agrandir · Double-clic : valider"
+                                      referrerPolicy="no-referrer"
+                                      loading="lazy"
+                                      width={64}
+                                      height={80}
+                                      style={{ objectFit: "cover", cursor: "zoom-in" }}
+                                      onClick={() => {
+                                        setCoverChoices((current) => ({
+                                          ...current,
+                                          [book.object_id]: candidate.url,
+                                        }));
+                                        if (coverClickTimer.current !== null) {
+                                          window.clearTimeout(coverClickTimer.current);
+                                        }
+                                        coverClickTimer.current = window.setTimeout(() => {
+                                          openCoverZoom({
+                                            url: candidate.url,
+                                            title: book.title || book.display_name,
+                                            author: book.author,
+                                            provider: candidate.provider,
+                                            objectId: book.object_id,
+                                            status: book.status,
+                                          });
+                                          coverClickTimer.current = null;
+                                        }, 250);
+                                      }}
+                                      onDoubleClick={() => {
+                                        if (coverClickTimer.current !== null) {
+                                          window.clearTimeout(coverClickTimer.current);
+                                          coverClickTimer.current = null;
+                                        }
+                                        quickSelectCover({
+                                          url: candidate.url,
+                                          title: book.title || book.display_name,
+                                          objectId: book.object_id,
+                                          status: book.status,
+                                        });
+                                      }}
+                                    />
+                                  </td>
+                                  <td className="name">
+                                    <label htmlFor={radioId}>
+                                      {candidate.title || "Sans titre"}
+                                    </label>
+                                    <span className="muted table-sub">
+                                      {candidate.author || "Auteur inconnu"}
+                                    </span>
+                                    <span className="muted table-sub">
+                                      {candidate.provider}
+                                    </span>
+                                    {candidate.size ? (
+                                      <span className="muted table-sub">
+                                        Taille : {candidate.size}
+                                      </span>
+                                    ) : null}
+                                  </td>
+                                  <td>
+                                    <span className={badge.className}>
+                                      {badge.label}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <input
+                                      id={radioId}
+                                      type="radio"
+                                      name={group}
+                                      value={candidate.url}
+                                      checked={selected === candidate.url}
+                                      onChange={() =>
+                                        setCoverChoices((current) => ({
+                                          ...current,
+                                          [book.object_id]: candidate.url,
+                                        }))
+                                      }
+                                    />
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                          <tr>
+                            <td className="name" colSpan={3}>
+                              <label htmlFor={`${group}-none`}>Ne pas appliquer</label>
+                              <span className="muted table-sub">
+                                Aucune couverture ne sera importée pour ce livre.
+                              </span>
+                            </td>
+                            <td>
+                              <input
+                                id={`${group}-none`}
+                                type="radio"
+                                name={group}
+                                value=""
+                                checked={selected === ""}
+                                onChange={() =>
+                                  setCoverChoices((current) => ({
+                                    ...current,
+                                    [book.object_id]: "",
+                                  }))
+                                }
+                              />
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="form form-inline">
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        disabled={!canWrite || selectCover.isPending}
+                        onClick={() =>
+                          selectCover.mutate({
+                            object_id: book.object_id,
+                            candidate_url: selected || null,
+                          })
+                        }
+                      >
+                        Valider le choix
+                      </button>
+                      <ConfirmAction
+                        label="Remplacer la couverture"
+                        title={`Remplacer la couverture de ${book.title || book.display_name}`}
+                        message={
+                          <>
+                            Le choix validé pour « {book.title || book.display_name} »
+                            sera effacé.
+                            {published
+                              ? " ATTENTION : cette couverture a déjà été publiée ; l'effacement peut être refusé et ne retire pas la couverture déjà en ligne."
+                              : " Sélectionnez ensuite une nouvelle couverture."}
+                          </>
+                        }
+                        confirmLabel="Effacer le choix"
+                        className="btn"
+                        pending={clearCover.isPending}
+                        disabled={!canWrite || !book.chosen_url || clearCover.isPending}
+                        onConfirm={() => clearCover.mutate(book.object_id)}
+                      />
+                      {!canWrite ? (
+                        <span className="muted">
+                          La validation exige le droit admin:write.
+                        </span>
+                      ) : null}
+                    </div>
+                  </article>
+                );
+              })
+            )}
+            <div className="card">
+              <h3>Application par lot</h3>
+              <p className="muted">
+                Applique les couvertures dont le choix a été validé. La simulation
+                ne modifie rien et permet de vérifier le résultat.
+              </p>
+              <div className="form form-inline">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={coverDryRun}
+                    onChange={(event) => setCoverDryRun(event.target.checked)}
+                  />
+                  Simulation
+                </label>
+                <label className="field">
+                  <span>Limite</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={coverLimit}
+                    onChange={(event) => setCoverLimit(Number(event.target.value))}
+                  />
+                </label>
+                <ConfirmAction
+                  label="Appliquer les couvertures validées"
+                  title={
+                    coverDryRun
+                      ? "Simuler l'application des couvertures"
+                      : "Appliquer les couvertures validées"
+                  }
+                  message={
+                    coverDryRun
+                      ? "Simuler l'application des couvertures validées ? Aucune couverture ne sera modifiée."
+                      : `Appliquer les couvertures validées (jusqu'à ${coverLimit} livre(s)) ? Les couvertures sélectionnées seront remplacées, sans annulation possible.`
+                  }
+                  confirmLabel={coverDryRun ? "Simuler" : "Appliquer"}
+                  danger={!coverDryRun}
+                  className="btn btn-primary"
+                  pending={applySelectedCovers.isPending}
+                  disabled={
+                    !canWrite ||
+                    !Number.isInteger(coverLimit) ||
+                    coverLimit < 1 ||
+                    coverLimit > 200
+                  }
+                  onConfirm={() =>
+                    applySelectedCovers.mutate({
+                      dry_run: coverDryRun,
+                      confirm: true,
+                      limit: coverLimit,
+                    })
+                  }
+                />
+                {!canWrite ? (
+                  <span className="muted">
+                    L'application exige le droit admin:write.
+                  </span>
+                ) : null}
+              </div>
+              {coverApplyResult ? (
+                <p role="status" className="alert alert-ok">
+                  {coverApplyResult.dry_run ? "Simulation terminée" : "Application terminée"}{" "}
+                  : {coverApplyResult.applied} appliquée(s),{" "}
+                  {coverApplyResult.failed} échec(s),{" "}
+                  {coverApplyResult.skipped} ignoré(s).
+                </p>
+              ) : null}
+            </div>
+          </>
+        )}
+      </section>
+  );
+
+  if (onlyCovers) {
+    return (
+      <div className="stack admin-page">
+        <div className="page-head">
+          <div className="page-title">
+            <h1>Validation des couvertures</h1>
+            <p className="muted page-sub">
+              Candidats iTunes/Open Library par livre audio. La publication
+              reste une action explicite et réversible par la revue.
+            </p>
+          </div>
+        </div>
+        {error ? (
+          <p role="alert" className="alert alert-error">
+            {error}
+            <button type="button" className="btn btn-ghost btn-small" onClick={() => setError(null)}>
+              Fermer
+            </button>
+          </p>
+        ) : null}
+        {coverSection}
+      </div>
+    );
+  }
 
   return (
     <div className="stack admin-page">
@@ -1403,7 +2163,11 @@ export function AdminPage() {
             type="button"
             className="btn btn-ghost btn-small"
             disabled={storageOrphans.isFetching}
-            onClick={() => void storageOrphans.refetch()}
+            onClick={() => {
+              setOrphanCleanupResults({});
+              queryClient.setQueryData(STORAGE_ORPHANS_QUERY_KEY, undefined);
+              void storageOrphans.refetch();
+            }}
           >
             {storageOrphans.isFetching ? "Analyse…" : "Analyser le stockage"}
           </button>
@@ -1411,7 +2175,10 @@ export function AdminPage() {
         <p className="muted">
           Fichiers présents au stockage sans fiche au catalogue, octets laissés par des
           envois abandonnés et envois en plusieurs parties orphelins. La corbeille n'en
-          fait pas partie. Lecture seule : rien n'est supprimé depuis cet écran.
+          fait pas partie. L'analyse est paginée par curseur ; les pages sont accumulées.
+          Le nettoyage est une action distincte, confirmée et limitée à 100 fichiers et
+          100 envois par appel et par bucket. Les éléments déjà tentés sont exclus du lot
+          suivant jusqu'à réinitialisation explicite.
         </p>
         {storageOrphans.isError ? (
           <p role="alert" className="alert alert-error">
@@ -1419,18 +2186,161 @@ export function AdminPage() {
           </p>
         ) : storageOrphans.data ? (
           <ul className="plain-list" data-testid="storage-orphans">
-            {storageOrphans.data.buckets.map((entry) => (
-              <li key={entry.bucket}>
-                <strong>{entry.bucket}</strong> :{" "}
-                {entry.error
-                  ? "stockage indisponible"
-                  : `${entry.orphans?.length ?? 0} fichier(s) non référencé(s) (${formatBytes(
-                      entry.orphan_bytes ?? 0,
-                    )}), ${entry.stale_uploads?.length ?? 0} envoi(s) en parties abandonné(s) sur ${
-                      entry.scanned ?? 0
-                    } objet(s) analysé(s)${entry.next_start_after ? " — analyse partielle" : ""}`}
-              </li>
-            ))}
+            {storageOrphans.data.buckets.map((entry) => {
+              const batch = buildOrphanCleanupBatch(entry, orphanCleanupExclusions[entry.bucket]);
+              const keyCount = batch.input.keys?.length ?? 0;
+              const uploadCount = batch.input.uploads?.length ?? 0;
+              const candidateCount = keyCount + uploadCount;
+              const cleanupResult = orphanCleanupResults[entry.bucket];
+              return (
+                <li key={entry.bucket}>
+                  <strong>{entry.bucket}</strong> :{" "}
+                  {entry.error
+                    ? "stockage indisponible"
+                    : `${entry.orphans?.length ?? 0} fichier(s) non référencé(s) (${formatBytes(
+                        entry.orphan_bytes ?? 0,
+                      )}), ${entry.stale_uploads?.length ?? 0} envoi(s) en parties abandonné(s) sur ${
+                        entry.scanned ?? 0
+                      } objet(s) analysé(s)${entry.next_start_after ? " — analyse partielle" : ""}`}
+                  {!entry.error && entry.next_start_after ? (
+                    <div className="form form-inline">
+                      <span className="muted">
+                        Reprise après <code>{entry.next_start_after}</code>
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-small"
+                        aria-label={`Charger la suite du scan de ${entry.bucket}`}
+                        disabled={storageOrphans.isFetching || loadMoreStorageOrphans.isPending}
+                        onClick={() =>
+                          loadMoreStorageOrphans.mutate({
+                            bucket: entry.bucket,
+                            startAfter: entry.next_start_after!,
+                          })
+                        }
+                      >
+                        {loadMoreStorageOrphans.isPending &&
+                        loadMoreStorageOrphans.variables?.bucket === entry.bucket
+                          ? "Chargement…"
+                          : "Charger la suite du scan"}
+                      </button>
+                    </div>
+                  ) : null}
+                  {canWrite && (batch.excludedKeys > 0 || batch.excludedUploads > 0) ? (
+                    <div className="form form-inline">
+                      <span className="muted">
+                        {batch.excludedKeys} fichier(s) et {batch.excludedUploads} envoi(s)
+                        déjà tentés sont exclus pour ne pas bloquer la suite du traitement.
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-small"
+                        onClick={() =>
+                          setOrphanCleanupExclusions((current) => {
+                            const next = { ...current };
+                            delete next[entry.bucket];
+                            return next;
+                          })
+                        }
+                      >
+                        Réinitialiser les exclusions de {entry.bucket}
+                      </button>
+                    </div>
+                  ) : null}
+                  {canWrite && !entry.error && candidateCount > 0 ? (
+                    <div className="form form-inline">
+                      <ConfirmAction
+                        label="Nettoyer les orphelins"
+                        ariaLabel={`Nettoyer les orphelins de ${entry.bucket}`}
+                        title={`Nettoyer les orphelins de ${entry.bucket}`}
+                        message={
+                          <>
+                            Supprimer définitivement {keyCount} fichier(s) non référencé(s) et
+                            abandonner {uploadCount} envoi(s) multipart du bucket {entry.bucket} ?
+                            Chaque élément sera revérifié juste avant l'action ; les éléments
+                            devenus légitimes ou trop récents seront ignorés.
+                            <details>
+                              <summary>Éléments concernés par ce lot</summary>
+                              <ul>
+                                {batch.input.keys?.map((key) => (
+                                  <li key={key}><code>{key}</code></li>
+                                ))}
+                                {batch.input.uploads?.map((upload) => (
+                                  <li key={upload.upload_id}>
+                                    <code>{upload.key}</code> — envoi <code>{upload.upload_id}</code>
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          </>
+                        }
+                        confirmLabel="Nettoyer"
+                        danger
+                        pending={
+                          cleanupStorageOrphans.isPending &&
+                          cleanupStorageOrphans.variables?.bucket === entry.bucket
+                        }
+                        disabled={storageOrphans.isFetching || cleanupStorageOrphans.isPending}
+                        onConfirm={() => cleanupStorageOrphans.mutate(batch.input)}
+                      />
+                      {batch.remainingKeys > 0 || batch.remainingUploads > 0 ? (
+                        <span className="muted">
+                          Lot limité : {batch.remainingKeys} fichier(s) et{" "}
+                          {batch.remainingUploads} envoi(s) restant(s). Relancez le nettoyage
+                          pour traiter la suite.
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {!canWrite && !entry.error && candidateCount > 0 ? (
+                    <p className="muted">Le nettoyage exige le droit admin:write.</p>
+                  ) : null}
+                  {cleanupResult ? (
+                    <div
+                      role="status"
+                      data-testid={`orphan-cleanup-result-${entry.bucket}`}
+                      className={`alert ${cleanupResult.skipped.length > 0 ? "alert-warn" : "alert-ok"}`}
+                    >
+                      Nettoyage de {entry.bucket} : {cleanupResult.removed.length}{" "}
+                      fichier(s) supprimé(s), {cleanupResult.aborted_uploads.length}{" "}
+                      envoi(s) abandonné(s), {cleanupResult.skipped.length} ignoré(s).
+                      {cleanupResult.removed.length > 0 ? (
+                        <details>
+                          <summary>Fichiers supprimés</summary>
+                          <ul>
+                            {cleanupResult.removed.map((key) => (
+                              <li key={key}><code>{key}</code></li>
+                            ))}
+                          </ul>
+                        </details>
+                      ) : null}
+                      {cleanupResult.aborted_uploads.length > 0 ? (
+                        <details>
+                          <summary>Envois multipart abandonnés</summary>
+                          <ul>
+                            {cleanupResult.aborted_uploads.map((uploadId) => (
+                              <li key={uploadId}><code>{uploadId}</code></li>
+                            ))}
+                          </ul>
+                        </details>
+                      ) : null}
+                      {cleanupResult.skipped.length > 0 ? (
+                        <details>
+                          <summary>Éléments ignorés et motifs</summary>
+                          <ul>
+                            {cleanupResult.skipped.map((item, index) => (
+                              <li key={`${item.key}-${index}`}>
+                                <code>{item.key}</code> : {orphanSkipReason(item.reason)}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         ) : null}
       </section>
@@ -1442,7 +2352,40 @@ export function AdminPage() {
       >
         <div className="section-head">
           <h2 id="admin-integrity-title">Intégrité des fichiers</h2>
+          {canWrite ? (
+            <ConfirmAction
+              label="Lancer une vérification d'intégrité"
+              title="Vérifier l'intégrité maintenant"
+              message="Lancer une passe de vérification bornée ? Les fichiers dus seront relus et leur SHA-256 comparé au catalogue. Un défaut peut bloquer le fichier ; aucun octet ne sera supprimé ni réécrit."
+              confirmLabel="Vérifier"
+              pending={scrubIntegrity.isPending}
+              onConfirm={() => scrubIntegrity.mutate()}
+            />
+          ) : null}
         </div>
+        {scrubIntegrity.isSuccess ? (
+          <p
+            role="status"
+            data-testid="scrub-result"
+            className={`alert ${
+              scrubIntegrity.data.mismatch > 0 ||
+              scrubIntegrity.data.missing > 0 ||
+              scrubIntegrity.data.error > 0
+                ? "alert-warn"
+                : "alert-ok"
+            }`}
+          >
+            Vérification terminée : {scrubIntegrity.data.ok} intact(s),{" "}
+            {scrubIntegrity.data.mismatch} altéré(s), {scrubIntegrity.data.missing} absent(s),{" "}
+            {scrubIntegrity.data.error} erreur(s), {formatBytes(scrubIntegrity.data.bytes)} relu(s).
+            {scrubIntegrity.data.mismatch > 0 || scrubIntegrity.data.missing > 0
+              ? " Restaurez les fichiers en défaut depuis la sauvegarde, puis re-vérifiez-les."
+              : ""}
+            {scrubIntegrity.data.error > 0
+              ? " Une erreur de stockage interrompt la passe : réessayez quand le stockage répond."
+              : ""}
+          </p>
+        ) : null}
         {integrity.isError ? (
           <p role="alert" className="alert alert-error">
             Rapport d'intégrité indisponible.
@@ -1483,6 +2426,24 @@ export function AdminPage() {
                 (integrity.data.results.missing?.count ?? 0)}{" "}
               en défaut.
             </p>
+            {Object.values(reverifyResults).map((result) => (
+              <p
+                key={result.id}
+                role="status"
+                data-testid={`reverify-result-${result.id}`}
+                className={`alert ${result.status === "available" ? "alert-ok" : "alert-warn"}`}
+              >
+                Re-vérification de <code>{result.id}</code> :{" "}
+                {result.status === "available"
+                  ? "contenu conforme, objet de nouveau disponible."
+                  : "contenu toujours divergent, objet conservé en état suspect."}{" "}
+                Taille relue : {formatBytes(result.size_bytes)}. SHA-256 calculé :{" "}
+                <code>{result.checksum_sha256}</code>.
+                {result.status === "suspect"
+                  ? " Restaurez les octets attendus depuis la sauvegarde avant de réessayer."
+                  : ""}
+              </p>
+            ))}
             {integrity.data.problems.length > 0 ? (
               <>
                 <p role="alert" className="alert alert-error">
@@ -1492,10 +2453,11 @@ export function AdminPage() {
                 <table className="table">
                   <thead>
                     <tr>
-                      <th>Objet</th>
-                      <th>Espace</th>
-                      <th>Constat</th>
-                      <th>Relu le</th>
+                      <th scope="col">Objet</th>
+                      <th scope="col">Espace</th>
+                      <th scope="col">Constat</th>
+                      <th scope="col">Relu le</th>
+                      {canWrite ? <th scope="col">Action</th> : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -1514,12 +2476,137 @@ export function AdminPage() {
                             : "Contenu altéré"}
                         </td>
                         <td className="muted">{formatTs(problem.scrubbed_at)}</td>
+                        {canWrite ? (
+                          <td>
+                            <ConfirmAction
+                              label="Re-vérifier"
+                              ariaLabel={`Re-vérifier ${problem.display_name}`}
+                              title={`Re-vérifier ${problem.display_name}`}
+                              message={`Relire les octets de ${problem.display_name} (${problem.id}) et recalculer leur SHA-256 ? Si le contenu correspond au catalogue, l'objet redeviendra disponible ; sinon il restera suspect. Aucun octet ne sera supprimé.`}
+                              confirmLabel="Re-vérifier"
+                              pending={
+                                reverifyObject.isPending && reverifyObject.variables === problem.id
+                              }
+                              disabled={reverifyObject.isPending}
+                              onConfirm={() => reverifyObject.mutate(problem.id)}
+                            />
+                          </td>
+                        ) : null}
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </>
             ) : null}
+          </>
+        )}
+      </section>
+
+      <section
+        className="section"
+        aria-labelledby="admin-maintenance-title"
+        hidden={tab !== "overview"}
+      >
+        <div className="section-head">
+          <h2 id="admin-maintenance-title">Maintenance et récupération</h2>
+        </div>
+        <p className="muted">
+          Actions de maintenance du stockage, toutes réservées au droit{" "}
+          <code>admin:write</code>. Chaque commande demande une confirmation explicite
+          et affiche les compteurs retournés par l'API.
+        </p>
+        {!canWrite ? (
+          <p className="muted">Ces commandes sont en lecture seule pour votre compte.</p>
+        ) : (
+          <>
+            <article className="card">
+              <h3>Nettoyage des objets terminés</h3>
+              <p className="muted">
+                Reprend le nettoyage des octets des objets failed, aborted, deleted ou
+                expired vieux de plus de sept jours. Une fiche n'est supprimée qu'après
+                suppression effective de ses octets.
+              </p>
+              <ConfirmAction
+                label="Nettoyer les objets terminés"
+                title="Nettoyer les objets terminés"
+                message={`Supprimer définitivement les octets puis les fiches des objets terminés de plus de sept jours, dans tous les espaces (jusqu'à ${TERMINAL_RECONCILE_LIMIT} lignes inspectées par état) ? Les échecs de stockage conservent les fiches pour une nouvelle tentative.`}
+                confirmLabel="Nettoyer"
+                danger
+                pending={reconcileTerminal.isPending}
+                onConfirm={() => reconcileTerminal.mutate()}
+              />
+              {reconcileTerminal.isSuccess ? (
+                <p
+                  role="status"
+                  data-testid="terminal-reconcile-result"
+                  className={`alert ${reconcileTerminal.data.storage_failures > 0 ? "alert-warn" : "alert-ok"}`}
+                >
+                  Objets terminés : {reconcileTerminal.data.cleaned} fiche(s) nettoyée(s),{" "}
+                  {reconcileTerminal.data.storage_deletes_attempted} suppression(s) stockage
+                  tentée(s), {reconcileTerminal.data.storage_failures} échec(s) stockage.
+                  {reconcileTerminal.data.storage_failures > 0
+                    ? " Les fiches en échec sont conservées : réessayez plus tard."
+                    : ""}
+                </p>
+              ) : null}
+            </article>
+            <article className="card">
+              <h3>Réconciliation inverse</h3>
+              <p className="muted">
+                Compare le stockage au catalogue, dans chaque bucket enregistré (au plus
+                500 clés inspectées par bucket). Les révisions sont exclues. Commencez par
+                la simulation : seule la suppression explicite efface des octets.
+              </p>
+              <div className="form form-inline">
+                <ConfirmAction
+                  label="Analyser la réconciliation inverse"
+                  title="Simuler la réconciliation inverse"
+                  message="Lister les clés du stockage qu'aucune fiche du catalogue ne référence ? Cette simulation ne supprime aucun octet."
+                  confirmLabel="Simuler"
+                  pending={reconcileReverse.isPending && reconcileReverse.variables === true}
+                  disabled={reconcileReverse.isPending}
+                  onConfirm={() => reconcileReverse.mutate(true)}
+                />
+                <ConfirmAction
+                  label="Supprimer les orphelins détectés"
+                  title="Supprimer les orphelins du stockage"
+                  message="Supprimer définitivement les clés non référencées trouvées dans tous les buckets enregistrés ? Jusqu'à 500 clés sont inspectées par bucket. Cette action est irréversible et ne demande pas une nouvelle simulation préalable."
+                  confirmLabel="Supprimer"
+                  danger
+                  pending={reconcileReverse.isPending && reconcileReverse.variables === false}
+                  disabled={reconcileReverse.isPending}
+                  onConfirm={() => reconcileReverse.mutate(false)}
+                />
+              </div>
+              {reconcileReverse.isSuccess ? (
+                <div
+                  role="status"
+                  data-testid="reverse-reconcile-result"
+                  className={`alert ${reconcileReverse.data.failures > 0 ? "alert-warn" : "alert-ok"}`}
+                >
+                  {reconcileReverse.data.dry_run ? "Simulation terminée" : "Suppression terminée"} :{" "}
+                  {reconcileReverse.data.scanned} clé(s) analysée(s), {reconcileReverse.data.orphans}{" "}
+                  orpheline(s), {reconcileReverse.data.deleted} supprimée(s),{" "}
+                  {reconcileReverse.data.failures} échec(s).
+                  {reconcileReverse.data.dry_run && reconcileReverse.data.orphans > 0
+                    ? " Vérifiez les clés listées avant de lancer la suppression."
+                    : ""}
+                  {reconcileReverse.data.orphan_keys.length > 0 ? (
+                    <details>
+                      <summary>Clés orphelines retournées (50 maximum)</summary>
+                      <ul>
+                        {reconcileReverse.data.orphan_keys.map((orphan) => (
+                          <li key={`${orphan.bucket}:${orphan.key}`}>
+                            <code>{orphan.bucket}/{orphan.key}</code> —{" "}
+                            {orphan.size === null ? "taille inconnue" : formatBytes(orphan.size)}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
+                </div>
+              ) : null}
+            </article>
           </>
         )}
       </section>
@@ -2173,7 +3260,7 @@ export function AdminPage() {
                 required
               >
                 <option value="">— choisir —</option>
-                {spaceItems.map((s) => (
+                {activeSpaceItems.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name} ({s.environment})
                   </option>
@@ -2212,7 +3299,7 @@ export function AdminPage() {
               type="submit"
               className="btn btn-primary"
               disabled={
-                createIdentity.isPending || spaceItems.length === 0 || idScopes.length === 0
+                createIdentity.isPending || activeSpaceItems.length === 0 || idScopes.length === 0
               }
             >
               Créer l'identité
@@ -2356,7 +3443,7 @@ export function AdminPage() {
                 required
               >
                 <option value="">— choisir —</option>
-                {spaceItems.map((s) => (
+                {activeSpaceItems.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name} ({s.environment})
                   </option>
@@ -2415,7 +3502,7 @@ export function AdminPage() {
               className="btn btn-primary"
               disabled={
                 createPartner.isPending ||
-                spaceItems.length === 0 ||
+                activeSpaceItems.length === 0 ||
                 partnerScopes.length === 0
               }
             >
@@ -2579,6 +3666,9 @@ export function AdminPage() {
         )}
       </section>
 
+      {coverSection}
+
+
       {editingPartner ? (
         <EditPartnerDialog
           site={editingPartner}
@@ -2638,6 +3728,47 @@ export function AdminPage() {
             updateSpace.mutate({ id: editingSpace.id, ...patch })
           }
         />
+      ) : null}
+
+      {coverZoom ? (
+        <Dialog
+          open
+          title={`Aperçu — ${coverZoom.title}`}
+          onClose={() => setCoverZoom(null)}
+        >
+          <div className="cover-zoom">
+            <img
+              src={coverZoom.url}
+              alt={`Couverture agrandie de ${coverZoom.title}`}
+              referrerPolicy="no-referrer"
+            />
+            <p className="muted">
+              {coverZoom.author || "Auteur inconnu"} · source :{" "}
+              {coverZoom.provider}
+            </p>
+            <p className="muted">
+              Double-cliquez sur l’image dans la galerie pour valider
+              directement ce choix.
+            </p>
+          </div>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setCoverZoom(null)}
+            >
+              Fermer
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!canWrite || selectCover.isPending}
+              onClick={() => quickSelectCover(coverZoom)}
+            >
+              Choisir cette couverture
+            </button>
+          </div>
+        </Dialog>
       ) : null}
     </div>
   );

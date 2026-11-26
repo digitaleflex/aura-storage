@@ -235,6 +235,8 @@ def search_itunes(title: str, author: str = "", limit: int = 3) -> list[dict]:
             "title": str(row.get("collectionName") or row.get("trackName") or ""),
             "author": str(row.get("artistName") or ""),
             "url": str(row.get("artworkUrl100") or "").replace("100x100bb", "600x600bb"),
+            "size": "600",
+            "source_url": str(row.get("collectionViewUrl") or row.get("trackViewUrl") or ""),
         }
         for row in results if row.get("artworkUrl100")
     ]
@@ -257,9 +259,94 @@ def search_openlibrary(title: str, author: str = "", limit: int = 3) -> list[dic
             "title": str(row.get("title") or ""),
             "author": ", ".join(str(a) for a in (row.get("author_name") or [])[:2]),
             "url": f"https://covers.openlibrary.org/b/id/{row['cover_i']}-L.jpg",
+            "size": "L",
+            "source_url": f"https://openlibrary.org{row.get('key') or ''}",
         }
         for row in results if row.get("cover_i")
     ]
+
+
+def search_google_books(
+    title: str, author: str = "", isbn: str = "", limit: int = 5,
+) -> list[dict]:
+    """Google Books (primary source); optional API key avoids a shared quota.
+
+    Without a key the public endpoint is heavily rate limited: an empty list
+    simply lets the caller fall back to the secondary providers.
+    """
+    if isbn:
+        query = f"isbn:{isbn.strip()}"
+    else:
+        parts = []
+        if title.strip():
+            parts.append(f'intitle:"{title.strip()}"')
+        if author.strip():
+            parts.append(f'inauthor:"{author.strip()}"')
+        query = " ".join(parts) or title or author
+    params = {"q": query, "maxResults": max(1, min(limit, 20))}
+    api_key = os.environ.get("AURA_GOOGLE_BOOKS_API_KEY", "").strip()
+    if api_key:
+        params["key"] = api_key
+    payload = fetch_url(
+        "https://www.googleapis.com/books/v1/volumes?" + urlencode(params),
+    )
+    if not payload:
+        return []
+    try:
+        items = json.loads(payload).get("items", [])
+    except (ValueError, AttributeError):
+        return []
+    candidates = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        info = row.get("volumeInfo") or {}
+        links = info.get("imageLinks") or {}
+        url = ""
+        size = ""
+        for name in ("extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail"):
+            if links.get(name):
+                url, size = str(links[name]), name
+                break
+        if url.startswith("http://"):
+            url = "https://" + url[len("http://"):]
+        if not url:
+            continue
+        isbns = [
+            str(entry.get("identifier") or "")
+            for entry in (info.get("industryIdentifiers") or [])
+            if isinstance(entry, dict)
+        ]
+        candidates.append({
+            "provider": "google_books",
+            "title": str(info.get("title") or ""),
+            "author": ", ".join(str(a) for a in (info.get("authors") or [])[:2]),
+            "url": url,
+            "size": size,
+            "isbn": isbn.strip() or next((value for value in isbns if value), ""),
+            "source_url": f"https://books.google.com/books?id={row.get('id')}",
+            "license": str(info.get("copyright") or ""),
+            "query": query,
+        })
+    return candidates
+
+
+def search_candidates(
+    title: str, author: str = "", isbn: str = "", limit: int = 5,
+) -> list[dict]:
+    """Google Books first, then Open Library, then iTunes as a last resort."""
+    found = search_google_books(title, author, isbn, limit)
+    found += search_openlibrary(title, author, limit)
+    if not isbn and not found:
+        found += search_itunes(title, author, limit)
+    seen = set()
+    unique = []
+    for candidate in found:
+        if candidate.get("url") in seen:
+            continue
+        seen.add(candidate.get("url"))
+        unique.append(candidate)
+    return unique[: max(1, min(limit * 3, 60))]
 
 
 def review_path() -> Path:

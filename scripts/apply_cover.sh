@@ -8,18 +8,18 @@ cd "$ROOT_DIR"
 OBJECT_ID="${1:?Usage: apply_cover.sh OBJECT_ID IMAGE_PATH}"
 SOURCE="${2:?Usage: apply_cover.sh OBJECT_ID IMAGE_PATH}"
 
-LOCK_FILE="${TMPDIR:-/tmp}/aura-cover-review.lock"
+REVIEW_FILE="${AURA_DATA_DIR:-/srv/aura-storage}/cover-review/cover-candidates.json"
+mkdir -p "$(dirname "$REVIEW_FILE")"
+LOCK_FILE="$REVIEW_FILE.lock"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "une autre operation sur les couvertures est en cours" >&2
   exit 1
 fi
 
-REVIEW_FILE="${AURA_DATA_DIR:-/srv/aura-storage}/cover-candidates.json"
 TMP_REVIEW="/tmp/aura-cover-review-$$.json"
 TMP_IMAGE="/tmp/aura-cover-input-$$"
 HOST_OUTPUT="$REVIEW_FILE.tmp.$$"
-mkdir -p "$(dirname "$REVIEW_FILE")"
 
 valid_review() {
   python3 - "$1" <<'PY'

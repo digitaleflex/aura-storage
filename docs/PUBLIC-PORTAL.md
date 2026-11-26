@@ -207,31 +207,13 @@ livres indéfiniment.
 #### Candidats externes (validation obligatoire)
 
 `scripts/cover_candidates.sh [limite] [itunes|openlibrary|all]` interroge des API
-publiques (iTunes Search, Open Library) et écrit un fichier de revue dans
-`$AURA_DATA_DIR/cover-candidates.json`. **Aucune image n'est publiée** :
-le fichier liste les candidats par livre. Une régénération bornée conserve les
-livres déjà appliqués, leurs choix et les entrées hors limite. Les résultats
-peuvent être erronés (mauvaise édition) et les droits d'image doivent être vérifiés
-avant publication.
-
-Pour automatiser la préparation (sans publication), `scripts/refresh_cover_review.sh`
-rafraîchit les candidats, applique une **pré-sélection automatique** très
-conservative, puis régénère `/srv/aura-storage/cover-review.html`. La
-pré-sélection ne publie rien : elle marque `selected` dans le fichier de revue
-uniquement quand les règles sont toutes satisfaites (titre normalisé exact,
-auteur normalisé exact si connu, un seul candidat correspondant, URL HTTPS sur
-hôte autorisé, aucun conflit titre exact/auteur différent). Les cas ambigus
-restent `pending` pour revue manuelle. Audit JSON dans
-`$AURA_AUDIT_DIR/cover-auto-select-*.json`.
-
-Variables : `AURA_COVER_AUTO_SELECT=1` (défaut) pour activer la
-pré-sélection, `AURA_COVER_AUTO_SELECT_LIMIT=0` pour ne pas limiter.
-
-Exemple cron :
-
-```cron
-30 4 * * * cd /home/aura-admin/aura-storage && ./scripts/refresh_cover_review.sh >> /srv/aura-storage/audit/cover-review-refresh.log 2>&1
-```
+publiques (iTunes Search, Open Library) et écrit le fichier de revue canonique
+dans `$AURA_DATA_DIR/cover-review/cover-candidates.json`, monté en lecture-écriture
+dans le conteneur API. **Aucune image n'est publiée** : le fichier
+liste les candidats par livre. Une régénération bornée conserve les livres déjà
+appliqués, leurs choix et les entrées hors limite. Les résultats peuvent être
+erronés (mauvaise édition) et les droits d'image doivent être vérifiés avant
+publication.
 
 Une fois un candidat retenu :
 
@@ -246,7 +228,17 @@ renseignent `cover_key`. Le fichier de revue marque le livre comme `applied`.
 
 #### Validation et application en lot
 
-Une page HTML locale facilite la revue des propositions :
+La page **Administration → Couvertures** (`/admin/covers`) affiche les
+propositions par livre. Le bouton **« Rechercher une couverture »** interroge
+Google Books en priorité (par ISBN si fourni, sinon titre + auteur), puis Open
+Library et iTunes en repli. Une clé `AURA_GOOGLE_BOOKS_API_KEY` évite le quota
+limité de l'API publique. Chaque proposition conserve sa source, sa taille et
+son URL d'origine ; la validation d'un choix ne publie rien, seule l'action de
+lot explicitement confirmée écrit la couverture dans le catalogue. La lecture
+exige `admin:read`, la recherche, la validation et l'application `admin:write`
+avec CSRF.
+
+Une page HTML locale reste disponible pour une revue hors ligne :
 
 ```bash
 python3 scripts/render_cover_review.py \

@@ -30,7 +30,10 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from api import cover_enrichment as ce
 
-COVER_HOST_RULES = ("covers.openlibrary.org", ".mzstatic.com")
+COVER_HOST_RULES = (
+    "covers.openlibrary.org", ".mzstatic.com",
+    "books.google.com", ".googleusercontent.com", ".gstatic.com",
+)
 REVIEW_STATE_FIELDS = (
     "status", "chosen_url", "chosen_candidate", "chosen_provider",
     "cover_key", "applied_at", "error",
