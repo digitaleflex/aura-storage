@@ -665,21 +665,7 @@ def _normalize_slug(value: str) -> str:
     return slug
 
 
-class PublicationIn(BaseModel):
-    """Publish or unpublish an object under a stable public slug.
-
-    The slug is the permanent capability: it survives a content replacement, so
-    course sites never have to be edited when a file is updated.
-    """
-    model_config = ConfigDict(extra="forbid")
-    slug: str | None = Field(default=None, max_length=63)
-    published: bool = True
-
-    @field_validator("slug")
-    @classmethod
-    def valid_slug(cls, value: str | None) -> str | None:
-        return None if value is None else _normalize_slug(value)
-
+from .routes_objects_ops import PublicationIn  # noqa: E402
 
 class ReplaceObjectIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -2690,10 +2676,7 @@ def _require_master(principal: dict) -> None:
         raise HTTPException(status_code=403, detail="master mode required")
 
 
-class BulkIdsIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    ids: list[str] = Field(min_length=1)
-
+from .routes_objects_ops import BulkIdsIn  # noqa: E402
 
 def _bulk_purge(ids: list[str], principal: dict) -> dict:
     from .lifecycle import PurgeBlockedError, StorageDeleteError
@@ -2716,32 +2699,6 @@ def _bulk_purge(ids: list[str], principal: dict) -> dict:
         "purged": len(purged), "not_found": len(not_found), "failed": len(failed),
     })
     return {"purged": purged, "not_found": not_found, "failed": failed}
-
-
-@app.post("/api/v1/objects/bulk-purge")
-def bulk_purge(body: BulkIdsIn, principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
-    """Master mode: purge many objects in one call, no per-item confirmation."""
-    _require_master(principal)
-    if len(body.ids) > settings.master_bulk_max:
-        raise HTTPException(status_code=422, detail=f"at most {settings.master_bulk_max} ids per call")
-    return _bulk_purge(body.ids, principal)
-
-
-@app.post("/api/v1/objects/trash/empty")
-def empty_trash(principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
-    """Master mode: purge the caller's trash (at most master_bulk_max per call)."""
-    _require_master(principal)
-    # Deliberately owner-scoped even for an operator/admin: "empty my trash"
-    # must never silently destroy every user's deleted objects in the space.
-    scope = {"space_id": principal["space_id"], "owner_id": principal["id"]}
-    rows = repo.list_objects(
-        **scope, status=DELETED, limit=settings.master_bulk_max,
-    )
-    ids = [_as_dict(r)["id"] for r in rows]
-    out = _bulk_purge(ids, principal)
-    # More than one call's worth: the client simply calls again.
-    out["more"] = bool(repo.list_objects(**scope, status=DELETED, limit=1))
-    return out
 
 
 def _upload_headers(content_type: str) -> dict:
@@ -3789,51 +3746,6 @@ def _require_public_access_scopes(principal: dict) -> None:
         raise HTTPException(status_code=403, detail="forbidden")
 
 
-@app.post("/api/v1/objects/{oid}/public-access")
-def create_public_access(
-    oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
-):
-    """Mint a short revocable public URL after an external entitlement decision.
-
-    Reserved for machine identities acting as a trusted service (the audiobook
-    API). The returned token is shown once; only its SHA-256 is stored.
-    """
-    _require_public_access_scopes(principal)
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(row)
-    if row["status"] != AVAILABLE:
-        raise HTTPException(status_code=409, detail="object not available")
-    token = secrets.token_urlsafe(32)
-    now = int(time.time())
-    expires_at = now + settings.public_access_grant_ttl
-    repo.create_public_access_grant(
-        hashlib.sha256(token.encode("utf-8")).hexdigest(),
-        oid, row["space_id"], principal["id"], now, expires_at,
-    )
-    audit_event("public-access-grant", principal["id"], "created",
-                {"object_id": oid, "expires_at": expires_at})
-    return {"token": token, "url": f"/a/{token}", "expires_at": expires_at}
-
-
-@app.delete("/api/v1/objects/{oid}/public-access")
-def revoke_public_access(
-    oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
-):
-    """Revoke every outstanding public grant for one object."""
-    _require_public_access_scopes(principal)
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    revoked = repo.revoke_public_access_grants_for_object(oid, int(time.time()))
-    audit_event("public-access-grant", principal["id"], "revoked",
-                {"object_id": oid, "count": revoked})
-    return {"revoked": revoked}
-
-
 def _query_tags(value: str | None) -> list[str]:
     """Normalize a comma-separated tag filter like stored tags (max 10)."""
     if not value:
@@ -4457,37 +4369,6 @@ def object_thumbnail(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)
         "Cache-Control": "private, max-age=300",
         "X-Content-Type-Options": "nosniff",
     })
-
-
-@app.put("/api/v1/objects/{oid}/publication")
-def set_object_publication(
-    oid: str, body: PublicationIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    """Publish/unpublish an object under a stable slug (human only).
-
-    Unpublishing keeps the slug reserved so the same URL can be re-enabled;
-    the public route requires `published_at`, so it answers 404 meanwhile.
-    """
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(row)
-    if row["status"] != AVAILABLE:
-        raise HTTPException(status_code=409, detail="object not available")
-    if body.published and not body.slug:
-        raise HTTPException(status_code=422, detail="slug is required to publish")
-    if body.slug:
-        existing = repo.get_object_by_slug(body.slug)
-        if existing is not None and existing["id"] != oid:
-            raise HTTPException(status_code=409, detail="slug already in use")
-    published_at = int(time.time()) if body.published else None
-    repo.set_object_publication(oid, body.slug, published_at)
-    audit_event("object.publish" if body.published else "object.unpublish",
-                principal["id"], "success",
-                {"object_id": oid, "slug": body.slug})
-    return _object_public(repo.get_object(oid, **_object_scope(principal)))
 
 
 @app.post("/api/v1/objects/{oid}/replace")
@@ -6577,3 +6458,6 @@ def restore_object_revision(
         "head_revision_number": next_no,
         "status": "available",
     }
+
+from .routes_objects_ops import router as objects_ops_router  # noqa: E402
+app.include_router(objects_ops_router)
