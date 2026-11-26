@@ -3848,55 +3848,6 @@ def _query_tags(value: str | None) -> list[str]:
     return out
 
 
-@app.get("/api/v1/objects")
-def list_objects(
-    principal: dict = Depends(authorize(OBJECTS_READ)), limit: int = 50, offset: int = 0,
-    folder_id: str | None = None,
-    q: str | None = Query(default=None, max_length=200),
-    search: str | None = Query(default=None, max_length=200),
-    status: ObjectStatus | None = None,
-    content_type: str | None = Query(default=None, max_length=1000),
-    min_size: int | None = Query(default=None, ge=0),
-    max_size: int | None = Query(default=None, ge=0),
-    created_after: int | None = Query(default=None, ge=0),
-    created_before: int | None = Query(default=None, ge=0),
-    tag: str | None = Query(default=None, max_length=32),
-    tags: str | None = Query(default=None, max_length=400),
-    tag_mode: Literal["all", "any"] = "all",
-    sort: ObjectSort = "created_at",
-    order: SortOrder = "desc",
-):
-    limit = max(1, min(limit, 100))
-    offset = max(0, offset)
-    # ``folder_id`` is an optional catalogue filter (#62): the literal "root"
-    # selects objects not filed in any folder; a canonical uuid selects that
-    # folder. Unknown or foreign folder ids simply match nothing (no leak).
-    folder_filter: str | None = None
-    if folder_id is not None:
-        folder_filter = "" if folder_id == "root" else _canonical_id(folder_id, "folder id")
-    # ``q`` is a case-insensitive display-name substring. It never touches the
-    # internal object key, and a blank value is treated as "no search".
-    needle = (q or "").strip() or None
-    search_needle = (search or "").strip() or None
-    rows = repo.list_objects(
-        **_object_scope(principal), folder_id=folder_filter, q=needle,
-        search=search_needle,
-        status=status, hide_deleted=status is None,
-        content_type=(content_type or None),
-        min_size=min_size, max_size=max_size,
-        created_after=created_after, created_before=created_before,
-        tag=(tag.strip().lower() or None) if tag else None,
-        tags=_query_tags(tags), tag_mode=tag_mode,
-        sort=sort, order=order, limit=limit, offset=offset,
-    )
-    tag_map = repo.list_tags_for_objects([r["id"] for r in rows])
-    return {
-        "items": [
-            _object_public(r, tag_map.get(r["id"])) for r in rows
-        ]
-    }
-
-
 @app.get("/api/v1/objects/tags")
 def list_object_tags(
     principal: dict = Depends(authorize(OBJECTS_READ)),
@@ -3911,15 +3862,6 @@ def list_object_tags(
     """
     rows = repo.list_tag_counts(**_object_scope(principal), limit=limit)
     return {"items": [{"tag": row["tag"], "count": row["n"]} for row in rows]}
-
-
-@app.get("/api/v1/objects/{oid}")
-def get_object(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    return _object_public(row, repo.get_object_tags(oid))
 
 
 @app.get("/api/v1/transfers")
@@ -6577,3 +6519,6 @@ def restore_object_revision(
         "head_revision_number": next_no,
         "status": "available",
     }
+
+from .routes_objects import router as objects_router  # noqa: E402
+app.include_router(objects_router)
