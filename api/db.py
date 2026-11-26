@@ -1926,6 +1926,26 @@ class Repository:
         retry = max(1, int(window - (now - float(row["window_start"]))))
         return False, retry
 
+    def rate_peek(self, key: str, *, now: float, window: float, limit: int) -> tuple[bool, int]:
+        """Read-only check: has ``key`` exhausted ``limit`` in the current window?"""
+        row = self.conn.execute(
+            "SELECT window_start, hits FROM public_rate_counters WHERE key = ?", (key,)
+        ).fetchone()
+        if row is None:
+            return True, 0
+        window_start = float(row["window_start"])
+        if now - window_start >= window:
+            return True, 0
+        if int(row["hits"]) < limit:
+            return True, 0
+        retry = max(1, int(window - (now - window_start)))
+        return False, retry
+
+    def rate_clear(self, key: str) -> None:
+        """Reset one counter (e.g. after a successful authentication)."""
+        self.conn.execute("DELETE FROM public_rate_counters WHERE key = ?", (key,))
+        self.conn.commit()
+
     def clear_rate_counters(self) -> None:
         self.conn.execute("DELETE FROM public_rate_counters")
         self.conn.commit()

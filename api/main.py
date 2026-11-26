@@ -269,20 +269,6 @@ def _warn_on_unbounded_multipart() -> None:
 
 
 @app.on_event("startup")
-def _warn_on_process_local_rate_limits() -> None:
-    """Public rate counters live in this process; several workers bypass them."""
-    try:
-        workers = int(os.environ.get("WEB_CONCURRENCY", "1"))
-    except ValueError:
-        workers = 1
-    if workers > 1:
-        log.warning(
-            "WEB_CONCURRENCY=%d: public rate limits are process-local and can be "
-            "bypassed by spreading requests across workers", workers,
-        )
-
-
-@app.on_event("startup")
 def _start_verifier() -> None:
     # Large objects are hashed outside the commit request (N5).
     if settings.verify_worker == "inline":
@@ -351,33 +337,10 @@ async def request_context(request: Request, call_next):
         reset_request_context(token)
 
 
-# In-memory login rate limiter: {client_ip: [failure_epoch, ...]}.
-# Only *failed* attempts are counted, so a burst of legitimate logins cannot
-# lock out everyone sharing a proxy/NAT address.
-_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
-# The public portal has its own failure budget: a flood of invalid Google
-# callbacks must never lock an operator out of /api/v1/login (and vice versa).
-_PUBLIC_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
-# A distributed brute force (or spoofed X-Forwarded-For) must not grow the
-# table without bound. Only enforced above this size to keep the common path
-# free of work.
-_RATE_LIMIT_MAX_ENTRIES = 10_000
-
-
-def _prune_attempt_table(table: dict[str, list[float]], window: float,
-                         now: float | None = None) -> None:
-    """Drop stale and, if still too large, arbitrary entries (memory bound)."""
-    if len(table) < _RATE_LIMIT_MAX_ENTRIES:
-        return
-    now = time.time() if now is None else now
-    for client in list(table):
-        fresh = [t for t in table[client] if now - t < window]
-        if fresh:
-            table[client] = fresh
-        else:
-            table.pop(client, None)
-    while len(table) >= _RATE_LIMIT_MAX_ENTRIES:
-        table.pop(next(iter(table)), None)
+# Login failure counters live in the shared catalogue (public_rate_counters)
+# so the limit holds across workers (#322). Only failures are counted.
+_LOGIN_RATE_PREFIX = "login:"
+_PUBLIC_LOGIN_RATE_PREFIX = "public-login:"
 
 
 def _client_ip(request: Request) -> str:
@@ -388,43 +351,42 @@ def _client_ip(request: Request) -> str:
 
 def _login_blocked(client_ip: str, now: float | None = None) -> bool:
     now = time.time() if now is None else now
-    window = settings.login_rate_window
-    attempts = [t for t in _LOGIN_ATTEMPTS.get(client_ip, []) if now - t < window]
-    if attempts:
-        _LOGIN_ATTEMPTS[client_ip] = attempts
-    else:
-        _LOGIN_ATTEMPTS.pop(client_ip, None)
-    return len(attempts) >= settings.login_rate_limit
+    allowed, _ = repo.rate_peek(
+        f"{_LOGIN_RATE_PREFIX}{client_ip}", now=now,
+        window=settings.login_rate_window, limit=settings.login_rate_limit,
+    )
+    return not allowed
 
 
 def _login_record_failure(client_ip: str) -> None:
-    _LOGIN_ATTEMPTS.setdefault(client_ip, []).append(time.time())
-    _prune_attempt_table(_LOGIN_ATTEMPTS, settings.login_rate_window)
+    repo.rate_hit(
+        f"{_LOGIN_RATE_PREFIX}{client_ip}", now=time.time(),
+        window=settings.login_rate_window, limit=settings.login_rate_limit,
+    )
 
 
 def _login_clear(client_ip: str) -> None:
-    # A successful login resets the failure budget for that client.
-    _LOGIN_ATTEMPTS.pop(client_ip, None)
+    repo.rate_clear(f"{_LOGIN_RATE_PREFIX}{client_ip}")
 
 
 def _public_login_blocked(client_ip: str, now: float | None = None) -> bool:
     now = time.time() if now is None else now
-    window = settings.login_rate_window
-    attempts = [t for t in _PUBLIC_LOGIN_ATTEMPTS.get(client_ip, []) if now - t < window]
-    if attempts:
-        _PUBLIC_LOGIN_ATTEMPTS[client_ip] = attempts
-    else:
-        _PUBLIC_LOGIN_ATTEMPTS.pop(client_ip, None)
-    return len(attempts) >= settings.login_rate_limit
+    allowed, _ = repo.rate_peek(
+        f"{_PUBLIC_LOGIN_RATE_PREFIX}{client_ip}", now=now,
+        window=settings.login_rate_window, limit=settings.login_rate_limit,
+    )
+    return not allowed
 
 
 def _public_login_record_failure(client_ip: str) -> None:
-    _PUBLIC_LOGIN_ATTEMPTS.setdefault(client_ip, []).append(time.time())
-    _prune_attempt_table(_PUBLIC_LOGIN_ATTEMPTS, settings.login_rate_window)
+    repo.rate_hit(
+        f"{_PUBLIC_LOGIN_RATE_PREFIX}{client_ip}", now=time.time(),
+        window=settings.login_rate_window, limit=settings.login_rate_limit,
+    )
 
 
 def _public_login_clear(client_ip: str) -> None:
-    _PUBLIC_LOGIN_ATTEMPTS.pop(client_ip, None)
+    repo.rate_clear(f"{_PUBLIC_LOGIN_RATE_PREFIX}{client_ip}")
 
 
 # Public read endpoints (media redirect, covers, listening position) count EVERY
@@ -467,8 +429,6 @@ def _public_rate_check(kind: str, request: Request) -> None:
 
 
 def reset_login_attempts() -> None:
-    _LOGIN_ATTEMPTS.clear()
-    _PUBLIC_LOGIN_ATTEMPTS.clear()
     try:
         repo.clear_rate_counters()
     except Exception:

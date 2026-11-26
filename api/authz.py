@@ -64,29 +64,14 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 PUBLIC_COOKIE = "aura_public_session"
 PUBLIC_ROLE = "public"
 
-# Machine-to-machine authentication failure rate limiter: {client_ip: [ts, ...]}.
-_M2M_ATTEMPTS: dict[str, list[float]] = {}
-# Bound the table: a distributed/spoofed-IP attack must not exhaust memory.
-_M2M_MAX_ENTRIES = 10_000
-
-
-def _prune_m2m(now: float | None = None) -> None:
-    if len(_M2M_ATTEMPTS) < _M2M_MAX_ENTRIES:
-        return
-    now = time.time() if now is None else now
-    window = settings.m2m_rate_window
-    for client in list(_M2M_ATTEMPTS):
-        fresh = [t for t in _M2M_ATTEMPTS[client] if now - t < window]
-        if fresh:
-            _M2M_ATTEMPTS[client] = fresh
-        else:
-            _M2M_ATTEMPTS.pop(client, None)
-    while len(_M2M_ATTEMPTS) >= _M2M_MAX_ENTRIES:
-        _M2M_ATTEMPTS.pop(next(iter(_M2M_ATTEMPTS)), None)
+# Machine-to-machine authentication failures share the DB-backed rate counter
+# table so the limit holds across workers (#322).
+_M2M_RATE_PREFIX = "m2m:"
 
 
 def reset_m2m_attempts() -> None:
-    _M2M_ATTEMPTS.clear()
+    # Tests reset process state; clear shared counters for isolation.
+    repo.clear_rate_counters()
 
 
 def _client_ip(request: Request) -> str:
@@ -97,20 +82,18 @@ def _client_ip(request: Request) -> str:
 
 def _m2m_blocked(client_ip: str, now: float | None = None) -> bool:
     now = time.time() if now is None else now
-    window = settings.m2m_rate_window
-    attempts = [t for t in _M2M_ATTEMPTS.get(client_ip, []) if now - t < window]
-    if attempts:
-        _M2M_ATTEMPTS[client_ip] = attempts
-    else:
-        # No permanent empty entry: every distinct probing IP must not leave
-        # residue (mirrors the login limiter).
-        _M2M_ATTEMPTS.pop(client_ip, None)
-    return len(attempts) >= settings.m2m_rate_limit
+    allowed, _ = repo.rate_peek(
+        f"{_M2M_RATE_PREFIX}{client_ip}", now=now,
+        window=settings.m2m_rate_window, limit=settings.m2m_rate_limit,
+    )
+    return not allowed
 
 
 def _m2m_record_failure(client_ip: str) -> None:
-    _M2M_ATTEMPTS.setdefault(client_ip, []).append(time.time())
-    _prune_m2m()
+    repo.rate_hit(
+        f"{_M2M_RATE_PREFIX}{client_ip}", now=time.time(),
+        window=settings.m2m_rate_window, limit=settings.m2m_rate_limit,
+    )
 
 
 def _bearer_token(request: Request) -> str | None:
