@@ -194,8 +194,8 @@ def test_catalogue_keeps_the_filters_folded_and_lists_authors_in_a_select():
     _published_pack()
     with _FreshVisitor() as c:
         page = c.get("/").text
-        # Books first: the display/filter controls sit in a folded panel.
-        assert '<details class="filters-fold" id="filters-fold">' in page
+        # Filters are visible by default so category/theme filtering is discoverable.
+        assert '<details class="filters-fold" id="filters-fold" open>' in page
         assert 'id="author-select"' in page
         assert re.search(r"Auteur Test \(\d+\)", page)
         # No per-author pills, no "show all authors" toggle, no author search box.
