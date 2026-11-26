@@ -215,7 +215,18 @@ peuvent être erronés (mauvaise édition) et les droits d'image doivent être v
 avant publication.
 
 Pour automatiser la préparation (sans publication), `scripts/refresh_cover_review.sh`
-rafraîchit les candidats puis régénère `/srv/aura-storage/cover-review.html`.
+rafraîchit les candidats, applique une **pré-sélection automatique** très
+conservative, puis régénère `/srv/aura-storage/cover-review.html`. La
+pré-sélection ne publie rien : elle marque `selected` dans le fichier de revue
+uniquement quand les règles sont toutes satisfaites (titre normalisé exact,
+auteur normalisé exact si connu, un seul candidat correspondant, URL HTTPS sur
+hôte autorisé, aucun conflit titre exact/auteur différent). Les cas ambigus
+restent `pending` pour revue manuelle. Audit JSON dans
+`$AURA_AUDIT_DIR/cover-auto-select-*.json`.
+
+Variables : `AURA_COVER_AUTO_SELECT=1` (défaut) pour activer la
+pré-sélection, `AURA_COVER_AUTO_SELECT_LIMIT=0` pour ne pas limiter.
+
 Exemple cron :
 
 ```cron
