@@ -22,8 +22,10 @@
 - [SSH access and per-device key management (no private keys)](docs/SSH-ACCESS-AND-KEY-MANAGEMENT.md)
 - [Network architecture and throughput test plan (documentation only)](docs/NETWORK-AND-THROUGHPUT-PLAN.md)
 - [Read-only host preflight diagnostic](scripts/host-preflight.sh)
+- [Idempotent host hardening](scripts/harden-host.sh) — rejoue SSH/fail2ban/UFW (dry-run par défaut, `--apply` pour écrire)
 - [Deployment verification log template](docs/verification-log-template.md)
 - [Verification log — portail, transfert et perf, 2026-11-24](docs/verification-log-2026-11-24-portail-perf.md)
+- [Audit de sécurité et durcissement, 2026-11-26](docs/verification-log-2026-11-26-security-hardening.md) — brute-force SSH, fail2ban, UFW et durcissement SSH vérifiés
 - [Feature status (source of truth)](docs/ETAT-DES-FONCTIONNALITES.md)
 - [Public portal roadmap and issue status](docs/PUBLIC-PORTAL-ROADMAP.md)
 - [Operations: vacuum, HTTP/3 and media caching](docs/OPERATIONS.md)
