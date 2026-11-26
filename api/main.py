@@ -480,8 +480,7 @@ _ensure_bootstrap_admin()
 _DUMMY_PASS_HASH = hash_password(new_token(32))
 
 
-def _as_dict(row) -> dict:
-    return dict(row) if not isinstance(row, dict) else row
+from .normalizers import as_dict as _as_dict
 
 
 def _canonical_id(value: str, field: str) -> str:
