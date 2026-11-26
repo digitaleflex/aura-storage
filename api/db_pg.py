@@ -1,14 +1,17 @@
 """PostgreSQL catalogue implementing the same Repository interface as db.py (#19)."""
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 from . import ids
 from .auth import new_token, session_key
+from .config import settings
 from .dblock import synchronized
 from .migrations import (
     DEFAULT_APPLICATION_NAME,
@@ -31,13 +34,46 @@ class Repository:
     dialect = "postgres"
 
     def __init__(self, dsn: str):
-        # psycopg connections are not thread-safe and FastAPI runs sync endpoints
-        # in a threadpool, so `_lock` serializes access; see api/dblock.py.
+        # A pool avoids per-request connection setup and bounds concurrent DB
+        # connections (#325). @synchronized keeps the legacy serialized access
+        # model; the pool still provides health checks, reconnects and limits.
         self._lock = threading.RLock()
-        self.conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
+        self._local = threading.local()
+        self.pool = ConnectionPool(
+            dsn,
+            min_size=max(0, settings.pg_pool_min),
+            max_size=max(1, settings.pg_pool_max),
+            timeout=settings.pg_pool_timeout,
+            kwargs={"row_factory": dict_row, "autocommit": True},
+            open=True,
+        )
+        # Dedicated connection kept for legacy direct repo.conn access. Helper
+        # methods (_one/_all/_run) use pooled connections.
+        self.conn = self.pool.getconn()
         with self.conn.cursor() as cur:
             cur.execute(SCHEMA)
         apply_migrations(self.conn, "postgres")
+
+    @contextmanager
+    def _transaction(self):
+        with self.pool.connection() as conn:
+            prev = getattr(self._local, "conn", None)
+            self._local.conn = conn
+            try:
+                with conn.transaction():
+                    yield conn
+            finally:
+                if prev is None:
+                    del self._local.conn
+                else:
+                    self._local.conn = prev
+
+    def close(self) -> None:
+        try:
+            self.pool.putconn(self.conn)
+        except Exception:
+            pass
+        self.pool.close()
 
     def now(self) -> int:
         return int(time.time())
@@ -46,23 +82,47 @@ class Repository:
         return ids.new_id()
 
     def _one(self, sql: str, params: tuple = ()) -> Optional[dict]:
-        with self.conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchone()
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchone()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchone()
 
     def _all(self, sql: str, params: tuple = ()) -> list:
-        with self.conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchall()
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchall()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchall()
 
     def _run(self, sql: str, params: tuple = ()) -> int:
-        with self.conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.rowcount
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.rowcount
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.rowcount
 
     def _run_many(self, sql: str, params_seq) -> None:
-        with self.conn.cursor() as cur:
-            cur.executemany(sql, params_seq)
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            with conn.cursor() as cur:
+                cur.executemany(sql, params_seq)
+            return
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, params_seq)
 
     # -- users ------------------------------------------------------------
     def get_user_by_name(self, username: str) -> Optional[dict]:
@@ -761,15 +821,13 @@ class Repository:
     def consume_share(self, sid: str, now: int) -> bool:
         # See api/db.py: the guard is part of the UPDATE so a last use cannot be
         # redeemed twice by concurrent requests.
-        with self.conn.cursor() as cur:
-            cur.execute(
-                "UPDATE object_shares SET use_count = use_count + 1, "
-                "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
-                "AND expires_at > %s "
-                "AND (max_uses IS NULL OR use_count < max_uses)",
-                (now, sid, now),
-            )
-            return cur.rowcount == 1
+        return self._run(
+            "UPDATE object_shares SET use_count = use_count + 1, "
+            "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
+            "AND expires_at > %s "
+            "AND (max_uses IS NULL OR use_count < max_uses)",
+            (now, sid, now),
+        ) == 1
 
     def revoke_share(self, sid: str, now: int) -> None:
         self._run(
@@ -814,15 +872,13 @@ class Repository:
         )
 
     def consume_folder_share(self, sid: str, now: int) -> bool:
-        with self.conn.cursor() as cur:
-            cur.execute(
-                "UPDATE folder_shares SET use_count = use_count + 1, "
-                "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
-                "AND expires_at > %s "
-                "AND (max_uses IS NULL OR use_count < max_uses)",
-                (now, sid, now),
-            )
-            return cur.rowcount == 1
+        return self._run(
+            "UPDATE folder_shares SET use_count = use_count + 1, "
+            "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
+            "AND expires_at > %s "
+            "AND (max_uses IS NULL OR use_count < max_uses)",
+            (now, sid, now),
+        ) == 1
 
     def revoke_folder_share(self, sid: str, now: int) -> None:
         self._run(
@@ -1001,7 +1057,7 @@ class Repository:
         self._run(f"UPDATE objects SET {column} = %s WHERE id = %s", (now, oid))
 
     def replace_audio_chapters(self, oid: str, chapters: list[dict]) -> None:
-        with self.conn.transaction():
+        with self._transaction():
             self._run("DELETE FROM audio_chapters WHERE object_id = %s", (oid,))
             self._run_many(
                 "INSERT INTO audio_chapters "
@@ -1037,7 +1093,7 @@ class Repository:
         return result
 
     def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
-        with self.conn.transaction():
+        with self._transaction():
             self._run("DELETE FROM objects WHERE id = %s", (source_id,))
             self._run(
                 "UPDATE objects SET bucket = %s, object_key = %s, size_bytes = %s, "
@@ -1796,7 +1852,7 @@ class Repository:
         )
 
     def replace_collection_items(self, cid: str, object_ids: list) -> None:
-        with self.conn.transaction():
+        with self._transaction():
             self._run("DELETE FROM collection_items WHERE collection_id = %s", (cid,))
             self._run_many(
                 "INSERT INTO collection_items (collection_id, object_id, position) "
@@ -1816,7 +1872,7 @@ class Repository:
         )
 
     def delete_collection(self, cid: str) -> None:
-        with self.conn.transaction():
+        with self._transaction():
             self._run("DELETE FROM collection_items WHERE collection_id = %s", (cid,))
             self._run("DELETE FROM collections WHERE id = %s", (cid,))
 

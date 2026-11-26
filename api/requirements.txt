@@ -5,4 +5,5 @@ boto3==1.44.7
 argon2-cffi==25.1.0
 psycopg==3.3.9
 psycopg-binary==3.3.9
+psycopg-pool==3.3.3
 python-multipart==0.0.34

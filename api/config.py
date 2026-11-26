@@ -49,6 +49,10 @@ class Settings:
     # PostgreSQL DSN, e.g. postgresql://aura:PASSWORD@localhost:5432/aura.
     # Only used when backend is 'postgres'. Never logged.
     db_dsn: str = os.environ.get("AURA_API_DSN", "")
+    # PostgreSQL connection pool (psycopg_pool). Only used by the postgres backend.
+    pg_pool_min: int = _int("AURA_PG_POOL_MIN", 1)
+    pg_pool_max: int = _int("AURA_PG_POOL_MAX", 4)
+    pg_pool_timeout: float = float(os.environ.get("AURA_PG_POOL_TIMEOUT", "30"))
     # Lifetimes (seconds).
     # Human session cookie lifetime: 8 hours by default (audit H6 kept the
     # default short). A longer session (e.g. 2592000 = 30 days) widens the window
