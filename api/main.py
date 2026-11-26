@@ -97,7 +97,9 @@ from .transfer import (
     valid_idempotency_key,
 )
 
-app = FastAPI(title="AURA Management API", version="0.2.0")
+from .app_factory import create_app
+
+app = create_app()
 
 # Server-side idempotent response cache (D2): short-lived memo of commit/abort
 # results keyed by (route, idempotency-key, object id) so a client retry does
