@@ -406,6 +406,9 @@ def _track_html(item: dict) -> str:
         f'<span class="track-duration">{ESC(_duration_text(duration))}</span>',
         '</button>',
         _heart_button(item),
+        f'<button type="button" class="playlist-add-button" data-add-playlist="{ESC(item.get("id") or "")}" '
+        f'aria-haspopup="dialog" aria-label="Ajouter à une liste : {ESC(label)}" '
+        f'title="Ajouter à une liste"><span aria-hidden="true">+</span></button>',
         '</li>',
     ])
 
@@ -808,6 +811,20 @@ def catalog_page(
         '<button type="submit" value="cancel">Annuler</button>',
         '<button type="submit" value="confirm" class="primary-button">Enregistrer</button>',
         '</div></form></dialog>',
+        '<dialog id="playlist-dialog" aria-labelledby="playlist-dialog-title">',
+        '<div class="playlist-dialog-head">',
+        '<h3 id="playlist-dialog-title">Ajouter à une liste</h3>',
+        '<button type="button" class="icon-button panel-close" id="playlist-dialog-close" aria-label="Fermer">×</button>',
+        '</div>',
+        '<p class="track-author" id="playlist-dialog-book"></p>',
+        '<div id="playlist-dialog-status" class="playlist-dialog-status" role="status" aria-live="polite"></div>',
+        '<div id="playlist-dialog-list" class="playlist-dialog-list" aria-label="Listes de lecture"></div>',
+        '<form id="playlist-create-form" class="playlist-create-form">',
+        '<label for="playlist-create-name">Nouvelle liste</label>',
+        '<div class="email-row">',
+        '<input id="playlist-create-name" name="name" type="text" maxlength="80" required autocomplete="off" placeholder="Nom de la liste">',
+        '<button type="submit" class="primary-button">Créer</button>',
+        '</div></form></dialog>',
 
         '<aside class="queue-panel" id="queue-panel" hidden aria-label="File d\'attente">',
         '<div class="queue-panel-head"><h3>Dans la file</h3>'
@@ -826,6 +843,7 @@ def catalog_page(
         '<script src="' + asset_url("player.js") + '"></script>',
         '<script src="' + asset_url("shelf.js") + '"></script>',
         '<script src="' + asset_url("favorites.js") + '"></script>',
+        '<script src="' + asset_url("playlists.js") + '"></script>',
         '<script src="' + asset_url("offline.js") + '"></script>',
         '<script src="' + asset_url("bookmarks.js") + '"></script>',
         '</main></body></html>',

@@ -60,6 +60,11 @@ def _published_book(name="Auteur - Livre.mp3"):
         "UPDATE objects SET published_at = ?, public_slug = ?, duration_seconds = 600 "
         "WHERE id = ?", (int(time.time()), f"slug-{oid[:8]}", oid),
     )
+    cid = str(uuid.uuid4())
+    slug = f"pack-{uuid.uuid4().hex[:8]}"
+    main.repo.create_collection(cid, main.repo.default_scope()[1], None, slug, name, "Roman")
+    main.repo.replace_collection_items(cid, [oid])
+    main.repo.update_collection(cid, name, "Roman", int(time.time()))
     return oid
 
 
@@ -144,3 +149,32 @@ def test_book_page_shows_spoiler_free_recap_and_series_position(monkeypatch):
     assert "Avant de continuer" in response.text
     assert "Une histoire sans révélation." in response.text
     assert "Tome 1 sur 2" in response.text
+
+
+def test_catalog_playlist_dialog_and_idempotent_add():
+    client, headers, _ = _public_client()
+    oid, _ = _seed_published_books()
+
+    catalog = client.get("/", headers=headers)
+    assert catalog.status_code == 200, catalog.text[:300]
+    assert f'data-add-playlist="{oid}"' in catalog.text
+    assert 'id="playlist-dialog"' in catalog.text
+    assert 'id="playlist-create-form"' in catalog.text
+    assert 'id="playlist-dialog-list"' in catalog.text
+    assert "playlists.js" in catalog.text
+
+    created = client.post("/api/public/playlists", json={"name": "Route"}, headers=headers)
+    assert created.status_code == 200, created.text
+    pid = created.json()["playlist"]["id"]
+
+    added = client.put(f"/api/public/playlists/{pid}/items/{oid}", headers=headers)
+    assert added.status_code == 200, added.text
+    assert added.json() == {"object_id": oid, "added": True}
+
+    again = client.put(f"/api/public/playlists/{pid}/items/{oid}", headers=headers)
+    assert again.status_code == 200, again.text
+    assert again.json() == {"object_id": oid, "added": False}
+
+    items = client.get(f"/api/public/playlists/{pid}/items", headers=headers)
+    assert items.status_code == 200
+    assert [i["object_id"] for i in items.json()["items"]] == [oid]
