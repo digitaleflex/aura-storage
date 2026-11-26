@@ -166,6 +166,7 @@ class Repository:
     def delete_public_account(self, uid: str) -> None:
         """Delete a public portal account and its portal-owned data."""
         self.conn.execute("DELETE FROM listen_progress WHERE user_id = ?", (uid,))
+        self.conn.execute("DELETE FROM listen_events WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM listen_favorites WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM listen_bookmarks WHERE user_id = ?", (uid,))
         self.conn.execute(
@@ -243,6 +244,35 @@ class Repository:
             (user_id, *object_ids),
         ).fetchall()
         return {r["object_id"]: float(r["position_seconds"]) for r in rows}
+
+    def projected_listening_seconds(self, user_id: str, object_ids: list, *, max_delta: float = 120.0) -> dict:
+        """Project real listened time from append-only events (#320).
+
+        Sums positive position deltas between consecutive events per object,
+        capping each delta to `max_delta` to ignore seeks/long pauses. Returns
+        {object_id: seconds}. Falls back to empty dict when no events exist.
+        """
+        if not object_ids:
+            return {}
+        marks = ",".join("?" for _ in object_ids)
+        rows = self.conn.execute(
+            f"SELECT object_id, position_seconds, occurred_at FROM listen_events "
+            f"WHERE user_id = ? AND object_id IN ({marks}) "
+            f"ORDER BY object_id, occurred_at, id",
+            (user_id, *object_ids),
+        ).fetchall()
+        totals: dict[str, float] = {}
+        last_pos: dict[str, float] = {}
+        for r in rows:
+            oid = r["object_id"]
+            pos = float(r["position_seconds"] or 0.0)
+            prev = last_pos.get(oid)
+            if prev is not None:
+                delta = pos - prev
+                if 0 < delta <= max_delta:
+                    totals[oid] = totals.get(oid, 0.0) + delta
+            last_pos[oid] = pos
+        return totals
 
     def portal_stats(self, period: str, available: str) -> dict:
         """Aggregate portal figures per published book: no visitor is identifiable."""
@@ -402,13 +432,24 @@ class Repository:
     def save_progress(
         self, user_id: str, object_id: str, position_seconds: float, now: int,
     ) -> None:
+        pos = max(0.0, float(position_seconds))
         self.conn.execute(
             "INSERT INTO listen_progress (user_id, object_id, position_seconds, updated_at) "
             "VALUES (?, ?, ?, ?) ON CONFLICT(user_id, object_id) DO UPDATE SET "
             "position_seconds = excluded.position_seconds, "
             "updated_at = excluded.updated_at",
-            (user_id, object_id, max(0.0, float(position_seconds)), now),
+            (user_id, object_id, pos, now),
         )
+        kind = "start" if pos <= 5.0 else "position"
+        self.conn.execute(
+            "INSERT INTO listen_events "
+            "(id, user_id, object_id, kind, position_seconds, occurred_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, object_id, kind, occurred_at, position_seconds) DO NOTHING",
+            (self.new_id(), user_id, object_id, kind, pos, now),
+        )
+        # Retention bound (#320): keep 400 days of listening history.
+        self.conn.execute("DELETE FROM listen_events WHERE occurred_at < ?", (now - 34560000,))
         self.conn.commit()
 
     def revoke_sessions_beyond(self, max_expires_at: int) -> int:

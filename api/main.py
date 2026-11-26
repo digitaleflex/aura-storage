@@ -2271,16 +2271,24 @@ async def public_playlist_delete_form(
 
 
 def _public_listening_stats(principal: dict) -> dict:
-    """Lightweight listener stats, derived from data the portal already stores.
+    """Lightweight listener stats from stored portal data.
 
-    Only the latest position is kept per book, so the listened time is an
-    estimate from saved positions, never a claim of exact playback duration.
+    Listened time is projected from append-only listen_events (#320); when no
+    events exist for a user yet, we fall back to the last saved positions and
+    mark the source as "estimated" so the UI never presents it as exact.
     """
     collections = _public_collections(principal)
     items = [item for col in collections for item in col["items"]]
-    progress = repo.get_progress_map(principal["id"], [item["id"] for item in items])
+    ids = [item["id"] for item in items]
+    progress = repo.get_progress_map(principal["id"], ids)
     positions = {item["id"]: float(progress.get(item["id"], 0)) for item in items}
-    listened = sum(positions.values())
+    projected = repo.projected_listening_seconds(principal["id"], ids)
+    if projected:
+        listened = sum(float(projected.get(oid, 0.0)) for oid in ids)
+        source = "projected_events"
+    else:
+        listened = sum(positions.values())
+        source = "estimated_positions"
     completed = sum(
         1 for item in items
         if item.get("duration_seconds")
@@ -2306,6 +2314,8 @@ def _public_listening_stats(principal: dict) -> dict:
     return {
         "items_in_library": len(items),
         "estimated_listened_seconds": int(listened),
+        "listened_seconds": int(listened),
+        "listened_seconds_source": source,
         "completed": completed,
         "favorites": len(favourites),
         "bookmarks": bookmarks,

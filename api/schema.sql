@@ -371,6 +371,22 @@ CREATE TABLE IF NOT EXISTS listen_progress (
 CREATE INDEX IF NOT EXISTS idx_listen_progress_user
   ON listen_progress(user_id, updated_at);
 
+-- Append-only listening events (#320): the projection source for real stats.
+-- Idempotent by natural key so retries/duplicate heartbeats do not inflate time.
+CREATE TABLE IF NOT EXISTS listen_events (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  object_id TEXT NOT NULL REFERENCES objects(id),
+  kind TEXT NOT NULL,
+  position_seconds REAL NOT NULL DEFAULT 0,
+  occurred_at INTEGER NOT NULL,
+  UNIQUE (user_id, object_id, kind, occurred_at, position_seconds)
+);
+CREATE INDEX IF NOT EXISTS idx_listen_events_user
+  ON listen_events(user_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_listen_events_object
+  ON listen_events(object_id, occurred_at);
+
 -- Public portal bookmarks: a named position in a book, private to the visitor.
 CREATE TABLE IF NOT EXISTS listen_bookmarks (
   id TEXT PRIMARY KEY,
