@@ -58,7 +58,7 @@ from .authz import (
     require_public,
 )
 from .config import settings
-from . import media_worker
+from . import audio_classification_worker, media_worker
 from .identity import fingerprint, format_token, new_secret
 from .lifecycle import (
     purge_object,
@@ -234,6 +234,11 @@ log = logging.getLogger("uvicorn.error")
 @app.on_event("startup")
 def _start_media_worker() -> None:
     media_worker.start()
+
+
+@app.on_event("startup")
+def _start_audio_classification_worker() -> None:
+    audio_classification_worker.start()
 
 
 @app.on_event("startup")
