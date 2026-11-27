@@ -1137,6 +1137,99 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "422": { description: Invalid tag }
+  /api/v1/audio-classifications:
+    get:
+      summary: List audio classification jobs for the caller's space
+      tags: [objects]
+      description: >-
+        Read-only view of the opt-in classification queue. Suggestions are
+        stored for human review and are never applied automatically.
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [queued, processing, needs_review, accepted, rejected, failed] }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200": { description: "Jobs newest-first with object summaries (items)" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "422": { description: Invalid pagination or status filter }
+  /api/v1/audio-classifications/enqueue:
+    post:
+      summary: Queue audio analysis for available objects (objects:write)
+      tags: [objects]
+      description: >-
+        Only available audio objects visible in the caller's space are queued;
+        other entries are returned with a reason. Returns 409 unless the
+        classification sandbox is enabled with AURA_AI_CLASSIFICATION_ENABLED=1.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [object_ids]
+              properties:
+                object_ids:
+                  type: array
+                  maxItems: 100
+                  items: { type: string, minLength: 1, maxLength: 64 }
+      responses:
+        "200": { description: "Queued jobs and skipped ids with reasons" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "409": { description: Audio classification is disabled }
+  /api/v1/audio-classifications/{jid}:
+    get:
+      summary: Get one audio classification job
+      tags: [objects]
+      parameters:
+        - in: path
+          name: jid
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+      responses:
+        "200": { description: "Job with normalized suggestions" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "404": { description: Job not found in the caller's space }
+        "422": { description: Identifier is not a canonical UUID v4 }
+  /api/v1/audio-classifications/{jid}/review:
+    post:
+      summary: Accept or reject one classification proposal (objects:write)
+      tags: [objects]
+      description: >-
+        Accepting applies only the normalized suggested tags to the object;
+        nothing is moved or published. Rejecting records the decision without
+        changing the object.
+      parameters:
+        - in: path
+          name: jid
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action]
+              properties:
+                action: { type: string, enum: [accept, reject] }
+      responses:
+        "200": { description: "Reviewed job with its final status" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "404": { description: Job not found in the caller's space }
+        "409": { description: Job cannot be reviewed }
+        "422": { description: Invalid action or identifier }
   /api/v1/collections:
     get:
       summary: List the caller's ordered packs (human only)
