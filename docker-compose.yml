@@ -295,6 +295,17 @@ services:
       AURA_PUBLIC_ACCESS_GRANT_TTL: ${AURA_PUBLIC_ACCESS_GRANT_TTL:-900}
       # Shared scoring for the public "Pour vous" shelf (local = legacy heuristic).
       AURA_PUBLIC_RECOMMENDATIONS_ENGINE: ${AURA_PUBLIC_RECOMMENDATIONS_ENGINE:-audiobook}
+      # AI audio classification (Gemini primary, Claude fallback). Disabled by
+      # default; set keys in .env and enable explicitly after validation.
+      AURA_AI_CLASSIFICATION_ENABLED: ${AURA_AI_CLASSIFICATION_ENABLED:-0}
+      AURA_AI_PRIMARY_PROVIDER: ${AURA_AI_PRIMARY_PROVIDER:-gemini}
+      AURA_AI_FALLBACK_PROVIDER: ${AURA_AI_FALLBACK_PROVIDER:-claude}
+      AURA_GEMINI_API_KEY: ${AURA_GEMINI_API_KEY:-}
+      AURA_GEMINI_MODEL: ${AURA_GEMINI_MODEL:-gemini-2.5-flash}
+      AURA_ANTHROPIC_API_KEY: ${AURA_ANTHROPIC_API_KEY:-}
+      AURA_ANTHROPIC_MODEL: ${AURA_ANTHROPIC_MODEL:-claude-sonnet-4-6}
+      AURA_AI_CONFIDENCE_THRESHOLD: ${AURA_AI_CONFIDENCE_THRESHOLD:-0.80}
+      AURA_AI_TIMEOUT_S: ${AURA_AI_TIMEOUT_S:-120}
       GOOGLE_ALLOWED_EMAIL_DOMAINS: ${GOOGLE_ALLOWED_EMAIL_DOMAINS:-}
       # Optional e-mail sign-in link: active only when a mail server is set.
       AURA_SMTP_HOST: ${AURA_SMTP_HOST:-}

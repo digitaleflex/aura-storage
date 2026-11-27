@@ -136,6 +136,18 @@ class Settings:
     # In-process HLS worker (one job at a time, ffmpeg nice + 1 thread). Disable
     # when running several API replicas until the lease/queue is externalised.
     media_worker_enabled: bool = os.environ.get("AURA_MEDIA_WORKER", "1") == "1"
+    # AI audio analysis / classification. Disabled by default: enabling requires
+    # explicit opt-in and valid provider keys. Gemini is the primary provider
+    # (native audio input); Claude is the fallback (transcript/text classification).
+    ai_classification_enabled: bool = os.environ.get("AURA_AI_CLASSIFICATION_ENABLED", "0") == "1"
+    ai_primary_provider: str = os.environ.get("AURA_AI_PRIMARY_PROVIDER", "gemini").strip().lower()
+    ai_fallback_provider: str = os.environ.get("AURA_AI_FALLBACK_PROVIDER", "claude").strip().lower()
+    gemini_api_key: str = os.environ.get("AURA_GEMINI_API_KEY", "")
+    gemini_model: str = os.environ.get("AURA_GEMINI_MODEL", "gemini-2.5-flash")
+    anthropic_api_key: str = os.environ.get("AURA_ANTHROPIC_API_KEY", "")
+    anthropic_model: str = os.environ.get("AURA_ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    ai_confidence_threshold: float = _float("AURA_AI_CONFIDENCE_THRESHOLD", 0.80)
+    ai_timeout_s: int = _int("AURA_AI_TIMEOUT_S", 120)
     multipart_threshold_bytes: int = _int("AURA_MULTIPART_THRESHOLD_BYTES", 100 * 1024 * 1024)
     # Each part is one request through the edge proxy: keep part / slowest
     # supported rate well under Traefik's readTimeout (see the plan).
