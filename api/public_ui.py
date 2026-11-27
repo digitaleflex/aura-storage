@@ -13,7 +13,7 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import urlencode
 
-from . import public_facets
+from . import public_classification, public_facets
 
 _ASSET_DIR = Path(__file__).with_name("portal_assets")
 _ASSET_TYPES = {
@@ -94,6 +94,20 @@ _NAV_ICONS = {
     "recherche": '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
     "favori": '<path d="M12 20.5S4.5 16 4.5 10.3A3.9 3.9 0 0 1 12 8.1a3.9 3.9 0 0 1 7.5 2.2C19.5 16 12 20.5 12 20.5Z"/>',
     "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    "grid": '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/>'
+            '<rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',
+    "sprout": '<path d="M12 21v-8"/><path d="M12 13C7 13 5 10 5 6c5 0 7 2 7 7Z"/>'
+              '<path d="M12 10c0-4 2-6 7-6 0 4-2 6-7 6Z"/>',
+    "chart": '<path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 15 4-4 3 2 5-7"/>',
+    "compass": '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z"/>',
+    "heart": '<path d="M12 20.5S4.5 16 4.5 10.3A3.9 3.9 0 0 1 12 8.1a3.9 3.9 0 0 1 7.5 2.2C19.5 16 12 20.5 12 20.5Z"/>',
+    "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/>',
+    "shield": '<path d="M12 3 5 6v5c0 4.5 3 7.5 7 10 4-2.5 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/>',
+    "book": '<path d="M4 5.5h6a2 2 0 0 1 2 2V20H6a2 2 0 0 1-2-2V5.5Z"/>'
+            '<path d="M20 5.5h-6a2 2 0 0 0-2 2V20h6a2 2 0 0 0 2-2V5.5Z"/>',
+    "lotus": '<path d="M12 20c-4 0-7-2.5-7-6 2.5 0 5 1.5 7 4 2-2.5 4.5-4 7-4 0 3.5-3 6-7 6Z"/>'
+             '<path d="M12 16c-3-1-5-3.5-5-7 3 0 5 2 5 5 0-3 2-5 5-5 0 3.5-2 6-5 7Z"/>',
+    "tag": '<path d="M4 4h7l9 9-7 7-9-9V4Z"/><circle cx="8" cy="8" r="1"/>',
 }
 
 
@@ -103,6 +117,56 @@ def _nav_icon(name: str) -> str:
         'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
         + _NAV_ICONS.get(name, "") + '</svg>'
     )
+
+
+def category_theme_nav(
+    *, facet_options: dict | None = None, active_facets: dict | None = None,
+    href, include_categories: bool = True, include_themes: bool = True,
+) -> str:
+    """Shared category/theme shortcut row for anonymous and signed-in catalogues."""
+    facet_options = facet_options or {}
+    active_facets = active_facets or {}
+    categories = list(facet_options.get("categories") or [])[:8] if include_categories else []
+    themes = list(facet_options.get("themes") or [])[:10] if include_themes else []
+    if not categories and not themes:
+        return ""
+    parts = []
+    if categories:
+        all_link = (
+            f'<a class="cat-chip facet-chip" href="{ESC(href(categorie=None, page=None))}" '
+            f'aria-pressed="{str(not active_facets.get("category")).lower()}">'
+            f'<span class="facet-icon">{_nav_icon("grid")}</span><span>Toutes catégories</span></a>'
+        )
+        chips = [all_link]
+        for option in categories:
+            value = str(option.get("value") or "")
+            label = public_facets.facet_label("category", value)
+            count = int(option.get("count") or 0)
+            icon = public_classification.CATEGORY_ICONS.get(value, "tag")
+            chips.append(
+                f'<a class="cat-chip facet-chip" href="{ESC(href(categorie=value, page=None))}" '
+                f'aria-pressed="{str(active_facets.get("category") == value).lower()}">'
+                f'<span class="facet-icon">{_nav_icon(icon)}</span><span>{ESC(label)}</span>'
+                f'<small>{count}</small></a>'
+            )
+        parts.append('<section class="cat-row" aria-label="Catégories">' + "".join(chips) + '</section>')
+    if themes:
+        all_link = (
+            f'<a class="cat-chip theme-chip" href="{ESC(href(theme=None, page=None))}" '
+            f'aria-pressed="{str(not active_facets.get("theme")).lower()}">Tous thèmes</a>'
+        )
+        chips = [all_link]
+        for option in themes:
+            value = str(option.get("value") or "")
+            label = public_facets.facet_label("theme", value)
+            count = int(option.get("count") or 0)
+            chips.append(
+                f'<a class="cat-chip theme-chip" href="{ESC(href(theme=value, page=None))}" '
+                f'aria-pressed="{str(active_facets.get("theme") == value).lower()}">'
+                f'{ESC(label)} <small>{count}</small></a>'
+            )
+        parts.append('<section class="cat-row theme-row" aria-label="Thèmes">' + "".join(chips) + '</section>')
+    return "".join(parts)
 
 
 def site_header(active: str = "", principal: dict | None = None) -> str:
@@ -488,9 +552,11 @@ def _track_html(item: dict) -> str:
     progress = float(item.get("progress_seconds") or 0)
     facets = public_facets.item_facets(item)
     classifications = [
-        public_facets.humanize(value)
-        for value in (facets["categories"] + facets["themes"])[:2]
+        public_facets.facet_label("category", value) for value in facets["categories"]
+    ] + [
+        public_facets.facet_label("theme", value) for value in facets["themes"]
     ]
+    classifications = classifications[:2]
     pct = min(100.0, progress / duration * 100) if duration else 0.0
     cover = item.get("cover_url") or ""
     cover_inner = fallback_cover_inner(label, author)
@@ -761,36 +827,17 @@ def catalog_page(
     # il existe, sinon la jaquette typographique du livre.
     hero_items = all_items[:3]
     hero_figure = ""
-    if hero_covers:
+    if hero_items:
         hero_figure = (
             '<div class="hero-figure"><div class="hero-stack">'
-            + "".join(f'<div class="hero-cover"><img src="{ESC(url)}" alt=""></div>'
-                      for url in hero_covers)
+            + "".join(hero_cover_html(i) for i in hero_items)
             + '<div class="hero-note"><p class="eyebrow">À découvrir</p>'
               '<p>Un catalogue choisi, à écouter à votre rythme.</p></div></div></div>'
         )
 
-    # Catégories et thèmes : filtres visibles dès l'accueil.
-    cat_chips = [f'<a class="cat-chip" href="{ESC(href(categorie=None, page=None))}"'
-                 f' aria-pressed="{str(not active_facets.get("category")).lower()}">Toutes catégories</a>']
-    for option in facet_options.get("categories", [])[:8]:
-        value = str(option.get("value") or "")
-        label = str(option.get("label") or value.replace("-", " ").capitalize())
-        count = f' <small>{int(option.get("count") or 0)}</small>'
-        cat_chips.append(
-            f'<a class="cat-chip" href="{ESC(href(categorie=value, page=None))}"'
-            f' aria-pressed="{str(active_facets.get("category") == value).lower()}">{ESC(label)}{count}</a>'
-        )
-    theme_chips = [f'<a class="cat-chip theme-chip" href="{ESC(href(theme=None, page=None))}"'
-                   f' aria-pressed="{str(not active_facets.get("theme")).lower()}">Tous thèmes</a>']
-    for option in facet_options.get("themes", [])[:10]:
-        value = str(option.get("value") or "")
-        label = str(option.get("label") or value.replace("-", " ").capitalize())
-        count = f' <small>{int(option.get("count") or 0)}</small>'
-        theme_chips.append(
-            f'<a class="cat-chip theme-chip" href="{ESC(href(theme=value, page=None))}"'
-            f' aria-pressed="{str(active_facets.get("theme") == value).lower()}">{ESC(label)}{count}</a>'
-        )
+    facet_nav = category_theme_nav(
+        facet_options=facet_options, active_facets=active_facets, href=href,
+    )
 
     parts = [
         _HEAD,
@@ -828,10 +875,7 @@ def catalog_page(
         '<div class="search-suggest"><span>En ce moment :</span>',
         '<button type="button">Romans courts</button><button type="button">Moins d’une heure</button>',
         '<button type="button">Nouveautés</button></div></section>',
-        '<section class="cat-row" aria-label="Catégories">', "".join(cat_chips),
-        '<span class="spacer"></span></section>',
-        '<section class="cat-row theme-row" aria-label="Thèmes">', "".join(theme_chips),
-        '</section>',
+        facet_nav,
     ]
     if search_note:
         parts.append(f'<p class="search-note" role="status">Compris comme : {ESC(search_note)}</p>')

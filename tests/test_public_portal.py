@@ -1248,6 +1248,9 @@ def test_public_catalog_filters_by_category_theme_language_format_collection_and
         "categorie-roman", "theme-histoire", "langue-fr", "interne-secret",
     ])
     client = TestClient(main.app)
+    landing = client.get("/")
+    assert 'aria-label="Catégories"' in landing.text
+    assert 'class="facet-icon"' in landing.text
     for path in (
         "/?categorie=roman",
         "/?theme=histoire",
@@ -1279,6 +1282,7 @@ def test_connected_catalog_exposes_one_accessible_filter_form(monkeypatch):
     assert 'name="theme"' in page.text and 'value="histoire" selected' in page.text
     assert 'name="langue"' in page.text and 'value="fr" selected' in page.text
     assert 'name="format"' in page.text and 'value="mp3" selected' in page.text
+    assert 'aria-label="Catégories"' in page.text and 'class="facet-icon"' in page.text
     assert '<button type="submit" class="filter-apply">Appliquer les filtres</button>' in page.text
     assert "Effacer tous les filtres" in page.text
 

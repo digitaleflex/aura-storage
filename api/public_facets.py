@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+from . import public_classification
+
 FORMAT_LABELS = {
     "mp3": "MP3",
     "m4a": "M4A / MP4",
@@ -59,6 +61,15 @@ def normalize_format(value: str | None, *, unknown: str = "other") -> str:
 def humanize(value: str) -> str:
     words = [part for part in value.replace("_", "-").split("-") if part]
     return " ".join(word[:1].upper() + word[1:] for word in words) or value
+
+
+def facet_label(kind: str, value: str) -> str:
+    labels = (
+        public_classification.CATEGORY_LABELS if kind == "category"
+        else public_classification.THEME_LABELS if kind == "theme"
+        else LANGUAGE_LABELS
+    )
+    return labels.get(value, humanize(value))
 
 
 def split_public_tags(tags: list[str] | tuple[str, ...] | None) -> dict:
@@ -165,8 +176,8 @@ def catalog_facets(collections: list[dict]) -> dict:
 
     return {
         "collections": collection_options,
-        "categories": _options(category_counts),
-        "themes": _options(theme_counts),
+        "categories": _options(category_counts, public_classification.CATEGORY_LABELS),
+        "themes": _options(theme_counts, public_classification.THEME_LABELS),
         "languages": _options(language_counts, LANGUAGE_LABELS),
         "formats": _options(format_counts, FORMAT_LABELS),
     }

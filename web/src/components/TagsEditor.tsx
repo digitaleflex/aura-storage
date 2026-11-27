@@ -5,11 +5,16 @@ import type { ObjectItem } from "../lib/api";
 import { describeError } from "../lib/errors";
 
 const QUICK_PUBLIC_TAGS = [
-  { tag: "categorie-roman", label: "Roman" },
-  { tag: "categorie-science", label: "Science" },
-  { tag: "categorie-informatique", label: "Informatique" },
-  { tag: "theme-histoire", label: "Histoire" },
+  { tag: "categorie-developpement", label: "Développement personnel" },
+  { tag: "categorie-finance", label: "Finance & entrepreneuriat" },
+  { tag: "categorie-leadership", label: "Leadership & productivité" },
+  { tag: "categorie-psychologie", label: "Psychologie & relations" },
+  { tag: "categorie-spiritualite", label: "Spiritualité & bien-être" },
+  { tag: "categorie-cybersecurite", label: "Cybersécurité & technologie" },
+  { tag: "categorie-litterature", label: "Littérature & philosophie" },
+  { tag: "categorie-meditation", label: "Méditation & audio guidé" },
   { tag: "theme-intelligence-artificielle", label: "Intelligence artificielle" },
+  { tag: "theme-histoire", label: "Histoire" },
   { tag: "langue-fr", label: "Français" },
   { tag: "langue-en", label: "Anglais" },
 ];
@@ -70,13 +75,13 @@ export function TagsEditor({
         <input
           type="text"
           value={value}
-          placeholder="categorie-roman, theme-histoire, langue-fr"
+          placeholder="categorie-finance, theme-argent, langue-fr"
           aria-describedby="public-tag-help"
           onChange={(e) => setValue(e.target.value)}
         />
       </label>
       <p id="public-tag-help" className="hint">
-        Pour le catalogue public : <code>categorie-roman</code>, <code>theme-histoire</code>,
+        Pour le catalogue public : <code>categorie-finance</code>, <code>theme-argent</code>,
         <code>langue-fr</code>. Les autres étiquettes restent privées.
       </p>
       <div className="tag-suggestions" role="group" aria-label="Classification publique rapide">

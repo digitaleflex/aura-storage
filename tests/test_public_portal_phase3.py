@@ -131,6 +131,43 @@ def test_natural_language_search_is_translated_into_filters():
     assert plain.q == "Nuit" and not plain.recognised
 
 
+def test_local_synonyms_are_canonicalised_without_rewriting_the_query():
+    intent = portal_search.parse_search("un polar sur l'IA")
+    assert intent.q == "un polar sur l'IA"
+    assert "synonyme local : thriller" in intent.explanation
+    assert "synonyme local : intelligence artificielle" in intent.explanation
+    assert portal_search.search_tokens("polar") == ["thriller"]
+    assert portal_search.search_tokens("Nuit inconnue") == ["nuit", "inconnue"]
+
+
+def test_synonym_search_matches_the_indexed_facets():
+    collections = [{
+        "slug": "classiques", "title": "Classiques", "items": [
+            {
+                "id": "a", "display_name": "La Nuit", "author": "Awa Diallo",
+                "title": "La Nuit", "duration_seconds": 3600,
+                "categories": [], "themes": ["thriller"], "languages": [], "format": "mp3",
+            },
+            {
+                "id": "b", "display_name": "Le Jardin", "author": "Awa Diallo",
+                "title": "Le Jardin", "duration_seconds": 3600,
+                "categories": [], "themes": ["romance"], "languages": [], "format": "mp3",
+            },
+        ],
+    }]
+    found = main._filter_collections(collections, "polar", "")
+    assert [i["id"] for col in found for i in col["items"]] == ["a"]
+    assert [i["id"] for col in main._filter_collections(collections, "romantique", "")
+            for i in col["items"]] == ["b"]
+
+
+def test_search_enrichment_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("AURA_SEARCH_ENRICHMENT", "0")
+    assert portal_search.search_tokens("polar") == ["polar"]
+    assert not portal_search.synonym_notes("polar")
+    assert not portal_search.parse_search("un polar").recognised
+
+
 def test_book_page_shows_spoiler_free_recap_and_series_position(monkeypatch):
     first = {"id": OID, "title": "Tome 1", "author": "Auteur", "chapters": []}
     second = {"id": NEXT_OID, "title": "Tome 2", "author": "Autre auteur", "chapters": []}

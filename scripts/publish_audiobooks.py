@@ -14,6 +14,8 @@ Safety:
   and objects that are soft-deleted.
 - audio/x-m4a is rewritten to audio/mp4: /m/<slug> only serves inline types
   from the allow-list, and x-m4a would be downloaded instead of played.
+- adds proposed public category/theme/language tags without replacing existing
+  editorial facets or private tags.
 
 Usage (from the repository root):
     .venv/bin/python scripts/publish_audiobooks.py --dry-run
@@ -67,6 +69,7 @@ if not os.environ.get("AURA_API_BACKEND") and os.environ.get("POSTGRES_USER"):
 import boto3  # noqa: E402
 
 from api.config import settings  # noqa: E402
+from api.public_classification import classify_public_item, merge_public_tags  # noqa: E402
 from api.store import repo  # noqa: E402
 
 AUDIO_TYPES = ("audio/mpeg", "audio/ogg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/flac", "audio/aac")
@@ -200,9 +203,11 @@ def main() -> int:
     ph = "?" if settings.db_backend == "sqlite" else "%s"
     placeholders = ",".join(ph for _ in AUDIO_TYPES)
     rows = repo.conn.execute(
-        f"SELECT * FROM objects WHERE space_id = {ph} AND content_type IN ({placeholders}) "
-        "AND status IN ('available','pending','verifying','expired','failed') "
-        "ORDER BY created_at DESC",
+        f"SELECT o.*, COALESCE(f.name, '') AS folder_name FROM objects o "
+        f"LEFT JOIN folders f ON f.id = o.folder_id "
+        f"WHERE o.space_id = {ph} AND o.content_type IN ({placeholders}) "
+        "AND o.status IN ('available','pending','verifying','expired','failed') "
+        "ORDER BY o.created_at DESC",
         (sid, *AUDIO_TYPES),
     ).fetchall()
     rows, excluded = filter_publication_rows(
@@ -278,6 +283,13 @@ def main() -> int:
         )
         if not obj.get("published_at"):
             repo.set_object_publication(oid, slug, int(time.time()))
+        existing_tags = repo.get_object_tags(oid)
+        classification = classify_public_item(
+            obj["display_name"], obj.get("folder_name") or "",
+        )
+        merged_tags = merge_public_tags(existing_tags, classification)
+        if set(merged_tags) != set(existing_tags):
+            repo.set_object_tags(oid, merged_tags)
         published_ids.append(oid)
         print(f"  publie: {obj['display_name']} -> /m/{slug}")
 

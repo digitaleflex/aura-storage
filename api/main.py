@@ -2138,7 +2138,10 @@ def _filter_collections(
     language: str = "", media_format: str = "",
 ) -> list:
     """Search and combine public facets with AND semantics."""
-    words = public_ui.fold(query).split()
+    # Query and indexed text share the same canonicalisation, so « polar »
+    # finds a book tagged « thriller » while unknown words keep plain matching.
+    from . import portal_search
+    words = portal_search.search_tokens(query)
     raw_format = (media_format or "").strip().lower()
     wanted_format = public_facets.normalize_format(raw_format, unknown=raw_format) if raw_format else ""
     wanted_author = public_ui.fold(author) if author else ""
@@ -2149,7 +2152,7 @@ def _filter_collections(
         prepared = []
         for item in col["items"]:
             facets = public_facets.item_facets(item)
-            searchable = public_ui.fold(
+            searchable = portal_search.canonicalize(
                 f'{item.get("display_name", "")} {item.get("author", "")} '
                 f'{item.get("title", "")} {" ".join(facets["categories"])} '
                 f'{" ".join(facets["themes"])}'

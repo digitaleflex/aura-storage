@@ -253,6 +253,10 @@ services:
       AURA_S3_REGION: ${AURA_S3_REGION:-us-east-1}
       AURA_API_BACKEND: postgres
       AURA_API_DSN: postgresql://${POSTGRES_USER:-aura}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-aura}
+      # Bounded integrated connection pool (#325); min <= max, timeout in seconds.
+      AURA_DB_POOL_MIN: ${AURA_DB_POOL_MIN:-2}
+      AURA_DB_POOL_MAX: ${AURA_DB_POOL_MAX:-10}
+      AURA_DB_POOL_TIMEOUT: ${AURA_DB_POOL_TIMEOUT:-5}
       AURA_COOKIE_SECURE: "1"
       # Public portal on its own subdomain. The domain is configuration (never
       # a client Host header): it builds the OAuth redirect URI and guards the

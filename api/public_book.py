@@ -10,8 +10,9 @@ from urllib.parse import quote, quote_plus, urlencode
 from . import public_facets
 from .public_ui import (
     ESC, _BRAND, _GOOGLE, _SKIP_LINK, _duration_text, _heart_button, _nav_icon,
-    _position_text, asset_url, catalog_filter_fields, cover_hue, email_form,
-    fallback_cover_inner, mobile_nav, page_head, site_footer, site_header,
+    _position_text, asset_url, catalog_filter_fields, category_theme_nav, cover_hue,
+    email_form, fallback_cover_inner, hero_cover_html, mobile_nav, page_head,
+    site_footer, site_header,
 )
 
 SITE_NAME = "AURA"
@@ -36,9 +37,11 @@ def _card(item: dict) -> str:
     label = str(item.get("title") or item.get("display_name") or "Livre")
     facets = public_facets.item_facets(item)
     classifications = [
-        public_facets.humanize(value)
-        for value in (facets["categories"] + facets["themes"])[:2]
+        public_facets.facet_label("category", value) for value in facets["categories"]
+    ] + [
+        public_facets.facet_label("theme", value) for value in facets["themes"]
     ]
+    classifications = classifications[:2]
     return "".join([
         '<li class="book-card"><a href="', ESC(book_path(item)), '">',
         _cover(item),
@@ -84,6 +87,33 @@ def landing_page(
             author_name = str(item.get("author") or "").strip()
             if author_name:
                 author_counts[author_name] = author_counts.get(author_name, 0) + 1
+
+    def _href(pn: int | None = None, **changes) -> str:
+        values = {
+            "q": query, "auteur": active_author, "tri": sort,
+            "collection": active_facets.get("collection"),
+            "categorie": active_facets.get("category"),
+            "theme": active_facets.get("theme"),
+            "langue": active_facets.get("language"),
+            "format": active_facets.get("format"),
+            "duree_min": active_facets.get("duration_min"),
+            "duree_max": active_facets.get("duration_max"),
+            "page": page if page > 1 else "",
+        }
+        values.update(changes)
+        if pn is not None:
+            values["page"] = pn if pn > 1 else ""
+        qs = [f"{key}={quote_plus(str(value))}" for key, value in values.items() if value]
+        return "/?" + "&".join(qs) if qs else "/"
+
+    category_nav = category_theme_nav(
+        facet_options=facet_options, active_facets=active_facets, href=_href,
+        include_themes=False,
+    )
+    theme_nav = category_theme_nav(
+        facet_options=facet_options, active_facets=active_facets, href=_href,
+        include_categories=False,
+    )
     description = (
         f"{len(items)} livres audio à découvrir : écoutez un extrait gratuit, "
         "puis entrez avec Google pour tout écouter."
@@ -117,6 +147,7 @@ def landing_page(
         '<div class="hero-actions welcome-actions"><a class="google-button" href="/api/public/auth/google">',
         _GOOGLE, '<span>Continuer avec Google</span></a></div>',
         email_form() if with_email else '', '</div>', hero_figure, '</div></section>',
+        category_nav,
         '<section class="search-section" aria-label="Recherche principale">',
         '<form class="search-form catalog-search" method="get" action="/" role="search">',
         _nav_icon("recherche").replace('<svg ', '<svg class="search-icon" '),
@@ -141,6 +172,7 @@ def landing_page(
         '<button type="button">Moins d’une heure</button>'
         '<button type="button">Nouveautés</button></div></section>'
     )
+    parts.append(theme_nav)
     if search_note:
         parts.append(f'<p class="search-note" role="status">Compris comme : {ESC(search_note)}</p>')
     parts.append(
@@ -164,26 +196,17 @@ def landing_page(
         parts.extend(_card(i) for i in page_items)
         parts.append('</ul>')
         if pages > 1:
-            def _page_href(pn: int) -> str:
-                qs = []
-                if query: qs.append(f"q={quote_plus(query)}")
-                if active_author: qs.append(f"auteur={quote_plus(active_author)}")
-                if sort: qs.append(f"tri={quote_plus(sort)}")
-                for k, v in (("collection", active_facets.get("collection")), ("categorie", active_facets.get("category")), ("theme", active_facets.get("theme")), ("langue", active_facets.get("language")), ("format", active_facets.get("format")), ("duree_min", active_facets.get("duration_min")), ("duree_max", active_facets.get("duration_max"))):
-                    if v: qs.append(f"{k}={quote_plus(str(v))}")
-                if pn > 1: qs.append(f"page={pn}")
-                return "/?" + "&".join(qs) if qs else "/"
             parts.append('<nav class="pagination" aria-label="Pagination">')
             if page > 1:
-                parts.append(f'<a class="page-link" href="{ESC(_page_href(page-1))}">Précédent</a>')
+                parts.append(f'<a class="page-link" href="{ESC(_href(page-1))}">Précédent</a>')
             for pn in range(1, pages+1):
                 if pn == 1 or pn == pages or abs(pn-page) <= 2:
                     cur = ' aria-current="page"' if pn == page else ''
-                    parts.append(f'<a class="page-link" href="{ESC(_page_href(pn))}"{cur}>{pn}</a>')
+                    parts.append(f'<a class="page-link" href="{ESC(_href(pn))}"{cur}>{pn}</a>')
                 elif abs(pn-page) == 3:
                     parts.append('<span class="page-ellipsis">…</span>')
             if page < pages:
-                parts.append(f'<a class="page-link" href="{ESC(_page_href(page+1))}">Suivant</a>')
+                parts.append(f'<a class="page-link" href="{ESC(_href(page+1))}">Suivant</a>')
             parts.append('</nav>')
         parts.append('</section>')
     parts.extend([
@@ -227,8 +250,9 @@ def book_page(
         meta.append(("name", "twitter:image", base_url + item["cover_url"]))
     facets = public_facets.item_facets(item)
     classifications = [
-        public_facets.humanize(value)
-        for value in (facets["categories"] + facets["themes"])
+        public_facets.facet_label("category", value) for value in facets["categories"]
+    ] + [
+        public_facets.facet_label("theme", value) for value in facets["themes"]
     ]
     ld = {
         "@context": "https://schema.org", "@type": "Audiobook", "name": label,

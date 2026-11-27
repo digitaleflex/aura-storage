@@ -728,12 +728,19 @@ button,input,select{font:inherit;color:inherit}
 .theme-row{padding-top:0;padding-bottom:24px}
 .theme-row .cat-chip{background:rgba(255,255,255,.5)}
 .cat-row .cat-chip,.cat-chip{
-  font-size:13px;font-weight:500;padding:8px 16px;border:1px solid var(--line);
+  display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:500;
+  min-height:38px;padding:8px 16px;border:1px solid var(--line);
   border-radius:999px;background:transparent;color:var(--muted);text-decoration:none;
+  transition:border-color .18s ease,color .18s ease,background-color .18s ease;
 }
 .cat-chip:hover{border-color:var(--ink);color:var(--ink)}
 .cat-chip[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--surface)}
-.cat-chip small{font-size:11px;opacity:.8}
+.cat-chip small{font-size:12px;opacity:1;margin-left:2px}
+.facet-icon{display:inline-flex;width:18px;height:18px;flex:none}
+.facet-icon svg{width:18px;height:18px}
+.facet-chip{box-shadow:0 1px 2px rgba(20,36,56,.03)}
+.facet-chip:hover{background:var(--surface)}
+.facet-chip[aria-pressed=true]:hover{background:var(--ink)}
 .cat-row .view-link,.cat-row .facet,.view-link,.facet{
   font-size:13px;font-weight:500;padding:8px 16px;border:1px solid var(--line);
   border-radius:999px;background:transparent;color:var(--muted);text-decoration:none;
