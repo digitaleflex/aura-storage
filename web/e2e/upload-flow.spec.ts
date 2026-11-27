@@ -105,6 +105,10 @@ async function installMocks(page: Page, options: Options = {}): Promise<Mocks> {
       await route.fulfill({ json: { id: objectId, status: "aborted", aborted: true } });
       return;
     }
+    if (path === "/api/v1/objects/duplicate-scan" && method === "POST") {
+      await route.fulfill({ json: { byParent: {}, unresolved: [] } });
+      return;
+    }
     await route.fulfill({ status: 404, json: { detail: `unmocked ${method} ${path}` } });
   });
 
@@ -234,7 +238,8 @@ test("a big batch lists only what needs attention; 'Tous' lists everything", asy
     Array.from({ length: 40 }, (_, i) => ({
       name: `lot-${i}.pdf`,
       mimeType: "application/pdf",
-      buffer: Buffer.from("hello world"),
+      // Distinct bytes of the same length: identical files would be flagged as batch duplicates.
+      buffer: Buffer.from(String(i).padStart(11, "x")),
     })),
   );
   const preflight = page.getByTestId("import-preflight");

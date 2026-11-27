@@ -3154,6 +3154,8 @@ export function ObjectsPage() {
             type="file"
             multiple
             data-testid="resume-files-input"
+            aria-label="Reprendre l'import : choisir les fichiers"
+            tabIndex={-1}
             className="visually-hidden"
             onChange={(e) => {
               handleResume(e.target.files);
@@ -3165,6 +3167,8 @@ export function ObjectsPage() {
             type="file"
             multiple
             data-testid="resume-folder-input"
+            aria-label="Reprendre l'import : choisir le dossier"
+            tabIndex={-1}
             className="visually-hidden"
             onChange={(e) => {
               handleResume(e.target.files);
@@ -3331,6 +3335,8 @@ export function ObjectsPage() {
             type="file"
             multiple
             data-testid="folder-input"
+            aria-label="Choisir un dossier à importer"
+            tabIndex={-1}
             className="visually-hidden"
             disabled={transferActive}
             onChange={(e) => {

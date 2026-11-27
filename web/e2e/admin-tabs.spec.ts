@@ -61,7 +61,7 @@ test("the sidebar opens the dedicated cover validation page", async ({ page }) =
   await page.getByRole("button", { name: "Se connecter", exact: true }).click();
   await page.getByRole("link", { name: "Couvertures" }).click();
   await expect(page).toHaveURL(/\/admin\/covers/);
-  await expect(page.getByRole("heading", { name: "Validation des couvertures" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Validation des couvertures" })).toBeVisible();
 });
 
 test("a link with #covers opens the cover validation tab", async ({ page }) => {
@@ -69,7 +69,7 @@ test("a link with #covers opens the cover validation tab", async ({ page }) => {
 
   const covers = page.getByRole("tab", { name: "Couvertures" });
   await expect(covers).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("heading", { name: "Validation des couvertures" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Validation des couvertures" })).toBeVisible();
 });
 
 test("the cover validation page offers a cover search for each book", async ({ page }) => {
@@ -99,6 +99,6 @@ test("the cover validation page offers a cover search for each book", async ({ p
   await loginToAdmin(page);
   await page.getByRole("link", { name: "Couvertures" }).click();
   await expect(page).toHaveURL(/\/admin\/covers/);
-  await expect(page.getByRole("heading", { name: "Validation des couvertures" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Validation des couvertures" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Rechercher une couverture" })).toBeVisible();
 });

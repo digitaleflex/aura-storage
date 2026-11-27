@@ -58,6 +58,9 @@ async function installMocks(page: Page, state: { dead: boolean }) {
         json: { items: ALL.slice(offset, offset + limit) },
       });
     }
+    if (path === "/api/v1/objects/duplicate-scan" && method === "POST") {
+      return route.fulfill({ json: { byParent: {}, unresolved: [] } });
+    }
     return route.fulfill({ status: 404, json: { detail: `unmocked ${method} ${path}` } });
   });
 }
