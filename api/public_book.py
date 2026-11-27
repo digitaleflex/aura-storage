@@ -10,7 +10,7 @@ from urllib.parse import quote, quote_plus, urlencode
 from . import public_facets
 from .public_ui import (
     ESC, _BRAND, _GOOGLE, _SKIP_LINK, _duration_text, _heart_button, _nav_icon,
-    _position_text, asset_url, carousel_shelves, catalog_filter_fields,
+    _player_icon, _position_text, asset_url, carousel_shelves, catalog_filter_fields,
     category_theme_nav, cover_hue, email_form, fallback_cover_inner,
     hero_cover_html, mobile_nav, page_head, real_cover_img, site_footer,
     site_header, use_real_cover,
@@ -310,9 +310,20 @@ def book_page(
     if preview_seconds:
         parts += [
             '<div class="preview"><p class="eyebrow">Extrait gratuit · 1 min, sans compte</p>',
-            f'<audio controls controlsList="nodownload" disablePictureInPicture '
-            f'preload="none" src="/extrait/{ESC(item["id"])}">'
-            'Votre navigateur ne sait pas lire l’audio.</audio></div>',
+            '<div class="preview-player" data-preview-player>',
+            f'<audio preload="metadata" controlsList="nodownload" disablePictureInPicture '
+            f'data-preview-audio data-preview-duration="{int(preview_seconds)}" '
+            f'src="/extrait/{ESC(item["id"])}">Votre navigateur ne sait pas lire l’audio.</audio>',
+            f'<button type="button" class="preview-play" data-preview-toggle '
+            f'aria-label="Lire l’extrait" title="Lire l’extrait">{_player_icon("play")}</button>',
+            '<span class="preview-time" data-preview-current>0:00</span>',
+            '<input class="preview-seek" data-preview-seek type="range" min="0" max="100" '
+            'value="0" step="0.1" aria-label="Position dans l’extrait" aria-valuetext="0:00">',
+            f'<span class="preview-time" data-preview-total>{_position_text(preview_seconds)}</span>',
+            '</div>',
+            '<noscript><audio controls controlsList="nodownload" preload="none" '
+            f'src="/extrait/{ESC(item["id"])}">Votre navigateur ne sait pas lire l’audio.</audio></noscript>',
+            '</div>',
         ]
     if principal:
         parts.append(f'<p class="book-cta"><a class="primary-button" href="/?lecture={ESC(item["id"])}">'
