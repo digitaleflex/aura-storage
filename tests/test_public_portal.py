@@ -825,11 +825,27 @@ def test_fallback_cover_shows_the_title_and_author():
     item = {"id": "book-id", "title": "Le Grand Livre", "author": "Alice Auteur"}
     track = main.public_ui._track_html(item)
     assert 'class="cover-fallback"' in track
+    assert 'class="cover-spine"></span>' in track
     assert 'class="cover-title">Le Grand Livre</span>' in track
     assert 'class="cover-author">Alice Auteur</span>' in track
     cover = main.public_book._cover(item)
     assert 'class="cover-title">Le Grand Livre</span>' in cover
     assert 'class="cover-author">Alice Auteur</span>' in cover
+
+
+def test_fallback_hues_stay_in_the_aura_palette():
+    for label in ("", "Z", "Le Grand Livre", "Énergie douce"):
+        assert main.public_ui.cover_hue(label) in main.public_ui.COVER_HUES
+
+
+def test_hero_uses_a_typographic_jacket_without_artwork():
+    hero = main.public_ui.hero_cover_html(
+        {"title": "Sans jaquette", "author": "Alice Auteur"}
+    )
+    assert 'class="hero-cover"' in hero
+    assert 'class="cover-fallback"' in hero
+    assert 'class="cover-title">Sans jaquette</span>' in hero
+    assert "<img" not in hero
 
 
 def test_track_only_requests_subtitles_when_one_is_linked():

@@ -96,13 +96,12 @@ def landing_page(
     ]
     if base_url:
         meta.append(("property", "og:url", base_url + "/"))
-    hero_covers = [i["cover_url"] for i in items if i.get("cover_url")][:3]
+    hero_items = items[:3]
     hero_figure = ""
-    if hero_covers:
+    if hero_items:
         hero_figure = (
             '<div class="hero-figure"><div class="hero-stack">'
-            + "".join(f'<div class="hero-cover"><img src="{ESC(url)}" alt=""></div>'
-                      for url in hero_covers)
+            + "".join(hero_cover_html(i) for i in hero_items)
             + '<div class="hero-note"><p class="eyebrow">Le catalogue</p>'
               '<p>Un extrait gratuit sur chaque livre.</p></div></div></div>'
         )

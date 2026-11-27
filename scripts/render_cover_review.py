@@ -257,7 +257,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "input", nargs="?",
-        default=f"{os.environ.get('AURA_DATA_DIR', '/srv/aura-storage')}/cover-review/cover-candidates.json",
+        default=(
+            os.environ.get("AURA_COVER_REVIEW_FILE")
+            or f"{os.environ.get('AURA_DATA_DIR', '/srv/aura-storage')}/cover-review/cover-candidates.json"
+        ),
     )
     parser.add_argument("--output", default="/srv/aura-storage/cover-review.html")
     args = parser.parse_args()

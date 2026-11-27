@@ -14,7 +14,7 @@ for arg in "$@"; do
   [[ "$arg" == "--dry-run" ]] && DRY_RUN=1
 done
 
-REVIEW_FILE="${AURA_DATA_DIR:-/srv/aura-storage}/cover-review/cover-candidates.json"
+REVIEW_FILE="${AURA_COVER_REVIEW_FILE:-${AURA_DATA_DIR:-/srv/aura-storage}/cover-review/cover-candidates.json}"
 mkdir -p "$(dirname "$REVIEW_FILE")"
 LOCK_FILE="$REVIEW_FILE.lock"
 exec 9>"$LOCK_FILE"

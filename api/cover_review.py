@@ -43,7 +43,7 @@ def review_lock(path: Path):
 
 
 def review_path() -> Path:
-    default = Path(os.environ.get("AURA_DATA_DIR", "/srv/aura-storage")) / "cover-candidates.json"
+    default = Path(os.environ.get("AURA_DATA_DIR", "/srv/aura-storage")) / "cover-review" / "cover-candidates.json"
     return Path(os.environ.get("AURA_COVER_REVIEW_FILE", str(default)))
 
 
@@ -237,7 +237,9 @@ def apply_selected(review: dict, *, dry_run: bool = True, limit: int = 50) -> di
                 book["error"] = "candidat périmé ou objet introuvable"
                 write_review(review)
             continue
-        if obj.get("cover_key"):
+        # A locally generated jacket is a placeholder: an approved real cover
+        # may replace it, while a real cover is never overwritten here.
+        if obj.get("cover_key") and not ce.is_generated_cover(obj["cover_key"]):
             skipped += 1
             if not dry_run:
                 book["status"] = "already_applied"

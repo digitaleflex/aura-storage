@@ -267,7 +267,9 @@ def apply_selected(
                 print(f"  REFUSE: {book.get('title') or object_id}: {problem}")
             continue
 
-        if obj.get("cover_key"):
+        # A generated AURA jacket is a placeholder that an approved real cover
+        # may replace; never overwrite a real cover from a review selection.
+        if obj.get("cover_key") and not ce.is_generated_cover(obj["cover_key"]):
             skipped += 1
             if apply:
                 book["status"] = "already_applied"

@@ -364,17 +364,23 @@ def _duration_text(seconds) -> str:
     return f"{secs} s"
 
 
+# Curated hues: the fallback stays in the AURA palette instead of cycling
+# through the whole colour wheel (which produced off-brand neon jackets).
+COVER_HUES = (28, 42, 152, 190, 262)
+
+
 def cover_hue(label: str) -> int:
-    """Stable colour for a book with no artwork."""
-    return sum(ord(c) for c in str(label or "")) * 37 % 360
+    """Stable, brand-safe colour for a book with no artwork."""
+    return COVER_HUES[sum(ord(c) for c in str(label or "")) % len(COVER_HUES)]
 
 
 def fallback_cover_inner(label: str, author: str = "") -> str:
-    """Typographic placeholder shown until/unless the real cover loads."""
+    """Typographic AURA jacket shown until/unless the real cover loads."""
     title = str(label or "").strip() or "Livre"
     byline = str(author or "").strip()
     return "".join([
         '<span class="cover-fallback" aria-hidden="true">',
+        '<span class="cover-spine"></span>',
         f'<span class="cover-monogram">{ESC(title[:1].upper())}</span>',
         '<span class="cover-copy">',
         '<span class="cover-kicker">Livre audio</span>',
@@ -382,6 +388,16 @@ def fallback_cover_inner(label: str, author: str = "") -> str:
         f'<span class="cover-author">{ESC(byline or "AURA")}</span>',
         '</span></span>',
     ])
+
+
+def hero_cover_html(item: dict) -> str:
+    """One hero jacket: real artwork over the same typographic fallback."""
+    label = str(item.get("title") or item.get("display_name") or "Livre")
+    inner = fallback_cover_inner(label, item.get("author") or "")
+    cover = str(item.get("cover_url") or "")
+    if cover:
+        inner += f'<img src="{ESC(cover)}" alt="" loading="lazy" data-fallback>'
+    return f'<div class="hero-cover" style="--cover-h:{cover_hue(label)}">{inner}</div>'
 
 
 def _position_text(seconds) -> str:
@@ -738,9 +754,9 @@ def catalog_page(
     featured = resume[0] if resume else (all_items[0] if all_items else None)
     featured_idx = id_to_index.get(str(featured.get("id"))) if featured else -1
 
-    # Couvertures réelles du catalogue pour le hero éditorial (aucune image
-    # générée côté serveur : on réutilise celles des livres publiés).
-    hero_covers = [i["cover_url"] for i in all_items if i.get("cover_url")][:3]
+    # Couvertures du catalogue pour le hero éditorial : l'artwork réel quand
+    # il existe, sinon la jaquette typographique du livre.
+    hero_items = all_items[:3]
     hero_figure = ""
     if hero_covers:
         hero_figure = (

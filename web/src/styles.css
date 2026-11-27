@@ -4943,19 +4943,147 @@ html {
   margin-top: 4px;
 }
 
+/* Cover review: typographic jacket whenever artwork is missing or broken. */
+.admin-cover-thumb,
+.admin-cover-fallback {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 64px;
+  height: 80px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.admin-cover-thumb {
+  object-fit: cover;
+  background: var(--surface-2, #f3f1ec);
+}
+.admin-cover-thumb.admin-cover-proposal {
+  cursor: zoom-in;
+}
+.admin-cover-fallback {
+  position: relative;
+  overflow: hidden;
+  color: #6e542e;
+  font-family: Georgia, "Iowan Old Style", serif;
+  font-size: 30px;
+  line-height: 1;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      transparent 0 8px,
+      rgba(29, 43, 57, 0.04) 8px 9px
+    ),
+    linear-gradient(150deg, #f7f1e7, #e7dcc8);
+}
+.admin-cover-fallback::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(180deg, rgba(149, 109, 53, 0.55), rgba(149, 109, 53, 0.15));
+}
+
 /* Cover review: single click zooms, double click validates. */
+.cover-filters {
+  margin-bottom: 0.75rem;
+}
 .cover-zoom {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   justify-items: center;
-  gap: 10px;
+  gap: 16px;
+}
+.cover-zoom-item {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
 }
 .cover-zoom img {
-  max-width: min(90vw, 520px);
-  max-height: 72vh;
+  max-width: min(42vw, 360px);
+  max-height: 62vh;
   object-fit: contain;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2, #f3f1ec);
+}
+/* Typographic jacket, mirroring the public portal's .cover-fallback. */
+.admin-jacket {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  width: 240px;
+  aspect-ratio: 3 / 4;
+  padding: 1rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #63462c;
+  font-family: Georgia, "Iowan Old Style", serif;
+  background: linear-gradient(150deg, #f4efeb, #e3dbd3);
+}
+.admin-jacket::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 12% 10%, rgba(255, 255, 255, 0.55), transparent 48%);
+}
+.admin-jacket > [aria-hidden="true"] {
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  font-size: 3.2rem;
+  line-height: 1;
+  opacity: 0.14;
+}
+.admin-jacket-copy {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  width: 100%;
+}
+.admin-jacket-kicker {
+  font-family: system-ui, sans-serif;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #7b5a3d;
+}
+.admin-jacket-title {
+  font-size: 1.05rem;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+.admin-jacket-author {
+  font-family: system-ui, sans-serif;
+  font-size: 0.68rem;
+  color: #705843;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+@media (max-width: 640px) {
+  .cover-zoom {
+    grid-template-columns: 1fr;
+  }
+  .cover-zoom img {
+    max-width: min(90vw, 360px);
+  }
 }
 .cover-zoom p {
   margin: 0;

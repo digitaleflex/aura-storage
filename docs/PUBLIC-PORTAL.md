@@ -185,8 +185,11 @@ et « Toute la bibliothèque ».
 Les couvertures sont d'abord cherchées **localement** : tous les flux d'artwork
 intégrés au fichier, puis une image stockée à côté de l'audio dans le même bucket
 (`cover.jpg`, `folder.jpg`, image de même stem). L'image retenue est redimensionnée
-par ffmpeg et servie par `/covers/{oid}.jpg`. Sans image locale, une couverture
-typographique deterministe (titre, auteur, teinte stable) reste affichée.
+par ffmpeg et servie par `/covers/{oid}.jpg`. Sans image locale, une **jaquette
+typographique AURA** reste affichée : titre en serif, auteur, monogramme, tranche
+et teinte stable choisie dans une palette bronze/vert/bleu/violet. La même
+jaquette sert dans le hero, la vue liste et l'administration lorsqu'une image
+est absente ou invalide.
 Deux voies optionnelles permettent d'enrichir les livres récalcitrants : des
 **candidats externes à valider** et l'**ajout manuel** d'une image (voir ci-dessous).
 Aucun service externe n'est contacté par le déploiement ni par le cron de

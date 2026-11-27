@@ -54,6 +54,9 @@ from api.store import repo  # noqa: E402
 AUDIO_TYPES = ("audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/flac", "audio/aac")
 IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif", "image/avif")
 COVER_NAMES = {"cover", "folder", "albumart", "album", "front", "artwork", "jacket"}
+# A locally generated AURA jacket uses a distinct key so an operator-approved
+# (or auto-selected) real cover can still replace it later.
+GENERATED_COVER_SUFFIX = ".jacket.jpg"
 COVER_WIDTH = 480
 TIMEOUT_S = 60
 MAX_SOURCE_BYTES = 12 * 1024 * 1024
@@ -198,9 +201,40 @@ def extract_embedded(url: str, max_streams: int = 3) -> bytes | None:
     return None
 
 
-def publish_cover(obj: dict, jpeg: bytes, client, apply: bool) -> str:
+def is_generated_cover(cover_key: object) -> bool:
+    """Whether a catalogue cover is a replaceable, locally generated jacket."""
+    return str(cover_key or "").endswith(GENERATED_COVER_SUFFIX)
+
+
+def render_jacket(obj: dict) -> bytes | None:
+    """Render the deterministic AURA jacket for a book with no artwork.
+
+    Purely local: no network, no ffmpeg, no clock. The visual language comes
+    from ``api.cover_jacket``, the same palette as the portal's HTML fallback.
+    """
+    from . import cover_jacket  # imported lazily: Pillow is only needed here
+
+    display = str(obj.get("display_name") or "")
+    stem = display.rsplit(".", 1)[0] if "." in display else display
+    author, separator, title = stem.partition(" - ")
+    if not separator:
+        author, title = "", stem
+    label = title.strip() or str(obj.get("title") or "").strip() or "Livre"
+    try:
+        jpeg = cover_jacket.render_jacket(label, author.strip())
+    except (OSError, ValueError, TypeError):
+        return None
+    if len(jpeg) < 1024 or not jpeg.startswith(b"\xff\xd8"):
+        return None
+    return jpeg
+
+
+def publish_cover(
+    obj: dict, jpeg: bytes, client, apply: bool, *, generated: bool = False,
+) -> str:
     """Store the resized JPEG next to the object and record it in the catalogue."""
-    key = f"{obj['object_key']}.cover.jpg"
+    suffix = GENERATED_COVER_SUFFIX if generated else ".cover.jpg"
+    key = f"{obj['object_key']}{suffix}"
     if apply:
         extra = {"ServerSideEncryption": SSE_ALGORITHM} if settings.require_sse else {}
         client.put_object(
@@ -350,7 +384,7 @@ def search_candidates(
 
 
 def review_path() -> Path:
-    default = Path(os.environ.get("AURA_DATA_DIR", "/srv/aura-storage")) / "cover-candidates.json"
+    default = Path(os.environ.get("AURA_DATA_DIR", "/srv/aura-storage")) / "cover-review" / "cover-candidates.json"
     return Path(os.environ.get("AURA_COVER_REVIEW_FILE", str(default)))
 
 

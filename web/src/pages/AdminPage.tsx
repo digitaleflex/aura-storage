@@ -87,6 +87,57 @@ function coverState(book: CoverCandidateBook): { label: string; className: strin
   return { label: "Aucun choix", className: "chip chip-muted" };
 }
 
+type CoverThumbProps = {
+  src?: string | null;
+  title: string;
+  alt: string;
+  label?: string;
+  className?: string;
+  onClick?: () => void;
+  onDoubleClick?: () => void;
+};
+
+/** Cover image with a typographic jacket when the artwork is absent or broken. */
+function CoverThumb({
+  src, title, alt, label, className = "", onClick, onDoubleClick,
+}: CoverThumbProps) {
+  const [broken, setBroken] = useState(false);
+  const initial = (title || "Livre").trim().charAt(0).toUpperCase() || "L";
+  const classes = `admin-cover-thumb ${className}`.trim();
+  if (!src || broken) {
+    return (
+      <span
+        className={`admin-cover-fallback ${className}`.trim()}
+        role="img"
+        aria-label={label || `Couverture indisponible pour ${title || "ce livre"}`}
+        onClick={onClick}
+        onDoubleClick={onDoubleClick}
+        onKeyDown={onClick ? (event) => {
+          if (event.key === "Enter" || event.key === " ") onClick();
+        } : undefined}
+        tabIndex={onClick ? 0 : undefined}
+      >
+        <span aria-hidden="true">{initial}</span>
+      </span>
+    );
+  }
+  return (
+    <img
+      className={classes}
+      src={src}
+      alt={alt}
+      title={label}
+      referrerPolicy="no-referrer"
+      loading="lazy"
+      width={64}
+      height={80}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      onError={() => setBroken(true)}
+    />
+  );
+}
+
 const GIB = 1024 ** 3;
 
 /** Percentage of a quota used, or null when no quota is configured. */
@@ -598,6 +649,7 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
   // an explicit "" means "do not apply", exactly like candidate_url: null.
   const [coverChoices, setCoverChoices] = useState<Record<string, string>>({});
   const [coverIsbns, setCoverIsbns] = useState<Record<string, string>>({});
+  const [coverStatusFilter, setCoverStatusFilter] = useState("all");
   const [coverDryRun, setCoverDryRun] = useState(false);
   const [coverLimit, setCoverLimit] = useState(200);
   const [coverApplyResult, setCoverApplyResult] = useState<CoverApplyResult | null>(null);
@@ -610,17 +662,11 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
     provider: string;
     objectId: string;
     status: string;
+    fallbackUrl?: string | null;
   } | null>(null);
   const coverClickTimer = useRef<number | null>(null);
 
-  function openCoverZoom(zoom: {
-    url: string;
-    title: string;
-    author: string;
-    provider: string;
-    objectId: string;
-    status: string;
-  }) {
+  function openCoverZoom(zoom: NonNullable<typeof coverZoom>) {
     setCoverZoom(zoom);
   }
 
@@ -1285,6 +1331,35 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
   const objectsByStatus = stats.data?.objects_by_status ?? {};
   const objectsTotal = Object.values(objectsByStatus).reduce((a, b) => a + b, 0);
 
+  // Missing covers first, then alphabetical. Filtering is UI-only: the review
+  // file order on disk is never changed by a display choice.
+  const allCoverBooks = coverCandidates.data?.books ?? [];
+  const coverStats = {
+    total: allCoverBooks.length,
+    published: allCoverBooks.filter((book) => Boolean(book.cover_url)).length,
+    missing: allCoverBooks.filter((book) => !book.cover_url).length,
+    toPublish: allCoverBooks.filter((book) => book.status === "selected").length,
+  };
+  const coverCoverage = coverStats.total
+    ? Math.round((coverStats.published / coverStats.total) * 100)
+    : 0;
+  const visibleCoverBooks = allCoverBooks
+    .filter((book) => {
+      if (coverStatusFilter === "all") return true;
+      if (coverStatusFilter === "missing") return !book.cover_url;
+      if (coverStatusFilter === "selected") return book.status === "selected";
+      if (coverStatusFilter === "published") {
+        return book.status === "applied" || book.status === "already_applied";
+      }
+      return book.status === "error";
+    })
+    .sort((a, b) => {
+      const missingA = a.cover_url ? 0 : 1;
+      const missingB = b.cover_url ? 0 : 1;
+      if (missingA !== missingB) return missingB - missingA;
+      return (a.title || a.display_name).localeCompare(b.title || b.display_name, "fr");
+    });
+
   const coverSection = (
       <section
         className="section"
@@ -1293,6 +1368,26 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
       >
         <div className="section-head">
           <h2 id="admin-covers-title">Validation des couvertures</h2>
+        </div>
+        <div className="form form-inline cover-filters">
+          <label className="field">
+            <span>Afficher</span>
+            <select
+              value={coverStatusFilter}
+              onChange={(event) => setCoverStatusFilter(event.target.value)}
+              aria-label="Filtrer les couvertures par statut"
+            >
+              <option value="all">Tous les livres</option>
+              <option value="missing">Sans couverture</option>
+              <option value="selected">Choix validé · à publier</option>
+              <option value="published">Couverture publiée</option>
+              <option value="error">En erreur</option>
+            </select>
+          </label>
+          <span className="muted">
+            {visibleCoverBooks.length} livre(s) affiché(s) · les livres sans
+            couverture sont listés en premier.
+          </span>
         </div>
         <p className="muted">
           Choisissez la couverture qui correspond à chaque livre, puis appliquez
@@ -1332,16 +1427,25 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
                 </div>
                 <div className="label">Candidats</div>
               </div>
+              <div className="stat">
+                <div className="value">{coverStats.missing}</div>
+                <div className="label">Sans couverture</div>
+              </div>
+              <div className="stat">
+                <div className="value">{coverStats.toPublish}</div>
+                <div className="label">À publier</div>
+              </div>
             </div>
             <p className="muted">
-              Généré le {formatTs(coverCandidates.data?.generated_at)}
+              {coverCoverage}% des livres suivis ont une couverture publiée ·
+              généré le {formatTs(coverCandidates.data?.generated_at)}
             </p>
             {(coverCandidates.data?.books.length ?? 0) === 0 ? (
               <p className="empty">
                 Aucun livre à valider pour le moment.
               </p>
             ) : (
-              coverCandidates.data?.books.map((book) => {
+              visibleCoverBooks.map((book) => {
                 const candidates = book.candidates;
                 const fallback =
                   book.chosen_url &&
@@ -1401,17 +1505,13 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
                         </span>
                       ) : null}
                     </div>
-                    {book.cover_url ? (
-                      <img
-                        src={book.cover_url}
-                        alt={`Couverture actuelle de ${book.title || book.display_name}`}
-                        referrerPolicy="no-referrer"
-                        loading="lazy"
-                        width={64}
-                        height={80}
-                        style={{ objectFit: "cover" }}
-                      />
-                    ) : null}
+                    <CoverThumb
+                      key={book.cover_url ?? "none"}
+                      src={book.cover_url}
+                      title={book.title || book.display_name}
+                      alt={`Couverture actuelle de ${book.title || book.display_name}`}
+                      label="Couverture publiée"
+                    />
                     <div className="table-wrap">
                       <table className="table">
                         <thead>
@@ -1436,15 +1536,12 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
                               return (
                                 <tr key={`${candidate.provider}-${candidate.url}`}>
                                   <td>
-                                    <img
+                                    <CoverThumb
                                       src={candidate.url}
+                                      title={book.title || book.display_name}
                                       alt={`Couverture proposée par ${candidate.provider} pour ${book.title || book.display_name}. Clic pour agrandir, double-clic pour valider.`}
-                                      title="Clic : agrandir · Double-clic : valider"
-                                      referrerPolicy="no-referrer"
-                                      loading="lazy"
-                                      width={64}
-                                      height={80}
-                                      style={{ objectFit: "cover", cursor: "zoom-in" }}
+                                      label="Clic : agrandir · Double-clic : valider"
+                                      className="admin-cover-proposal"
                                       onClick={() => {
                                         setCoverChoices((current) => ({
                                           ...current,
@@ -1461,6 +1558,7 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
                                             provider: candidate.provider,
                                             objectId: book.object_id,
                                             status: book.status,
+                                            fallbackUrl: book.cover_url,
                                           });
                                           coverClickTimer.current = null;
                                         }, 250);
@@ -1546,6 +1644,27 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
                       </table>
                     </div>
                     <div className="form form-inline">
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={
+                          !canWrite || published || !candidates.some((candidate) => candidate.match === "exact")
+                        }
+                        onClick={() => {
+                          const exact = candidates.find((candidate) => candidate.match === "exact");
+                          if (exact) {
+                            setCoverChoices((current) => ({
+                              ...current,
+                              [book.object_id]: exact.url,
+                            }));
+                            setCoverMessage(
+                              `Correspondance exacte sélectionnée pour « ${book.title || book.display_name} ».`,
+                            );
+                          }
+                        }}
+                      >
+                        Choisir la correspondance exacte
+                      </button>
                       <button
                         type="button"
                         className="btn btn-primary"
@@ -3737,20 +3856,49 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
           onClose={() => setCoverZoom(null)}
         >
           <div className="cover-zoom">
-            <img
-              src={coverZoom.url}
-              alt={`Couverture agrandie de ${coverZoom.title}`}
-              referrerPolicy="no-referrer"
-            />
-            <p className="muted">
-              {coverZoom.author || "Auteur inconnu"} · source :{" "}
-              {coverZoom.provider}
-            </p>
-            <p className="muted">
-              Double-cliquez sur l’image dans la galerie pour valider
-              directement ce choix.
-            </p>
+            <figure className="cover-zoom-item">
+              <img
+                src={coverZoom.url}
+                alt={`Couverture agrandie de ${coverZoom.title}`}
+                referrerPolicy="no-referrer"
+              />
+              <figcaption className="muted">
+                Candidat · {coverZoom.provider}
+              </figcaption>
+            </figure>
+            <figure className="cover-zoom-item">
+              {coverZoom.fallbackUrl ? (
+                <img
+                  src={coverZoom.fallbackUrl}
+                  alt={`Couverture actuelle de ${coverZoom.title}`}
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <span
+                  className="admin-jacket"
+                  role="img"
+                  aria-label={`Jaquette AURA pour ${coverZoom.title}`}
+                >
+                  <span aria-hidden="true">
+                    {(coverZoom.title || "Livre").trim().charAt(0).toUpperCase()}
+                  </span>
+                  <span className="admin-jacket-copy">
+                    <span className="admin-jacket-kicker">Livre audio</span>
+                    <span className="admin-jacket-title">{coverZoom.title}</span>
+                    <span className="admin-jacket-author">{coverZoom.author || "AURA"}</span>
+                  </span>
+                </span>
+              )}
+              <figcaption className="muted">Couverture actuelle</figcaption>
+            </figure>
           </div>
+          <p className="muted">
+            {coverZoom.author || "Auteur inconnu"} · source : {coverZoom.provider}
+          </p>
+          <p className="muted">
+            Double-cliquez sur l’image dans la galerie pour valider directement
+            ce choix.
+          </p>
           <div className="dialog-actions">
             <button
               type="button"
