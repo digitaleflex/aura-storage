@@ -14,6 +14,22 @@ from .lifecycle import purge_object, purge_transfer_history, reconcile_pending, 
 from .store import repo
 from .transfer import EXPIRED
 
+# This extracted route module is not registered by api.main, so importing its
+# helpers back from main is safe and keeps the extraction faithful to the
+# original endpoint bodies.
+from .main import (  # noqa: E402
+    ALL_SCOPES, AVAILABLE, SERVICE_SCOPES,
+    ApplicationIn, ApplicationPatchIn, BucketIn, BucketPatchIn, IdentityIn,
+    ObjectTooLarge, PartnerSiteIn, PartnerSitePatchIn, SpaceIn, SpacePatchIn,
+    SpaceQuotasIn,
+    _BOOT_TIME, _application_public, _bucket_public, _capacity,
+    _space_month_usage, _space_public, _space_quota, _split_audio_name,
+    _upload_ceiling, _usage_period,
+    JSONResponse, app, audit_path, fingerprint, format_token,
+    is_valid_bucket_name, new_secret, prune_audit_log, query_audit_log,
+    recent_error_events, s3probe, shutil, stream_sha256,
+)
+
 
 def _main():
     import api.main as m
@@ -61,7 +77,6 @@ def reconcile(limit: int = 500,
         multipart_expired_before=int(time.time()) - settings.intent_grace_s,
     )
     # Finish purges a crashed process left half-done (two-phase purge).
-    from .lifecycle import resume_purges
     out.update(resume_purges(repo, _main.s3ops, limit=limit))
     # Retention window for the append-only transfer journal (#246).
     out.update(purge_transfer_history(

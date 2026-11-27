@@ -8,6 +8,14 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validat
 
 from . import ids
 
+# Extracted schema module (not imported by api.main): reuse the original
+# validators and constants from main instead of duplicating their rules.
+from .main import (  # noqa: E402
+    APPLICATION_STATUSES, OBJECTS_READ, SPACE_STATUSES,
+    _normalize_partner_url, _trim_name, _validate_folder_name,
+)
+
+
 def _canonical_uuid(value: str) -> str:
     """Pydantic validator helper: canonicalize or fail with 422."""
     canonical = ids.canonical(value)
