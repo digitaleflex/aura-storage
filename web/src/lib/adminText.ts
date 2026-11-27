@@ -11,6 +11,13 @@ export function frenchNote(text: string | undefined | null): string {
   return NOTE_FR[text] ?? text;
 }
 
+/** Only active spaces may receive new identities or partner sites. */
+export function activeSpaces<T extends { status: string }>(
+  spaces: readonly T[] | null | undefined,
+): T[] {
+  return (spaces ?? []).filter((space) => space.status === "active");
+}
+
 /** One readable line for a supervision row, without dangling separators. */
 export function healthDetail(
   component: {

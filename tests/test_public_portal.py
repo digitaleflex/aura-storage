@@ -162,10 +162,10 @@ def test_view_modes_facets_and_cover_route():
     _published_pack()
     c = _sign_in(TestClient(main.app))
     page = c.get("/").text
-    assert "view-liste" in page
+    assert "view-grille" in page  # la grille est la vue par défaut
     assert "Auteur Test" in page  # facet derived from the file name
     assert "Reprendre l&#x27;écoute" in page or "Reprendre l'écoute" in page
-    assert "view-grille" in c.get("/?vue=grille").text
+    assert "view-liste" in c.get("/?vue=liste").text
     assert "class=\"hero\"" in c.get("/?vue=immersif").text
     assert "Chapitre 1" in c.get("/?q=chapitre").text
     assert c.get("/?vue=bogus").status_code == 200
@@ -215,7 +215,7 @@ def test_catalogue_keeps_the_filters_folded_and_lists_authors_in_a_select():
         assert '<details class="filters-fold" id="filters-fold" open>' in filtered
         assert re.search(r'<option value="Auteur Test" selected>', filtered)
         assert 'name="vue" value="grille"' in filtered  # the select keeps the view
-        assert "Effacer les filtres" in filtered
+        assert "Effacer tous les filtres" in filtered
 
 
 def test_resume_card_is_not_repeated_in_the_resume_shelf():
@@ -270,6 +270,102 @@ def test_listening_progress_is_saved_for_the_visitor_only():
         assert other_item["progress_seconds"] == 0
     finally:
         globals()["SUBJECT"] = monkeypatch_sub
+
+
+def test_progress_records_measured_events_without_double_counting(monkeypatch):
+    """#320: positions become append-only events, deduplicated per sample."""
+    previous_subject = globals()["SUBJECT"]
+    globals()["SUBJECT"] = f"listen-subject-{uuid.uuid4().hex[:8]}"
+    try:
+        _published_pack()
+        c = _sign_in(TestClient(main.app))
+        item = c.get("/api/public/library").json()["collections"][0]["items"][0]
+        oid = item["id"]
+        csrf = c.get("/api/public/me").json()["csrf_token"]
+        hdr = {"X-CSRF-Token": csrf}
+        # Place the first sample near a minute boundary so the next one crosses
+        # into the next event_id bucket while keeping a realistic ~4 s interval.
+        clock = [(int(main.time.time()) // 60) * 60 + 58]
+        monkeypatch.setattr(main.time, "time", lambda: clock[0])
+
+        first = c.post("/api/public/progress", headers=hdr, json={
+            "object_id": oid, "position_seconds": 10, "kind": "start",
+        })
+        assert first.status_code == 200, first.text
+        clock[0] += 4
+        second = c.post("/api/public/progress", headers=hdr, json={
+            "object_id": oid, "position_seconds": 60, "kind": "position",
+        })
+        assert second.status_code == 200, second.text
+        # A retried sample in the same minute must not add a second event.
+        retry = c.post("/api/public/progress", headers=hdr, json={
+            "object_id": oid, "position_seconds": 60, "kind": "position",
+        })
+        assert retry.status_code == 200, retry.text
+
+        stats = c.get("/api/public/stats").json()
+        assert stats["listen_events"] == 2
+        assert stats["measured_listened_seconds"] == 10
+        assert stats["estimated_listened_seconds"] == 60  # legacy estimate kept
+        assert "Temps écouté mesuré" in c.get("/profil").text
+    finally:
+        globals()["SUBJECT"] = previous_subject
+
+
+def test_listen_events_retention_and_account_deletion_anonymise(monkeypatch):
+    """#320: old events are pruned, deleted visitors keep no identifiable row."""
+    previous_subject = globals()["SUBJECT"]
+    globals()["SUBJECT"] = f"listen-subject-{uuid.uuid4().hex[:8]}"
+    try:
+        _published_pack()
+        c = _sign_in(TestClient(main.app))
+        oid = c.get("/api/public/library").json()["collections"][0]["items"][0]["id"]
+        uid = main.repo.get_session(c.cookies["aura_public_session"])["user_id"]
+        now = int(main.time.time())
+        monkeypatch.setattr(main.settings, "listen_event_retention_days", 1)
+
+        main.repo.record_listen_event(uid, oid, "position", 100, 90, now - 2 * 86400)
+        main.repo.record_listen_event(uid, oid, "position", 200, 70, now - 10)
+        totals = main.repo.listening_totals(uid, now, 86400)
+        assert totals["listened_seconds"] == 70
+        assert catalogue_sql.fetch_one(
+            "SELECT COUNT(*) AS n FROM listen_events WHERE user_id = ?", (uid,)
+        )["n"] == 1
+        # Scope the assertion to this visitor's events: other tests may have
+        # produced events for the same shared sample object.
+        own_events = [
+            row["event_id"] for row in catalogue_sql.fetch_all(
+                "SELECT event_id FROM listen_events WHERE user_id = ?", (uid,)
+            )
+        ]
+        assert len(own_events) == 1
+
+        csrf = c.get("/api/public/me").json()["csrf_token"]
+        assert c.post("/profil/supprimer", data={"csrf_token": csrf},
+                      follow_redirects=False).status_code == 303
+        placeholders = ", ".join("?" for _ in own_events)
+        rows = catalogue_sql.fetch_all(
+            f"SELECT user_id, anonymized_at FROM listen_events "
+            f"WHERE event_id IN ({placeholders})", tuple(own_events)
+        )
+        assert len(rows) == len(own_events)
+        assert all(r["user_id"] is None and r["anonymized_at"] for r in rows)
+        assert main.repo.listening_totals(uid, now, 86400)["listened_seconds"] == 0
+    finally:
+        globals()["SUBJECT"] = previous_subject
+
+
+def test_listen_event_rules_cap_seeks_and_dedupe_samples():
+    from api.listen_events import event_id, listened_delta
+
+    assert event_id("u", "o", "position", 12.4, 100) == event_id("u", "o", "position", 12.9, 119)
+    assert event_id("u", "o", "position", 12.4, 100) != event_id("u", "o", "end", 12.4, 100)
+    assert listened_delta(10, 20, 5) == 10
+    assert listened_delta(10, 5, 5) == 0
+    assert listened_delta(10, 5000, 5) <= 5 * 1.25 + 5
+    # A suspended tab for an hour must not turn a forward seek into an hour of
+    # measured listening (#320).
+    assert listened_delta(10, 5000, 3600) <= 15 * 1.25 + 5
 
 
 def test_chapters_are_exposed_in_the_player_html():
@@ -669,7 +765,7 @@ def test_book_page_has_share_metadata_chapters_and_the_right_call_to_action(monk
     assert page.status_code == 200, page.text
     t = page.text
     assert '<meta property="og:title" content="Chapitre 1.mp3 — AURA">' in t or "og:title" in t
-    assert 'property="og:image" content="https://testserver/covers/' in t
+    assert 'property="og:image"' not in t and 'name="twitter:image"' not in t
     assert f'rel="canonical" href="https://testserver/livre/{oid}"' in t
     assert '"@type": "Audiobook"' in t and "Ouverture" in t and "La rencontre" in t
     assert "1 h 02 min" in t and "Extrait gratuit" in t
@@ -825,11 +921,28 @@ def test_fallback_cover_shows_the_title_and_author():
     item = {"id": "book-id", "title": "Le Grand Livre", "author": "Alice Auteur"}
     track = main.public_ui._track_html(item)
     assert 'class="cover-fallback"' in track
+    assert 'class="cover-spine"></span>' in track
     assert 'class="cover-title">Le Grand Livre</span>' in track
     assert 'class="cover-author">Alice Auteur</span>' in track
     cover = main.public_book._cover(item)
     assert 'class="cover-title">Le Grand Livre</span>' in cover
     assert 'class="cover-author">Alice Auteur</span>' in cover
+    assert 'class="cover-author">Livre audio</span>' in main.public_book._cover({"title": "Sans auteur"})
+
+
+def test_fallback_hues_stay_in_the_aura_palette():
+    for label in ("", "Z", "Le Grand Livre", "Énergie douce"):
+        assert main.public_ui.cover_hue(label) in main.public_ui.COVER_HUES
+
+
+def test_hero_uses_a_typographic_jacket_without_artwork():
+    hero = main.public_ui.hero_cover_html(
+        {"title": "Sans jaquette", "author": "Alice Auteur"}
+    )
+    assert 'class="hero-cover"' in hero
+    assert 'class="cover-fallback"' in hero
+    assert 'class="cover-title">Sans jaquette</span>' in hero
+    assert "<img" not in hero
 
 
 def test_track_only_requests_subtitles_when_one_is_linked():
@@ -1127,6 +1240,107 @@ def test_search_is_accent_insensitive_matches_every_word_and_sort_is_validated(m
     assert 'option value="titre" selected' in page.text
     assert page.headers["x-robots-tag"] == "noindex, nofollow"  # sorted views are not indexed
     assert 'selected' not in c.get("/?tri=hacked%22%3E").text.split('name="tri"')[1].split("</select>")[0].replace('value="" selected', "")
+
+
+def test_public_catalog_filters_by_category_theme_language_format_collection_and_duration(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    collection_slug, _, oid = _book(duration=3600, content_type="audio/mpeg")
+    main.repo.set_object_tags(oid, [
+        "categorie-roman", "theme-histoire", "langue-fr", "interne-secret",
+    ])
+    client = TestClient(main.app)
+    landing = client.get("/")
+    assert 'aria-label="Catégories"' in landing.text
+    assert 'class="facet-icon"' in landing.text
+    for path in (
+        "/?categorie=roman",
+        "/?theme=histoire",
+        "/?langue=fr",
+        "/?format=mp3",
+        f"/?collection={collection_slug}",
+        "/?duree_min=30&duree_max=90",
+        "/?q=histoire",
+    ):
+        page = client.get(path)
+        assert page.status_code == 200, path
+        assert f'href="/livre/{oid}"' in page.text, path
+        assert page.headers["x-robots-tag"] == "noindex, nofollow", path
+    assert f'href="/livre/{oid}"' not in client.get("/?categorie=science").text
+    assert f'href="/livre/{oid}"' not in client.get("/?format=ogg").text
+    assert "interne-secret" not in client.get("/").text
+    invalid = client.get("/?duree_min=90&duree_max=30")
+    assert "Durée invalide" in invalid.text
+
+
+def test_connected_catalog_exposes_one_accessible_filter_form(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    _, _, oid = _book()
+    main.repo.set_object_tags(oid, ["categorie-roman", "theme-histoire", "langue-fr"])
+    reader = _sign_in(TestClient(main.app))
+    page = reader.get("/?categorie=roman&theme=histoire&langue=fr&format=mp3")
+    assert page.status_code == 200, page.text
+    assert 'name="categorie"' in page.text and 'value="roman" selected' in page.text
+    assert 'name="theme"' in page.text and 'value="histoire" selected' in page.text
+    assert 'name="langue"' in page.text and 'value="fr" selected' in page.text
+    assert 'name="format"' in page.text and 'value="mp3" selected' in page.text
+    assert 'aria-label="Catégories"' in page.text and 'class="facet-icon"' in page.text
+    assert '<button type="submit" class="filter-apply">Appliquer les filtres</button>' in page.text
+    assert "Effacer tous les filtres" in page.text
+
+
+def test_book_page_and_public_json_expose_only_approved_facets(monkeypatch):
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    _, _, oid = _book()
+    main.repo.set_object_tags(oid, [
+        "categorie-roman", "theme-histoire", "langue-fr", "interne-secret",
+    ])
+    client = TestClient(main.app)
+    page = client.get(f"/livre/{oid}")
+    assert page.status_code == 200, page.text
+    assert "Roman" in page.text and "Histoire" in page.text and "Français" in page.text
+    assert '"inLanguage": "fr"' in page.text and '"genre"' in page.text
+    assert "interne-secret" not in page.text
+
+    reader = _sign_in(client)
+    payload = reader.get("/api/public/library").json()
+    item = next(i for col in payload["collections"] for i in col["items"] if i["id"] == oid)
+    assert item["categories"] == ["roman"]
+    assert item["themes"] == ["histoire"]
+    assert item["language"] == "fr"
+    assert "interne-secret" not in item["public_tags"]
+
+
+def test_duration_filters_validate_effective_bounds_and_preserve_nlp_bounds():
+    from types import SimpleNamespace
+    from starlette.requests import Request
+
+    intent = SimpleNamespace(min_seconds=1800, max_seconds=5400)
+    request = Request({"type": "http", "query_string": b"q=moins+de+90+minutes&duree_min=120"})
+    _, bounds, error = main._catalog_filter_state(request, intent)
+    assert error and bounds == {"min_seconds": None, "max_seconds": None}
+
+    request = Request({"type": "http", "query_string": b""})
+    active, bounds, error = main._catalog_filter_state(request, intent)
+    assert not error and bounds == {"min_seconds": 1800, "max_seconds": 5400}
+    assert active["duration_min"] == "30" and active["duration_max"] == "90"
+
+    decimal_intent = SimpleNamespace(min_seconds=3636, max_seconds=3636)
+    active, bounds, error = main._catalog_filter_state(request, decimal_intent)
+    assert not error and bounds == {"min_seconds": 3600, "max_seconds": 3600}
+    assert active["duration_min"] == "60" and active["duration_max"] == "60"
+
+
+def test_zero_duration_bound_excludes_unknown_durations_and_search_keeps_author(monkeypatch):
+    unknown = {"id": "unknown", "display_name": "Anonyme", "author": "", "duration_seconds": None}
+    assert main._filter_collections(
+        [{"slug": "all", "items": [unknown]}], "", "", min_seconds=0,
+    ) == []
+
+    monkeypatch.setattr(main.settings, "public_domain", "testserver")
+    _book()
+    reader = _sign_in(TestClient(main.app))
+    page = reader.get("/?auteur=Auteur%20Test&q=introuvable").text
+    assert '<input type="hidden" name="auteur" value="Auteur Test">' in page
 
 
 def test_recommendations_follow_the_visitors_own_signals_only():
