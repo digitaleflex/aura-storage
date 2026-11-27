@@ -50,26 +50,47 @@
     }
     return {item: list[0], i: 0};
   }
+  function jacketSpan(cls, text){
+    const el = document.createElement('span');
+    el.className = cls;
+    if(text) el.textContent = text;
+    return el;
+  }
   function setCover(container, track){
     if(!container || !track) return;
+    const title = (track.dataset.title || 'Livre').trim();
+    const author = (track.dataset.author || '').trim();
+    const jacket = jacketSpan('cover-fallback', '');
+    jacket.setAttribute('aria-hidden', 'true');
+    jacket.appendChild(jacketSpan('cover-spine', ''));
+    jacket.appendChild(jacketSpan('cover-monogram', title.slice(0,1).toUpperCase() || 'A'));
+    const copy = jacketSpan('cover-copy', '');
+    copy.appendChild(jacketSpan('cover-kicker', 'Livre audio'));
+    copy.appendChild(jacketSpan('cover-title', title));
+    copy.appendChild(jacketSpan('cover-author', author || 'AURA'));
+    jacket.appendChild(copy);
     container.innerHTML = '';
-    const initial = document.createElement('span');
-    initial.textContent = (track.dataset.title || 'A').trim().slice(0,1).toUpperCase() || 'A';
-    container.appendChild(initial);
-    if(track.dataset.cover){
-      const img = document.createElement('img');
-      img.src = track.dataset.cover;
-      img.alt = '';
-      img.onerror = function(){ this.remove(); };
-      container.appendChild(img);
-    }
+    container.appendChild(jacket);
   }
   function updateChapterLabel(){
     if(!nowChapter){ return; }
     const cur = currentChapter();
     nowChapter.textContent = cur && cur.item ? ('Chapitre · ' + (cur.item.title || ('Chapitre ' + (cur.i + 1)))) : '';
   }
-  function updateProgressUI(force){
+  function saveProgress(kind){
+    if(index < 0) return;
+    const track = tracks[index];
+    fetch('/api/public/progress', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf},
+      body: JSON.stringify({
+        object_id: track.dataset.objectId,
+        position_seconds: Math.floor(audio.currentTime || 0),
+        kind: kind || 'position'
+      })
+    }).catch(function(){});
+  }
+  function updateProgressUI(force, kind){
     if(index < 0) return;
     const track = tracks[index];
     const pos = audio.currentTime || 0;
@@ -100,11 +121,7 @@
     updateBoundaryStates();
     if(force || Math.abs(pos - lastSaved) >= 5){
       lastSaved = pos;
-      fetch('/api/public/progress', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf},
-        body: JSON.stringify({object_id: track.dataset.objectId, position_seconds: Math.floor(pos)})
-      }).catch(function(){});
+      saveProgress(kind || 'position');
     }
   }
   function setPlayState(isPlaying){
@@ -285,17 +302,6 @@
     const track = tracks[index];
     if(nowTitle) nowTitle.textContent = track.dataset.title || 'Livre audio';
     if(nowAuthor) nowAuthor.textContent = track.dataset.author || 'Livre audio';
-    const bigCover = document.getElementById('immersive-cover-host');
-    if(bigCover && track.dataset.cover){
-      let bigImg = bigCover.querySelector('img');
-      if(!bigImg){
-        bigImg = document.createElement('img');
-        bigImg.alt = '';
-        bigImg.onerror = function(){ this.remove(); };
-        bigCover.appendChild(bigImg);
-      }
-      bigImg.src = track.dataset.cover;
-    }
     setCover(playerCover, track);
     buildChapters();
     updateChapterLabel();
@@ -535,8 +541,8 @@
     });
   }
 
-  audio.addEventListener('play', function(){ setPlayState(true); });
-  audio.addEventListener('pause', function(){ setPlayState(false); updateProgressUI(true); });
+  audio.addEventListener('play', function(){ setPlayState(true); saveProgress('start'); });
+  audio.addEventListener('pause', function(){ setPlayState(false); updateProgressUI(true, 'end'); });
   audio.addEventListener('timeupdate', function(){
     if(!isFinite(audio.duration)) return;
     updateProgressUI(false);
@@ -563,7 +569,7 @@
   });
   audio.addEventListener('ended', function(){
     clearSleepTimer();
-    updateProgressUI(true);
+    updateProgressUI(true, 'end');
     if(index + 1 < tracks.length) play(index + 1); else stop();
   });
   audio.addEventListener('error', function(){

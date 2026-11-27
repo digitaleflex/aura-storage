@@ -1,6 +1,6 @@
 # État des fonctionnalités — AURA Storage
 
-> **Date :** 2026-11-05, **révision :** 2026-11-24 (voir §10) · **Périmètre :** dépôt `main`, API FastAPI, frontend React, infrastructure Docker Compose.
+> **Date :** 2026-11-05, **révision :** 2026-11-27 (voir §11) · **Périmètre :** dépôt `main`, API FastAPI, frontend React, infrastructure Docker Compose.
 > **Méthode :** lecture du code et des routes, exécution des suites de tests, vérification statique de la configuration. Aucun test sur le VPS réel n'a été exécuté pour ce document.
 > **But :** distinguer clairement ce qui est **spécifié**, **implémenté** et **validé**, afin d'éviter de compter une spec comme une fonctionnalité livrée.
 
@@ -10,10 +10,10 @@
 
 | Indicateur | Valeur vérifiée |
 |---|---|
-| Routes HTTP backend | **97** (`api/main.py`) |
-| Tests backend | **444 passés, 2 skipés** (parité PostgreSQL sans `AURA_TEST_PG_DSN`) |
-| Tests unitaires frontend | **47 passés** (6 fichiers) |
-| Specs e2e Playwright | **41** (API mockée, pas de stockage réel) |
+| Routes HTTP backend | **156** (`api/main.py`, régénéré le 2026-11-27 ; voir `CODE-METRICS.md`) |
+| Tests backend | **711 passés, 41 skipés** (suite locale du 2026-11-27 ; suite PostgreSQL opt-in : 750 passés, 2 skipés) |
+| Tests unitaires frontend | **104 passés** (14 fichiers) |
+| Specs e2e Playwright | **250 scénarios** (52 fichiers, API mockée ; 3 nouveaux scénarios de dialogue de liste) |
 | Écrans frontend | **11** routes |
 | Services Docker | **9** |
 | Ports publiés sur l'hôte | **80/443 uniquement** (Traefik) |
@@ -159,6 +159,7 @@
 | Import jobs | API de réservation, pas de traitement |
 | Multipart en production | Code présent, flag OFF, gate SeaweedFS non close |
 | Better Auth / Google OAuth | Différé (décision documentée) |
+| Premium payant / facturation | **Différé** — abonnement + Stripe Tax retenus (`DECISION-PREMIUM-BILLING.md`), activation après revue juridique ; allow-list `AURA_PREMIUM_EMAILS` seulement en bootstrap |
 | Sauvegarde indépendante | Scripts présents, restore réel non validé |
 | Fonctionnalités de transfert avancées | Reportées (décision documentée) |
 
@@ -171,8 +172,8 @@
 | Backup/restore indépendant | **Bloquant** | Choisir la destination, exécuter une sauvegarde et un restore isolé, vérifier l'intégrité |
 | Persistance après reboot | Non vérifié | Exécuter la procédure sur le VPS |
 | E2E réel sur le VPS | Non exécuté | Démarrer API + front réels et jouer les parcours critiques |
-| Parité PostgreSQL | Non exécutée | Définir `AURA_TEST_PG_DSN` et lancer la suite |
-| Multipart SeaweedFS 4.48 | Bloqué | Lever les deux UNKNOWN (récupération disque après abort, completion 10 000 parties) |
+| Parité PostgreSQL | **Exécutée localement** | Suite complète sur base jetable (`750 passed, 2 skipped`) ; reste à rejouer sur le VPS |
+| Multipart SeaweedFS 4.48 | Partiel | UNKNOWN #1 (reclaim après vacuum) et #2 (10 000 parties, HEAD/Range/SHA-256) levés ; plafond opérationnel 5 000 parties conservé |
 | Compression / cache des assets | Ouvert | `gzip`/brotli et `Cache-Control` sur les assets hashés |
 | CSP du bootstrap de thème | Ouvert | Sortir le script inline ou ajouter son hash |
 | Routes inconnues | Ouvert | `/robots.txt`, `/sitemap.xml` renvoient la SPA en 200 |
@@ -231,10 +232,31 @@ Preuves détaillées : [journal de vérification](verification-log-2026-11-24-po
 | Déploiement complet de la roadmap sur le pilote | **Partiel** — API/migrations et config rechargées ; rebuild global suivi par #315 |
 | Backup local + vérification | **Fait** — archive de 59 Go générée et vérifiée le 2026-11-24 (`aura-backup-20261124-182638`) ; reste la copie hors-site et le restore isolé |
 | Copie hors-site, restore isolé, reboot, E2E réel | **Ouverts** — issues #5, #9, #10, #11, #23 |
-| Preuves multipart (reclaim après abort, 10 000 parties) | **Ouvertes** — issues #316, #317 ; plafond opérationnel 5 000 parties en mitigation |
-| Tests audiobook PostgreSQL | **Ouvert** — issue #318 |
-| Pool de connexions PostgreSQL | **Ouvert** — issue #325 |
+| Preuves multipart (reclaim après abort, 10 000 parties) | **#316 et #317 levées** (2026-11-27) ; plafond opérationnel 5 000 parties conservé malgré la preuve 10 000 |
+| Tests audiobook PostgreSQL | **Exécutés localement (64 passed)** et sur Actions (`run 45846203958`, 738 passed / 1 skipped) ; workflow enrichi du résumé skipped et d'un job dédié — issue #318 |
+| Pool de connexions PostgreSQL | **Implémenté** — pool intégré borné (`psycopg_pool`), métriques et test de charge (2026-11-27), voir `POSTGRES-POOL-2026-11-27.md` |
 
 ### 10.4 Documents périmés
 
 `docs/STRUCTURED_MAP.md`, `docs/API-ROUTES-AUDIT.md` et `docs/ISSUES-AUDIT-2026-11.md` datent de l'audit d'octobre et contiennent des chiffres et statuts contradictoires. Ils sont conservés à titre historique et **ne doivent pas être utilisés comme source de vérité** ; le suivi de leur réconciliation est l'issue #324.
+
+---
+
+## 11. Révision du 2026-11-27
+
+Chiffres régénérés depuis le code : [`CODE-METRICS.md`](CODE-METRICS.md) (script `scripts/regenerate-doc-metrics.py`). Suite Python locale : **711 passés, 41 skipés** (PostgreSQL opt-in : **750 passés, 2 skipés**) ; frontend : **104 tests unitaires passés**, e2e Playwright : 3 scénarios supplémentaires pour la dialogue de liste (**250 scénarios** au total).
+
+| Sujet | État au 2026-11-27 |
+|---|---|
+| #316 reclaim après abort | **Levée** — 1 GiB de parties uniques, 1 048 602 058 → 458 octets après vacuum, journal `verification-log-2026-11-27-multipart-proofs-4.48.md` |
+| #317 complétion 10 000 parties | **Levée** — 10 000 parties uniques (48,8 GiB) complétées en 1 275 s, HEAD/Range/SHA-256 conformes ; plafond 5 000 conservé |
+| #318 tests audiobook PostgreSQL | **Exécutés** — 64 passed localement, run Actions `45846203958` réussi (738 passed / 1 skipped) ; job dédié et résumé skipped ajoutés au workflow |
+| #319 ajout à une liste depuis les cartes | **Implémenté** — bouton/dialogue restaurés et couverts par 3 tests e2e |
+| #320 événements d'écoute | **Implémenté** — `listen_events` append-only et idempotent, mesure distincte de l'estimation, rétention/anonymisation (migration `0028`) |
+| #321 recherche locale | **Implémenté** — synonymes normalisés sans service tiers, kill-switch, mesure recall/MRR enregistrée |
+| #322 limiteurs partagés | **Implémenté** — test à deux workers avec catalogue SQLite partagé |
+| #323 premium/facturation | **Décision documentée** (`DECISION-PREMIUM-BILLING.md`), activation bloquée par la revue juridique |
+| #324 réconciliation des docs | **Chiffres régénérés** et documents historiques avertis ; source de vérité confirmée |
+| #325 pool PostgreSQL | **Implémenté** — pool intégré borné, métriques et test de charge (voir `POSTGRES-POOL-2026-11-27.md`) |
+
+Contrôles finaux rejoués après revue statique : le test two-workers force `AURA_API_BACKEND=sqlite` même dans le job CI PostgreSQL ; la sonde de compatibilité multipart recharge `MAX_OPERATIONAL_PARTS` / `MAX_PART_BYTES` ; les trois nouveaux réglages sont passés explicitement par `docker-compose.yml` ; la fenêtre de crédit d'écoute est bornée à 15 s ; le repository PostgreSQL expose le même verrou d'admission que SQLite. `git diff --check`, lint frontend (0 erreur, 13 avertissements) et les 3 specs e2e ciblées passent également.

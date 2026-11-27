@@ -22,9 +22,13 @@
 - [SSH access and per-device key management (no private keys)](docs/SSH-ACCESS-AND-KEY-MANAGEMENT.md)
 - [Network architecture and throughput test plan (documentation only)](docs/NETWORK-AND-THROUGHPUT-PLAN.md)
 - [Read-only host preflight diagnostic](scripts/host-preflight.sh)
+- [Idempotent host hardening](scripts/harden-host.sh) — rejoue SSH/fail2ban/UFW (dry-run par défaut, `--apply` pour écrire)
 - [Deployment verification log template](docs/verification-log-template.md)
 - [Verification log — portail, transfert et perf, 2026-11-24](docs/verification-log-2026-11-24-portail-perf.md)
+- [Audit de sécurité et durcissement, 2026-11-26](docs/verification-log-2026-11-26-security-hardening.md) — brute-force SSH, fail2ban, UFW et durcissement SSH vérifiés
 - [Feature status (source of truth)](docs/ETAT-DES-FONCTIONNALITES.md)
+- [Regenerated code metrics (routes, tests, statuses)](docs/CODE-METRICS.md)
+- [PostgreSQL connection pool and load test](docs/POSTGRES-POOL-2026-11-27.md)
 - [Public portal roadmap and issue status](docs/PUBLIC-PORTAL-ROADMAP.md)
 - [Operations: vacuum, HTTP/3 and media caching](docs/OPERATIONS.md)
 - [Multipart compatibility verification log — SeaweedFS 4.48, 2026-10-25](docs/verification-log-2026-10-25-multipart-compat-4.48.md)
@@ -46,6 +50,7 @@
 - [Decision: defer Better Auth + Google OAuth](docs/DECISION-BETTER-AUTH.md)
 - [Decision: defer independent backup](docs/DECISION-BACKUP-DEFERRED.md)
 - [Decision: advanced transfer features deferred](docs/DECISION-ADVANCED-TRANSFER-FEATURES.md)
+- [Decision: premium subscription and delegated billing](docs/DECISION-PREMIUM-BILLING.md)
 - [Audit complet du site (2026-10-24)](docs/AUDIT-COMPLET-2026-10-24.md)
 
 ## Intended topology

@@ -60,6 +60,7 @@ def test_itunes_candidates_are_upscaled(monkeypatch):
     assert out == [{
         "provider": "itunes", "title": "Le Grand Livre", "author": "Alice",
         "url": "https://example.test/cover/600x600bb.jpg",
+        "size": "600", "source_url": "",
     }]
     assert "term=Alice+Le+Grand+Livre" in seen["url"]
     assert "entity=audiobook" in seen["url"]

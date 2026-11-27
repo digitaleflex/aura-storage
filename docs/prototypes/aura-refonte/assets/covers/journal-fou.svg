@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 900" role="img" aria-label="Couverture : Le Journal d'un Fou">
+  <rect width="600" height="900" fill="#D8D4C7"/>
+  <g color="#253347"><line x1="96" y1="270" x2="304" y2="270" stroke="#8A6A45" stroke-width="1" opacity=".35"/><line x1="96" y1="292" x2="344" y2="292" stroke="#8A6A45" stroke-width="1" opacity=".35"/><line x1="96" y1="314" x2="384" y2="314" stroke="#8A6A45" stroke-width="1" opacity=".35"/><line x1="96" y1="336" x2="304" y2="336" stroke="#8A6A45" stroke-width="1" opacity=".35"/><line x1="96" y1="358" x2="344" y2="358" stroke="#8A6A45" stroke-width="1" opacity=".35"/><line x1="96" y1="380" x2="384" y2="380" stroke="#8A6A45" stroke-width="1" opacity=".35"/><line x1="96" y1="402" x2="304" y2="402" stroke="#8A6A45" stroke-width="1" opacity=".35"/><line x1="96" y1="424" x2="344" y2="424" stroke="#8A6A45" stroke-width="1" opacity=".35"/>
+    <text x="300" y="104" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="17" letter-spacing="5" fill="#8A6A45">AURA</text>
+    <text x="300" y="136" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="12" letter-spacing="3" opacity=".62">BIBLIOTHÈQUE AUDIO</text>
+    <text x="300" y="342" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="74" fill="currentColor">Le Journal</text><text x="300" y="426" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="74" fill="currentColor">d'un Fou</text>
+    <line x1="210" y1="552" x2="390" y2="552" stroke="#8A6A45" stroke-width="1.5" opacity=".9"/>
+    <text x="300" y="596" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="16" letter-spacing="3.5" fill="#253347" opacity=".9">GUY DE MAUPASSANT</text>
+    <text x="300" y="826" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="11" letter-spacing="4" fill="#8A6A45" opacity=".8">ÉDITIONS AURA</text>
+  </g>
+</svg>
