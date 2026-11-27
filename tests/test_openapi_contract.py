@@ -22,10 +22,19 @@ import api.main as main  # noqa: E402
 OPENAPI_PATH = Path(__file__).resolve().parents[1] / "docs" / "openapi.yaml"
 
 
+def _iter_routes(routes):
+    for route in routes:
+        if hasattr(route, "methods") and hasattr(route, "path"):
+            yield route
+        orig = getattr(route, "original_router", None)
+        if orig is not None and hasattr(orig, "routes"):
+            yield from _iter_routes(orig.routes)
+
+
 def _implemented_routes() -> dict[str, set[str]]:
     routes: dict[str, set[str]] = {}
-    for route in main.app.routes:
-        if hasattr(route, "methods") and route.path.startswith("/api/v1"):
+    for route in _iter_routes(main.app.routes):
+        if route.path.startswith("/api/v1"):
             routes.setdefault(route.path, set()).update(m.lower() for m in route.methods)
     return routes
 
