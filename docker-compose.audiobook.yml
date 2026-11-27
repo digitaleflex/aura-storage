@@ -33,6 +33,9 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       AURA_API_BASE_URL: ${AURA_API_BASE_URL:-http://api:8000}
       AURA_SERVICE_TOKEN: ${AURA_SERVICE_TOKEN:-}
+      # Optional Google Books key (same as the API service) for cover/metadata
+      # lookups; the public endpoint works without it but is rate limited.
+      AURA_GOOGLE_BOOKS_API_KEY: ${AURA_GOOGLE_BOOKS_API_KEY:-}
       AUDIOBOOK_CORS_ORIGINS: ${AUDIOBOOK_CORS_ORIGINS:-}
       AUDIOBOOK_LOG_LEVEL: ${AUDIOBOOK_LOG_LEVEL:-INFO}
     # Exposed on its own subdomain so listener auth (cookie + CSRF) never

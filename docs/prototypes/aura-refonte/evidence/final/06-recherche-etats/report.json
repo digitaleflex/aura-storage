@@ -1,0 +1,74 @@
+[
+  {
+    "file": "resultats.png",
+    "state": "resultats",
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "eyebrow",
+        "label": "标题上方的眉标",
+        "count": 1,
+        "examples": [
+          "p.eyebrow「RECHERCHE & FILTRES」"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "vide.png",
+    "state": "vide",
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "eyebrow",
+        "label": "标题上方的眉标",
+        "count": 1,
+        "examples": [
+          "p.eyebrow「RECHERCHE & FILTRES」"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "chargement.png",
+    "state": "chargement",
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "eyebrow",
+        "label": "标题上方的眉标",
+        "count": 1,
+        "examples": [
+          "p.eyebrow「RECHERCHE & FILTRES」"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "erreur.png",
+    "state": "erreur",
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "eyebrow",
+        "label": "标题上方的眉标",
+        "count": 1,
+        "examples": [
+          "p.eyebrow「RECHERCHE & FILTRES」"
+        ]
+      }
+    ]
+  }
+]

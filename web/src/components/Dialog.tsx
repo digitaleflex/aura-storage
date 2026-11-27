@@ -96,6 +96,7 @@ export function ConfirmAction({
   disabled = false,
   danger = false,
   className,
+  ariaLabel,
 }: {
   label: string;
   title: string;
@@ -106,6 +107,7 @@ export function ConfirmAction({
   disabled?: boolean;
   danger?: boolean;
   className?: string;
+  ariaLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -115,6 +117,7 @@ export function ConfirmAction({
         type="button"
         className={className ?? "btn btn-small"}
         disabled={disabled}
+        aria-label={ariaLabel}
         onClick={() => setOpen(true)}
       >
         {label}
