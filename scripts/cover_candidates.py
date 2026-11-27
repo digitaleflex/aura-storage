@@ -30,7 +30,10 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from api import cover_enrichment as ce
 
-COVER_HOST_RULES = ("covers.openlibrary.org", ".mzstatic.com")
+COVER_HOST_RULES = (
+    "covers.openlibrary.org", ".mzstatic.com",
+    "books.google.com", ".googleusercontent.com", ".gstatic.com",
+)
 REVIEW_STATE_FIELDS = (
     "status", "chosen_url", "chosen_candidate", "chosen_provider",
     "cover_key", "applied_at", "error",
@@ -264,7 +267,9 @@ def apply_selected(
                 print(f"  REFUSE: {book.get('title') or object_id}: {problem}")
             continue
 
-        if obj.get("cover_key"):
+        # A generated AURA jacket is a placeholder that an approved real cover
+        # may replace; never overwrite a real cover from a review selection.
+        if obj.get("cover_key") and not ce.is_generated_cover(obj["cover_key"]):
             skipped += 1
             if apply:
                 book["status"] = "already_applied"

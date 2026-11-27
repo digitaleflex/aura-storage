@@ -211,3 +211,103 @@ class ITunesMetadataProvider:
             cover_candidates=covers,
             duration_ms=duration_ms,
         )
+
+
+class GoogleBooksMetadataProvider:
+    """Google Books volumes, including their front-cover image links."""
+
+    name = "google_books"
+    _BASE = "https://www.googleapis.com/books/v1/volumes"
+    _IMAGE_SIZES = (
+        "extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail",
+    )
+
+    def __init__(self, transport: JsonTransport, *, api_key: str = "") -> None:
+        self.transport = transport
+        self.api_key = clean_text(api_key, limit=200)
+
+    def search(self, query: MetadataQuery) -> list[MetadataCandidate]:
+        params: dict[str, Any] = {"maxResults": max(1, min(query.limit, 20))}
+        if query.identifier_kind == "isbn" and query.identifier:
+            params["q"] = f"isbn:{clean_text(query.identifier, limit=32)}"
+        elif query.text:
+            params["q"] = f'intitle:"{clean_text(query.text, limit=200)}"'
+        elif query.identifier:
+            params["q"] = clean_text(query.identifier, limit=200)
+        else:
+            return []
+        if query.language:
+            params["langRestrict"] = clean_text(query.language, limit=10)
+        if self.api_key:
+            params["key"] = self.api_key
+        payload = self.transport.get_json(self._BASE, params=params)
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise MetadataProviderError("Google Books response has no items list")
+        candidates: list[MetadataCandidate] = []
+        for item in items[: query.limit]:
+            if not isinstance(item, dict):
+                continue
+            candidate = self._normalize(item)
+            if candidate is not None:
+                candidates.append(candidate)
+        return candidates
+
+    def _normalize(self, item: dict[str, Any]) -> MetadataCandidate | None:
+        provider_id = clean_text(item.get("id"), limit=200)
+        info = item.get("volumeInfo")
+        if not provider_id or not isinstance(info, dict):
+            return None
+        title = clean_text(info.get("title"), limit=500)
+        if not title:
+            return None
+        authors = info.get("authors")
+        if not isinstance(authors, list):
+            authors = []
+        contributors = tuple(
+            MetadataContributor(name=name, role="author", position=index)
+            for index, name in enumerate(authors[:20])
+            if clean_text(name)
+        )
+        identifiers: list[ExternalIdentifier] = [
+            ExternalIdentifier(kind="google_books", value=provider_id)
+        ]
+        for entry in info.get("industryIdentifiers") or []:
+            if not isinstance(entry, dict):
+                continue
+            isbn = valid_isbn(entry.get("identifier"))
+            if isbn:
+                identifiers.append(
+                    ExternalIdentifier(
+                        kind="isbn13" if len(isbn) == 13 else "isbn10", value=isbn,
+                    )
+                )
+        links = info.get("imageLinks")
+        covers: tuple[CoverCandidate, ...] = ()
+        if isinstance(links, dict):
+            for size in self._IMAGE_SIZES:
+                url = clean_text(links.get(size), limit=2048)
+                if url.startswith("http://"):
+                    url = "https://" + url[len("http://"):]
+                if url.startswith("https://"):
+                    covers = (CoverCandidate(url=url, provider=self.name),)
+                    break
+        categories = info.get("categories")
+        return MetadataCandidate(
+            provider=self.name,
+            provider_id=provider_id,
+            title=title,
+            kind="ebook",
+            language=clean_text(info.get("language"), limit=10),
+            description=strip_html(info.get("description")),
+            publisher=clean_text(info.get("publisher"), limit=300),
+            publication_date=normalize_date(info.get("publishedDate")),
+            contributors=contributors,
+            categories=tuple(
+                clean_text(value, limit=200)
+                for value in (categories if isinstance(categories, list) else ())
+                if clean_text(value, limit=200)
+            ),
+            identifiers=tuple(dict.fromkeys(identifiers)),
+            cover_candidates=covers,
+        )

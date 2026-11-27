@@ -54,6 +54,9 @@ from api.store import repo  # noqa: E402
 AUDIO_TYPES = ("audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/flac", "audio/aac")
 IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif", "image/avif")
 COVER_NAMES = {"cover", "folder", "albumart", "album", "front", "artwork", "jacket"}
+# A locally generated AURA jacket uses a distinct key so an operator-approved
+# (or auto-selected) real cover can still replace it later.
+GENERATED_COVER_SUFFIX = ".jacket.jpg"
 COVER_WIDTH = 480
 TIMEOUT_S = 60
 MAX_SOURCE_BYTES = 12 * 1024 * 1024
@@ -198,9 +201,40 @@ def extract_embedded(url: str, max_streams: int = 3) -> bytes | None:
     return None
 
 
-def publish_cover(obj: dict, jpeg: bytes, client, apply: bool) -> str:
+def is_generated_cover(cover_key: object) -> bool:
+    """Whether a catalogue cover is a replaceable, locally generated jacket."""
+    return str(cover_key or "").endswith(GENERATED_COVER_SUFFIX)
+
+
+def render_jacket(obj: dict) -> bytes | None:
+    """Render the deterministic AURA jacket for a book with no artwork.
+
+    Purely local: no network, no ffmpeg, no clock. The visual language comes
+    from ``api.cover_jacket``, the same palette as the portal's HTML fallback.
+    """
+    from . import cover_jacket  # imported lazily: Pillow is only needed here
+
+    display = str(obj.get("display_name") or "")
+    stem = display.rsplit(".", 1)[0] if "." in display else display
+    author, separator, title = stem.partition(" - ")
+    if not separator:
+        author, title = "", stem
+    label = title.strip() or str(obj.get("title") or "").strip() or "Livre"
+    try:
+        jpeg = cover_jacket.render_jacket(label, author.strip())
+    except (OSError, ValueError, TypeError):
+        return None
+    if len(jpeg) < 1024 or not jpeg.startswith(b"\xff\xd8"):
+        return None
+    return jpeg
+
+
+def publish_cover(
+    obj: dict, jpeg: bytes, client, apply: bool, *, generated: bool = False,
+) -> str:
     """Store the resized JPEG next to the object and record it in the catalogue."""
-    key = f"{obj['object_key']}.cover.jpg"
+    suffix = GENERATED_COVER_SUFFIX if generated else ".cover.jpg"
+    key = f"{obj['object_key']}{suffix}"
     if apply:
         extra = {"ServerSideEncryption": SSE_ALGORITHM} if settings.require_sse else {}
         client.put_object(
@@ -235,6 +269,8 @@ def search_itunes(title: str, author: str = "", limit: int = 3) -> list[dict]:
             "title": str(row.get("collectionName") or row.get("trackName") or ""),
             "author": str(row.get("artistName") or ""),
             "url": str(row.get("artworkUrl100") or "").replace("100x100bb", "600x600bb"),
+            "size": "600",
+            "source_url": str(row.get("collectionViewUrl") or row.get("trackViewUrl") or ""),
         }
         for row in results if row.get("artworkUrl100")
     ]
@@ -257,13 +293,98 @@ def search_openlibrary(title: str, author: str = "", limit: int = 3) -> list[dic
             "title": str(row.get("title") or ""),
             "author": ", ".join(str(a) for a in (row.get("author_name") or [])[:2]),
             "url": f"https://covers.openlibrary.org/b/id/{row['cover_i']}-L.jpg",
+            "size": "L",
+            "source_url": f"https://openlibrary.org{row.get('key') or ''}",
         }
         for row in results if row.get("cover_i")
     ]
 
 
+def search_google_books(
+    title: str, author: str = "", isbn: str = "", limit: int = 5,
+) -> list[dict]:
+    """Google Books (primary source); optional API key avoids a shared quota.
+
+    Without a key the public endpoint is heavily rate limited: an empty list
+    simply lets the caller fall back to the secondary providers.
+    """
+    if isbn:
+        query = f"isbn:{isbn.strip()}"
+    else:
+        parts = []
+        if title.strip():
+            parts.append(f'intitle:"{title.strip()}"')
+        if author.strip():
+            parts.append(f'inauthor:"{author.strip()}"')
+        query = " ".join(parts) or title or author
+    params = {"q": query, "maxResults": max(1, min(limit, 20))}
+    api_key = os.environ.get("AURA_GOOGLE_BOOKS_API_KEY", "").strip()
+    if api_key:
+        params["key"] = api_key
+    payload = fetch_url(
+        "https://www.googleapis.com/books/v1/volumes?" + urlencode(params),
+    )
+    if not payload:
+        return []
+    try:
+        items = json.loads(payload).get("items", [])
+    except (ValueError, AttributeError):
+        return []
+    candidates = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        info = row.get("volumeInfo") or {}
+        links = info.get("imageLinks") or {}
+        url = ""
+        size = ""
+        for name in ("extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail"):
+            if links.get(name):
+                url, size = str(links[name]), name
+                break
+        if url.startswith("http://"):
+            url = "https://" + url[len("http://"):]
+        if not url:
+            continue
+        isbns = [
+            str(entry.get("identifier") or "")
+            for entry in (info.get("industryIdentifiers") or [])
+            if isinstance(entry, dict)
+        ]
+        candidates.append({
+            "provider": "google_books",
+            "title": str(info.get("title") or ""),
+            "author": ", ".join(str(a) for a in (info.get("authors") or [])[:2]),
+            "url": url,
+            "size": size,
+            "isbn": isbn.strip() or next((value for value in isbns if value), ""),
+            "source_url": f"https://books.google.com/books?id={row.get('id')}",
+            "license": str(info.get("copyright") or ""),
+            "query": query,
+        })
+    return candidates
+
+
+def search_candidates(
+    title: str, author: str = "", isbn: str = "", limit: int = 5,
+) -> list[dict]:
+    """Google Books first, then Open Library, then iTunes as a last resort."""
+    found = search_google_books(title, author, isbn, limit)
+    found += search_openlibrary(title, author, limit)
+    if not isbn and not found:
+        found += search_itunes(title, author, limit)
+    seen = set()
+    unique = []
+    for candidate in found:
+        if candidate.get("url") in seen:
+            continue
+        seen.add(candidate.get("url"))
+        unique.append(candidate)
+    return unique[: max(1, min(limit * 3, 60))]
+
+
 def review_path() -> Path:
-    default = Path(os.environ.get("AURA_DATA_DIR", "/srv/aura-storage")) / "cover-candidates.json"
+    default = Path(os.environ.get("AURA_DATA_DIR", "/srv/aura-storage")) / "cover-review" / "cover-candidates.json"
     return Path(os.environ.get("AURA_COVER_REVIEW_FILE", str(default)))
 
 
