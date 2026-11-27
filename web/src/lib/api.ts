@@ -263,6 +263,23 @@ function normalizeTransferHistoryPage(raw: unknown): TransferHistoryPage {
   };
 }
 
+export interface DuplicateScanFingerprint {
+  parentPath: string;
+  name: string;
+  sizeBytes: number;
+  sha256?: string | null;
+}
+
+export interface DuplicateScanResponse {
+  byParent: Record<string, Array<{
+    id: string;
+    display_name: string;
+    size_bytes: number;
+    checksum_sha256: string | null;
+  }>>;
+  unresolved: string[];
+}
+
 /** A logical folder owned by the signed-in human user (#61). */
 export interface FolderItem {
   id: string;
@@ -1411,6 +1428,16 @@ export const api = {
       `/api/v1/objects/${encodeURIComponent(id)}/tags`,
       { method: "PUT", body: { tags }, csrf },
     );
+  },
+
+  /** Authoritative destination objects for an import batch, keyed by parent path. */
+  scanDuplicates(
+    items: DuplicateScanFingerprint[],
+    csrf: string,
+  ): Promise<DuplicateScanResponse> {
+    return request<DuplicateScanResponse>("/api/v1/objects/duplicate-scan", {
+      method: "POST", body: { items }, csrf,
+    });
   },
 
   /** Distinct tags visible to the caller, with their object counts. */

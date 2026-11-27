@@ -40,6 +40,8 @@ export interface DuplicateScanOptions {
   hashMaxBytes?: number;
   /** Hash every small file so renamed duplicates can be found too. */
   hashAllUnderBytes?: number;
+  /** Precomputed hashes avoid reading the same files twice when the scan is authoritative. */
+  checksums?: Map<string, string | null>;
   signal?: AbortSignal;
   onResult?: (entry: DuplicateEntry, result: PreflightResult) => void;
 }
@@ -47,6 +49,7 @@ export interface DuplicateScanOptions {
 export interface DuplicateScanReport {
   matches: DuplicateMatch[];
   results: Map<string, PreflightResult>;
+  checksums: Map<string, string | null>;
 }
 
 async function sha256Hex(file: File): Promise<string> {
@@ -88,6 +91,7 @@ export async function scanDuplicates(
   const hashAllUnderBytes = opts.hashAllUnderBytes ?? 8 * 1024 * 1024;
   const matches: DuplicateMatch[] = [];
   const results = new Map<string, PreflightResult>();
+  const checksums = new Map<string, string | null>();
 
   const existingChecksums = new Map<string, Map<string, ExistingObjectRef>>();
   for (const [parent, objects] of existingByKey) {
@@ -128,13 +132,16 @@ export async function scanDuplicates(
 
     let checksum: string | null = null;
     let hashFailed = false;
-    if (smallEnoughToHash || plausibleHashCandidate) {
+    if (opts.checksums?.has(entry.key)) {
+      checksum = opts.checksums.get(entry.key) ?? null;
+    } else if (smallEnoughToHash || plausibleHashCandidate) {
       try {
         checksum = await sha256Hex(entry.file);
       } catch {
         hashFailed = true;
       }
     }
+    checksums.set(entry.key, checksum);
     if (opts.signal?.aborted) throw new DOMException("Scan annulé", "AbortError");
     if (hashFailed) {
       const result: PreflightResult = { status: "error" };
@@ -205,7 +212,7 @@ export async function scanDuplicates(
     }
   }
 
-  return { matches, results };
+  return { matches, results, checksums };
 }
 
 /** Backward-compatible helper for callers that only need the match list. */

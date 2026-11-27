@@ -31,6 +31,11 @@ async function installMocks(page: Page, existing: Array<Record<string, unknown>>
     if (path === "/api/v1/objects" && method === "GET") {
       return route.fulfill({ json: { items: existing } });
     }
+    if (path === "/api/v1/objects/duplicate-scan" && method === "POST") {
+      return route.fulfill({
+        json: { byParent: existing.length ? { "": existing } : {}, unresolved: [] },
+      });
+    }
     if (path === "/api/v1/objects/upload-intents" && method === "POST") {
       intents += 1;
       const body = request.postDataJSON();

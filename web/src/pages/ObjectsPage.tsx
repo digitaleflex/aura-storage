@@ -43,7 +43,6 @@ import {
   normalizeRelativePath,
   parentDirOf,
   planFolders,
-  resolvePlannedFolderIds,
 } from "../lib/folderTree";
 import {
   scanDuplicates,
@@ -1569,6 +1568,7 @@ export function ObjectsPage() {
       setDuplicateChecking(true);
       try {
         matches = await checkUploadDuplicates(files, relPaths, folderMode, {
+          csrf: csrf ?? "",
           keys: files.map(importId),
           signal: controller.signal,
         });
@@ -1703,32 +1703,17 @@ export function ObjectsPage() {
     ]);
   }
 
-  async function fetchAllObjectsInFolder(folderId: string | null): Promise<ObjectItem[]> {
-    const out: ObjectItem[] = [];
-    let offset = 0;
-    const limit = 100;
-    for (let guard = 0; guard < 200; guard += 1) {
-      const page = await api.listObjects({ folderId, status: "available", limit, offset });
-      out.push(...page.items);
-      if (page.items.length < limit) break;
-      offset += page.items.length;
-    }
-    return out;
-  }
-
   async function checkUploadDuplicates(
     files: File[],
     relPaths: string[],
-    folderMode: boolean,
+    _folderMode: boolean,
     options: {
+      csrf: string;
       signal?: AbortSignal;
       keys?: string[];
       onResult?: (entry: DuplicateEntry, result: PreflightResult) => void;
-    } = {},
+    },
   ): Promise<DuplicateMatch[]> {
-    if (folderMode && !treeQuery.isSuccess) {
-      throw new Error("L'arborescence des dossiers n'est pas encore disponible.");
-    }
     const entries: DuplicateEntry[] = files.map((file, index) => ({
       key: options.keys?.[index] ?? importId(file),
       file,
@@ -1742,41 +1727,38 @@ export function ObjectsPage() {
       const result: PreflightResult = { status: "error" };
       options.onResult?.(entry, result);
     }
-    const existingByKey = new Map<string, ExistingObjectRef[]>();
+    for (const entry of scanEntries) options.onResult?.(entry, { status: "checking" });
 
-    if (!folderMode) {
-      const currentObjects = await fetchAllObjectsInFolder(currentFolderId);
-      existingByKey.set("", currentObjects.map((o) => ({
-        id: o.id, display_name: o.display_name, size_bytes: o.size_bytes, checksum_sha256: o.checksum_sha256,
-      })));
-    } else {
-      // The cached folder tree can be stale after a recent import. Read it again
-      // so nested destinations are compared against the real current folders.
-      const freshTree = await api.listAllFolders();
-      const folderIds = resolvePlannedFolderIds(plan, freshTree.items, currentFolderId);
-      const neededKeys = new Set<string>([""]);
-      for (const entry of scanEntries) {
-        const parent = entry.rel.includes("/") ? entry.rel.slice(0, entry.rel.lastIndexOf("/")) : "";
-        neededKeys.add(parent);
-      }
-      for (const key of neededKeys) {
-        const folderId = key === "" ? currentFolderId : folderIds.get(key) ?? null;
-        if (key !== "" && !folderIds.has(key)) {
-          existingByKey.set(key, []);
-          continue;
-        }
-        const objs = await fetchAllObjectsInFolder(folderId);
-        existingByKey.set(key, objs.map((o) => ({
-          id: o.id, display_name: o.display_name, size_bytes: o.size_bytes, checksum_sha256: o.checksum_sha256,
-        })));
-      }
-    }
-
-    const report = await scanDuplicates(scanEntries, existingByKey, {
+    const hashOptions = {
       computeHash: true,
       hashMaxBytes: 256 * 1024 * 1024,
       hashAllUnderBytes: 8 * 1024 * 1024,
       signal: options.signal,
+    };
+    const hashed = await scanDuplicates(scanEntries, new Map(), hashOptions);
+    if ([...hashed.results.values()].some((result) => result.status === "error")) {
+      throw new Error("L'empreinte d'au moins un fichier n'a pas pu être vérifiée.");
+    }
+
+    const fingerprints = scanEntries.map((entry) => ({
+      parentPath: parentDirOf(entry.rel) ?? "",
+      name: entry.file.name,
+      sizeBytes: entry.file.size,
+      sha256: hashed.checksums.get(entry.key) ?? null,
+    }));
+    const existingByKey = new Map<string, ExistingObjectRef[]>();
+    for (let index = 0; index < fingerprints.length; index += 5000) {
+      const response = await api.scanDuplicates(
+        fingerprints.slice(index, index + 5000), options.csrf,
+      );
+      for (const [parent, objects] of Object.entries(response.byParent)) {
+        existingByKey.set(parent, objects);
+      }
+    }
+
+    const report = await scanDuplicates(scanEntries, existingByKey, {
+      ...hashOptions,
+      checksums: hashed.checksums,
       onResult: options.onResult,
     });
     if (tooDeep.size > 0) {
@@ -1818,6 +1800,7 @@ export function ObjectsPage() {
         importCandidates.map((entry) => entry.rel),
         importCandidates.some((entry) => entry.rel.includes("/")),
         {
+          csrf,
           signal: controller.signal,
           keys: importCandidates.map((entry) => entry.key),
           onResult: (entry, result) => {
