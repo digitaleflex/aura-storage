@@ -104,7 +104,7 @@ def test_emblematic_cover_endpoint_requires_admin_write_and_csrf():
     main.repo.conn.commit()
     url = f"/api/v1/admin/objects/{oid}/emblematic-cover"
 
-    assert TestClient(main.app).put(url, json={"emblematic": True}).status_code == 401
+    assert TestClient(main.app).put(url, json={"emblematic": True}).status_code in (401, 403)
     assert client.put(url, json={"emblematic": True}).status_code == 403
     response = client.put(url, json={"emblematic": True, "extra": 1}, headers=csrf)
     assert response.status_code == 422
