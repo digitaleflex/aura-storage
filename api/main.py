@@ -692,9 +692,17 @@ class AudioClassificationEnqueueIn(BaseModel):
     object_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
+class AudioClassificationEnqueueUnclassifiedIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(default=100, ge=1, le=500)
+
+
 class AudioClassificationReviewIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal["accept", "reject"]
+    corrected_category: str | None = Field(default=None, max_length=64)
+    corrected_themes: list[str] | None = None
+    corrected_folder: str | None = Field(default=None, max_length=256)
 
 
 class SubtitleIn(BaseModel):
@@ -4169,6 +4177,44 @@ def list_audio_classifications(
     return {"items": [_audio_job_public(r) for r in rows]}
 
 
+@app.get("/api/v1/audio-classifications/feedback")
+def audio_classification_feedback(
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+    limit: int = Query(default=500, ge=1, le=1000),
+):
+    rows = repo.list_audio_classification_jobs(principal["space_id"], limit=limit, offset=0)
+    total = len(rows)
+    by_status = {}
+    by_category = {}
+    low_conf = []
+    rejected = []
+    for r in rows:
+        r = _as_dict(r)
+        st = r.get("status") or "unknown"
+        by_status[st] = by_status.get(st, 0) + 1
+        cat = r.get("suggested_category") or "autre"
+        by_category[cat] = by_category.get(cat, 0) + 1
+        conf = float(r.get("confidence") or 0)
+        item = {
+            "id": r.get("id"), "object_id": r.get("object_id"),
+            "display_name": (r.get("display_name") or ""),
+            "status": st, "suggested_category": cat, "confidence": conf,
+            "reason": r.get("reason"), "provider": r.get("provider"),
+        }
+        if st == "rejected":
+            rejected.append(item)
+        if conf < 0.6 and st in ("needs_review", "failed", "rejected"):
+            low_conf.append(item)
+    return {
+        "total": total,
+        "by_status": by_status,
+        "by_category": by_category,
+        "rejected": rejected[:100],
+        "low_confidence": low_conf[:100],
+        "hint": "Utilise les rejected/low_confidence pour ajouter des mots-clés dans api/audio_rules.json puis rebuild l'API.",
+    }
+
+
 @app.get("/api/v1/audio-classifications/{jid}")
 def get_audio_classification(jid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
     jid = _canonical_id(jid, "job id")
@@ -4212,6 +4258,24 @@ def enqueue_audio_classifications(
     return {"enqueued": enqueued, "skipped": skipped}
 
 
+@app.post("/api/v1/audio-classifications/enqueue-unclassified")
+def enqueue_unclassified_audio_classifications(
+    body: AudioClassificationEnqueueUnclassifiedIn = AudioClassificationEnqueueUnclassifiedIn(),
+    principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    if not settings.ai_classification_enabled:
+        raise HTTPException(status_code=409, detail="audio classification is disabled")
+    ids_to_enqueue = repo.list_unclassified_audio_object_ids(principal["space_id"], limit=body.limit)
+    enqueued = []
+    for oid in ids_to_enqueue:
+        jid = repo.enqueue_audio_classification(ids.new_id(), oid, principal["space_id"])
+        enqueued.append({"object_id": oid, "job_id": jid})
+    if enqueued:
+        audit_event("audio_classification.enqueue_unclassified", principal.get("sub") or principal.get("id"), "ok",
+                    {"count": len(enqueued), "space_id": principal.get("space_id")})
+    return {"enqueued": enqueued, "count": len(enqueued)}
+
+
 @app.post("/api/v1/audio-classifications/{jid}/review")
 def review_audio_classification(
     jid: str,
@@ -4226,36 +4290,62 @@ def review_audio_classification(
     ok = repo.review_audio_classification_job(jid, status=status, reviewed_by=principal.get("sub") or principal.get("id"))
     if not ok:
         raise HTTPException(status_code=409, detail="job cannot be reviewed")
-    # On accept, apply suggested tags as metadata (no move).
+
+    # Save human correction for learning loop.
+    correction = {}
+    if body.corrected_category:
+        correction["corrected_category"] = body.corrected_category.strip().lower()[:64]
+    if body.corrected_themes is not None:
+        correction["corrected_themes"] = [str(t).strip().lower()[:32] for t in body.corrected_themes if str(t).strip()][:8]
+    if body.corrected_folder:
+        correction["corrected_folder"] = body.corrected_folder.strip()[:256]
+    if correction:
+        try:
+            existing_result = json.loads(row.get("result_json") or "{}")
+        except Exception:
+            existing_result = {}
+        existing_result["correction"] = correction
+        existing_result["corrected_at"] = repo.now()
+        repo.save_audio_classification_correction(jid, json.dumps(existing_result, ensure_ascii=False))
+
+    # On accept, apply suggested/corrected tags only when confidence is high enough.
+    applied_tags = False
     if status == "accepted":
-        oid = row.get("object_id")
-        obj = repo.get_object_global(oid) if oid else None
-        if obj is not None:
-            tags = []
-            cat = row.get("suggested_category")
-            if cat:
-                tags.append(f"categorie-{cat}")
+        conf = float(row.get("confidence") or 0)
+        effective_cat = correction.get("corrected_category") or row.get("suggested_category")
+        effective_themes = correction.get("corrected_themes")
+        if effective_themes is None:
             try:
-                themes = json.loads(row.get("suggested_themes") or "[]")
+                effective_themes = json.loads(row.get("suggested_themes") or "[]")
             except Exception:
-                themes = []
-            for t in themes[:3]:
-                t = str(t).strip().lower().replace(" ", "-")
-                if t:
-                    tags.append(f"theme-{t}")
-            lang = row.get("suggested_language")
-            if lang:
-                tags.append(f"langue-{lang}")
-            existing = repo.get_object_tags(oid)
-            merged = list(existing)
-            for t in tags:
-                if t not in merged:
-                    merged.append(t)
-            repo.set_object_tags(oid, merged[:20])
+                effective_themes = []
+        if conf >= 0.80 or correction.get("corrected_category"):
+            oid = row.get("object_id")
+            obj = repo.get_object_global(oid) if oid else None
+            if obj is not None:
+                tags = []
+                if effective_cat:
+                    tags.append(f"categorie-{effective_cat}")
+                for t in effective_themes[:3]:
+                    t = str(t).strip().lower().replace(" ", "-")
+                    if t:
+                        tags.append(f"theme-{t}")
+                lang = row.get("suggested_language")
+                if lang:
+                    tags.append(f"langue-{lang}")
+                existing = repo.get_object_tags(oid)
+                merged = list(existing)
+                for t in tags:
+                    if t not in merged:
+                        merged.append(t)
+                repo.set_object_tags(oid, merged[:20])
+                applied_tags = True
     fresh = repo.get_audio_classification_job(jid)
     audit_event("audio_classification.review", principal.get("sub") or principal.get("id"), "ok",
-                {"job_id": jid, "action": body.action, "space_id": principal.get("space_id")})
-    return _audio_job_public(fresh or row)
+                {"job_id": jid, "action": body.action, "applied_tags": applied_tags, "space_id": principal.get("space_id")})
+    out = _audio_job_public(fresh or row)
+    out["applied_tags"] = applied_tags
+    return out
 
 
 @app.get("/api/v1/objects/{oid}")

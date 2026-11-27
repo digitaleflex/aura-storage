@@ -1185,6 +1185,46 @@ paths:
         "401": { description: Authentication required }
         "403": { description: Not authorised or missing CSRF }
         "409": { description: Audio classification is disabled }
+  /api/v1/audio-classifications/feedback:
+    get:
+      summary: Summarise classification outcomes for rule tuning
+      tags: [objects]
+      description: >-
+        Read-only counters by status and category, plus bounded samples of
+        rejected and low-confidence jobs. Use the samples to add keywords to
+        `api/audio_rules.json`; no provider is contacted.
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 500 }
+      responses:
+        "200": { description: "Totals, status/category breakdown and bounded samples" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "422": { description: Invalid limit }
+  /api/v1/audio-classifications/enqueue-unclassified:
+    post:
+      summary: Queue analysis for audio objects without an active job (objects:write)
+      tags: [objects]
+      description: >-
+        Bounded bulk enqueue of available audio objects that have no queued,
+        processing, needs_review or accepted job. Returns 409 unless the
+        classification sandbox is enabled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                limit: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200": { description: "Queued jobs and count" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "409": { description: Audio classification is disabled }
+        "422": { description: Invalid limit }
   /api/v1/audio-classifications/{jid}:
     get:
       summary: Get one audio classification job
@@ -1205,9 +1245,10 @@ paths:
       summary: Accept or reject one classification proposal (objects:write)
       tags: [objects]
       description: >-
-        Accepting applies only the normalized suggested tags to the object;
-        nothing is moved or published. Rejecting records the decision without
-        changing the object.
+        Accepting applies tags only for high-confidence suggestions or when a
+        human correction is supplied; nothing is moved or published. Rejecting
+        records the decision without changing the object. Corrections are saved
+        in the job result for the rule-tuning feedback loop.
       parameters:
         - in: path
           name: jid
@@ -1223,8 +1264,15 @@ paths:
               required: [action]
               properties:
                 action: { type: string, enum: [accept, reject] }
+                corrected_category: { type: string, nullable: true, maxLength: 64 }
+                corrected_themes:
+                  type: array
+                  nullable: true
+                  maxItems: 8
+                  items: { type: string, maxLength: 32 }
+                corrected_folder: { type: string, nullable: true, maxLength: 256 }
       responses:
-        "200": { description: "Reviewed job with its final status" }
+        "200": { description: "Reviewed job with final status and applied_tags flag" }
         "401": { description: Authentication required }
         "403": { description: Not authorised or missing CSRF }
         "404": { description: Job not found in the caller's space }

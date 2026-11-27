@@ -1142,6 +1142,7 @@ export interface AudioClassificationJob {
   created_at: number;
   updated_at: number;
   object?: { display_name?: string; content_type?: string; size_bytes?: number } | null;
+  applied_tags?: boolean;
 }
 
 export const api = {
@@ -1461,6 +1462,14 @@ export const api = {
     return request("/api/v1/audio-classifications/enqueue", {
       method: "POST",
       body: { object_ids: objectIds },
+      csrf,
+    });
+  },
+
+  enqueueUnclassifiedAudioClassifications(limit: number, csrf: string): Promise<{ enqueued: { object_id: string; job_id: string }[]; count: number }> {
+    return request("/api/v1/audio-classifications/enqueue-unclassified", {
+      method: "POST",
+      body: { limit },
       csrf,
     });
   },
