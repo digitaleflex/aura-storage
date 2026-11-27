@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS objects (
   hls_status TEXT,
   hls_prefix TEXT,
   subtitle_object_id TEXT,
+  -- Curated real cover art: only emblematic books may use their uploaded
+  -- artwork on the public portal; everyone else keeps the AURA jacket.
+  emblematic_cover INTEGER NOT NULL DEFAULT 0,
   UNIQUE (bucket, object_key)
 );
 CREATE TABLE IF NOT EXISTS applications (

@@ -1150,6 +1150,13 @@ class Repository:
     def set_object_cover(self, oid: str, cover_key: Optional[str]) -> None:
         self._run("UPDATE objects SET cover_key = %s WHERE id = %s", (cover_key, oid))
 
+    def set_object_emblematic(self, oid: str, emblematic: bool) -> None:
+        """Curate real cover art for one book (0/1 for portability)."""
+        self._run(
+            "UPDATE objects SET emblematic_cover = %s WHERE id = %s",
+            (int(bool(emblematic)), oid),
+        )
+
     def set_object_duration(self, oid: str, duration_seconds: float) -> None:
         self._run(
             "UPDATE objects SET duration_seconds = %s WHERE id = %s",

@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0028_listen_events"
+SCHEMA_VERSION = "0029_emblematic_cover"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -121,6 +121,9 @@ ADDED_COLUMNS = {
         ("replaced_at", "INTEGER"),
         # Pending replacement intent targets this existing object id (Lot 3.3.2).
         ("replace_target_id", "TEXT"),
+        # Editorial cover policy: real artwork is shown only for curated,
+        # emblematic books. Every other book keeps the AURA typographic jacket.
+        ("emblematic_cover", "INTEGER NOT NULL DEFAULT 0"),
     ],
     # Master mode: a session-bound, short-lived elevation for bulk destructive
     # actions, granted only after re-entering the password (step-up).

@@ -625,6 +625,8 @@ def _object_public(row, tags: list | None = None) -> dict:
         "duration_seconds": row.get("duration_seconds"),
         "hls_status": row.get("hls_status"),
         "subtitle": bool(row.get("subtitle_object_id")),
+        # Editorial policy: real cover art only for curated emblematic books.
+        "emblematic_cover": bool(row.get("emblematic_cover")),
         "tags": list(tags or []),
     }
 
@@ -2102,6 +2104,7 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             "chapters": chapters.get(row["id"], []),
             "published_slug": row.get("public_slug"),
             "cover_url": f"/covers/{row['id']}.jpg" if row.get("cover_key") else None,
+            "emblematic_cover": bool(row.get("emblematic_cover")),
             "url": f"/m/{row['public_slug']}" if published else None,
             "subtitle_url": (
                 f"/m/{row['public_slug']}/subtitles.vtt"
@@ -5582,12 +5585,41 @@ class CoverApplyIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class EmblematicCoverIn(BaseModel):
+    emblematic: bool
+    model_config = ConfigDict(extra="forbid")
+
+
 @app.get("/api/v1/admin/cover-candidates")
 def admin_cover_candidates(principal: dict = Depends(authorize(ADMIN_READ))):
     """Operator review of external cover candidates. Never publishes anything."""
     from . import cover_review as cr
 
-    return cr.public_review(cr.read_review())
+    review = cr.public_review(cr.read_review())
+    # Display policy, not review state: read the curation flag from the
+    # catalogue so the admin can toggle real artwork per book.
+    for book in review["books"]:
+        obj = repo.get_object_unscoped(str(book.get("object_id") or ""))
+        book["emblematic_cover"] = bool(obj and obj.get("emblematic_cover"))
+    return review
+
+
+@app.put("/api/v1/admin/objects/{oid}/emblematic-cover")
+def admin_set_emblematic_cover(
+    oid: str, body: EmblematicCoverIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Curate whether one book may show its real cover art on the portal."""
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    repo.set_object_emblematic(oid, body.emblematic)
+    audit_event("admin.cover.emblematic", principal["id"], "success", {
+        "object_id": oid,
+        "emblematic": bool(body.emblematic),
+    })
+    return {"id": oid, "emblematic_cover": bool(body.emblematic)}
 
 
 @app.post("/api/v1/admin/covers/select")

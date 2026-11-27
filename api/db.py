@@ -1203,6 +1203,14 @@ class Repository:
         )
         self.conn.commit()
 
+    def set_object_emblematic(self, oid: str, emblematic: bool) -> None:
+        """Curate real cover art for one book (0/1 for portability)."""
+        self.conn.execute(
+            "UPDATE objects SET emblematic_cover = ? WHERE id = ?",
+            (int(bool(emblematic)), oid),
+        )
+        self.conn.commit()
+
     def set_object_duration(self, oid: str, duration_seconds: float) -> None:
         self.conn.execute(
             "UPDATE objects SET duration_seconds = ? WHERE id = ?",
