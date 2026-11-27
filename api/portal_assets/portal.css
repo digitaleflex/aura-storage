@@ -1079,7 +1079,9 @@ button,input,select{font:inherit;color:inherit}
 .hero h2 { font-family:var(--serif); }
 
 /* --- Jaquettes : même texte, contraste garanti sur les quatre teintes ---- */
-.cover-title,
+.cover-title { color:var(--ink); }
+.cover-kicker,
+.cover-author { font-family:var(--sans); }
 .cover-kicker { color:var(--ink); }
 .cover-author { color:var(--text); }
 .cover-monogram { color:var(--bronze); }
@@ -1103,6 +1105,7 @@ button,input,select{font:inherit;color:inherit}
 
 /* --- Lecteur plein écran : encre sur encre, pas papier sur papier ------- */
 .full-player .player-bar { background:var(--ink); color:var(--surface); }
+.full-player #fullscreen { display:none; }
 .player-bar :focus-visible {
   outline:3px solid var(--focus-on-dark);
   outline-offset:2px;
@@ -1130,6 +1133,10 @@ button,input,select{font:inherit;color:inherit}
 @media (max-width:720px){
   .player-actions { flex-wrap:wrap; overflow:visible; justify-content:center; }
   .player-actions select { max-width:none; }
+  .player-status {
+    position:static; grid-column:1/-1; margin-top:.15rem;
+    left:auto; bottom:auto; transform:none; max-width:none;
+  }
 }
 @media (max-width:560px){
   body.has-player:not(.full-player) .player-bar {

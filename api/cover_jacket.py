@@ -24,7 +24,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 # Keep in sync with api/public_ui.COVER_HUES (curated, brand-safe hues).
-COVER_HUES = (28, 42, 152, 190, 262)
+COVER_HUES = (28, 152, 205, 262)
 WIDTH = 480
 HEIGHT = 640
 

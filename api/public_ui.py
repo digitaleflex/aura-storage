@@ -136,7 +136,7 @@ def category_theme_nav(
     if categories:
         all_link = (
             f'<a class="cat-chip facet-chip" href="{ESC(href(categorie=None, page=None))}" '
-            f'aria-pressed="{str(not active_facets.get("category")).lower()}">'
+            f'aria-pressed="false">'
             f'<span class="facet-icon">{_nav_icon("grid")}</span><span>Toutes catégories</span></a>'
         )
         chips = [all_link]
@@ -155,7 +155,7 @@ def category_theme_nav(
     if themes:
         all_link = (
             f'<a class="cat-chip theme-chip" href="{ESC(href(theme=None, page=None))}" '
-            f'aria-pressed="{str(not active_facets.get("theme")).lower()}">Tous thèmes</a>'
+            f'aria-pressed="false">Tous thèmes</a>'
         )
         chips = [all_link]
         for option in themes:
