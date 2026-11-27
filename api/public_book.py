@@ -10,9 +10,9 @@ from urllib.parse import quote, quote_plus, urlencode
 from . import public_facets
 from .public_ui import (
     ESC, _BRAND, _GOOGLE, _SKIP_LINK, _duration_text, _heart_button, _nav_icon,
-    _position_text, asset_url, catalog_filter_fields, category_theme_nav, cover_hue,
-    email_form, fallback_cover_inner, hero_cover_html, mobile_nav, page_head,
-    site_footer, site_header,
+    _position_text, asset_url, carousel_shelves, catalog_filter_fields,
+    category_theme_nav, cover_hue, email_form, fallback_cover_inner,
+    hero_cover_html, mobile_nav, page_head, site_footer, site_header,
 )
 
 SITE_NAME = "AURA"
@@ -25,8 +25,6 @@ def book_path(item: dict) -> str:
 def _cover(item: dict) -> str:
     label = str(item.get("title") or item.get("display_name") or "Livre")
     inner = fallback_cover_inner(label, item.get("author") or "")
-    if item.get("cover_url"):
-        inner += f'<img src="{ESC(item["cover_url"])}" alt="" loading="lazy" data-fallback>'
     return (
         f'<span class="cover cover-large" style="--cover-h:{cover_hue(label)}" '
         f'aria-hidden="true">{inner}</span>'
@@ -173,6 +171,7 @@ def landing_page(
         '<button type="button">Nouveautés</button></div></section>'
     )
     parts.append(theme_nav)
+    parts.append(carousel_shelves(items))
     if search_note:
         parts.append(f'<p class="search-note" role="status">Compris comme : {ESC(search_note)}</p>')
     parts.append(
@@ -210,6 +209,7 @@ def landing_page(
             parts.append('</nav>')
         parts.append('</section>')
     parts.extend([
+        f'<script defer src="{asset_url("carousel.js")}"></script>',
         mobile_nav("Découvrir"),
         '</main>', site_footer(), '</body></html>',
     ])
@@ -239,15 +239,12 @@ def book_page(
         ("property", "og:type", "book"), ("property", "og:site_name", SITE_NAME),
         ("property", "og:title", f"{label} — {SITE_NAME}"),
         ("property", "og:description", description), ("property", "og:locale", "fr_FR"),
-        ("name", "twitter:card", "summary_large_image" if item.get("cover_url") else "summary"),
+        ("name", "twitter:card", "summary"),
         ("name", "twitter:title", f"{label} — {SITE_NAME}"),
         ("name", "twitter:description", description),
     ]
     if base_url:
         meta.append(("property", "og:url", url))
-    if base_url and item.get("cover_url"):
-        meta.append(("property", "og:image", base_url + item["cover_url"]))
-        meta.append(("name", "twitter:image", base_url + item["cover_url"]))
     facets = public_facets.item_facets(item)
     classifications = [
         public_facets.facet_label("category", value) for value in facets["categories"]

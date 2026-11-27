@@ -50,19 +50,27 @@
     }
     return {item: list[0], i: 0};
   }
+  function jacketSpan(cls, text){
+    const el = document.createElement('span');
+    el.className = cls;
+    if(text) el.textContent = text;
+    return el;
+  }
   function setCover(container, track){
     if(!container || !track) return;
+    const title = (track.dataset.title || 'Livre').trim();
+    const author = (track.dataset.author || '').trim();
+    const jacket = jacketSpan('cover-fallback', '');
+    jacket.setAttribute('aria-hidden', 'true');
+    jacket.appendChild(jacketSpan('cover-spine', ''));
+    jacket.appendChild(jacketSpan('cover-monogram', title.slice(0,1).toUpperCase() || 'A'));
+    const copy = jacketSpan('cover-copy', '');
+    copy.appendChild(jacketSpan('cover-kicker', 'Livre audio'));
+    copy.appendChild(jacketSpan('cover-title', title));
+    copy.appendChild(jacketSpan('cover-author', author || 'AURA'));
+    jacket.appendChild(copy);
     container.innerHTML = '';
-    const initial = document.createElement('span');
-    initial.textContent = (track.dataset.title || 'A').trim().slice(0,1).toUpperCase() || 'A';
-    container.appendChild(initial);
-    if(track.dataset.cover){
-      const img = document.createElement('img');
-      img.src = track.dataset.cover;
-      img.alt = '';
-      img.onerror = function(){ this.remove(); };
-      container.appendChild(img);
-    }
+    container.appendChild(jacket);
   }
   function updateChapterLabel(){
     if(!nowChapter){ return; }
@@ -294,17 +302,6 @@
     const track = tracks[index];
     if(nowTitle) nowTitle.textContent = track.dataset.title || 'Livre audio';
     if(nowAuthor) nowAuthor.textContent = track.dataset.author || 'Livre audio';
-    const bigCover = document.getElementById('immersive-cover-host');
-    if(bigCover && track.dataset.cover){
-      let bigImg = bigCover.querySelector('img');
-      if(!bigImg){
-        bigImg = document.createElement('img');
-        bigImg.alt = '';
-        bigImg.onerror = function(){ this.remove(); };
-        bigCover.appendChild(bigImg);
-      }
-      bigImg.src = track.dataset.cover;
-    }
     setCover(playerCover, track);
     buildChapters();
     updateChapterLabel();

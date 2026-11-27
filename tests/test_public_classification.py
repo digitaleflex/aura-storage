@@ -1,6 +1,6 @@
 from urllib.parse import urlencode
 
-from api import public_book, public_classification, public_facets, public_ui
+from api import public_book, public_classification, public_facets, public_series, public_ui
 
 
 def test_classification_uses_private_folder_only_as_a_proposal_source():
@@ -75,6 +75,64 @@ def test_category_navigation_has_icons_counts_and_preserves_other_filters():
     assert "q=argent" in html and "auteur=Alice" in html
 
 
+def test_series_are_curated_from_folders_and_grouped_from_published_items():
+    assert public_series.series_for_folder("Podcast_cyber_substack") == "Cyber substack"
+    assert public_series.series_for_folder("Dossier prive") == ""
+    items = [
+        {"id": str(i), "title": f"Livre {i}", "series": "Robert Greene", "cover_url": None}
+        for i in range(3)
+    ] + [{"id": "other", "title": "Autre", "series": "", "cover_url": None}]
+    shelves = public_series.group_series(items)
+    assert len(shelves) == 1
+    assert shelves[0]["label"] == "Robert Greene"
+    assert len(shelves[0]["items"]) == 3
+    duplicate = {"id": "dup", "title": "Livre 0", "series": "Robert Greene"}
+    deduped = public_series.group_series(items + [duplicate])
+    assert len(deduped[0]["items"]) == 3
+
+
+def test_categories_group_published_items_with_real_labels():
+    items = [
+        {"id": str(i), "categories": ["finance"], "themes": [], "languages": [], "format": "mp3"}
+        for i in range(4)
+    ]
+    shelves = public_series.group_categories(items)
+    assert shelves[0]["label"] == "Finance & entrepreneuriat"
+    assert len(shelves[0]["items"]) == 4
+
+
+def test_standard_cards_use_typographic_jackets_only():
+    item = {
+        "id": "one", "title": "Le Grand Livre", "author": "Alice",
+        "cover_url": "/covers/one.jpg",
+    }
+    assert "<img" not in public_ui._track_html(item)
+    assert "<img" not in public_ui.hero_cover_html(item)
+    assert "<img" not in public_book._cover(item)
+    assert "cover-fallback" in public_ui._track_html(item)
+
+
+def test_carousels_show_real_covers_only_for_curated_series():
+    shelf = {
+        "slug": "robert-greene", "label": "Robert Greene",
+        "items": [{
+            "id": "one", "title": "Stratégie", "author": "Robert Greene",
+            "cover_url": "/covers/one.jpg", "series": "Robert Greene",
+            "categories": ["leadership"], "themes": [], "languages": [],
+            "format": "mp3",
+        }],
+    }
+    uniform = public_ui.carousel_shelf(shelf)
+    series = public_ui.carousel_shelf(shelf, use_covers=True)
+    for html in (uniform, series):
+        assert 'class="carousel-track"' in html
+        assert 'data-carousel="carousel-robert-greene"' in html
+        assert 'href="/livre/one"' in html
+        assert 'aria-label="Faire défiler Robert Greene vers la droite"' in html
+    assert "<img" not in uniform
+    assert "/covers/one.jpg" in series
+
+
 def test_anonymous_landing_renders_the_shared_category_navigation():
     item = {
         "id": "one", "display_name": "Alice - Finance.mp3", "title": "Finance",
@@ -92,3 +150,5 @@ def test_anonymous_landing_renders_the_shared_category_navigation():
     assert 'class="facet-icon"' in html
     assert "Finance &amp; entrepreneuriat" in html
     assert "categorie=finance" in html and "q=argent" in html and "auteur=Alice" in html
+    assert 'class="carousel-shelf"' in html and 'class="carousel-track"' in html
+    assert "carousel.js" in html

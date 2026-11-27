@@ -13,7 +13,7 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import urlencode
 
-from . import public_classification, public_facets
+from . import public_classification, public_facets, public_series
 
 _ASSET_DIR = Path(__file__).with_name("portal_assets")
 _ASSET_TYPES = {
@@ -108,6 +108,8 @@ _NAV_ICONS = {
     "lotus": '<path d="M12 20c-4 0-7-2.5-7-6 2.5 0 5 1.5 7 4 2-2.5 4.5-4 7-4 0 3.5-3 6-7 6Z"/>'
              '<path d="M12 16c-3-1-5-3.5-5-7 3 0 5 2 5 5 0-3 2-5 5-5 0 3.5-2 6-5 7Z"/>',
     "tag": '<path d="M4 4h7l9 9-7 7-9-9V4Z"/><circle cx="8" cy="8" r="1"/>',
+    "chevron-left": '<path d="m15 5-7 7 7 7"/>',
+    "chevron-right": '<path d="m9 5 7 7-7 7"/>',
 }
 
 
@@ -166,6 +168,72 @@ def category_theme_nav(
                 f'{ESC(label)} <small>{count}</small></a>'
             )
         parts.append('<section class="cat-row theme-row" aria-label="Thèmes">' + "".join(chips) + '</section>')
+    return "".join(parts)
+
+
+def carousel_shelf(
+    shelf: dict, *, use_covers: bool = False, all_href: str = "",
+) -> str:
+    """Horizontal book shelf: uniform jackets, or real covers for curated series."""
+    items = list(shelf.get("items") or [])
+    if not items:
+        return ""
+    slug = str(shelf.get("slug") or "serie")
+    label = str(shelf.get("label") or "Série")
+    track_id = f"carousel-{slug}"
+    cards = []
+    for item in items:
+        title = str(item.get("title") or item.get("display_name") or "Livre")
+        author = str(item.get("author") or "")
+        inner = fallback_cover_inner(title, author)
+        if use_covers and item.get("cover_url"):
+            inner += (
+                f'<img src="{ESC(item["cover_url"])}" alt="" loading="lazy" '
+                'data-fallback>'
+            )
+        cards.append(
+            f'<li><a class="carousel-card" href="/livre/{ESC(item.get("id") or "")}">'
+            f'<span class="carousel-cover" style="--cover-h:{cover_hue(title)}">{inner}</span>'
+            f'<span class="carousel-title">{ESC(title)}</span>'
+            f'<span class="carousel-author">{ESC(author or "Livre audio")}</span>'
+            '</a></li>'
+        )
+    heading_id = f"{track_id}-title"
+    all_link = (
+        f'<a class="carousel-all" href="{ESC(all_href)}">Tout voir</a>'
+        if all_href else ""
+    )
+    return "".join([
+        '<section class="carousel-shelf" aria-labelledby="', ESC(heading_id), '">',
+        '<div class="carousel-head"><div>',
+        f'<h2 id="{ESC(heading_id)}">{ESC(label)}</h2>',
+        all_link,
+        '</div><div class="carousel-controls">',
+        f'<button type="button" class="carousel-nav" data-carousel="{ESC(track_id)}" '
+        f'data-carousel-direction="prev" aria-label="Faire défiler {ESC(label)} vers la gauche">'
+        f'{_nav_icon("chevron-left")}</button>',
+        f'<button type="button" class="carousel-nav" data-carousel="{ESC(track_id)}" '
+        f'data-carousel-direction="next" aria-label="Faire défiler {ESC(label)} vers la droite">'
+        f'{_nav_icon("chevron-right")}</button>',
+        '</div></div>',
+        f'<ul class="carousel-track" id="{ESC(track_id)}" tabindex="0" '
+        f'aria-label="Livres de la sélection {ESC(label)}">',
+        "".join(cards), '</ul></section>',
+    ])
+
+
+def carousel_shelves(items: list[dict], *, limit: int = 4) -> str:
+    """Series carousels first (real covers), then category carousels (uniform)."""
+    series = public_series.group_series(items, limit=limit)
+    categories = public_series.group_categories(items, limit=limit)
+    parts = []
+    for shelf in series:
+        parts.append(carousel_shelf(shelf, use_covers=True))
+    for shelf in categories:
+        parts.append(carousel_shelf(
+            shelf,
+            all_href="/?" + urlencode({"categorie": shelf["slug"]}),
+        ))
     return "".join(parts)
 
 
@@ -444,7 +512,7 @@ def cover_hue(label: str) -> int:
 def fallback_cover_inner(label: str, author: str = "") -> str:
     """Typographic AURA jacket shown until/unless the real cover loads."""
     title = str(label or "").strip() or "Livre"
-    byline = str(author or "").strip()
+    byline = str(author or "").strip() or "Livre audio"
     return "".join([
         '<span class="cover-fallback" aria-hidden="true">',
         '<span class="cover-spine"></span>',
@@ -452,18 +520,15 @@ def fallback_cover_inner(label: str, author: str = "") -> str:
         '<span class="cover-copy">',
         '<span class="cover-kicker">Livre audio</span>',
         f'<span class="cover-title">{ESC(title)}</span>',
-        f'<span class="cover-author">{ESC(byline or "AURA")}</span>',
+        f'<span class="cover-author">{ESC(byline)}</span>',
         '</span></span>',
     ])
 
 
 def hero_cover_html(item: dict) -> str:
-    """One hero jacket: real artwork over the same typographic fallback."""
+    """One uniform typographic jacket for the editorial hero."""
     label = str(item.get("title") or item.get("display_name") or "Livre")
     inner = fallback_cover_inner(label, item.get("author") or "")
-    cover = str(item.get("cover_url") or "")
-    if cover:
-        inner += f'<img src="{ESC(cover)}" alt="" loading="lazy" data-fallback>'
     return f'<div class="hero-cover" style="--cover-h:{cover_hue(label)}">{inner}</div>'
 
 
@@ -558,10 +623,7 @@ def _track_html(item: dict) -> str:
     ]
     classifications = classifications[:2]
     pct = min(100.0, progress / duration * 100) if duration else 0.0
-    cover = item.get("cover_url") or ""
     cover_inner = fallback_cover_inner(label, author)
-    if cover:
-        cover_inner += f'<img src="{ESC(cover)}" alt="" loading="lazy" data-fallback>'
     stream_url = str(item.get("url") or "")
     availability = "Disponible"
     availability_class = ""
@@ -582,7 +644,6 @@ def _track_html(item: dict) -> str:
         f' data-object-id="{ESC(item.get("id") or "")}"',
         f' data-title="{ESC(label)}"',
         f' data-author="{ESC(author)}"',
-        f' data-cover="{ESC(cover)}"',
         f' data-duration="{duration:.0f}"',
         f' data-progress="{progress:.0f}"',
         f' style="--cover-h:{hue}" aria-label="Écouter {ESC(label)}">',
@@ -942,6 +1003,7 @@ def catalog_page(
     )
 
     parts.append('</div></details>')
+    parts.append(carousel_shelves(all_items))
 
     # The first book in progress is the resume card itself: the shelf lists the others.
     resume_shelf = resume[1:] if resume else []
@@ -986,10 +1048,7 @@ def catalog_page(
         fduration = float(featured.get("duration_seconds") or 0)
         fpct = min(100.0, (fprogress / fduration * 100) if fduration else 0.0)
         fhue = cover_hue(flabel)
-        fcover = featured.get("cover_url") or ""
         fcover_inner = fallback_cover_inner(flabel, featured.get("author") or "")
-        if fcover:
-            fcover_inner += f'<img src="{ESC(fcover)}" alt="" data-fallback>'
         fmeta = "Prêt à être écouté"
         if fprogress and fduration:
             remaining = max(0.0, fduration - fprogress)
@@ -1015,17 +1074,15 @@ def catalog_page(
     # Immersive hero
     if view == "immersif" and all_items:
         first = featured or all_items[0]
-        cover = first.get("cover_url") or ""
         label = str(first.get("title") or first.get("display_name") or "Livre")
         author = str(first.get("author") or "Livre audio")
         hue = cover_hue(label)
         cover_inner = fallback_cover_inner(label, first.get("author") or "")
-        img = f'<img src="{ESC(cover)}" alt="" data-fallback>' if cover else ""
         idx = id_to_index.get(str(first.get("id")), 0)
         parts.extend([
             '<section class="hero" id="resume-card" aria-label="Lecture immersive">',
             f'<div class="big-cover" style="--cover-h:{hue}" id="immersive-cover-host">',
-            f'{cover_inner}{img}</div>',
+            f'{cover_inner}</div>',
             '<div><p class="eyebrow">Lecture immersive</p>',
             f'<h2>{ESC(label)}</h2>',
             f'<p>{ESC(author)}</p>',
@@ -1180,6 +1237,7 @@ def catalog_page(
         '<p class="sync-prompt" id="sync-prompt" role="status" hidden>'
         '<span id="sync-text"></span> <button type="button" class="text-button" id="sync-go">Reprendre</button></p>',
 
+        '<script defer src="' + asset_url("carousel.js") + '"></script>',
         '<script src="' + asset_url("player.js") + '"></script>',
         '<script src="' + asset_url("shelf.js") + '"></script>',
         '<script src="' + asset_url("favorites.js") + '"></script>',

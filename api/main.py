@@ -26,7 +26,8 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validat
 
 from . import (
     authz, folder_shares, google_oauth, ids, listen_events, magic_link, netinfo,
-    public_book, public_facets, public_ui, shares,
+    public_book, public_classification, public_facets, public_series, public_ui,
+    shares,
 )
 from .audit import (
     audit_event,
@@ -2046,8 +2047,26 @@ def _split_audio_name(display_name: str) -> tuple[str, str]:
     stem = display_name.rsplit(".", 1)[0] if "." in display_name else display_name
     if " - " in stem:
         author, title = stem.split(" - ", 1)
-        return author.strip(), title.strip()
-    return "", stem.strip()
+        author, title = author.strip(), title.strip()
+        # `06 - Titre` is an episode number, not an author.
+        if author.isdigit():
+            return "", title
+        return author, title
+    # `001_Titre` and `06 - Titre` fall back to a clean, unnumbered title.
+    stem = re.sub(r"^\d{1,3}\s*[-_]\s*", "", stem)
+    return "", stem.replace("_", " ").strip()
+
+
+def _folder_names(folder_ids: list[str]) -> dict:
+    ids = list({fid for fid in folder_ids if fid})
+    if not ids:
+        return {}
+    mark = "?" if settings.db_backend == "sqlite" else "%s"
+    placeholders = ",".join(mark for _ in ids)
+    rows = repo.conn.execute(
+        f"SELECT id, name FROM folders WHERE id IN ({placeholders})", tuple(ids),
+    ).fetchall()
+    return {r["id"]: r["name"] for r in rows}
 
 
 def _library_items(col: dict, only_published: bool = False) -> list:
@@ -2061,8 +2080,9 @@ def _library_items(col: dict, only_published: bool = False) -> list:
         if only_published and not published:
             continue
         rows.append((pos, row, published))
-    # One query for every chapter of the pack instead of one per book.
+    # One query for every chapter and folder name instead of one per book.
     chapters = repo.get_audio_chapters_map([row["id"] for _, row, _ in rows])
+    folder_names = _folder_names([row.get("folder_id") for _, row, _ in rows])
     items = []
     for pos, row, published in rows:
         author, title = _split_audio_name(row["display_name"])
@@ -2072,6 +2092,9 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             "display_name": row["display_name"],
             "title": title,
             "author": author,
+            "series": public_series.series_for_folder(
+                folder_names.get(row.get("folder_id"), "")
+            ),
             "created_at": row.get("created_at"),
             "content_type": row["content_type"],
             "size_bytes": row["size_bytes"],

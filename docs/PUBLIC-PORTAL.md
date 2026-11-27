@@ -12,7 +12,7 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 | Chemin (sur `PUBLIC_DOMAIN`) | Rôle |
 |---|---|
 | `GET /` | **anonyme** : vitrine du catalogue publié (recherche, filtre par auteur, bouton Google) ; **connecté** : catalogue avec lecteur `<audio>`. Avec `AURA_PUBLIC_BROWSE=0`, les anonymes voient seulement la page de connexion |
-| `GET /livre/{id}` | page d'un livre, lisible sans compte : couverture, durée, chapitres, extrait gratuit, partage (WhatsApp, copier le lien), balises Open Graph/Twitter et JSON-LD `Audiobook` |
+| `GET /livre/{id}` | page d'un livre, lisible sans compte : jaquette typographique, durée, chapitres, extrait gratuit, partage (WhatsApp, copier le lien), balises Open Graph/Twitter et JSON-LD `Audiobook` |
 | `GET /extrait/{id}` | extrait gratuit : **1 minute** d'un **MP3** publié, découpée côté serveur (`AURA_PUBLIC_PREVIEW_SECONDS`, 60 par défaut, 0 = désactivé), sans compte et sans téléchargement (`controlsList="nodownload"`, `Accept-Ranges: none`) |
 | `GET /sitemap.xml`, `GET /robots.txt` | référencement : accueil et pages livre uniquement |
 | `GET /api/public/auth/google` | démarre le flux Google (state + PKCE) |
@@ -188,20 +188,27 @@ dans `audio_chapters` et `objects.duration_seconds` (migration `0020`), puis
 exposés dans `/api/public/library`.
 
 Trois modes d'affichage sont disponibles via `?vue=liste|grille|immersif` :
-liste compacte, grille de cartes avec pochettes, et vue immersive avec une
-grande couverture et un bouton « Lancer l'écoute ». Les auteurs sont extraits
-des noms `Auteur - Titre` et proposés comme filtres (`?auteur=`). Des boutons
-de découverte mènent à « Reprendre l'écoute », « Nouveautés », « À découvrir »
-et « Toute la bibliothèque ».
+liste compacte, grille de cartes et vue immersive avec une grande jaquette et un
+bouton « Lancer l'écoute ». Les auteurs sont extraits des noms `Auteur - Titre`
+et proposés comme filtres (`?auteur=`). Des boutons de découverte mènent à
+« Reprendre l'écoute », « Nouveautés », « À découvrir » et « Toute la bibliothèque ».
 
-Les couvertures sont d'abord cherchées **localement** : tous les flux d'artwork
+Le portail utilise désormais une **jaquette typographique AURA uniforme** pour
+le hero, les cartes, les rayons, la vue immersive et le lecteur : titre en serif,
+auteur, monogramme, tranche et teinte stable choisie dans une palette
+bronze/vert/bleu/violet. Les vraies couvertures ne sont plus affichées que dans
+les **carrousels de séries** (regroupements éditoriaux). Les carrousels de
+catégories utilisent uniquement les jaquettes typographiques, pour rester
+cohérents. Les carrousels sont navigables au toucher, au trackpad et avec les
+boutons précédent/suivant.
+
+Les couvertures sont toujours cherchées **localement** : tous les flux d'artwork
 intégrés au fichier, puis une image stockée à côté de l'audio dans le même bucket
 (`cover.jpg`, `folder.jpg`, image de même stem). L'image retenue est redimensionnée
-par ffmpeg et servie par `/covers/{oid}.jpg`. Sans image locale, une **jaquette
-typographique AURA** reste affichée : titre en serif, auteur, monogramme, tranche
-et teinte stable choisie dans une palette bronze/vert/bleu/violet. La même
-jaquette sert dans le hero, la vue liste et l'administration lorsqu'une image
-est absente ou invalide.
+par ffmpeg et servie par `/covers/{oid}.jpg` uniquement depuis les carrousels de
+séries. Les catégories et les séries sont dérivées des étiquettes publiques et
+d'une liste de dossiers approuvés ; les noms de dossiers non approuvés restent
+privés.
 Deux voies optionnelles permettent d'enrichir les livres récalcitrants : des
 **candidats externes à valider** et l'**ajout manuel** d'une image (voir ci-dessous).
 Aucun service externe n'est contacté par le déploiement ni par le cron de

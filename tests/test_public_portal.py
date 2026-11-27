@@ -765,7 +765,7 @@ def test_book_page_has_share_metadata_chapters_and_the_right_call_to_action(monk
     assert page.status_code == 200, page.text
     t = page.text
     assert '<meta property="og:title" content="Chapitre 1.mp3 — AURA">' in t or "og:title" in t
-    assert 'property="og:image" content="https://testserver/covers/' in t
+    assert 'property="og:image"' not in t and 'name="twitter:image"' not in t
     assert f'rel="canonical" href="https://testserver/livre/{oid}"' in t
     assert '"@type": "Audiobook"' in t and "Ouverture" in t and "La rencontre" in t
     assert "1 h 02 min" in t and "Extrait gratuit" in t
@@ -927,6 +927,7 @@ def test_fallback_cover_shows_the_title_and_author():
     cover = main.public_book._cover(item)
     assert 'class="cover-title">Le Grand Livre</span>' in cover
     assert 'class="cover-author">Alice Auteur</span>' in cover
+    assert 'class="cover-author">Livre audio</span>' in main.public_book._cover({"title": "Sans auteur"})
 
 
 def test_fallback_hues_stay_in_the_aura_palette():
