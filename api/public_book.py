@@ -7,9 +7,13 @@ no external resource, so the strict portal CSP applies unchanged.
 import json
 from urllib.parse import quote, quote_plus, urlencode
 
+from . import public_facets
 from .public_ui import (
-    ESC, SORTS, _BRAND, _GOOGLE, _SKIP_LINK, _duration_text, _heart_button, _position_text, asset_url,
-    cover_hue, email_form, fallback_cover_inner, page_head,
+    ESC, _BRAND, _GOOGLE, _SKIP_LINK, _duration_text, _heart_button, _nav_icon,
+    _position_text, asset_url, carousel_shelves, catalog_filter_fields,
+    category_theme_nav, cover_hue, email_form, fallback_cover_inner,
+    hero_cover_html, mobile_nav, page_head, real_cover_img, site_footer,
+    site_header, use_real_cover,
 )
 
 SITE_NAME = "AURA"
@@ -22,42 +26,41 @@ def book_path(item: dict) -> str:
 def _cover(item: dict) -> str:
     label = str(item.get("title") or item.get("display_name") or "Livre")
     inner = fallback_cover_inner(label, item.get("author") or "")
-    if item.get("cover_url"):
-        inner += f'<img src="{ESC(item["cover_url"])}" alt="" loading="lazy" data-fallback>'
     return (
         f'<span class="cover cover-large" style="--cover-h:{cover_hue(label)}" '
-        f'aria-hidden="true">{inner}</span>'
+        f'aria-hidden="true">{inner}{real_cover_img(item)}</span>'
     )
 
 
 def _card(item: dict) -> str:
     label = str(item.get("title") or item.get("display_name") or "Livre")
+    facets = public_facets.item_facets(item)
+    classifications = [
+        public_facets.facet_label("category", value) for value in facets["categories"]
+    ] + [
+        public_facets.facet_label("theme", value) for value in facets["themes"]
+    ]
+    classifications = classifications[:2]
     return "".join([
         '<li class="book-card"><a href="', ESC(book_path(item)), '">',
         _cover(item),
         f'<span class="book-card-title">{ESC(label)}</span>',
         f'<span class="book-card-author">{ESC(item.get("author") or "Livre audio")}</span>',
         f'<span class="book-card-meta">{ESC(_duration_text(item.get("duration_seconds")))}</span>',
+        f'<span class="book-card-categories">{ESC(" · ".join(classifications))}</span>' if classifications else '',
         '</a></li>',
     ])
 
 
-def _brand_bar(principal: dict | None) -> str:
-    right = (
-        '<a class="text-button" href="/">Ma bibliothèque</a>'
-        if principal else
-        '<a class="text-button" href="/api/public/auth/google">Se connecter</a>'
-    )
-    return (
-        '<header class="topbar"><a class="brand" href="/" aria-label="Accueil">'
-        + _BRAND + '<span class="word">AURA</span></a><div class="member">'
-        + right + '</div></header>'
-    )
+def _brand_bar(principal: dict | None, active: str = "Accueil") -> str:
+    """En-tête partagé avec le portail connecté (même composant)."""
+    return site_header(active, principal)
 
 
 def landing_page(
     collections: list[dict], query: str = "", authors: list[str] | None = None,
-    active_author: str = "", base_url: str = "", with_email: bool = False, sort: str = "",
+    active_author: str = "", author_counts: dict[str, int] | None = None,
+    base_url: str = "", with_email: bool = False, sort: str = "",
     search_note: str = "",
     facet_options: dict | None = None,
     active_facets: dict | None = None,
@@ -77,6 +80,39 @@ def landing_page(
     page = min(page, pages)
     start = (page - 1) * page_size
     page_items = items[start:start + page_size]
+    if author_counts is None:
+        author_counts = {}
+        for item in items:
+            author_name = str(item.get("author") or "").strip()
+            if author_name:
+                author_counts[author_name] = author_counts.get(author_name, 0) + 1
+
+    def _href(pn: int | None = None, **changes) -> str:
+        values = {
+            "q": query, "auteur": active_author, "tri": sort,
+            "collection": active_facets.get("collection"),
+            "categorie": active_facets.get("category"),
+            "theme": active_facets.get("theme"),
+            "langue": active_facets.get("language"),
+            "format": active_facets.get("format"),
+            "duree_min": active_facets.get("duration_min"),
+            "duree_max": active_facets.get("duration_max"),
+            "page": page if page > 1 else "",
+        }
+        values.update(changes)
+        if pn is not None:
+            values["page"] = pn if pn > 1 else ""
+        qs = [f"{key}={quote_plus(str(value))}" for key, value in values.items() if value]
+        return "/?" + "&".join(qs) if qs else "/"
+
+    category_nav = category_theme_nav(
+        facet_options=facet_options, active_facets=active_facets, href=_href,
+        include_themes=False,
+    )
+    theme_nav = category_theme_nav(
+        facet_options=facet_options, active_facets=active_facets, href=_href,
+        include_categories=False,
+    )
     description = (
         f"{len(items)} livres audio à découvrir : écoutez un extrait gratuit, "
         "puis entrez avec Google pour tout écouter."
@@ -89,68 +125,110 @@ def landing_page(
     ]
     if base_url:
         meta.append(("property", "og:url", base_url + "/"))
+    hero_items = items[:3]
+    hero_figure = ""
+    if hero_items:
+        hero_figure = (
+            '<div class="hero-figure"><div class="hero-stack">'
+            + "".join(hero_cover_html(i) for i in hero_items)
+            + '</div><div class="hero-note"><p class="eyebrow">Le catalogue</p>'
+              '<p>Un extrait gratuit sur chaque livre.</p></div></div>'
+        )
     parts = [
         page_head("AURA — Bibliothèque de livres audio", description, meta),
         '</head><body>', _SKIP_LINK, _brand_bar(None),
         '<main class="library view-grille" id="main">',
-        '<section class="welcome"><p class="kicker">Bibliothèque audio</p>',
-        '<h1>Des livres à écouter, <span class="nowrap">où que vous soyez.</span></h1>',
-        f'<p class="lede">{len(items)} titres. Un extrait gratuit sur chaque livre ; '
+        '<section class="welcome"><div class="hero-grid"><div class="hero-copy">',
+        '<p class="kicker">La bibliothèque audio</p>',
+        '<h1>Des histoires<br>qui vous <em>suivent</em>.</h1>',
+        f'<p class="lede">{len(items)} titres à découvrir. Un extrait gratuit sur chaque livre ; '
         'votre compte Google suffit pour tout écouter et reprendre là où vous vous êtes arrêté.</p>',
-        '<p class="welcome-actions"><a class="google-button" href="/api/public/auth/google">',
-        _GOOGLE, '<span>Continuer avec Google</span></a></p>',
-        email_form() if with_email else '', '</section>',
-        '<form class="search-form" method="get" action="/">',
+        '<div class="hero-actions welcome-actions"><a class="google-button" href="/api/public/auth/google">',
+        _GOOGLE, '<span>Continuer avec Google</span></a></div>',
+        email_form() if with_email else '', '</div>', hero_figure, '</div></section>',
+        category_nav,
+        '<section class="search-section" id="recherche" aria-label="Recherche principale">',
+        '<form class="search-form" method="get" action="/" role="search">',
+        _nav_icon("recherche").replace('<svg ', '<svg class="search-icon" '),
         f'<input type="search" name="q" value="{ESC(query)}" '
-        'placeholder="Rechercher un livre, un auteur…" aria-label="Rechercher un livre, un auteur">',
+        'placeholder="Un titre, un auteur, une envie…" aria-label="Rechercher un livre, un auteur ou un thème">',
+        '<button type="submit">Rechercher</button></form>',
+        '<div class="search-suggest"><span>En ce moment :</span>'
+        '<a href="/?categorie=litterature&amp;duree_max=240">Romans courts</a>'
+        '<a href="/?duree_max=60">Moins d’une heure</a>'
+        '<a href="/?tri=recent">Nouveautés</a></div></section>',
     ]
-    if authors:
-        parts.append('<select name="auteur" aria-label="Auteur"><option value="">Tous les auteurs</option>')
-        for a in authors:
-            sel = " selected" if a == active_author else ""
-            parts.append(f'<option value="{ESC(a)}"{sel}>{ESC(a)}</option>')
-        parts.append('</select>')
-    parts.append('<select name="tri" aria-label="Tri">')
-    for label, value in SORTS:
-        parts.append(f'<option value="{ESC(value)}"{" selected" if value == sort else ""}>{ESC(label)}</option>')
-    parts.append('</select><button type="submit">Rechercher</button></form>')
+    facet_values = (
+        active_facets.get("collection"), active_facets.get("category"),
+        active_facets.get("theme"), active_facets.get("language"),
+        active_facets.get("format"), active_facets.get("duration_min"),
+        active_facets.get("duration_max"),
+    )
+    filters_active = bool(query or active_author or sort or any(facet_values) or filter_error)
+    filter_count = (
+        (1 if query else 0) + (1 if active_author else 0) + (1 if sort else 0)
+        + sum(1 for value in facet_values if value)
+    )
+    badge = f' <span class="filters-badge">{filter_count}</span>' if filter_count else ""
+    parts.append(
+        f'<details class="filters-fold" id="filters-fold"{" open" if filters_active else ""}>'
+        f'<summary>Filtrer et trier{badge}</summary><div class="controls-block">'
+        '<form class="catalog-filters" method="get" action="/" aria-label="Filtrer le catalogue">'
+    )
+    parts.append(catalog_filter_fields(
+        authors=authors,
+        active_author=active_author,
+        author_counts=author_counts,
+        facet_options=facet_options,
+        active_facets=active_facets,
+        include_sort=True,
+        sort=sort,
+        preserve={"q": query},
+    ))
+    if filter_error:
+        parts.append(f'<p class="filter-error" role="alert">{ESC(filter_error)}</p>')
+    parts.append(
+        '<button type="submit" class="filter-apply">Appliquer les filtres</button>'
+        '</form></div></details>'
+    )
     if search_note:
         parts.append(f'<p class="search-note" role="status">Compris comme : {ESC(search_note)}</p>')
-    if query or active_author or sort:
-        parts.append('<p class="filters-reset"><a class="facet-clear" href="/">Effacer les filtres</a></p>')
+    parts.append(
+        f'<p class="filter-result-count" role="status">{len(items)} '
+        f'titre{"" if len(items) == 1 else "s"} affiché{"" if len(items) == 1 else "s"}</p>'
+    )
+    if filters_active:
+        parts.append('<p class="filters-reset"><a class="facet-clear" href="/">Effacer tous les filtres</a></p>')
+    parts.append(theme_nav)
+    parts.append('<div id="decouvrir"></div>')
+    parts.append(carousel_shelves(items))
     if not items:
         parts.append('<p class="empty">Aucun livre ne correspond à votre recherche.</p>')
     else:
-        title = collections[0]["title"] if len(collections) == 1 else "Tous les livres"
-        parts.append(f'<section class="shelf"><div class="shelf-head"><h2>{ESC(title)}</h2>'
+        parts.append('<section class="shelf" id="tous"><div class="shelf-head"><h2>Tous les livres</h2>'
                      f'<p class="desc">Page {page} sur {pages} · {total} titre{"s" if total != 1 else ""}</p>'
                      '</div><ul class="book-grid catalog-grid">')
         parts.extend(_card(i) for i in page_items)
         parts.append('</ul>')
         if pages > 1:
-            def _page_href(pn: int) -> str:
-                qs = []
-                if query: qs.append(f"q={quote_plus(query)}")
-                if active_author: qs.append(f"auteur={quote_plus(active_author)}")
-                if sort: qs.append(f"tri={quote_plus(sort)}")
-                for k, v in (("collection", active_facets.get("collection")), ("categorie", active_facets.get("category")), ("theme", active_facets.get("theme")), ("langue", active_facets.get("language")), ("format", active_facets.get("format")), ("duree_min", active_facets.get("duration_min")), ("duree_max", active_facets.get("duration_max"))):
-                    if v: qs.append(f"{k}={quote_plus(str(v))}")
-                if pn > 1: qs.append(f"page={pn}")
-                return "/?" + "&".join(qs) if qs else "/"
             parts.append('<nav class="pagination" aria-label="Pagination">')
             if page > 1:
-                parts.append(f'<a class="page-link" href="{ESC(_page_href(page-1))}">Précédent</a>')
+                parts.append(f'<a class="page-link" href="{ESC(_href(page-1))}">Précédent</a>')
             for pn in range(1, pages+1):
                 if pn == 1 or pn == pages or abs(pn-page) <= 2:
                     cur = ' aria-current="page"' if pn == page else ''
-                    parts.append(f'<a class="page-link" href="{ESC(_page_href(pn))}"{cur}>{pn}</a>')
+                    parts.append(f'<a class="page-link" href="{ESC(_href(pn))}"{cur}>{pn}</a>')
                 elif abs(pn-page) == 3:
                     parts.append('<span class="page-ellipsis">…</span>')
             if page < pages:
-                parts.append(f'<a class="page-link" href="{ESC(_page_href(page+1))}">Suivant</a>')
+                parts.append(f'<a class="page-link" href="{ESC(_href(page+1))}">Suivant</a>')
             parts.append('</nav>')
         parts.append('</section>')
-    parts.append('</main><footer class="site-foot">AURA · Écoute privée</footer></body></html>')
+    parts.extend([
+        f'<script defer src="{asset_url("carousel.js")}"></script>',
+        mobile_nav("Accueil"),
+        '</main>', site_footer(), '</body></html>',
+    ])
     return "".join(parts)
 
 
@@ -177,19 +255,32 @@ def book_page(
         ("property", "og:type", "book"), ("property", "og:site_name", SITE_NAME),
         ("property", "og:title", f"{label} — {SITE_NAME}"),
         ("property", "og:description", description), ("property", "og:locale", "fr_FR"),
-        ("name", "twitter:card", "summary_large_image" if item.get("cover_url") else "summary"),
+        ("name", "twitter:card", "summary"),
         ("name", "twitter:title", f"{label} — {SITE_NAME}"),
         ("name", "twitter:description", description),
     ]
     if base_url:
         meta.append(("property", "og:url", url))
-    if base_url and item.get("cover_url"):
-        meta.append(("property", "og:image", base_url + item["cover_url"]))
-        meta.append(("name", "twitter:image", base_url + item["cover_url"]))
+    if base_url and use_real_cover(item):
+        # Social previews follow the same editorial rule as the page: only a
+        # curated emblematic book may show its real artwork.
+        image_url = base_url + str(item["cover_url"])
+        meta.append(("property", "og:image", image_url))
+        meta.append(("name", "twitter:image", image_url))
+    facets = public_facets.item_facets(item)
+    classifications = [
+        public_facets.facet_label("category", value) for value in facets["categories"]
+    ] + [
+        public_facets.facet_label("theme", value) for value in facets["themes"]
+    ]
     ld = {
         "@context": "https://schema.org", "@type": "Audiobook", "name": label,
-        "inLanguage": "fr", "url": url,
+        "url": url,
     }
+    if facets["language"]:
+        ld["inLanguage"] = facets["language"]
+    if classifications:
+        ld["genre"] = classifications
     if author:
         ld["author"] = {"@type": "Person", "name": author}
     if duration:
@@ -200,13 +291,16 @@ def book_page(
     if base_url:
         parts.append(f'<link rel="canonical" href="{ESC(url)}">')
     parts.append('<script type="application/ld+json">' + json.dumps(ld, ensure_ascii=False).replace("</", "<\\/") + '</script>')
-    parts += ['</head><body>', _SKIP_LINK, _brand_bar(principal), '<main class="library book" id="main">',
+    parts += ['</head><body>', _SKIP_LINK, _brand_bar(principal, "Bibliothèque"), '<main class="library book" id="main">',
               '<p class="crumbs"><a href="/">← Toute la bibliothèque</a></p>',
               '<article class="book-hero">', _cover(item), '<div class="book-info">',
               f'<h1>{ESC(label)}</h1>']
     if author:
         parts.append(f'<p class="book-author"><a href="/?{ESC(urlencode({"auteur": author}))}">{ESC(author)}</a></p>')
     facts = [_duration_text(duration)] + ([f"{len(chapters)} chapitres"] if chapters else [])
+    facts.extend(classifications[:3])
+    if facets["language"]:
+        facts.append(public_facets.LANGUAGE_LABELS.get(facets["language"], facets["language"].upper()))
     if collection_title:
         facts.append(collection_title)
     if series_total:
@@ -264,7 +358,10 @@ def book_page(
         parts.append('<script src="' + asset_url("favorites.js") + '"></script>')
     if preview_seconds:
         parts.append('<script src="' + asset_url("preview.js") + '"></script>')
-    parts.append('</main><footer class="site-foot">AURA · Écoute privée</footer></body></html>')
+    parts.extend([
+        mobile_nav("Bibliothèque", principal),
+        '</main>', site_footer(principal), '</body></html>',
+    ])
     return "".join(parts)
 
 

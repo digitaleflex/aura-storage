@@ -1,11 +1,12 @@
 """SQLite catalogue behind a small Repository interface (#18; PostgreSQL in #19)."""
+import hashlib
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Optional
 
-from . import ids
+from . import ids, listen_events
 from .auth import new_token, session_key
 from .dblock import synchronized
 from .migrations import (
@@ -42,6 +43,19 @@ class Repository:
         self.conn.executescript(SCHEMA)
         self.conn.commit()
         apply_migrations(self.conn, "sqlite")
+
+    def pool_metrics(self) -> dict:
+        """SQLite parity stub: there is one shared connection, no pool (#325)."""
+        return {
+            "backend": "sqlite", "min": 1, "max": 1, "size": 1,
+            "available": 1, "waiting": 0, "acquisitions": 0, "queued": 0,
+            "avg_acquire_ms": 0.0, "timeouts": 0, "opens": 1,
+            "open_ms_total": 0, "usage_ms_total": 0,
+        }
+
+    def close_pool(self) -> None:
+        """SQLite parity stub: nothing to release, the connection stays open."""
+        return None
 
     def now(self) -> int:
         return int(time.time())
@@ -165,6 +179,12 @@ class Repository:
 
     def delete_public_account(self, uid: str) -> None:
         """Delete a public portal account and its portal-owned data."""
+        # Events stay append-only for aggregate history but are anonymised:
+        # no event can be linked back to the deleted visitor (#320).
+        self.conn.execute(
+            "UPDATE listen_events SET user_id = NULL, anonymized_at = ? WHERE user_id = ?",
+            (int(time.time()), uid),
+        )
         self.conn.execute("DELETE FROM listen_progress WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM listen_favorites WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM listen_bookmarks WHERE user_id = ?", (uid,))
@@ -243,6 +263,53 @@ class Repository:
             (user_id, *object_ids),
         ).fetchall()
         return {r["object_id"]: float(r["position_seconds"]) for r in rows}
+
+    # -- append-only listening events (#320) ------------------------------
+    def record_listen_event(
+        self, user_id: str, object_id: str, kind: str, position_seconds: float,
+        delta_seconds: float, now: int, client_event_id: str = "",
+    ) -> bool:
+        """Insert one idempotent event; False means it was already recorded."""
+        eid = listen_events.event_id(
+            user_id, object_id, kind, position_seconds, now, client_event_id
+        )
+        cur = self.conn.execute(
+            "INSERT OR IGNORE INTO listen_events "
+            "(event_id, user_id, object_id, kind, position_seconds, delta_seconds, "
+            "created_at, anonymized_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+            (eid, user_id, object_id, kind, max(0.0, float(position_seconds)),
+             max(0.0, float(delta_seconds)), int(now)),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def last_listen_event_at(self, user_id: str, object_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT COALESCE(MAX(created_at), 0) AS t FROM listen_events "
+            "WHERE user_id = ? AND object_id = ?", (user_id, object_id),
+        ).fetchone()
+        return int(row["t"] or 0)
+
+    def listening_totals(self, user_id: str, now: int, retention_seconds: int) -> dict:
+        """Prune expired events, then project one visitor's measured totals."""
+        cutoff = int(now) - max(0, int(retention_seconds))
+        self.conn.execute("DELETE FROM listen_events WHERE created_at < ?", (cutoff,))
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(delta_seconds), 0) AS listened, "
+            "COALESCE(SUM(CASE WHEN kind = 'start' THEN 1 ELSE 0 END), 0) AS starts, "
+            "COALESCE(SUM(CASE WHEN kind = 'end' THEN 1 ELSE 0 END), 0) AS ends, "
+            "COUNT(*) AS samples, COALESCE(MAX(created_at), 0) AS last_at "
+            "FROM listen_events WHERE user_id = ? AND created_at >= ?",
+            (user_id, cutoff),
+        ).fetchone()
+        self.conn.commit()
+        return {
+            "listened_seconds": int(float(row["listened"])),
+            "starts": int(row["starts"]),
+            "ends": int(row["ends"]),
+            "samples": int(row["samples"]),
+            "last_event_at": int(row["last_at"]),
+        }
 
     def portal_stats(self, period: str, available: str) -> dict:
         """Aggregate portal figures per published book: no visitor is identifiable."""
@@ -1133,6 +1200,14 @@ class Repository:
     def set_object_cover(self, oid: str, cover_key: Optional[str]) -> None:
         self.conn.execute(
             "UPDATE objects SET cover_key = ? WHERE id = ?", (cover_key, oid)
+        )
+        self.conn.commit()
+
+    def set_object_emblematic(self, oid: str, emblematic: bool) -> None:
+        """Curate real cover art for one book (0/1 for portability)."""
+        self.conn.execute(
+            "UPDATE objects SET emblematic_cover = ? WHERE id = ?",
+            (int(bool(emblematic)), oid),
         )
         self.conn.commit()
 
@@ -2186,6 +2261,116 @@ class Repository:
             (subtitle_id, self.now(), oid),
         )
         self.conn.commit()
+
+    # -- audio classification jobs (bac à sable) -------------------------
+    def enqueue_audio_classification(self, jid: str, oid: str, space_id: str) -> str:
+        row = self.conn.execute(
+            "SELECT id FROM audio_classification_jobs WHERE object_id = ? "
+            "AND status IN ('queued', 'processing') ORDER BY created_at DESC LIMIT 1",
+            (oid,),
+        ).fetchone()
+        if row is not None:
+            return row["id"]
+        now = self.now()
+        self.conn.execute(
+            "INSERT INTO audio_classification_jobs "
+            "(id, object_id, space_id, status, attempts, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'queued', 0, ?, ?)",
+            (jid, oid, space_id, now, now),
+        )
+        self.conn.commit()
+        return jid
+
+    def claim_audio_classification_job(self, lease_until: int, max_attempts: int = 5):
+        now = self.now()
+        row = self.conn.execute(
+            "SELECT * FROM audio_classification_jobs "
+            "WHERE status = 'queued' AND attempts < ? "
+            "ORDER BY created_at LIMIT 1",
+            (max_attempts,),
+        ).fetchone()
+        if row is None:
+            return None
+        cur = self.conn.execute(
+            "UPDATE audio_classification_jobs SET status = 'processing', "
+            "attempts = attempts + 1, lease_until = ?, updated_at = ?, error = NULL "
+            "WHERE id = ? AND status = 'queued'",
+            (lease_until, now, row["id"]),
+        )
+        self.conn.commit()
+        return _as_dict(row) if cur.rowcount else None
+
+    def complete_audio_classification_job(self, jid: str, *, provider: str, model: str,
+                                          confidence: float | None, suggested_category: str | None,
+                                          suggested_themes: str | None, suggested_language: str | None,
+                                          suggested_folder: str | None, quality_json: str | None,
+                                          transcript_excerpt: str | None, reason: str | None,
+                                          result_json: str | None, status: str = "needs_review") -> None:
+        self.conn.execute(
+            "UPDATE audio_classification_jobs SET status = ?, provider = ?, model = ?, "
+            "confidence = ?, suggested_category = ?, suggested_themes = ?, "
+            "suggested_language = ?, suggested_folder = ?, quality_json = ?, "
+            "transcript_excerpt = ?, reason = ?, result_json = ?, error = NULL, "
+            "lease_until = NULL, updated_at = ? WHERE id = ?",
+            (status, provider, model, confidence, suggested_category, suggested_themes,
+             suggested_language, suggested_folder, quality_json, transcript_excerpt,
+             reason, result_json, self.now(), jid),
+        )
+        self.conn.commit()
+
+    def fail_audio_classification_job(self, jid: str, error: str, *, requeue: bool = False) -> None:
+        status = "queued" if requeue else "failed"
+        self.conn.execute(
+            "UPDATE audio_classification_jobs SET status = ?, error = ?, "
+            "lease_until = NULL, updated_at = ? WHERE id = ?",
+            (status, error[:1000], self.now(), jid),
+        )
+        self.conn.commit()
+
+    def get_audio_classification_job(self, jid: str):
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM audio_classification_jobs WHERE id = ?", (jid,),
+        ).fetchone())
+
+    def get_latest_audio_classification_job(self, oid: str):
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM audio_classification_jobs WHERE object_id = ? "
+            "ORDER BY created_at DESC LIMIT 1", (oid,),
+        ).fetchone())
+
+    def list_audio_classification_jobs(self, space_id: str, *, status: str | None = None,
+                                       limit: int = 100, offset: int = 0) -> list:
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        if status:
+            rows = self.conn.execute(
+                "SELECT j.*, o.display_name, o.content_type, o.size_bytes, o.bucket, o.object_key "
+                "FROM audio_classification_jobs j "
+                "LEFT JOIN objects o ON o.id = j.object_id "
+                "WHERE j.space_id = ? AND j.status = ? "
+                "ORDER BY j.created_at DESC LIMIT ? OFFSET ?",
+                (space_id, status, limit, offset),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT j.*, o.display_name, o.content_type, o.size_bytes, o.bucket, o.object_key "
+                "FROM audio_classification_jobs j "
+                "LEFT JOIN objects o ON o.id = j.object_id "
+                "WHERE j.space_id = ? ORDER BY j.created_at DESC LIMIT ? OFFSET ?",
+                (space_id, limit, offset),
+            ).fetchall()
+        return [_as_dict(r) for r in rows]
+
+    def review_audio_classification_job(self, jid: str, *, status: str, reviewed_by: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE audio_classification_jobs SET status = ?, reviewed_by = ?, "
+            "reviewed_at = ?, updated_at = ? WHERE id = ? "
+            "AND status IN ('needs_review', 'failed')",
+            (status, reviewed_by, self.now(), self.now(), jid),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def stats(self) -> dict:
         objects = {
             row["status"]: row["n"]

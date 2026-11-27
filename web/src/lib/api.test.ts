@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PresignedUploadError, putToPresignedUrl } from "./api";
+import { PresignedUploadError, hasAdminAccess, putToPresignedUrl, SERVICE_SCOPES } from "./api";
 
 /**
  * The presigned PUT used to arm XHR's *total* `timeout` (120 s), which killed
@@ -47,6 +47,19 @@ function start(timeoutMs?: number): Promise<void> {
   vi.stubGlobal("XMLHttpRequest", FakeXHR);
   return putToPresignedUrl("https://s3.example/put", new Blob(["x"]), { timeoutMs });
 }
+
+describe("admin permission helpers", () => {
+  it("never offers purge to machine identities", () => {
+    expect(SERVICE_SCOPES).not.toContain("objects:purge");
+  });
+
+  it("grants admin-console access to operators and admins only", () => {
+    expect(hasAdminAccess("operator")).toBe(true);
+    expect(hasAdminAccess("admin")).toBe(true);
+    expect(hasAdminAccess("user")).toBe(false);
+    expect(hasAdminAccess(null)).toBe(false);
+  });
+});
 
 describe("putToPresignedUrl idle deadline", () => {
   it("does not use XHR's total timeout", async () => {

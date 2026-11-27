@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAuth, useSession } from "../lib/auth";
-import { api, type UsageResponse, type AdminStats } from "../lib/api";
+import { api, hasAdminAccess, type UsageResponse, type AdminStats } from "../lib/api";
 import { describeError } from "../lib/errors";
 import { VaultMark } from "../components/VaultMark";
 import { ToastStack, makeToast, type Toast } from "../components/Toasts";
@@ -27,9 +27,10 @@ export function DashboardPage() {
     void (async () => {
       try {
         const me = await api.me();
-        setIsAdmin(me.role === "admin");
+        const adminAccess = hasAdminAccess(me.role);
+        setIsAdmin(adminAccess);
 
-        if (me.role === "admin") {
+        if (adminAccess) {
           const [u, s] = await Promise.all([
             api.adminUsage(),
             api.adminStats(),
