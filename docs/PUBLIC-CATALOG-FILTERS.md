@@ -63,7 +63,7 @@ Les catégories et thèmes sont affichés sous forme de raccourcis avec pictogra
 - `scripts/classify_public_catalog.py` propose une catégorie et jusqu'à trois thèmes à partir du titre et du dossier privé.
 - Le script est en **dry-run par défaut** et conserve les étiquettes privées.
 - Une classification éditoriale existante n'est remplacée que avec `--replace-public-tags`.
-- `scripts/publish_audiobooks.py --apply` ajoute automatiquement les étiquettes publiques manquantes aux nouveaux livres, sans écraser une classification manuelle.
+- La publication d'un audio via l'API (`PUT /api/v1/objects/{oid}/publication`) ou `scripts/publish_audiobooks.py --apply` ajoute automatiquement les étiquettes publiques manquantes, sans écraser une classification manuelle.
 
 ```bash
 # Aperçu du classement des livres publiés

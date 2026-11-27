@@ -4642,6 +4642,28 @@ def object_thumbnail(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)
     })
 
 
+def _classify_published_audio(row: dict) -> bool:
+    """Add missing public facets to a newly published audio object."""
+    if not str(row.get("content_type") or "").lower().startswith("audio/"):
+        return False
+    folder_name = ""
+    if row.get("folder_id"):
+        mark = "?" if settings.db_backend == "sqlite" else "%s"
+        folder = repo.conn.execute(
+            f"SELECT name FROM folders WHERE id = {mark}", (row["folder_id"],),
+        ).fetchone()
+        folder_name = str(folder["name"]) if folder else ""
+    classification = public_classification.classify_public_item(
+        row["display_name"], folder_name,
+    )
+    existing = repo.get_object_tags(row["id"])
+    merged = public_classification.merge_public_tags(existing, classification)
+    if set(merged) == set(existing):
+        return False
+    repo.set_object_tags(row["id"], merged)
+    return True
+
+
 @app.put("/api/v1/objects/{oid}/publication")
 def set_object_publication(
     oid: str, body: PublicationIn,
@@ -4667,9 +4689,10 @@ def set_object_publication(
             raise HTTPException(status_code=409, detail="slug already in use")
     published_at = int(time.time()) if body.published else None
     repo.set_object_publication(oid, body.slug, published_at)
+    classified = _classify_published_audio(row) if body.published else False
     audit_event("object.publish" if body.published else "object.unpublish",
                 principal["id"], "success",
-                {"object_id": oid, "slug": body.slug})
+                {"object_id": oid, "slug": body.slug, "classified": classified})
     return _object_public(repo.get_object(oid, **_object_scope(principal)))
 
 
