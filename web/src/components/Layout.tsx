@@ -224,6 +224,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const isTransfersPage = location.pathname === "/transfers";
   const isDiagPage = location.pathname === "/diagnostic";
   const isAdminCoversPage = location.pathname === "/admin/covers";
+  const isAudioClassificationPage = location.pathname === "/audio-classifications";
   const isOnboardingPage = location.pathname === "/onboarding";
 
   // Rediriger vers l'onboarding si l'utilisateur ne l'a pas encore vu
@@ -247,6 +248,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       // Compteur purement décoratif (aria-hidden) : le nom du lien suffit.
       badge: transfers.queue.items.length,
     },
+    { to: "/audio-classifications", label: "Bac à sable audio", icon: "search", active: isAudioClassificationPage },
     { to: "/dashboard", label: "Tableau de bord", icon: "dashboard", active: location.pathname === "/dashboard" },
     { to: "/shares", label: "Partages", icon: "share", active: location.pathname === "/shares" },
     { to: "/trash", label: "Corbeille", icon: "trash", active: location.pathname === "/trash" },

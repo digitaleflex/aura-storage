@@ -10,6 +10,7 @@ import { FolderProvider } from "./lib/folderContext";
 import { LoginPage } from "./pages/LoginPage";
 import { ObjectsPage } from "./pages/ObjectsPage";
 import { TransfersPage } from "./pages/TransfersPage";
+import { AudioClassificationPage } from "./pages/AudioClassificationPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { SharesPage } from "./pages/SharesPage";
 import { TrashPage } from "./pages/TrashPage";
@@ -92,6 +93,18 @@ const transfersRoute = createRoute({
     <Layout>
       <RequireAuth>
         <TransfersPage />
+      </RequireAuth>
+    </Layout>
+  ),
+});
+
+const audioClassificationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/audio-classifications",
+  component: () => (
+    <Layout>
+      <RequireAuth>
+        <AudioClassificationPage />
       </RequireAuth>
     </Layout>
   ),
@@ -189,6 +202,7 @@ const routeTree = rootRoute.addChildren([
   adminRoute,
   adminCoversRoute,
   transfersRoute,
+  audioClassificationsRoute,
   dashboardRoute,
   sharesRoute,
   trashRoute,
