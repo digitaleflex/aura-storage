@@ -30,6 +30,7 @@ from api.auth import hash_password  # noqa: E402
 client = TestClient(main.app)
 
 SHA = hashlib.sha256(b"aura-duplicate-scan").hexdigest()
+FILE_NAME = f"dupscan-{uuid.uuid4().hex[:8]}.pdf"
 ROW_KEYS = {"id", "display_name", "size_bytes", "checksum_sha256"}
 
 
@@ -91,7 +92,7 @@ def _scan(c, headers, items):
     return c.post("/api/v1/objects/duplicate-scan", json={"items": items}, headers=headers)
 
 
-def _item(parent, name="rapport.pdf", size=11, checksum=None):
+def _item(parent, name=FILE_NAME, size=11, checksum=None):
     item = {"parentPath": parent, "name": name, "sizeBytes": size}
     if checksum is not None:
         item["sha256"] = checksum
@@ -107,15 +108,16 @@ def _ids(rows):
 # ---------------------------------------------------------------------------
 def test_root_scan_returns_only_available_root_objects(monkeypatch):
     c, headers = _account()
+    tag = uuid.uuid4().hex[:8]
     # Force several pages so the pagination loop is actually exercised.
     monkeypatch.setattr(main, "_DUPLICATE_SCAN_PAGE", 2)
 
-    live = [_available(c, headers, f"root-{n}.pdf", size=n + 1) for n in range(5)]
-    pending = _intent(c, headers, "pending.pdf")
-    deleted = _available(c, headers, "deleted.pdf")
+    live = [_available(c, headers, f"root-{tag}-{n}.pdf", size=n + 1) for n in range(5)]
+    pending = _intent(c, headers, f"pending-{tag}.pdf")
+    deleted = _available(c, headers, f"deleted-{tag}.pdf")
     main.repo.set_status(deleted, "deleted")
-    folder = _folder(c, headers, f"folder-{uuid.uuid4().hex[:8]}")
-    filed = _available(c, headers, "filed.pdf", folder_id=folder["id"])
+    folder = _folder(c, headers, f"folder-{tag}")
+    filed = _available(c, headers, f"filed-{tag}.pdf", folder_id=folder["id"])
 
     r = _scan(c, headers, [_item(""), _item("")])  # duplicate paths collapse
     assert r.status_code == 200, r.text
@@ -129,7 +131,7 @@ def test_root_scan_returns_only_available_root_objects(monkeypatch):
         assert set(row) == ROW_KEYS
         assert row["size_bytes"] in range(1, 6)
         assert row["checksum_sha256"] == SHA
-        assert row["display_name"].startswith("root-")
+        assert row["display_name"].startswith(f"root-{tag}-")
 
 
 # ---------------------------------------------------------------------------
@@ -137,13 +139,15 @@ def test_root_scan_returns_only_available_root_objects(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_nested_chain_is_strict_and_paths_are_normalized():
     c, headers = _account()
+    tag = uuid.uuid4().hex[:8]
+    name = f"scan-doc-{tag}.pdf"
     parent = _folder(c, headers, "Livres")
     child = _folder(c, headers, "2026", parent_id=parent["id"])
     decoy = _folder(c, headers, "2026")  # same leaf, different chain
-    nested_obj = _available(c, headers, "rapport.pdf", folder_id=child["id"])
-    decoy_obj = _available(c, headers, "rapport.pdf", folder_id=decoy["id"])
+    nested_obj = _available(c, headers, name, folder_id=child["id"])
+    decoy_obj = _available(c, headers, name, folder_id=decoy["id"])
     other = _folder(c, headers, "Archive")
-    other_obj = _available(c, headers, "rapport.pdf", folder_id=other["id"])
+    other_obj = _available(c, headers, name, folder_id=other["id"])
 
     r = _scan(c, headers, [
         _item("Livres\\2026"),                  # backslash separator
@@ -165,11 +169,12 @@ def test_nested_chain_is_strict_and_paths_are_normalized():
 def test_folder_chain_is_owner_scoped():
     alice, alice_h = _account()
     bob, bob_h = _account()
+    tag = uuid.uuid4().hex[:8]
     a_folder = _folder(alice, alice_h, "Partages")
     b_folder = _folder(bob, bob_h, "Partages")
-    b_only = _folder(bob, bob_h, "Prive")
-    a_obj = _available(alice, alice_h, "a.pdf", folder_id=a_folder["id"])
-    b_obj = _available(bob, bob_h, "b.pdf", folder_id=b_folder["id"])
+    _folder(bob, bob_h, "Prive")
+    a_obj = _available(alice, alice_h, f"a-{tag}.pdf", folder_id=a_folder["id"])
+    b_obj = _available(bob, bob_h, f"b-{tag}.pdf", folder_id=b_folder["id"])
 
     r = _scan(alice, alice_h, [
         _item("Partages", "a.pdf"),
@@ -255,11 +260,12 @@ def test_service_identity_scan_and_audit_carry_counts_only(tmp_path, monkeypatch
     }, headers=admin_h)
     assert identity.status_code == 200, identity.text
     svc_h = {"Authorization": f"Bearer {identity.json()['token']}"}
+    name = f"scan-doc-{suffix}.pdf"
 
-    oid = _available(admin, svc_h, "rapport.pdf")
+    oid = _available(admin, svc_h, name)
     r = _scan(admin, svc_h, [
-        _item("", "rapport.pdf"),
-        _item("Nouveau/Dossier", "rapport.pdf"),
+        _item("", name),
+        _item("Nouveau/Dossier", name),
     ])
     assert r.status_code == 200, r.text
     body = r.json()
@@ -274,5 +280,5 @@ def test_service_identity_scan_and_audit_carry_counts_only(tmp_path, monkeypatch
     assert events[0]["item_count"] == 2
     assert events[0]["unresolved_count"] == 1
     blob = log.read_text(encoding="utf-8")
-    assert "rapport.pdf" not in blob
+    assert name not in blob
     assert "Nouveau/Dossier" not in blob
