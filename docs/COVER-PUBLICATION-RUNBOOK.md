@@ -79,6 +79,28 @@ dessus (clé `<object_key>.cover.jpg`). Une vraie couverture n'est jamais
 - Le fichier de revue conserve `status`, `cover_key`, `applied_at` et
   l'historique des candidats ; aucun état n'est perdu lors d'un refresh borné.
 
+## 5. Politique éditoriale : couverture réelle ou jaquette AURA
+
+Le portail public n'affiche la couverture d'origine **que** pour les livres
+marqués `emblematic_cover = 1` (hero, meilleures ventes, partages `og:image`).
+Tous les autres gardent la jaquette typographique AURA, même lorsqu'un
+`cover_key` existe : les jaquettes générées localement (`.jacket.jpg`) ne sont
+donc jamais affichées comme « vraie » couverture sur le site.
+
+Pour curater un livre depuis l'interface : `/admin/covers` → case
+« Couverture réelle (emblématique) ». Côté API :
+
+```bash
+curl -X PUT -H "X-CSRF-Token: $CSRF" \
+  -H "Content-Type: application/json" \
+  -d '{"emblematic": true}' \
+  https://$API/api/v1/admin/objects/$OID/emblematic-cover
+```
+
+Le marqueur ne supprime ni l'image ni `cover_key` : c'est une décision
+d'affichage réversible. Le changement peut mettre jusqu'à une minute à
+apparaître sur les pages publiques mises en cache.
+
 ## Dépannage
 
 | Symptôme | Cause probable | Action |

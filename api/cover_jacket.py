@@ -4,10 +4,11 @@ The public portal already draws a typographic jacket in HTML/CSS (see
 ``api/public_ui.fallback_cover_inner``). This module renders the same visual
 language to a real JPEG so the jacket can be published as an object cover:
 
-* social previews get an ``og:image`` for every book, not only the ones with
-  third-party artwork;
-* the native player and any client that only knows ``/covers/{oid}.jpg`` gets
-  the same jacket as the portal;
+* ``/covers/{oid}.jpg`` always answers for published books, so the native
+  player and external clients get a coherent image;
+* the public portal shows a real cover only for curated emblematic books
+  (``objects.emblematic_cover``) and keeps the AURA jacket everywhere else,
+  including in social previews;
 * no external API and no image licence is involved.
 
 The palette is kept in sync with ``public_ui.COVER_HUES`` (a test asserts it).
