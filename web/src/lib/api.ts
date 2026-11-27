@@ -13,12 +13,15 @@
 export class ApiError extends Error {
   readonly status: number;
   readonly detail: string;
+  /** Structured error body, when the endpoint returns one (e.g. reverify 409). */
+  readonly payload: unknown;
 
-  constructor(status: number, detail: string) {
+  constructor(status: number, detail: string, payload?: unknown) {
     super(`API ${status}: ${detail}`);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    this.payload = payload;
   }
 }
 
@@ -260,6 +263,23 @@ function normalizeTransferHistoryPage(raw: unknown): TransferHistoryPage {
   };
 }
 
+export interface DuplicateScanFingerprint {
+  parentPath: string;
+  name: string;
+  sizeBytes: number;
+  sha256?: string | null;
+}
+
+export interface DuplicateScanResponse {
+  byParent: Record<string, Array<{
+    id: string;
+    display_name: string;
+    size_bytes: number;
+    checksum_sha256: string | null;
+  }>>;
+  unresolved: string[];
+}
+
 /** A logical folder owned by the signed-in human user (#61). */
 export interface FolderItem {
   id: string;
@@ -399,6 +419,56 @@ export interface PortalStatsResponse {
   books: PortalBookStat[];
 }
 
+/** One external cover proposal. `match` describes the metadata match quality. */
+export interface CoverCandidate {
+  provider: string;
+  title: string;
+  author: string;
+  url: string;
+  /** Provider-reported dimensions, when available (free-form string). */
+  size?: string;
+  match: "exact" | "title" | "approx";
+}
+
+/** A book (catalogue object) with its current cover and proposed candidates. */
+export interface CoverCandidateBook {
+  object_id: string;
+  title: string;
+  author: string;
+  display_name: string;
+  status: string;
+  /** Cover explicitly chosen by an admin, or null when none was validated. */
+  chosen_url: string | null;
+  /** Cover already attached to the book, or null when it has none. */
+  cover_url: string | null;
+  /** Editorial gate: real artwork is displayed only for curated books. */
+  emblematic_cover: boolean;
+  candidates: CoverCandidate[];
+}
+
+/** Read model of GET /api/v1/admin/cover-candidates. */
+export interface CoverCandidatesResponse {
+  generated_at: number | null;
+  counts: { books: number; with_candidates: number; candidates: number };
+  books: CoverCandidateBook[];
+}
+
+/** Body of POST /api/v1/admin/covers/search (`admin:write`). */
+export interface CoverSearchInput {
+  object_id: string;
+  /** Optional ISBN hint; null (or omitted) means no hint. */
+  isbn?: string | null;
+  limit?: number;
+}
+
+/** Outcome of POST /api/v1/admin/covers/apply. */
+export interface CoverApplyResult {
+  applied: number;
+  failed: number;
+  skipped: number;
+  dry_run: boolean;
+}
+
 export interface UsageResponse {
   /** Live query time (epoch seconds): the freshness marker. */
   measured_at: number;
@@ -497,6 +567,13 @@ export interface StorageOrphanReport {
   checked_at: number;
 }
 
+/** Optional bucket/cursor page for GET /api/v1/admin/storage-orphans. */
+export interface StorageOrphanQuery {
+  bucket?: string;
+  startAfter?: string;
+  maxKeys?: number;
+}
+
 export interface IntegrityProblem {
   id: string;
   space_id: string;
@@ -519,6 +596,65 @@ export interface ReconcileResponse {
   storage_failures: number;
 }
 
+/** Outcome of POST /api/v1/admin/integrity/scrub. */
+export interface IntegrityScrubResult {
+  ok: number;
+  mismatch: number;
+  missing: number;
+  error: number;
+  bytes: number;
+}
+
+/** Outcome of POST /api/v1/admin/objects/{oid}/reverify (200 or diagnostic 409). */
+export interface ObjectReverifyResult {
+  id: string;
+  status: "available" | "suspect";
+  reason?: "checksum_mismatch";
+  size_bytes: number;
+  checksum_sha256: string;
+}
+
+/** Outcome of POST /api/v1/admin/reconcile-terminal. */
+export interface TerminalReconcileResult {
+  cleaned: number;
+  storage_deletes_attempted: number;
+  storage_failures: number;
+}
+
+export interface ReverseReconcileOrphan {
+  bucket: string;
+  key: string;
+  size: number | null;
+}
+
+/** Outcome of POST /api/v1/admin/reconcile-reverse. */
+export interface ReverseReconcileResult {
+  scanned: number;
+  orphans: number;
+  orphan_keys: ReverseReconcileOrphan[];
+  deleted: number;
+  failures: number;
+  dry_run: boolean;
+}
+
+export interface OrphanUploadCleanup {
+  key: string;
+  upload_id: string;
+}
+
+export interface OrphanCleanupInput {
+  bucket: string;
+  keys?: string[];
+  uploads?: OrphanUploadCleanup[];
+}
+
+/** Outcome of POST /api/v1/admin/storage-orphans/cleanup. */
+export interface OrphanCleanupResult {
+  removed: string[];
+  aborted_uploads: string[];
+  skipped: Array<{ key: string; reason: string }>;
+}
+
 /**
  * Mirrors `SERVICE_SCOPES` in api/authz.py: machine identities are data-plane
  * principals and may never hold platform administration capabilities.
@@ -527,7 +663,6 @@ export const SERVICE_SCOPES = [
   "objects:read",
   "objects:write",
   "objects:delete",
-  "objects:purge",
 ] as const;
 
 export interface UploadIntentRequest {
@@ -967,20 +1102,46 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
   if (!res.ok) {
     let detail = res.statusText;
+    let payload: unknown;
     try {
-      const data = (await res.json()) as { detail?: unknown };
-      if (typeof data.detail === "string" && data.detail.length > 0) {
+      payload = await res.json();
+      const data = payload as { detail?: unknown } | null;
+      if (data && typeof data.detail === "string" && data.detail.length > 0) {
         detail = data.detail;
       }
     } catch {
       // Keep the HTTP status text when the body is not JSON.
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, payload);
   }
   if (res.status === 204) {
     return undefined as T;
   }
   return (await res.json()) as T;
+}
+
+export interface AudioClassificationJob {
+  id: string;
+  object_id: string;
+  space_id: string;
+  status: "queued" | "processing" | "needs_review" | "accepted" | "rejected" | "failed";
+  attempts: number;
+  provider?: string | null;
+  model?: string | null;
+  confidence?: number | null;
+  suggested_category?: string | null;
+  suggested_themes: string[];
+  suggested_language?: string | null;
+  suggested_folder?: string | null;
+  quality?: Record<string, unknown> | null;
+  transcript_excerpt?: string | null;
+  reason?: string | null;
+  error?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: number | null;
+  created_at: number;
+  updated_at: number;
+  object?: { display_name?: string; content_type?: string; size_bytes?: number } | null;
 }
 
 export const api = {
@@ -1269,11 +1430,47 @@ export const api = {
     );
   },
 
+  /** Authoritative destination objects for an import batch, keyed by parent path. */
+  scanDuplicates(
+    items: DuplicateScanFingerprint[],
+    csrf: string,
+  ): Promise<DuplicateScanResponse> {
+    return request<DuplicateScanResponse>("/api/v1/objects/duplicate-scan", {
+      method: "POST", body: { items }, csrf,
+    });
+  },
+
   /** Distinct tags visible to the caller, with their object counts. */
   listObjectTags(): Promise<{ items: { tag: string; count: number }[] }> {
     return request<{ items: { tag: string; count: number }[] }>(
       "/api/v1/objects/tags",
     );
+  },
+
+  // --- Audio classification (bac à sable) ---
+  listAudioClassifications(params?: { status?: string; limit?: number; offset?: number }): Promise<{ items: AudioClassificationJob[] }> {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.offset) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return request<{ items: AudioClassificationJob[] }>(`/api/v1/audio-classifications${qs ? `?${qs}` : ""}`);
+  },
+
+  enqueueAudioClassifications(objectIds: string[], csrf: string): Promise<{ enqueued: { object_id: string; job_id: string }[]; skipped: { id: string; reason: string }[] }> {
+    return request("/api/v1/audio-classifications/enqueue", {
+      method: "POST",
+      body: { object_ids: objectIds },
+      csrf,
+    });
+  },
+
+  reviewAudioClassification(jobId: string, action: "accept" | "reject", csrf: string): Promise<AudioClassificationJob> {
+    return request<AudioClassificationJob>(`/api/v1/audio-classifications/${encodeURIComponent(jobId)}/review`, {
+      method: "POST",
+      body: { action },
+      csrf,
+    });
   },
 
   // --- Packs (human only) ---
@@ -1514,6 +1711,11 @@ export const api = {
     return request<PortalStatsResponse>("/api/v1/admin/portal-stats");
   },
 
+  /** Cover proposals per book for the admin validation screen (admin:read). */
+  adminCoverCandidates(): Promise<CoverCandidatesResponse> {
+    return request<CoverCandidatesResponse>("/api/v1/admin/cover-candidates");
+  },
+
   adminHealth(): Promise<HealthResponse> {
     return request<HealthResponse>("/api/v1/admin/health");
   },
@@ -1526,8 +1728,13 @@ export const api = {
   },
 
   /** Storage bytes the catalogue does not account for (admin:read, read-only). */
-  adminStorageOrphans(): Promise<StorageOrphanReport> {
-    return request<StorageOrphanReport>("/api/v1/admin/storage-orphans");
+  adminStorageOrphans(query: StorageOrphanQuery = {}): Promise<StorageOrphanReport> {
+    const params = new URLSearchParams();
+    if (query.bucket !== undefined) params.set("bucket", query.bucket);
+    if (query.startAfter !== undefined) params.set("start_after", query.startAfter);
+    if (query.maxKeys !== undefined) params.set("max_keys", String(query.maxKeys));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return request<StorageOrphanReport>(`/api/v1/admin/storage-orphans${suffix}`);
   },
 
   /** Periodic integrity scrub results (admin:read). */
@@ -1543,10 +1750,109 @@ export const api = {
     });
   },
 
+  /** Run one bounded integrity pass; no bytes are deleted or rewritten. */
+  scrubIntegrity(csrf: string): Promise<IntegrityScrubResult> {
+    return request<IntegrityScrubResult>("/api/v1/admin/integrity/scrub", {
+      method: "POST",
+      csrf,
+    });
+  },
+
+  /** Re-hash one object; a divergent checksum is returned as a diagnostic 409. */
+  reverifyObject(id: string, csrf: string): Promise<ObjectReverifyResult> {
+    return request<ObjectReverifyResult>(
+      `/api/v1/admin/objects/${encodeURIComponent(id)}/reverify`,
+      { method: "POST", csrf },
+    );
+  },
+
+  /** Delete bytes and rows for terminal objects past the retention window. */
+  reconcileTerminal(
+    csrf: string,
+    limit = 500,
+  ): Promise<TerminalReconcileResult> {
+    return request<TerminalReconcileResult>(
+      `/api/v1/admin/reconcile-terminal?limit=${encodeURIComponent(String(limit))}`,
+      { method: "POST", csrf },
+    );
+  },
+
+  /** Storage-to-catalogue sweep; only `dryRun=false` deletes orphan keys. */
+  reconcileReverse(csrf: string, dryRun: boolean): Promise<ReverseReconcileResult> {
+    return request<ReverseReconcileResult>(
+      `/api/v1/admin/reconcile-reverse?dry_run=${dryRun ? "true" : "false"}`,
+      { method: "POST", csrf },
+    );
+  },
+
+  /** Destructive: remove only the listed orphan keys and abort listed uploads. */
+  cleanupStorageOrphans(
+    input: OrphanCleanupInput,
+    csrf: string,
+  ): Promise<OrphanCleanupResult> {
+    return request<OrphanCleanupResult>("/api/v1/admin/storage-orphans/cleanup", {
+      method: "POST",
+      body: input,
+      csrf,
+    });
+  },
+
   /** Enforce the audit retention window (M07, `admin:write`). */
   pruneAudit(csrf: string): Promise<AuditPruneResponse> {
     return request<AuditPruneResponse>("/api/v1/admin/audit/prune", {
       method: "POST",
+      csrf,
+    });
+  },
+
+  /** Refresh one book's candidates, optionally guided by an ISBN. */
+  searchCover(
+    input: CoverSearchInput,
+    csrf: string,
+  ): Promise<{ book: CoverCandidateBook }> {
+    return request<{ book: CoverCandidateBook }>("/api/v1/admin/covers/search", {
+      method: "POST",
+      body: input,
+      csrf,
+    });
+  },
+
+  /**
+   * Record an admin's cover choice for one book. A null URL means "do not
+   * apply": the book is deliberately left without an imported cover.
+   */
+  selectCover(
+    input: { object_id: string; candidate_url: string | null },
+    csrf: string,
+  ): Promise<{ book: CoverCandidateBook }> {
+    return request<{ book: CoverCandidateBook }>("/api/v1/admin/covers/select", {
+      method: "POST",
+      body: input,
+      csrf,
+    });
+  },
+
+  /** Curate real cover art for one book; all other books keep the AURA jacket. */
+  setObjectEmblematicCover(
+    objectId: string,
+    emblematic: boolean,
+    csrf: string,
+  ): Promise<{ id: string; emblematic_cover: boolean }> {
+    return request(`/api/v1/admin/objects/${encodeURIComponent(objectId)}/emblematic-cover`, {
+      method: "PUT",
+      body: { emblematic },
+      csrf,
+    });
+  },
+
+  /** Apply every validated choice in one batch; `dry_run` writes nothing. */
+  applySelectedCovers(
+    input: { dry_run: boolean; confirm: boolean; limit: number },
+    csrf: string,
+  ): Promise<CoverApplyResult> {
+    return request<CoverApplyResult>("/api/v1/admin/covers/apply", {
+      method: "POST",
+      body: input,
       csrf,
     });
   },

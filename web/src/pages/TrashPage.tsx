@@ -1,18 +1,22 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useAuth } from "../lib/auth";
+import { useAuth, useSession } from "../lib/auth";
 import {
   api,
+  hasScope,
   type ObjectItem,
 } from "../lib/api";
 import { describeError } from "../lib/errors";
 import { VaultMark } from "../components/VaultMark";
+import { ConfirmAction } from "../components/Dialog";
 import { ToastStack, makeToast, type Toast } from "../components/Toasts";
 import { EmptyState } from "../components/EmptyState";
 
 export function TrashPage() {
   const { logout } = useAuth();
+  const session = useSession();
   const navigate = useNavigate();
+  const canPurge = hasScope(session.data?.scopes, "objects:purge");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +126,11 @@ export function TrashPage() {
               className="trash-empty"
               icon="🗑️"
               title="Corbeille vide"
-              description="Aucun objet supprimé à restaurer ou purger."
+              description={
+                canPurge
+                  ? "Aucun objet supprimé à restaurer ou purger."
+                  : "Aucun objet supprimé à restaurer."
+              }
             />
           </div>
           <div className="trash-actions">
@@ -202,15 +210,26 @@ export function TrashPage() {
                   >
                     Restaurer
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-small btn-danger"
-                    disabled={isPurging(obj.id)}
-                    aria-label={`Purger définitivement ${obj.display_name}`}
-                    onClick={() => void handlePurge(obj.id)}
-                  >
-                    Purger
-                  </button>
+                  {canPurge ? (
+                    <ConfirmAction
+                      label="Purger"
+                      ariaLabel={`Purger définitivement ${obj.display_name}`}
+                      title="Purger définitivement"
+                      message={
+                        <>
+                          Supprimer définitivement{" "}
+                          <strong>{obj.display_name}</strong> ? Cette action est
+                          irréversible.
+                        </>
+                      }
+                      confirmLabel="Purger définitivement"
+                      danger
+                      className="btn btn-small btn-danger"
+                      pending={isPurging(obj.id)}
+                      disabled={isPurging(obj.id)}
+                      onConfirm={() => void handlePurge(obj.id)}
+                    />
+                  ) : null}
                 </td>
               </tr>
             ))}

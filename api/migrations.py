@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0027_perf_indexes"
+SCHEMA_VERSION = "0031_rate_counter_double_precision"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -121,6 +121,9 @@ ADDED_COLUMNS = {
         ("replaced_at", "INTEGER"),
         # Pending replacement intent targets this existing object id (Lot 3.3.2).
         ("replace_target_id", "TEXT"),
+        # Editorial cover policy: real artwork is shown only for curated,
+        # emblematic books. Every other book keeps the AURA typographic jacket.
+        ("emblematic_cover", "INTEGER NOT NULL DEFAULT 0"),
     ],
     # Master mode: a session-bound, short-lived elevation for bulk destructive
     # actions, granted only after re-entering the password (step-up).
@@ -301,6 +304,26 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
         "CREATE INDEX IF NOT EXISTS idx_listen_progress_user "
         "ON listen_progress(user_id, updated_at)"
     )
+    # Append-only listening events (#320). Same definition as schema.sql so an
+    # upgraded catalogue gets the table even though schema.sql only runs on
+    # fresh installs. event_id makes a repeated player sample idempotent.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS listen_events ("
+        "event_id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), "
+        "object_id TEXT NOT NULL REFERENCES objects(id), "
+        "kind TEXT NOT NULL CHECK (kind IN ('start', 'position', 'end')), "
+        "position_seconds REAL NOT NULL DEFAULT 0, "
+        "delta_seconds REAL NOT NULL DEFAULT 0, "
+        "created_at INTEGER NOT NULL, anonymized_at INTEGER)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_listen_events_user_time "
+        "ON listen_events(user_id, created_at)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_listen_events_object_time "
+        "ON listen_events(object_id, created_at)"
+    )
     # Public portal bookmarks (additive, private to the visitor).
     runner.exec(
         "CREATE TABLE IF NOT EXISTS listen_bookmarks ("
@@ -461,6 +484,30 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
         "CREATE INDEX IF NOT EXISTS idx_media_jobs_status "
         "ON media_jobs(status, created_at)"
     )
+    # Audio classification jobs (bac à sable). Additive for upgraded catalogues.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS audio_classification_jobs ("
+        "id TEXT PRIMARY KEY, object_id TEXT NOT NULL, space_id TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, "
+        "lease_until INTEGER, provider TEXT, model TEXT, confidence REAL, "
+        "suggested_category TEXT, suggested_themes TEXT, suggested_language TEXT, "
+        "suggested_folder TEXT, quality_json TEXT, transcript_excerpt TEXT, "
+        "reason TEXT, error TEXT, result_json TEXT, "
+        "reviewed_by TEXT, reviewed_at INTEGER, "
+        "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_status "
+        "ON audio_classification_jobs(status, created_at)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_object "
+        "ON audio_classification_jobs(object_id, created_at)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_space "
+        "ON audio_classification_jobs(space_id, status, created_at)"
+    )
     # Per-object monthly analytics (Sprint 3).
     runner.exec(
         "CREATE TABLE IF NOT EXISTS object_usage_monthly ("
@@ -566,9 +613,28 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE TABLE IF NOT EXISTS public_rate_counters ("
         "key TEXT PRIMARY KEY, "
-        "window_start REAL NOT NULL, "
+        # DOUBLE PRECISION, not REAL: window_start is a Unix time (~1.8e9). On
+        # PostgreSQL REAL is a 4-byte float whose spacing at that magnitude is
+        # 128 s, so a 60 s window was stored up to 64 s off and about one start
+        # time in ten let ten failed logins through without blocking the next.
+        # SQLite maps both spellings to 8-byte REAL.
+        "window_start DOUBLE PRECISION NOT NULL, "
         "hits INTEGER NOT NULL DEFAULT 1)"
     )
+    # Catalogues created before the fix still have the 4-byte column. Widening
+    # is lossless and the table only holds short-lived counters; only run it
+    # when needed so a normal start takes no table lock.
+    if runner.dialect == "postgres":
+        kind = runner.scalar(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_name = ? AND column_name = ?",
+            ("public_rate_counters", "window_start"),
+        )
+        if kind == "real":
+            runner.exec(
+                "ALTER TABLE public_rate_counters "
+                "ALTER COLUMN window_start TYPE DOUBLE PRECISION"
+            )
     # Short, revocable public media grants (gate D-08). The token is stored as a
     # SHA-256 fingerprint, never in clear, and never logged. The audiobook
     # service asks for one after its own entitlement decision.

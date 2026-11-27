@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="AURA — maquette de design, bibliothèque audio éditoriale.">
+<title>Système de design — AURA</title>
+<link rel="stylesheet" href="assets/aura.css"></head>
+<body class="">
+<a class="skip" href="#main">Aller au contenu</a>
+<header class="site-head">
+  <div class="wrap head-inner">
+    <a class="brand" href="index.html" aria-label="AURA, accueil"><svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="9" stroke="currentColor" stroke-width="1.3" opacity=".45"/><path d="M11 12.5h6.2c1.5 0 2.8 1.2 2.8 2.8V29H12a1 1 0 0 1-1-1V12.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M29 12.5h-6.2c-1.5 0-2.8 1.2-2.8 2.8V29H28a1 1 0 0 0 1-1V12.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M14 18h2.5M23.5 18H26M14 22h2.5M23.5 22H26" stroke="currentColor" stroke-width="1.2"/></svg><span class="brand-word">AURA</span></a>
+    <nav class="head-nav" aria-label="Navigation principale"><a href="01-accueil-desktop.html">Accueil</a><a href="03-bibliotheque.html">Bibliothèque</a><a href="01-accueil-desktop.html">Découvrir</a><a href="05-lecteur.html">En cours</a></nav>
+    <div class="head-end">
+      <button class="icon-btn" aria-label="Rechercher"><svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
+      <button class="icon-btn" aria-label="Mes favoris"><svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5S4.5 16 4.5 10.3A3.9 3.9 0 0 1 12 8.1a3.9 3.9 0 0 1 7.5 2.2C19.5 16 12 20.5 12 20.5Z"/></svg></button>
+      <span class="avatar" aria-hidden="true">CL</span>
+      <button class="icon-btn head-menu-toggle" aria-label="Ouvrir le menu"><svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    </div>
+  </div>
+</header><main id="main">
+    <section class="ds-hero"><div class="wrap">
+      <p class="eyebrow">Fondations</p>
+      <h1>Le système AURA.</h1>
+      <p class="lede">Sept règles, une seule ambition : une bibliothèque éditoriale où l'information respire et où l'écoute reste l'action la plus évidente.</p>
+    </div></section>
+    <nav class="ds-nav"><div class="wrap"><a href="#couleurs">Couleurs</a><a href="#type">Typographie</a><a href="#tokens">Rythme & grille</a><a href="#composants">Composants</a><a href="#regles">Règles d'usage</a><a href="#responsive">Responsive</a></div></nav>
+
+    <section class="ds-section" id="couleurs"><div class="wrap">
+      <h2>Couleurs</h2><p class="lede">Ivoire et papier pour le fond, bleu nuit pour l'encre et les actions. Les accents naturels restent rares : un seul par écran.</p>
+      <div class="swatch-grid"><div class="swatch"><div class="chip" style="background:#F7F4ED"></div><div class="lab"><strong>Papier ivoire</strong><span>#F7F4ED · Fond général</span></div></div><div class="swatch"><div class="chip" style="background:#FBF9F4"></div><div class="lab"><strong>Papier haut</strong><span>#FBF9F4 · Surfaces</span></div></div><div class="swatch"><div class="chip" style="background:#E6DDCE"></div><div class="lab"><strong>Sable</strong><span>#E6DDCE · Détails, pistes</span></div></div><div class="swatch"><div class="chip" style="background:#142438"></div><div class="lab"><strong>Encre nuit</strong><span>#142438 · Titres, actions</span></div></div><div class="swatch"><div class="chip" style="background:#223754"></div><div class="lab"><strong>Bleu nuit 2</strong><span>#223754 · Survol, nuit</span></div></div><div class="swatch"><div class="chip" style="background:#26313D"></div><div class="lab"><strong>Texte</strong><span>#26313D · Corps de texte</span></div></div><div class="swatch"><div class="chip" style="background:#9C5F42"></div><div class="lab"><strong>Terre cuite</strong><span>#9C5F42 · Accent éditorial</span></div></div><div class="swatch"><div class="chip" style="background:#885F26"></div><div class="lab"><strong>Ocre</strong><span>#885F26 · Accent, focus</span></div></div><div class="swatch"><div class="chip" style="background:#5E735F"></div><div class="lab"><strong>Sauge</strong><span>#5E735F · Disponible</span></div></div><div class="swatch"><div class="chip" style="background:#D6B67F"></div><div class="lab"><strong>Laiton clair</strong><span>#D6B67F · Lecteur</span></div></div><div class="swatch"><div class="chip" style="background:#DCD3C4"></div><div class="lab"><strong>Trait</strong><span>#DCD3C4 · Séparateurs</span></div></div><div class="swatch"><div class="chip" style="background:#93493F"></div><div class="lab"><strong>Erreur</strong><span>#93493F · États d'erreur</span></div></div></div>
+    </div></section>
+
+    <section class="ds-section" id="type"><div class="wrap">
+      <h2>Typographie</h2><p class="lede">Deux voix seulement : un serif éditorial pour les titres et la citation, un sans contemporain pour l'interface. Aucune troisième famille.</p>
+      <div class="type-row"><span class="spec">Affichage<br><span style="letter-spacing:0">Instrument Serif · 82 / 1.02</span></span><span class="sample">Des histoires qui vous suivent.</span></div><div class="type-row"><span class="spec">Titre de section<br><span style="letter-spacing:0">Instrument Serif · 42 / 1.10</span></span><span class="sample">À découvrir</span></div><div class="type-row"><span class="spec">Titre de carte<br><span style="letter-spacing:0">Instrument Serif · 21 / 1.18</span></span><span class="sample">Madame Bovary</span></div><div class="type-row ui"><span class="spec">Interface<br><span style="letter-spacing:0">Jakarta · 16 / 1.60</span></span><span class="sample">Une bibliothèque choisie, des voix qui donne</span></div><div class="type-row ui"><span class="spec">Métadonnées<br><span style="letter-spacing:0">Jakarta · 13 / 1.50</span></span><span class="sample">8 h 42 · Romans · Lu par Camille Delcourt</span></div><div class="type-row ui"><span class="spec">Sur titre<br><span style="letter-spacing:0">Jakarta 700 · 11 / .19em</span></span><span class="sample">BIBLIOTHÈQUE AUDIO</span></div>
+    </div></section>
+
+    <section class="ds-section" id="tokens"><div class="wrap">
+      <h2>Rythme & grille</h2><p class="lede">Une échelle d'espacement unique et une grille à quatre colonnes. Les écarts entre sections sont toujours plus grands qu'à l'intérieur d'une section.</p>
+      <table class="token-table"><thead><tr><th>Token</th><th>Valeur</th><th>Usage</th></tr></thead><tbody><tr><td>Espace</td><td><code>--s1 … --s9</code></td><td>4 · 8 · 12 · 16 · 24 · 32 · 48 · 64 · 96 px</td></tr><tr><td>Rayon</td><td><code>--r-sm … --r-xl</code></td><td>4 · 8 · 14 · 22 px ; pilules 999 px</td></tr><tr><td>Colonnes</td><td><code>grille</code></td><td>4 (desktop) · 3 (tablette) · 2 (mobile)</td></tr><tr><td>Largeur</td><td><code>--wrap</code></td><td>1 240 px, gouttières 24 / 32 px</td></tr><tr><td>Ombre</td><td><code>--sh-1 … --sh-3</code></td><td>diffuse, jamais colorée</td></tr><tr><td>Focus</td><td><code>--ochre</code></td><td>contour 3 px, décalage 3 px</td></tr></tbody></table>
+    </div></section>
+
+    <section class="ds-section" id="composants"><div class="wrap">
+      <h2>Composants fondamentaux</h2><p class="lede">Boutons, pastilles, catégories, champ de recherche et progression. Chaque état est dessiné, y compris le désactivé.</p>
+      <div class="demo-row"><span class="demo-label">Bouton principal</span><button class="btn btn-primary">Écouter le livre</button><button class="btn btn-primary" disabled style="opacity:.45">Désactivé</button></div>
+    <div class="demo-row"><span class="demo-label">Bouton secondaire</span><button class="btn btn-outline">Ouvrir le lecteur</button><button class="btn btn-quiet">Favori</button></div>
+    <div class="demo-row"><span class="demo-label">Lien</span><a class="link" href="#">Voir la bibliothèque <svg class="ic ic-sm" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></a><a class="link-plain" href="#">Effacer les filtres</a></div>
+    <div class="demo-row"><span class="demo-label">Pastilles</span><span class="badge" style="position:static"><span class="dot"></span>Disponible</span><span class="badge badge-free" style="position:static">Extrait gratuit</span><span class="badge badge-premium" style="position:static">Premium</span><span class="badge badge-soon" style="position:static">Bientôt</span></div>
+    <div class="demo-row"><span class="demo-label">Catégories</span><button class="cat-chip" aria-pressed="true">Romans</button><button class="cat-chip">Poésie <span class="count">2</span></button></div>
+    <div class="demo-row"><span class="demo-label">Champ de recherche</span><div class="search-bar" style="max-width:460px;flex:1"><svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input placeholder="Un titre, un auteur…" aria-label="Exemple de recherche"></div></div>
+    <div class="demo-row"><span class="demo-label">Progression</span><div style="width:220px"><div class="progress-line"><i style="width:42%"></i></div><p class="progress-note">42 % écouté · il reste 5 h 58</p></div></div>
+    </div></section>
+
+    <section class="ds-section" id="regles"><div class="wrap">
+      <h2>Règles d'usage</h2><p class="lede">Ce qui fait la tenue du système — et ce qui la casseraient.</p>
+      <div class="rule-grid">
+        <div class="rule-card"><h3><svg class="ic ic-sm" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 6.5"/></svg> À faire</h3><ul>
+          <li>Un seul sujet par écran ; tout le reste se tait.</li>
+          <li>Couverture en 2:3, coins presque carrés, ombre très légère.</li>
+          <li>Titre serif, action en bleu nuit, accent naturel ponctuel.</li>
+          <li>Libellés complets : « Écouter », « Reprendre », « Effacer les filtres ».</li>
+          <li>États vides, chargement et erreur dessinés comme les autres.</li>
+        </ul></div>
+        <div class="rule-card bad"><h3><svg class="ic ic-sm" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg> À éviter</h3><ul>
+          <li>Cartes denses, corps de texte sous 13 px, jargon management.</li>
+          <li>Surcouches colorées sur les couvertures au repos.</li>
+          <li>Logos de plateformes de streaming, dégradés, néons.</li>
+          <li>Icônes émoji ; utiliser les tracés SVG fournis.</li>
+          <li>Empiler les accents : terre cuite et ocre sur le même écran.</li>
+        </ul></div>
+      </div>
+    </div></section>
+
+    <section class="ds-section" id="responsive"><div class="wrap">
+      <h2>Responsive</h2><p class="lede">Le nombre de colonnes suit l'espace disponible, pas l'inverse. Sur mobile, la navigation devient une barre basse et l'écoute reste à portée de pouce.</p>
+      <table class="token-table"><thead><tr><th>Environnement</th><th>Colonnes</th><th>Navigation</th><th>Priorité</th></tr></thead><tbody>
+        <tr><td>Desktop · ≥ 1 101 px</td><td>4</td><td>Barre haute complète</td><td>Découverte + bibliothèque</td></tr>
+        <tr><td>Tablette · 561 – 1 100 px</td><td>3</td><td>Barre haute complète</td><td>Grille adaptée</td></tr>
+        <tr><td>Mobile · ≤ 560 px</td><td>2</td><td>Barre basse à 5 entrées</td><td>Consultation et écoute</td></tr>
+      </tbody></table>
+    </div></section>
+</main><footer class="site-foot">
+  <div class="wrap foot-grid">
+    <div class="foot-brand"><div class="brand"><svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="9" stroke="currentColor" stroke-width="1.3" opacity=".45"/><path d="M11 12.5h6.2c1.5 0 2.8 1.2 2.8 2.8V29H12a1 1 0 0 1-1-1V12.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M29 12.5h-6.2c-1.5 0-2.8 1.2-2.8 2.8V29H28a1 1 0 0 0 1-1V12.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M14 18h2.5M23.5 18H26M14 22h2.5M23.5 22H26" stroke="currentColor" stroke-width="1.2"/></svg><span class="brand-word">AURA</span></div>
+      <p>Une bibliothèque à écouter.</p></div>
+    <nav class="foot-links" aria-label="Liens de pied de page">
+      <a href="01-accueil-desktop.html">À propos</a><a href="03-bibliotheque.html">La collection</a>
+      <a href="design-system.html">Accessibilité</a><a href="design-system.html">Confidentialité</a>
+      <a href="index.html">Contact</a>
+    </nav>
+    <p class="foot-legal">AURA — prototype de design. Titres, voix, durées et couvertures sont des données illustratives.</p>
+  </div>
+</footer>
+<script src="assets/app.js" defer></script>
+</body></html>

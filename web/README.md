@@ -108,15 +108,20 @@ cd web && npx playwright test
 ```
 
 On minimal hosts without system browser libraries (no GTK/ATK/fonts), the
-Playwright Chromium needs user-local libraries — no root required:
+Playwright Chromium dependencies can be installed **without root**:
 
 ```bash
-# one-time: fetch Ubuntu libs + DejaVu fonts into /tmp/opencode/pwlibs
-# (see exact package list in the issue report) then run tests with:
+# from the repository root
+scripts/install-playwright-deps-user.sh
+
+# then run browser tests with the extracted libraries and fonts
 export LD_LIBRARY_PATH=/tmp/opencode/pwlibs/root/usr/lib/x86_64-linux-gnu
-export FONTCONFIG_FILE=/tmp/opencode/pwlibs/fontconf/fonts.conf
-npx playwright test
+export FONTCONFIG_FILE=/tmp/opencode/pwlibs/fonts.conf
+cd web && npx playwright test
 ```
+
+The script uses `apt-get download` and `dpkg-deb -x`; it does not invoke `sudo`
+or modify system packages. Set `PLAYWRIGHT_LIBS_DIR` to choose another location.
 
 ## Limits
 

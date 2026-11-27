@@ -91,7 +91,7 @@ test("queues several files, isolates one failure and retries only it", async ({ 
   ]);
 
   // All three are staged before submission.
-  await expect(page.locator(".pending-item")).toHaveCount(3);
+  await expect(page.getByTestId("preflight-item")).toHaveCount(3);
 
   await page.getByRole("button", { name: "Importer et valider" }).click();
 

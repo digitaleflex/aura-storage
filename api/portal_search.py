@@ -6,6 +6,7 @@ déjà appliquer. Le texte non reconnu reste une recherche par mots-clés.
 """
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -30,6 +31,79 @@ def fold(value: str) -> str:
         c for c in unicodedata.normalize("NFD", value.casefold())
         if unicodedata.category(c) != "Mn"
     )
+
+
+# Local enrichment only: no catalogue text, query or listener data leaves AURA.
+# Each group maps everyday wording to one canonical token shared by the query
+# and by the indexed title/author/category/theme text. The original wording is
+# never rewritten in the URL or in the page: only matching is canonicalised.
+_SYNONYM_GROUPS: dict[str, tuple[str, ...]] = {
+    "thriller": ("thriller", "polar", "policier", "suspense", "crime"),
+    "romance": ("romance", "romantique", "amour", "sentimental"),
+    "biographie": ("biographie", "autobiographie", "memoires", "memoir"),
+    "fantastique": ("fantastique", "fantasy", "magie", "merveilleux"),
+    "science-fiction": ("science-fiction", "science fiction", "scifi", "futuriste"),
+    "histoire": ("histoire", "historique", "chronique"),
+    "humour": ("humour", "humor", "comique", "comedie"),
+    "poesie": ("poesie", "poeme", "poemes", "vers"),
+    "jeunesse": ("jeunesse", "ado", "enfant", "enfants"),
+    "intelligence artificielle": (
+        "intelligence artificielle", "ia", "machine learning", "apprentissage automatique",
+    ),
+}
+
+
+def _synonym_patterns():
+    pairs = {
+        fold(variant): canonical
+        for canonical, variants in _SYNONYM_GROUPS.items()
+        for variant in variants
+    }
+    return tuple(
+        (re.compile(rf"(?<!\w){re.escape(variant)}(?!\w)"), canonical)
+        for variant, canonical in sorted(pairs.items(), key=lambda pair: -len(pair[0]))
+    )
+
+
+_SYNONYM_PATTERNS = _synonym_patterns()
+
+
+def enrichment_enabled() -> bool:
+    """Operational kill switch; plain keyword search is always available."""
+    return os.environ.get("AURA_SEARCH_ENRICHMENT", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
+def canonicalize(value: str) -> str:
+    """Fold accents and replace known synonyms with their canonical token."""
+    text = fold(value)
+    if not text or not enrichment_enabled():
+        return text
+    for pattern, canonical in _SYNONYM_PATTERNS:
+        text = pattern.sub(canonical, text)
+    return " ".join(text.split())
+
+
+def search_tokens(query: str) -> list[str]:
+    """Query terms used by the AND filter, with local synonyms normalised."""
+    return canonicalize(query).split()
+
+
+def synonym_notes(text: str) -> list[str]:
+    """Explanations shown when non-canonical wording was understood locally."""
+    if not enrichment_enabled():
+        return []
+    folded = fold(text)
+    notes = []
+    for canonical, variants in _SYNONYM_GROUPS.items():
+        if any(
+            variant != canonical
+            and re.search(rf"(?<!\w){re.escape(fold(variant))}(?!\w)", folded)
+            for variant in variants
+        ):
+            notes.append(f"synonyme local : {canonical}")
+    return list(dict.fromkeys(notes))
 
 
 _DURATION_TOKEN = re.compile(
@@ -114,6 +188,7 @@ def parse_search(text: str) -> SearchIntent:
         q = leftover[:120]
     elif not q:
         q = leftover[:120]
+    notes.extend(synonym_notes(raw))
     return SearchIntent(
         q=q, author=author, min_seconds=min_seconds, max_seconds=max_seconds,
         sort=sort, explanation=" · ".join(notes),
