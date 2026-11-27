@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "description": "Règles déterministes de classification audio AURA. Modifiable sans réinventer le code. Ajoute des mots-clés après observation des erreurs du bac à sable.",
+  "categories": [
+    {"category": "meditation", "keywords": ["meditation", "mediter", "pleine conscience", "mindfulness", "respiration", "respirez", "relaxation", "detente", "sommeil guide", "body scan", "yoga nidra", "visualisation guidee", "hypnose", "sophrologie", "coherence cardiaque", "ancrage", "calme", "serenite", "anti stress", "lacher prise", "scan corporel"]},
+    {"category": "developpement_personnel", "keywords": ["developpement personnel", "confiance en soi", "estime de soi", "motivation", "habitude", "productivite", "coaching", "pnl", "intelligence emotionnelle", "reussite", "pensee positive", "mindset", "discipline", "procrastination", "communication", "assertivite", "resilience", "blocage", "peur", "croyance limitante"]},
+    {"category": "formation", "keywords": ["formation", "cours", "lecon", "module", "apprendre", "tutoriel", "masterclass", "certification", "atelier", "seminaire", "conference", "programme", "session", "debutant", "avance", "introduction", "guide pratique"]},
+    {"category": "business", "keywords": ["business", "entrepreneuriat", "marketing", "vente", "finance", "investissement", "management", "startup", "leadership", "strategie", "negociation", "e-commerce", "immobilier", "bourse", "crypto", "freelance", "copywriting", "offre"]},
+    {"category": "podcast", "keywords": ["podcast", "episode", "ep ", "interview", "entretien", "chronique", "emission", "radio", "talk", "debat", "rediffusion", "invite"]},
+    {"category": "litterature", "keywords": ["livre audio", "audiobook", "roman", "nouvelle", "conte", "poesie", "lecture", "chapitre", "tome", "volume", "narrateur", "fiction", "biographie", "autobiographie", "memoire"]},
+    {"category": "spiritualite", "keywords": ["spiritualite", "priere", "eveil", "conscience", "mantra", "sagesse", "karma", "dharma", "energie", "chakras", "gratitude", "loi de l'attraction", "guidance", "ange", "oracle", "univers"]},
+    {"category": "musique", "keywords": ["musique", "album", "single", "instrumental", "beat", "sonate", "playlist", "concert", "symphonie", "ambient", "lofi", "binaural", "frequence"]},
+    {"category": "sante_bien_etre", "keywords": ["sante", "bien etre", "nutrition", "sommeil", "fitness", "yoga", "respiration", "detox", "stress", "anxiete", "burnout", "guerison", "douleur", "inflammation"]},
+    {"category": "histoire_societe", "keywords": ["histoire", "societe", "philosophie", "politique", "economie", "culture", "documentaire", "guerre", "civilisation"]}
+  ]
+}

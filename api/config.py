@@ -146,6 +146,8 @@ class Settings:
     gemini_model: str = os.environ.get("AURA_GEMINI_MODEL", "gemini-4-hydrogen")
     anthropic_api_key: str = os.environ.get("AURA_ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.environ.get("AURA_ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    openrouter_api_key: str = os.environ.get("AURA_OPENROUTER_API_KEY", "")
+    openrouter_model: str = os.environ.get("AURA_OPENROUTER_MODEL", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free")
     ai_confidence_threshold: float = _float("AURA_AI_CONFIDENCE_THRESHOLD", 0.80)
     ai_timeout_s: int = _int("AURA_AI_TIMEOUT_S", 120)
     multipart_threshold_bytes: int = _int("AURA_MULTIPART_THRESHOLD_BYTES", 100 * 1024 * 1024)

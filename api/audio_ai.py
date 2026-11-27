@@ -26,7 +26,8 @@ log = logging.getLogger("uvicorn.error")
 
 CATEGORIES = [
     "meditation", "developpement_personnel", "formation", "business",
-    "podcast", "litterature", "spiritualite", "musique", "autre",
+    "podcast", "litterature", "spiritualite", "musique",
+    "sante_bien_etre", "histoire_societe", "autre",
 ]
 
 
@@ -84,6 +85,13 @@ def probe_quality(path: str) -> dict[str, Any]:
         score += 5
     if codec:
         score += 10
+    tags = fmt.get("tags") or {}
+    # normalize tag keys to lowercase
+    norm_tags = {}
+    if isinstance(tags, dict):
+        for k, v in tags.items():
+            if isinstance(k, str) and isinstance(v, str) and v.strip():
+                norm_tags[k.strip().lower()] = v.strip()[:300]
     score = max(0, min(100, score))
     return {
         "ok": True,
@@ -95,18 +103,21 @@ def probe_quality(path: str) -> dict[str, Any]:
         "channels": channels,
         "size_bytes": size,
         "technical_score": score,
+        "tags": {k: norm_tags[k] for k in ("title", "artist", "album", "genre", "album_artist", "comment", "date", "track") if k in norm_tags},
     }
 
 
-def extract_sample(src: str, dst: str, *, max_seconds: int = 90) -> bool:
-    """Extract first max_seconds as mp3 for AI analysis."""
+def extract_sample(src: str, dst: str, *, max_seconds: int = 480, start_seconds: int = 0) -> bool:
+    """Extract an audio sample as low-bitrate mono mp3 for AI analysis."""
     cmd = [
-        "ffmpeg", "-v", "error", "-y", "-i", src,
+        "ffmpeg", "-v", "error", "-y",
+        "-ss", str(max(0, int(start_seconds))),
+        "-i", src,
         "-t", str(max_seconds), "-vn",
         "-ac", "1", "-ar", "22050", "-b:a", "64k",
         dst,
     ]
-    r = _run(cmd, timeout=120)
+    r = _run(cmd, timeout=180)
     return r.returncode == 0 and Path(dst).exists() and Path(dst).stat().st_size > 1024
 
 
@@ -149,39 +160,246 @@ def _normalize_result(raw: dict[str, Any], *, provider: str, model: str, quality
     }
 
 
+import re as _re
+import unicodedata as _ud
+
+def _norm_text(s: str) -> str:
+    s = _ud.normalize("NFKD", s or "")
+    s = "".join(c for c in s if not _ud.combining(c))
+    return _re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+_DEFAULT_RULE_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("meditation", ["meditation", "mediter", "pleine conscience", "mindfulness", "respiration", "respirez", "relaxation", "detente", "sommeil guide", "body scan", "yoga nidra", "visualisation guidee", "hypnose", "sophrologie", "coherence cardiaque", "ancrage", "calme", "serenite", "anti stress", "lacher prise"]),
+    ("developpement_personnel", ["developpement personnel", "confiance en soi", "estime de soi", "motivation", "habitude", "productivite", "coaching", "pnl", "intelligence emotionnelle", "reussite", "pensee positive", "mindset", "discipline", "procrastination", "communication", "assertivite", "leadership personnel", "guerison", "resilience"]),
+    ("formation", ["formation", "cours", "lecon", "module", "apprendre", "tutoriel", "masterclass", "certification", "atelier", "seminaire", "conference", "didacticiel", "programme", "chapitre", "session", "niveau", "debutant", "avance"]),
+    ("business", ["business", "entrepreneuriat", "marketing", "vente", "finance", "investissement", "management", "startup", "leadership", "strategie", "negociation", "e-commerce", "immobilier", "bourse", "crypto", "freelance", "copywriting"]),
+    ("podcast", ["podcast", "episode", "ep ", "interview", "entretien", "chronique", "emission", "radio", "talk", "debat", "rediffusion"]),
+    ("litterature", ["livre audio", "audiobook", "roman", "nouvelle", "conte", "poesie", "lecture", "chapitre", "tome", "volume", "narrateur", "fiction", "biographie", "autobiographie", "memoire"]),
+    ("spiritualite", ["spiritualite", "priere", "eveil", "conscience", "mantra", "sagesse", "karma", "dharma", "energie", "chakras", "gratitude", "loi de l'attraction", "guidance", "ange", "oracle"]),
+    ("musique", ["musique", "album", "single", "instrumental", "beat", "sonate", "playlist", "concert", "symphonie", "ambient", "lofi", "binaural"]),
+    ("sante_bien_etre", ["sante", "bien etre", "nutrition", "sommeil", "fitness", "yoga", "respiration", "detox", "stress", "anxiete", "burnout", "guerison"]),
+    ("histoire_societe", ["histoire", "societe", "philosophie", "politique", "economie", "culture", "documentaire", "biographie historique"]),
+]
+
+_RULES_FILE = Path(__file__).resolve().parent / "audio_rules.json"
+
+def _load_rule_keywords() -> list[tuple[str, list[str]]]:
+    try:
+        if _RULES_FILE.exists():
+            data = json.loads(_RULES_FILE.read_text(encoding="utf-8"))
+            rules = data.get("categories") if isinstance(data, dict) else data
+            if isinstance(rules, list):
+                out = []
+                for item in rules:
+                    if isinstance(item, dict) and isinstance(item.get("category"), str) and isinstance(item.get("keywords"), list):
+                        kws = [str(k).strip() for k in item["keywords"] if str(k).strip()]
+                        if kws:
+                            out.append((item["category"].strip().lower(), kws))
+                if out:
+                    return out
+    except Exception as e:
+        log.warning("audio_rules.json load failed: %s", e)
+    return list(_DEFAULT_RULE_KEYWORDS)
+
+def classify_with_rules(*, metadata: dict[str, Any], quality: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic classification from metadata/tags/filename/quality. No external AI."""
+    tags = (quality.get("tags") or {}) if isinstance(quality, dict) else {}
+    parts = [
+        str(metadata.get("display_name") or ""),
+        str(metadata.get("folder_name") or ""),
+        str(tags.get("title") or ""),
+        str(tags.get("album") or ""),
+        str(tags.get("artist") or ""),
+        str(tags.get("genre") or ""),
+        str(tags.get("comment") or ""),
+    ]
+    hay = _norm_text(" ".join(parts))
+    rule_keywords = _load_rule_keywords()
+    scores: dict[str, int] = {c: 0 for c, _ in rule_keywords}
+    matched: dict[str, list[str]] = {c: [] for c, _ in rule_keywords}
+    for cat, kws in rule_keywords:
+        for kw in kws:
+            nkw = _norm_text(kw)
+            if nkw and nkw in hay:
+                scores[cat] += 2 if " " in nkw else 1
+                if kw not in matched[cat]:
+                    matched[cat].append(kw)
+    # Genre tag strong signal
+    genre_tag = _norm_text(str(tags.get("genre") or ""))
+    for cat, kws in rule_keywords:
+        for kw in kws:
+            if _norm_text(kw) and _norm_text(kw) in genre_tag:
+                scores[cat] += 3
+
+    best_cat = max(scores, key=lambda c: scores[c])
+    best_score = scores[best_cat]
+    second = sorted(scores.values(), reverse=True)[1] if len(scores) > 1 else 0
+    reasons = []
+    confidence = 0.25
+    if best_score > 0:
+        # confidence from keyword strength and margin
+        confidence = min(0.92, 0.45 + best_score * 0.07 + (best_score - second) * 0.03)
+        reasons.append(f"mots-clés: {', '.join(matched[best_cat][:5])}")
+    else:
+        best_cat = "autre"
+        confidence = 0.20
+        reasons.append("aucun mot-clé métier détecté")
+
+    duration = float((quality.get("duration_s") or 0) if isinstance(quality, dict) else 0)
+    if duration >= 20 * 60:
+        reasons.append(f"durée longue ({int(duration//60)} min)")
+        if best_cat == "autre":
+            confidence = max(confidence, 0.30)
+    if duration and duration < 180:
+        reasons.append("durée courte (<3 min)")
+        if best_cat == "autre":
+            scores_music = scores.get("musique", 0)
+            if scores_music == 0:
+                confidence = min(confidence, 0.35)
+
+    themes = matched.get(best_cat, [])[:5]
+    folder = f"Audiobooks/{best_cat.replace('_', ' ').title().replace(' ', '-')}"
+    return _normalize_result(
+        {
+            "categorie": best_cat,
+            "themes": themes,
+            "langue": str(tags.get("language") or "fr")[:8],
+            "confiance": round(confidence, 2),
+            "dossier_suggere": folder,
+            "raison": "Règles déterministes: " + "; ".join(reasons),
+            "transcription_courte": "",
+        },
+        provider="rules",
+        model="rules-v1",
+        quality=quality,
+    )
+
+
 def _gemini_generate(payload: dict[str, Any], model: str) -> dict[str, Any]:
     api_key = settings.gemini_api_key
     if not api_key:
         raise RuntimeError("missing_gemini_api_key")
-    req = urllib.request.Request(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+    last_err: Exception | None = None
+    for attempt in range(3):
+        req = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=settings.ai_timeout_s) as r:
+                body = json.loads(r.read().decode("utf-8", "replace"))
+            parts = (((body.get("candidates") or [{}])[0]).get("content") or {}).get("parts") or []
+            text = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+            if not text:
+                raise RuntimeError("empty_gemini_response")
+            try:
+                return json.loads(text)
+            except Exception:
+                # tolerate markdown-fenced JSON
+                if "```" in text:
+                    text = text.split("```", 2)[1]
+                    if text.lstrip().startswith("json"):
+                        text = text.lstrip()[4:]
+                return json.loads(text.strip())
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code in (429, 503) and attempt < 2:
+                import time as _time
+                _time.sleep(2 * (attempt + 1))
+                continue
+            raise
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                import time as _time
+                _time.sleep(1)
+                continue
+            raise
+    raise last_err or RuntimeError("gemini_failed")
+
+
+def _gemini_upload_file(path: str, mime_type: str) -> str:
+    """Upload a large audio sample via Gemini Files API; returns file URI."""
+    api_key = settings.gemini_api_key
+    if not api_key:
+        raise RuntimeError("missing_gemini_api_key")
+    data = Path(path).read_bytes()
+    num_bytes = len(data)
+    start_req = urllib.request.Request(
+        f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={api_key}",
+        data=json.dumps({"file": {"display_name": Path(path).name}}).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+            "X-Goog-Upload-Header-Content-Length": str(num_bytes),
+            "X-Goog-Upload-Header-Content-Type": mime_type,
+        },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=settings.ai_timeout_s) as r:
+    with urllib.request.urlopen(start_req, timeout=settings.ai_timeout_s) as r:
+        upload_url = r.headers.get("x-goog-upload-url") or r.headers.get("X-Goog-Upload-URL")
+    if not upload_url:
+        raise RuntimeError("gemini_upload_missing_url")
+    up_req = urllib.request.Request(
+        upload_url,
+        data=data,
+        headers={
+            "Content-Length": str(num_bytes),
+            "X-Goog-Upload-Offset": "0",
+            "X-Goog-Upload-Command": "upload, finalize",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(up_req, timeout=max(settings.ai_timeout_s, 120)) as r:
         body = json.loads(r.read().decode("utf-8", "replace"))
-    parts = (((body.get("candidates") or [{}])[0]).get("content") or {}).get("parts") or []
-    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
-    if not text:
-        raise RuntimeError("empty_gemini_response")
-    return json.loads(text)
+    file_info = body.get("file") or body
+    uri = file_info.get("uri")
+    if not uri:
+        raise RuntimeError("gemini_upload_missing_uri")
+    # Wait briefly for file to become ACTIVE if needed
+    name = file_info.get("name")
+    if name:
+        for _ in range(15):
+            get_req = urllib.request.Request(
+                f"https://generativelanguage.googleapis.com/v1beta/{name}?key={api_key}",
+                headers={"Content-Type": "application/json"},
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(get_req, timeout=30) as gr:
+                    info = json.loads(gr.read().decode("utf-8", "replace"))
+                if info.get("state") == "ACTIVE":
+                    break
+            except Exception:
+                pass
+            import time as _time
+            _time.sleep(1)
+    return uri
 
 
 def classify_with_gemini(*, sample_path: str, mime_type: str, metadata: dict[str, Any], quality: dict[str, Any]) -> dict[str, Any]:
-    audio_bytes = Path(sample_path).read_bytes()
     prompt = (
         "Analyse ce livre audio (extrait). Réponds UNIQUEMENT en JSON valide avec ce schéma: "
-        '{"transcription_courte":"1-2 phrases","langue":"fr","categorie":"meditation|developpement_personnel|formation|business|podcast|litterature|spiritualite|musique|autre",'
+        '{"transcription_courte":"1-2 phrases","langue":"fr","categorie":"meditation|developpement_personnel|formation|business|podcast|litterature|spiritualite|musique|sante_bien_etre|histoire_societe|autre",'
         '"themes":["..."],"confiance":0.0,"dossier_suggere":"Audiobooks/<Categorie>/<Sous-dossier>",'
         '"raison":"courte justification"}. '
         "Ne fais pas de transcription complète; donne seulement un court extrait représentatif."
     )
+    size = Path(sample_path).stat().st_size
+    if size > 20 * 1024 * 1024:
+        file_uri = _gemini_upload_file(sample_path, mime_type)
+        audio_part = {"file_data": {"mime_type": mime_type, "file_uri": file_uri}}
+    else:
+        audio_bytes = Path(sample_path).read_bytes()
+        audio_part = {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(audio_bytes).decode()}}
     payload = {
         "contents": [{
             "parts": [
                 {"text": prompt + "\n\nMétadonnées:\n" + json.dumps(metadata, ensure_ascii=False)[:3000]},
-                {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(audio_bytes).decode()}},
+                audio_part,
             ]
         }],
         "generationConfig": {
@@ -232,12 +450,73 @@ def classify_with_claude(*, metadata: dict[str, Any], quality: dict[str, Any], r
     prompt = (
         "Classifie ce livre audio à partir des métadonnées (pas d'audio). "
         "Réponds UNIQUEMENT en JSON valide avec ce schéma: "
-        '{"transcription_courte":"","langue":"fr","categorie":"meditation|developpement_personnel|formation|business|podcast|litterature|spiritualite|musique|autre",'
+        '{"transcription_courte":"","langue":"fr","categorie":"meditation|developpement_personnel|formation|business|podcast|litterature|spiritualite|musique|sante_bien_etre|histoire_societe|autre",'
         '"themes":["..."],"confiance":0.0,"dossier_suggere":"Audiobooks/<Categorie>/<Sous-dossier>","raison":"courte justification"}.\n\n'
         f"Contexte: {reason_prefix}\nMétadonnées:\n{json.dumps(metadata, ensure_ascii=False)[:4000]}\nQualité:\n{json.dumps(quality, ensure_ascii=False)[:2000]}"
     )
     raw = _claude_generate(prompt)
     return _normalize_result(raw, provider="claude", model=settings.anthropic_model, quality=quality)
+
+
+def classify_with_openrouter(*, sample_path: str, mime_type: str, metadata: dict[str, Any], quality: dict[str, Any]) -> dict[str, Any]:
+    api_key = settings.openrouter_api_key
+    if not api_key:
+        raise RuntimeError("missing_openrouter_api_key")
+    audio_bytes = Path(sample_path).read_bytes()
+    fmt = "mp3"
+    if "wav" in mime_type: fmt = "wav"
+    elif "ogg" in mime_type: fmt = "ogg"
+    elif "flac" in mime_type: fmt = "flac"
+    elif "m4a" in mime_type or "mp4" in mime_type: fmt = "m4a"
+    prompt = (
+        "Analyse ce livre audio (extrait). Réponds UNIQUEMENT en JSON valide avec ce schéma: "
+        '{"transcription_courte":"1-2 phrases","langue":"fr","categorie":"meditation|developpement_personnel|formation|business|podcast|litterature|spiritualite|musique|sante_bien_etre|histoire_societe|autre",'
+        '"themes":["..."],"confiance":0.0,"dossier_suggere":"Audiobooks/<Categorie>/<Sous-dossier>",'
+        '"raison":"courte justification"}. '
+        "Ne fais pas de transcription complète; donne seulement un court extrait représentatif."
+    )
+    payload = {
+        "model": settings.openrouter_model,
+        "temperature": 0.1,
+        "max_tokens": 700,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt + "\n\nMétadonnées:\n" + json.dumps(metadata, ensure_ascii=False)[:3000]},
+                {"type": "input_audio", "input_audio": {"data": base64.b64encode(audio_bytes).decode(), "format": fmt}},
+            ],
+        }],
+    }
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": "https://aura.local",
+            "X-Title": "AURA Audio Classification",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=settings.ai_timeout_s) as r:
+            body = json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:300]
+        raise RuntimeError(f"openrouter_http_{e.code}:{detail}") from e
+    choices = body.get("choices") or []
+    msg = (choices[0].get("message") if choices else {}) or {}
+    text = msg.get("content") or ""
+    if isinstance(text, list):
+        text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+    text = str(text).strip()
+    if "```" in text:
+        text = text.split("```", 2)[1]
+        if text.lstrip().startswith("json"):
+            text = text.lstrip()[4:]
+        text = text.strip()
+    raw = json.loads(text)
+    return _normalize_result(raw, provider="openrouter", model=settings.openrouter_model, quality=quality)
 
 
 def analyze_audio_file(path: str, *, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -247,40 +526,62 @@ def analyze_audio_file(path: str, *, metadata: dict[str, Any]) -> dict[str, Any]
     tmp_sample = None
     try:
         size = Path(path).stat().st_size
-        duration = (quality.get("duration_s") or 0) if isinstance(quality, dict) else 0
-        # For large or long files, analyze a short sample only.
-        if size > 15 * 1024 * 1024 or duration > 600:
+        duration = float((quality.get("duration_s") or 0) if isinstance(quality, dict) else 0)
+        # For large or long files, analyze a representative 8-min sample (5-10 min requested).
+        if size > 20 * 1024 * 1024 or duration > 600:
             fd, tmp_sample = tempfile.mkstemp(prefix="aura-class-", suffix=".mp3")
             os.close(fd)
-            if extract_sample(path, tmp_sample, max_seconds=90):
+            start = min(30, int(duration * 0.05)) if duration > 60 else 0
+            max_s = 480 if duration > 600 else 180
+            if extract_sample(path, tmp_sample, max_seconds=max_s, start_seconds=start):
                 sample_path = tmp_sample
                 sample_mime = "audio/mpeg"
+        # 1) Deterministic rules first (no external AI, fast, explainable).
+        rules = classify_with_rules(metadata=metadata, quality=quality)
+        rules_conf = float(rules.get("confidence") or 0)
+        primary = str(settings.ai_primary_provider or "rules").strip().lower()
+        fallback = str(settings.ai_fallback_provider or "none").strip().lower()
+        ai_enabled = primary not in ("rules", "none", "off", "disabled")
+
+        if not ai_enabled or rules_conf >= settings.ai_confidence_threshold:
+            rules["reason"] = (rules.get("reason") or "") + ("; IA ignorée (confiance règles suffisante)" if rules_conf >= settings.ai_confidence_threshold and ai_enabled else "; mode règles")
+            return rules
+
+        # 2) AI enrichment when rules are uncertain.
         errors = []
-        if settings.ai_primary_provider == "gemini" and settings.gemini_api_key:
+        transient = False
+
+        def _try_provider(name: str):
+            nonlocal transient
             try:
-                return classify_with_gemini(sample_path=sample_path, mime_type=sample_mime, metadata=metadata, quality=quality)
+                if name == "gemini" and settings.gemini_api_key:
+                    return classify_with_gemini(sample_path=sample_path, mime_type=sample_mime, metadata=metadata, quality=quality)
+                if name == "openrouter" and settings.openrouter_api_key:
+                    return classify_with_openrouter(sample_path=sample_path, mime_type=sample_mime, metadata=metadata, quality=quality)
+                if name == "claude" and settings.anthropic_api_key:
+                    return classify_with_claude(metadata=metadata, quality=quality, reason_prefix="; ".join(errors))
             except Exception as e:
-                errors.append(f"gemini:{type(e).__name__}")
-                log.warning("audio_ai gemini failed: %s", e)
-        if settings.ai_fallback_provider == "claude" and settings.anthropic_api_key:
-            try:
-                return classify_with_claude(metadata=metadata, quality=quality, reason_prefix="; ".join(errors))
-            except Exception as e:
-                errors.append(f"claude:{type(e).__name__}")
-                log.warning("audio_ai claude failed: %s", e)
-        # Last resort: deterministic metadata-only classification.
-        name = str(metadata.get("display_name") or "").lower()
-        cat = "autre"
-        if "medit" in name:
-            cat = "meditation"
-        elif "podcast" in name:
-            cat = "podcast"
-        elif "formation" in name or "cours" in name:
-            cat = "formation"
-        return _normalize_result(
-            {"categorie": cat, "confiance": 0.35, "raison": "fallback metadata-only; " + "; ".join(errors)},
-            provider="heuristic", model="none", quality=quality,
-        )
+                errors.append(f"{name}:{type(e).__name__}")
+                msg = str(e)
+                if isinstance(e, urllib.error.HTTPError) and e.code in (429, 503):
+                    transient = True
+                if "429" in msg or "503" in msg:
+                    transient = True
+                log.warning("audio_ai %s failed: %s", name, e)
+            return None
+
+        for name in [primary, fallback]:
+            if name in ("rules", "none", "off", "disabled", ""):
+                continue
+            res = _try_provider(name)
+            if res is not None:
+                return res
+        # If providers failed due to transient rate limits, let worker requeue.
+        if transient and not any(x.startswith("claude:") and "429" not in x and "503" not in x for x in errors):
+            raise RuntimeError("transient_ai_failure: " + "; ".join(errors))
+        # AI unavailable/failed: return deterministic rules.
+        rules["reason"] = (rules.get("reason") or "") + ("; fallback règles: " + "; ".join(errors) if errors else "; fallback règles")
+        return rules
     finally:
         if tmp_sample and os.path.exists(tmp_sample):
             try:
