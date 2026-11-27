@@ -724,6 +724,16 @@ class TagsIn(BaseModel):
         return _normalize_tags(value)
 
 
+class AudioClassificationEnqueueIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    object_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class AudioClassificationReviewIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["accept", "reject"]
+
+
 class SubtitleIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     subtitle_object_id: Uuid4 | None = None
@@ -4093,6 +4103,137 @@ def list_object_tags(
     """
     rows = repo.list_tag_counts(**_object_scope(principal), limit=limit)
     return {"items": [{"tag": row["tag"], "count": row["n"]} for row in rows]}
+
+
+def _audio_job_public(row: dict) -> dict:
+    return {
+        "id": row.get("id"),
+        "object_id": row.get("object_id"),
+        "space_id": row.get("space_id"),
+        "status": row.get("status"),
+        "attempts": row.get("attempts", 0),
+        "provider": row.get("provider"),
+        "model": row.get("model"),
+        "confidence": row.get("confidence"),
+        "suggested_category": row.get("suggested_category"),
+        "suggested_themes": json.loads(row["suggested_themes"]) if row.get("suggested_themes") else [],
+        "suggested_language": row.get("suggested_language"),
+        "suggested_folder": row.get("suggested_folder"),
+        "quality": json.loads(row["quality_json"]) if row.get("quality_json") else None,
+        "transcript_excerpt": row.get("transcript_excerpt"),
+        "reason": row.get("reason"),
+        "error": row.get("error"),
+        "reviewed_by": row.get("reviewed_by"),
+        "reviewed_at": row.get("reviewed_at"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "object": {
+            "display_name": row.get("display_name"),
+            "content_type": row.get("content_type"),
+            "size_bytes": row.get("size_bytes"),
+        } if row.get("display_name") is not None else None,
+    }
+
+
+@app.get("/api/v1/audio-classifications")
+def list_audio_classifications(
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    rows = repo.list_audio_classification_jobs(
+        principal["space_id"], status=status, limit=limit, offset=offset
+    )
+    return {"items": [_audio_job_public(r) for r in rows]}
+
+
+@app.get("/api/v1/audio-classifications/{jid}")
+def get_audio_classification(jid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    jid = _canonical_id(jid, "job id")
+    row = repo.get_audio_classification_job(jid)
+    if row is None or row.get("space_id") != principal["space_id"]:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _audio_job_public(row)
+
+
+@app.post("/api/v1/audio-classifications/enqueue")
+def enqueue_audio_classifications(
+    body: AudioClassificationEnqueueIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    if not settings.ai_classification_enabled:
+        raise HTTPException(status_code=409, detail="audio classification is disabled")
+    enqueued = []
+    skipped = []
+    for raw in body.object_ids:
+        try:
+            oid = _canonical_id(raw, "object id")
+        except Exception:
+            skipped.append({"id": raw, "reason": "invalid_id"})
+            continue
+        row = repo.get_object(oid, **_object_scope(principal))
+        if row is None:
+            skipped.append({"id": oid, "reason": "not_found"})
+            continue
+        if row.get("status") != "available":
+            skipped.append({"id": oid, "reason": "not_available"})
+            continue
+        if not str(row.get("content_type") or "").startswith("audio/"):
+            skipped.append({"id": oid, "reason": "not_audio"})
+            continue
+        jid = repo.enqueue_audio_classification(ids.new_id(), oid, principal["space_id"])
+        enqueued.append({"object_id": oid, "job_id": jid})
+    if enqueued:
+        audit_event("audio_classification.enqueue", principal.get("sub") or principal.get("id"), "ok",
+                    count=len(enqueued), space_id=principal.get("space_id"))
+    return {"enqueued": enqueued, "skipped": skipped}
+
+
+@app.post("/api/v1/audio-classifications/{jid}/review")
+def review_audio_classification(
+    jid: str,
+    body: AudioClassificationReviewIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    jid = _canonical_id(jid, "job id")
+    row = repo.get_audio_classification_job(jid)
+    if row is None or row.get("space_id") != principal["space_id"]:
+        raise HTTPException(status_code=404, detail="job not found")
+    status = "accepted" if body.action == "accept" else "rejected"
+    ok = repo.review_audio_classification_job(jid, status=status, reviewed_by=principal.get("sub") or principal.get("id"))
+    if not ok:
+        raise HTTPException(status_code=409, detail="job cannot be reviewed")
+    # On accept, apply suggested tags as metadata (no move).
+    if status == "accepted":
+        oid = row.get("object_id")
+        obj = repo.get_object_global(oid) if oid else None
+        if obj is not None:
+            tags = []
+            cat = row.get("suggested_category")
+            if cat:
+                tags.append(f"categorie-{cat}")
+            try:
+                themes = json.loads(row.get("suggested_themes") or "[]")
+            except Exception:
+                themes = []
+            for t in themes[:3]:
+                t = str(t).strip().lower().replace(" ", "-")
+                if t:
+                    tags.append(f"theme-{t}")
+            lang = row.get("suggested_language")
+            if lang:
+                tags.append(f"langue-{lang}")
+            existing = repo.get_object_tags(oid)
+            merged = list(existing)
+            for t in tags:
+                if t not in merged:
+                    merged.append(t)
+            repo.set_object_tags(oid, merged[:20])
+    fresh = repo.get_audio_classification_job(jid)
+    audit_event("audio_classification.review", principal.get("sub") or principal.get("id"), "ok",
+                job_id=jid, action=body.action, space_id=principal.get("space_id"))
+    return _audio_job_public(fresh or row)
 
 
 @app.get("/api/v1/objects/{oid}")

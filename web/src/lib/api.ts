@@ -1103,6 +1103,30 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await res.json()) as T;
 }
 
+export interface AudioClassificationJob {
+  id: string;
+  object_id: string;
+  space_id: string;
+  status: "queued" | "processing" | "needs_review" | "accepted" | "rejected" | "failed";
+  attempts: number;
+  provider?: string | null;
+  model?: string | null;
+  confidence?: number | null;
+  suggested_category?: string | null;
+  suggested_themes: string[];
+  suggested_language?: string | null;
+  suggested_folder?: string | null;
+  quality?: Record<string, unknown> | null;
+  transcript_excerpt?: string | null;
+  reason?: string | null;
+  error?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: number | null;
+  created_at: number;
+  updated_at: number;
+  object?: { display_name?: string; content_type?: string; size_bytes?: number } | null;
+}
+
 export const api = {
   login(username: string, password: string): Promise<LoginResponse> {
     return request<LoginResponse>("/api/v1/login", {
@@ -1394,6 +1418,32 @@ export const api = {
     return request<{ items: { tag: string; count: number }[] }>(
       "/api/v1/objects/tags",
     );
+  },
+
+  // --- Audio classification (bac à sable) ---
+  listAudioClassifications(params?: { status?: string; limit?: number; offset?: number }): Promise<{ items: AudioClassificationJob[] }> {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.offset) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return request<{ items: AudioClassificationJob[] }>(`/api/v1/audio-classifications${qs ? `?${qs}` : ""}`);
+  },
+
+  enqueueAudioClassifications(objectIds: string[], csrf: string): Promise<{ enqueued: { object_id: string; job_id: string }[]; skipped: { id: string; reason: string }[] }> {
+    return request("/api/v1/audio-classifications/enqueue", {
+      method: "POST",
+      body: { object_ids: objectIds },
+      csrf,
+    });
+  },
+
+  reviewAudioClassification(jobId: string, action: "accept" | "reject", csrf: string): Promise<AudioClassificationJob> {
+    return request<AudioClassificationJob>(`/api/v1/audio-classifications/${encodeURIComponent(jobId)}/review`, {
+      method: "POST",
+      body: { action },
+      csrf,
+    });
   },
 
   // --- Packs (human only) ---
