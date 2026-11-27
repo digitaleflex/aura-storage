@@ -301,52 +301,12 @@ def _start_verifier() -> None:
         start_import_worker(repo, settings, audit=audit_event)
 
 
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    return response
-
-
 # Process boot time for the M07 supervision endpoint (uptime is informational).
 _BOOT_TIME = int(time.time())
 
+from .http_middleware import register_http_middlewares
 
-def _incoming_request_id(request: Request) -> str:
-    """Correlation id: echo a safe client value, otherwise mint a UUID v4.
-
-    A client value is echoed only when it is short printable ASCII with no
-    whitespace or controls, so it can be logged and indexed safely; anything
-    else is replaced by a server-minted id (never 400: correlation must not
-    break callers).
-    """
-    incoming = request.headers.get("x-request-id", "")
-    if (incoming and len(incoming) <= 128
-            and all(33 <= ord(ch) <= 126 for ch in incoming)):
-        return incoming
-    return ids.new_id()
-
-
-@app.middleware("http")
-async def request_context(request: Request, call_next):
-    """Bind the M07 audit context for exactly one request.
-
-    A fresh mutable holder carries the request id; the authorization layer
-    fills the tenant in once the caller authenticates. The binding is reset
-    after the response so sequential requests sharing a worker thread can
-    never inherit each other's attribution.
-    """
-    request_id = _incoming_request_id(request)
-    _, token = bind_request_context(request_id)
-    try:
-        response = await call_next(request)
-        response.headers["X-Request-Id"] = request_id
-        return response
-    finally:
-        # Always reset, including when call_next raises: the original
-        # exception then reaches ServerErrorMiddleware unmasked.
-        reset_request_context(token)
+register_http_middlewares(app)
 
 
 # Login failure counters live in the shared catalogue (public_rate_counters)
