@@ -32,7 +32,11 @@
       var fallback = parseFloat(audio.getAttribute('data-preview-duration') || '0') || 0;
 
       function duration() {
-        return isFinite(audio.duration) && audio.duration > 0 ? audio.duration : fallback;
+        var real = isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
+        // MP3 extracts can keep the source duration in their header even when
+        // the server serves a one-minute clip: never exceed the announced cut.
+        if (fallback > 0) return real > 0 ? Math.min(real, fallback) : fallback;
+        return real;
       }
       function paint() {
         var d = duration();

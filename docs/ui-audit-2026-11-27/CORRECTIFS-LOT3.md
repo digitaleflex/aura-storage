@@ -13,6 +13,7 @@
 - La fiche livre n’affiche plus le lecteur `<audio controls>` natif (chrome gris/bleu du navigateur).
 - L’extrait utilise désormais les contrôles AURA : bouton lecture/pause rond en encre, temps courant, barre de progression bronze, durée totale.
 - Le `<audio>` reste dans le DOM mais masqué ; `preview.js` gère lecture/pause, `timeupdate`, seek et fin d’extrait.
+- La durée affichée est plafonnée à `preview_seconds` : certains MP3 coupés conservent la durée de la source dans leur en-tête (6:36 pour un extrait d’une minute), le lecteur affiche donc bien 1:00 et cale le seek sur la durée annoncée.
 - Le bouton et la barre sont accessibles : `aria-label`, `aria-valuetext`, cibles de 40 px.
 - Un fallback `<noscript>` conserve un lecteur natif si JavaScript est désactivé.
 - Le blocage « Enregistrer sous… » est conservé (`controlsList="nodownload"`, `disablePictureInPicture`, clic droit bloqué).
