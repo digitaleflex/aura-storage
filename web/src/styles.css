@@ -1932,10 +1932,16 @@ select:focus-visible {
   animation: preflight-scan 1.4s var(--ease-in-out) infinite;
 }
 
+.preflight-scope {
+  margin: var(--space-1) 0 0;
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+}
+
 .preflight-groups {
   display: grid;
   gap: var(--space-4);
-  max-height: 320px;
+  max-height: 460px;
   margin-top: var(--space-3);
   overflow-y: auto;
   overscroll-behavior: contain;
