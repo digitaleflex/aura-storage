@@ -59,8 +59,6 @@ export interface ObjectItem {
   hls_status?: string | null;
   /** True when a WebVTT subtitle is linked. */
   subtitle?: boolean;
-  /** True when this book is curated to show its real cover art. */
-  emblematic_cover?: boolean;
 }
 
 export interface CollectionItem {

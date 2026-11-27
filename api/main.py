@@ -625,8 +625,6 @@ def _object_public(row, tags: list | None = None) -> dict:
         "duration_seconds": row.get("duration_seconds"),
         "hls_status": row.get("hls_status"),
         "subtitle": bool(row.get("subtitle_object_id")),
-        # Editorial policy: real cover art only for curated emblematic books.
-        "emblematic_cover": bool(row.get("emblematic_cover")),
         "tags": list(tags or []),
     }
 

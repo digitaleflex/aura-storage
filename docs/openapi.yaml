@@ -1407,6 +1407,30 @@ paths:
         "200": { description: "Review file with candidate counts and match badges" }
         "401": { description: Authentication required }
         "403": { description: Not authorised }
+  /api/v1/admin/objects/{oid}/emblematic-cover:
+    put:
+      summary: Curate real cover art for one book (admin:write)
+      tags: [administration]
+      description: >-
+        Sets the editorial flag that allows real artwork on the public portal.
+        Every other book keeps the uniform AURA typographic jacket.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [emblematic]
+              properties:
+                emblematic: { type: boolean }
+      responses:
+        "200": { description: "Updated curation flag for the book" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "404": { description: Object not found or not visible }
   /api/v1/admin/covers/select:
     post:
       summary: Select or clear one cover candidate (admin:write)
