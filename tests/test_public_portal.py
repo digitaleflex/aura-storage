@@ -927,7 +927,8 @@ def test_fallback_cover_shows_the_title_and_author():
     cover = main.public_book._cover(item)
     assert 'class="cover-title">Le Grand Livre</span>' in cover
     assert 'class="cover-author">Alice Auteur</span>' in cover
-    assert 'class="cover-author">Livre audio</span>' in main.public_book._cover({"title": "Sans auteur"})
+    assert 'class="cover-author">Livre audio</span>' not in main.public_book._cover({"title": "Sans auteur"})
+    assert 'class="cover-author"' not in main.public_book._cover({"title": "Sans auteur"})
 
 
 def test_fallback_hues_stay_in_the_aura_palette():
@@ -984,7 +985,7 @@ def test_pages_declare_the_manifest_icons_and_theme_colours():
     for html in (TestClient(main.app).get("/").text, c.get("/").text, c.get("/profil").text):
         assert 'rel="manifest" href="/portal-assets/manifest.webmanifest?v=' in html
         assert 'rel="apple-touch-icon"' in html and 'rel="icon"' in html
-        assert 'name="theme-color" content="#F8F6F1"' in html
+        assert 'name="theme-color" content="#F7F4ED"' in html
         assert "prefers-color-scheme" not in html
     manifest = c.get(re.search(r'href="(/portal-assets/manifest\.webmanifest\?v=[0-9a-f]+)"',
                                c.get("/").text).group(1))

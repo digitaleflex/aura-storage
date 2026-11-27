@@ -3,7 +3,8 @@
 **Date :** 27 novembre 2026  
 **Référence audit :** [`AUDIT-UI-PORTAIL.md`](AUDIT-UI-PORTAIL.md)  
 **Commits :** `7b74146`, `73639d7`, `8784b69`  
-**Tests :** `100 passed` (`test_public_portal`, `test_public_portal_a11y`, `test_public_classification`, `test_cover_jacket`).
+**Tests :** `100 passed` (`test_public_portal`, `test_public_portal_a11y`, `test_public_classification`, `test_cover_jacket`).  
+**Suite :** plusieurs points « reste ouvert » ci-dessous ont été traités dans [`CORRECTIFS-LOT2.md`](CORRECTIFS-LOT2.md) (auteurs absents, PWA, pied de page, hiérarchie, métadonnées, profil, fiche livre, icônes).
 
 ---
 

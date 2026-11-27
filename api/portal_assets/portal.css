@@ -1129,6 +1129,52 @@ button,input,select{font:inherit;color:inherit}
 }
 .search-suggest a:hover { background:var(--bg-deep); }
 
+/* --- Pages utilitaires : un h1 plus calme que le hero ------------------- */
+.library-header.profile-head h1,
+.library-header.utility-head h1 {
+  font-size:clamp(38px,4vw,52px); line-height:1.06; margin:12px 0 14px;
+}
+
+/* --- Plancher typographique : métadonnées à 13 px ----------------------- */
+.carousel-author,
+.book-card-categories,
+.track-categories,
+.chapter-time,
+.time,
+.now-author,
+.player-status,
+.filter-field { font-size:13px; }
+.control-group label { font-size:11px; }
+.cover-kicker { font-size:11px; }
+.cover-author { font-size:13px; }
+.resume-cover .cover-kicker,
+.resume-cover .cover-author { display:none; }
+.preview .eyebrow { font-size:11px; }
+.preview audio { accent-color:var(--bronze); }
+
+/* --- Profil : statistiques sans cartes imbriquées ----------------------- */
+.stats-grid {
+  gap:.8rem 1.5rem; margin:1rem 0 0; padding-top:.9rem;
+  border-top:1px solid var(--line);
+}
+.stats-grid div { padding:0; border:0; border-radius:0; }
+
+/* --- Fiche livre : composition plus lisible de la grande jaquette ------- */
+.book-hero .cover-large .cover-fallback {
+  justify-content:center; padding:2.2rem;
+  --cover-title-size:2rem; --cover-author-size:13px; --cover-kicker-size:11px;
+}
+
+/* --- Icônes SVG pour le lecteur et les favoris -------------------------- */
+.icon-button svg,
+.player-icon { width:18px; height:18px; flex:none; }
+.icon-button.main .player-icon { width:20px; height:20px; }
+.icon-button.skip svg { width:18px; height:18px; }
+.fav-icon svg,
+.fav-svg { width:18px; height:18px; display:block; }
+.playlist-add-button svg { width:16px; height:16px; }
+.panel-close svg { width:18px; height:18px; }
+
 /* --- Hero : la note ne recouvre plus les jaquettes ----------------------- */
 .hero-figure { display:flex; flex-direction:column; justify-content:center; gap:14px; }
 .hero-note { position:static; right:auto; bottom:auto; margin:0 auto; max-width:250px; }
@@ -1155,3 +1201,6 @@ button,input,select{font:inherit;color:inherit}
   }
 }
 body.full-player .mobile-nav { display:none; }
+@media (max-width:560px){
+  .mobile-nav a { font-size:12px; }
+}

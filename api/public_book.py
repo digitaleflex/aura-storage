@@ -34,6 +34,7 @@ def _cover(item: dict) -> str:
 
 def _card(item: dict) -> str:
     label = str(item.get("title") or item.get("display_name") or "Livre")
+    author = str(item.get("author") or "").strip()
     facets = public_facets.item_facets(item)
     classifications = [
         public_facets.facet_label("category", value) for value in facets["categories"]
@@ -45,7 +46,7 @@ def _card(item: dict) -> str:
         '<li class="book-card"><a href="', ESC(book_path(item)), '">',
         _cover(item),
         f'<span class="book-card-title">{ESC(label)}</span>',
-        f'<span class="book-card-author">{ESC(item.get("author") or "Livre audio")}</span>',
+        f'<span class="book-card-author">{ESC(author)}</span>' if author else '',
         f'<span class="book-card-meta">{ESC(_duration_text(item.get("duration_seconds")))}</span>',
         f'<span class="book-card-categories">{ESC(" · ".join(classifications))}</span>' if classifications else '',
         '</a></li>',
@@ -369,7 +370,7 @@ def confirm_login_page(token: str) -> str:
     """Landing of the mailed link: one button, so a mail scanner cannot use the link up."""
     return "".join([
         page_head(f"Connexion — {SITE_NAME}"), '</head><body>', _SKIP_LINK, _brand_bar(None),
-        '<main class="library" id="main"><header class="library-header"><h1>Entrer dans la bibliothèque</h1>',
+        '<main class="library" id="main"><header class="library-header utility-head"><h1>Entrer dans la bibliothèque</h1>',
         '<p class="lede">Confirmez pour ouvrir votre session sur cet appareil.</p></header>',
         '<form method="post" action="/api/public/auth/email/confirm">',
         f'<input type="hidden" name="token" value="{ESC(token)}">',
@@ -380,7 +381,7 @@ def confirm_login_page(token: str) -> str:
 def message_page(title: str, text: str) -> str:
     return "".join([
         page_head(f"{title} — {SITE_NAME}"), '</head><body>', _SKIP_LINK, _brand_bar(None),
-        f'<main class="library" id="main"><header class="library-header"><h1>{ESC(title)}</h1>',
+        f'<main class="library" id="main"><header class="library-header utility-head"><h1>{ESC(title)}</h1>',
         f'<p class="lede">{ESC(text)}</p></header><p><a class="text-button" href="/">'
         'Retour à la bibliothèque</a></p></main></body></html>',
     ])

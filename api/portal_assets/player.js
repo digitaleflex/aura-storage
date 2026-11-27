@@ -24,6 +24,8 @@
   let index = -1, lastSaved = 0, retries = 0, sleepTimer = null, endOfChapter = false, showRemaining = false;
   let lastFocused = null;
   const STORE = {speed:'aura-player-speed', volume:'aura-player-volume', remaining:'aura-player-remaining'};
+  const PLAY_ICON = '<svg class="player-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 9 6-9 6V6Z" fill="currentColor" stroke="none"/></svg>';
+  const PAUSE_ICON = '<svg class="player-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v14M16 5v14"/></svg>';
   function storeGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
   function storeSet(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
 
@@ -67,7 +69,7 @@
     const copy = jacketSpan('cover-copy', '');
     copy.appendChild(jacketSpan('cover-kicker', 'Livre audio'));
     copy.appendChild(jacketSpan('cover-title', title));
-    copy.appendChild(jacketSpan('cover-author', author || 'AURA'));
+    if(author) copy.appendChild(jacketSpan('cover-author', author));
     jacket.appendChild(copy);
     container.innerHTML = '';
     container.appendChild(jacket);
@@ -126,7 +128,7 @@
   }
   function setPlayState(isPlaying){
     if(!playToggle) return;
-    playToggle.innerHTML = '<span aria-hidden="true">' + (isPlaying ? '⏸' : '▶') + '</span>';
+    playToggle.innerHTML = isPlaying ? PAUSE_ICON : PLAY_ICON;
     playToggle.setAttribute('aria-label', isPlaying ? 'Mettre en pause' : 'Lire');
     playToggle.setAttribute('title', isPlaying ? 'Mettre en pause' : 'Lecture');
   }

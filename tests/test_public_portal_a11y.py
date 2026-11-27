@@ -156,3 +156,16 @@ def test_player_assets_use_accessible_patterns():
     assert "createElement('track')" in player
     css = (ASSETS / "portal.css").read_text()
     assert ".skip-link:focus" in css
+
+
+def test_titles_stay_in_head_and_login_has_one_main_target():
+    pages = [
+        public_ui.login_page(),
+        public_ui.profile_page({"id": "r", "display_name": "R", "csrf": "t"}),
+        public_ui.catalog_page({"id": "r", "display_name": "R", "csrf": "t"}, CATALOG),
+    ]
+    for html in pages:
+        assert html.index("<title>") < html.index("<body>")
+    login = pages[0]
+    assert '<main class="stage" id="main">' in login
+    assert login.count("</main>") == 1
