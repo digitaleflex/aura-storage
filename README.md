@@ -50,6 +50,7 @@
 - [Decision: defer Better Auth + Google OAuth](docs/DECISION-BETTER-AUTH.md)
 - [Decision: defer independent backup](docs/DECISION-BACKUP-DEFERRED.md)
 - [Decision: advanced transfer features deferred](docs/DECISION-ADVANCED-TRANSFER-FEATURES.md)
+- [Decision: premium subscription and delegated billing](docs/DECISION-PREMIUM-BILLING.md)
 - [Audit complet du site (2026-10-24)](docs/AUDIT-COMPLET-2026-10-24.md)
 
 ## Intended topology

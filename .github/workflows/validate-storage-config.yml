@@ -96,10 +96,51 @@ jobs:
       - name: Run API tests on PostgreSQL
         run: |
           python3 -m pip install -r api/requirements-dev.txt
+          set +e
           AURA_API_BACKEND=postgres \
           AURA_API_DSN=postgresql://aura:ci-dummy-pg-password@127.0.0.1:5432/aura \
           AURA_TEST_PG_DSN=postgresql://aura:ci-dummy-pg-password@127.0.0.1:5432/aura_parity \
           AUDIOBOOK_TEST_DSN=postgresql://aura:ci-dummy-pg-password@127.0.0.1:5432/aura \
           AURA_API_ADMIN_PASSWORD=ci-dummy-password AURA_S3_ACCESS_KEY=ci-dummy-access-key-1234 \
           AURA_S3_SECRET_KEY=ci-dummy-secret-12345678901234567890 AURA_S3_ENDPOINT=https://127.0.0.1:9 \
-          AURA_COOKIE_SECURE=0 python3 -m pytest tests/ -q
+          AURA_COOKIE_SECURE=0 python3 -m pytest tests/ -q -rs 2>&1 | tee pytest-api-postgres.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          python3 - "$rc" <<'PY'
+          import os, re, sys
+          from pathlib import Path
+          text = Path("pytest-api-postgres.log").read_text(encoding="utf-8")
+          passed = re.search(r"(\d+) passed", text)
+          skipped = re.search(r"(\d+) skipped", text)
+          reasons = sorted(set(re.findall(r"SKIPPED \[\d+\] .*?\n\s*(.+)", text)))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("### Suite API PostgreSQL\n\n")
+              summary.write(f"- Réussis : {passed.group(1) if passed else '?'}\n")
+              summary.write(f"- Ignorés : {skipped.group(1) if skipped else 0}\n")
+              if reasons:
+                  summary.write("- Raisons : " + ", ".join(reasons[:10]) + "\n")
+          sys.exit(int(sys.argv[1]))
+          PY
+      - name: Audiobook PostgreSQL matrix (skipped count reported)
+        # Each test creates and drops its own schema; AUDIOBOOK_TEST_DSN must
+        # never be empty in this job, otherwise the whole matrix is skipped.
+        run: |
+          set +e
+          AUDIOBOOK_TEST_DSN=postgresql://aura:ci-dummy-pg-password@127.0.0.1:5432/aura \
+          python3 -m pytest tests/audiobook_service -q -rs 2>&1 | tee pytest-audiobook-postgres.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          python3 - "$rc" <<'PY'
+          import os, re, sys
+          from pathlib import Path
+          text = Path("pytest-audiobook-postgres.log").read_text(encoding="utf-8")
+          passed = re.search(r"(\d+) passed", text)
+          skipped = re.search(r"(\d+) skipped", text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("### Audiobook PostgreSQL (Lot 1/Lot 2 + metadata/ingestion)\n\n")
+              summary.write(f"- Réussis : {passed.group(1) if passed else '?'}\n")
+              summary.write(f"- Ignorés : {skipped.group(1) if skipped else 0} (objectif : 0)\n")
+              if skipped:
+                  sys.exit(1)
+          sys.exit(int(sys.argv[1]))
+          PY
