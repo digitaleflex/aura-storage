@@ -124,8 +124,11 @@ class Settings:
     # Each part is one request through the edge proxy: keep part / slowest
     # supported rate well under Traefik's readTimeout (see the plan).
     multipart_part_bytes: int = _int("AURA_MULTIPART_PART_BYTES", 16 * 1024 * 1024)
-    multipart_max_object_bytes: int = _int(
-        "AURA_MULTIPART_MAX_OBJECT_BYTES", 1024 * 1024 * 1024 * 1024
+    # Never allow a planned part above S3's 5 GiB ceiling: 5,000 operational
+    # parts × 5 GiB (≈ 24.4 TiB) is the largest object the server can plan.
+    multipart_max_object_bytes: int = min(
+        _int("AURA_MULTIPART_MAX_OBJECT_BYTES", 1024 * 1024 * 1024 * 1024),
+        5_000 * 5 * 1024 * 1024 * 1024,
     )
     # A multipart session outlives a single-PUT intent: a large upload may be
     # paused (reload, sleep, network loss) and resumed within this window.
