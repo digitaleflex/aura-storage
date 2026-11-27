@@ -1,0 +1,214 @@
+{
+  "corpus_size": 15,
+  "queries": 12,
+  "k": 5,
+  "before": [
+    {
+      "query": "polar",
+      "ranked": [
+        "thriller-1"
+      ],
+      "recall_at_5": 0.333,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "suspense",
+      "ranked": [
+        "thriller-2"
+      ],
+      "recall_at_5": 0.333,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "romantique",
+      "ranked": [
+        "romance-2"
+      ],
+      "recall_at_5": 0.5,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "mémoires",
+      "ranked": [
+        "bio-1"
+      ],
+      "recall_at_5": 0.5,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "science fiction",
+      "ranked": [
+        "sf-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "ia",
+      "ranked": [
+        "thriller-1",
+        "thriller-2",
+        "romance-2",
+        "sf-1",
+        "jeunesse-1"
+      ],
+      "recall_at_5": 0.0,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "query": "chronique",
+      "ranked": [
+        "histoire-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "poème",
+      "ranked": [
+        "poesie-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "ado",
+      "ranked": [
+        "jeunesse-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "comédie",
+      "ranked": [
+        "humour-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "Nuit",
+      "ranked": [
+        "thriller-1",
+        "plain-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "requête inconnue",
+      "ranked": [],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 0.0
+    }
+  ],
+  "after": [
+    {
+      "query": "polar",
+      "ranked": [
+        "thriller-1",
+        "thriller-2",
+        "thriller-3"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "suspense",
+      "ranked": [
+        "thriller-1",
+        "thriller-2",
+        "thriller-3"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "romantique",
+      "ranked": [
+        "romance-1",
+        "romance-2"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "mémoires",
+      "ranked": [
+        "bio-1",
+        "bio-2"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "science fiction",
+      "ranked": [
+        "sf-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "ia",
+      "ranked": [
+        "sf-2",
+        "ia-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "chronique",
+      "ranked": [
+        "histoire-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "poème",
+      "ranked": [
+        "poesie-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "ado",
+      "ranked": [
+        "jeunesse-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "comédie",
+      "ranked": [
+        "humour-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "Nuit",
+      "ranked": [
+        "thriller-1",
+        "plain-1"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "query": "requête inconnue",
+      "ranked": [],
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 0.0
+    }
+  ],
+  "mean_before_recall_at_5": 0.722,
+  "mean_before_reciprocal_rank": 0.833,
+  "mean_after_recall_at_5": 1.0,
+  "mean_after_reciprocal_rank": 0.917
+}

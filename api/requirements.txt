@@ -7,3 +7,4 @@ psycopg==3.3.9
 psycopg-binary==3.3.9
 psycopg-pool==3.3.3
 python-multipart==0.0.34
+Pillow==13.0.0

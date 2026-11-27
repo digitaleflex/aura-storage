@@ -22,10 +22,19 @@ import api.main as main  # noqa: E402
 OPENAPI_PATH = Path(__file__).resolve().parents[1] / "docs" / "openapi.yaml"
 
 
+def _iter_routes(routes):
+    for route in routes:
+        if hasattr(route, "methods") and hasattr(route, "path"):
+            yield route
+        orig = getattr(route, "original_router", None)
+        if orig is not None and hasattr(orig, "routes"):
+            yield from _iter_routes(orig.routes)
+
+
 def _implemented_routes() -> dict[str, set[str]]:
     routes: dict[str, set[str]] = {}
-    for route in main.app.routes:
-        if hasattr(route, "methods") and route.path.startswith("/api/v1"):
+    for route in _iter_routes(main.app.routes):
+        if route.path.startswith("/api/v1"):
             routes.setdefault(route.path, set()).update(m.lower() for m in route.methods)
     return routes
 
@@ -56,6 +65,18 @@ def test_openapi_methods_match_implemented_routes():
             f"{path}: implemented {sorted(implemented[path])} "
             f"!= documented {sorted(documented[path])}"
         )
+
+
+def test_service_identity_scopes_match_backend():
+    """The M2M form and OpenAPI must never offer a human-only purge scope."""
+    from api.authz import SERVICE_SCOPES
+
+    spec = _spec()
+    operation = spec["paths"]["/api/v1/admin/identities"]["post"]
+    schema = operation["requestBody"]["content"]["application/json"]["schema"]
+    documented = set(schema["properties"]["scopes"]["items"]["enum"])
+    assert documented == set(SERVICE_SCOPES)
+    assert "objects:purge" not in documented
 
 
 def test_every_documented_operation_is_described():

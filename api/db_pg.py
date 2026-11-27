@@ -1,4 +1,6 @@
 """PostgreSQL catalogue implementing the same Repository interface as db.py (#19)."""
+import hashlib
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -9,10 +11,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from . import ids
+from . import ids, listen_events
 from .auth import new_token, session_key
-from .config import settings
-from .dblock import synchronized
 from .migrations import (
     DEFAULT_APPLICATION_NAME,
     DEFAULT_ENVIRONMENT,
@@ -29,50 +29,117 @@ from .transfer import (
 SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
 
 
-@synchronized
 class Repository:
+    """PostgreSQL catalogue backed by a bounded, shared connection pool (#325).
+
+    The old implementation held one connection per process and serialized every
+    method with ``@synchronized``. The pool gives each worker thread its own
+    checkout (with a bounded acquisition timeout), so uploads, commits and URL
+    issuance no longer queue behind one connection. ``self.conn`` remains a
+    compatibility handle for bootstrap migrations and the few legacy callers
+    that issue raw statements; hot-path methods use ``_connection()``.
+    """
+
     dialect = "postgres"
 
-    def __init__(self, dsn: str):
-        # A pool avoids per-request connection setup and bounds concurrent DB
-        # connections (#325). @synchronized keeps the legacy serialized access
-        # model; the pool still provides health checks, reconnects and limits.
-        self._lock = threading.RLock()
+    def __init__(
+        self, dsn: str, pool_min: Optional[int] = None,
+        pool_max: Optional[int] = None, pool_timeout: Optional[float] = None,
+    ):
+        # Same environment contract as api/config.py, but read locally so the
+        # repository stays importable in standalone parity tests (no full API
+        # environment required).
+        min_size = int(os.environ.get("AURA_DB_POOL_MIN", "2")) if pool_min is None else int(pool_min)
+        max_size = int(os.environ.get("AURA_DB_POOL_MAX", "10")) if pool_max is None else int(pool_max)
+        timeout = float(os.environ.get("AURA_DB_POOL_TIMEOUT", "5")) if pool_timeout is None else float(pool_timeout)
+        if min_size < 1 or max_size < min_size or timeout <= 0:
+            raise RuntimeError("invalid PostgreSQL pool configuration")
+        self.pool_min = min_size
+        self.pool_max = max_size
+        self.pool_timeout = timeout
         self._local = threading.local()
+        # A few endpoints still use a process-local admission lock (upload
+        # intents); keep the same attribute as the SQLite repository so the
+        # PostgreSQL backend follows identical code paths.
+        self._lock = threading.RLock()
+        self._timeout_lock = threading.Lock()
+        self._timeouts = 0
+        # One dedicated connection for schema bootstrap/legacy raw callers. It is
+        # never used by the repository methods below, so the pool limits stay
+        # meaningful (total backend connections = pool_size + 1).
+        self.conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
         self.pool = ConnectionPool(
-            dsn,
-            min_size=max(0, settings.pg_pool_min),
-            max_size=max(1, settings.pg_pool_max),
-            timeout=settings.pg_pool_timeout,
-            kwargs={"row_factory": dict_row, "autocommit": True},
+            conninfo=dsn,
+            min_size=min_size,
+            max_size=max_size,
+            timeout=timeout,
             open=True,
+            name="aura-catalogue",
+            kwargs={"row_factory": dict_row, "autocommit": True},
         )
-        # Dedicated connection kept for legacy direct repo.conn access. Helper
-        # methods (_one/_all/_run) use pooled connections.
-        self.conn = self.pool.getconn()
-        with self.conn.cursor() as cur:
-            cur.execute(SCHEMA)
-        apply_migrations(self.conn, "postgres")
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(SCHEMA)
+            apply_migrations(conn, "postgres")
+
+    @contextmanager
+    def _connection(self):
+        """Check out a pool connection for one operation.
+
+        If a transaction has pinned a connection to this thread, reuse it so
+        multi-statement operations stay atomic and nested calls share it.
+        """
+        pinned = getattr(self._local, "conn", None)
+        if pinned is not None:
+            yield pinned
+            return
+        try:
+            conn = self.pool.getconn()
+        except Exception:
+            with self._timeout_lock:
+                self._timeouts += 1
+            raise
+        try:
+            yield conn
+        except BaseException:
+            self.pool.putconn(conn, close=True)
+            raise
+        else:
+            self.pool.putconn(conn)
 
     @contextmanager
     def _transaction(self):
-        with self.pool.connection() as conn:
-            prev = getattr(self._local, "conn", None)
+        with self._connection() as conn:
+            previous = getattr(self._local, "conn", None)
             self._local.conn = conn
             try:
                 with conn.transaction():
-                    yield conn
+                    yield
             finally:
-                if prev is None:
-                    del self._local.conn
-                else:
-                    self._local.conn = prev
+                self._local.conn = previous
 
-    def close(self) -> None:
-        try:
-            self.pool.putconn(self.conn)
-        except Exception:
-            pass
+    def pool_metrics(self) -> dict:
+        """Bounded pool figures for logs/monitoring (no DSN, no credentials)."""
+        stats = self.pool.get_stats()
+        acquisitions = int(stats.get("requests_num") or 0)
+        waited_ms = float(stats.get("requests_wait_ms") or 0)
+        return {
+            "min": int(stats.get("pool_min", self.pool_min)),
+            "max": int(stats.get("pool_max", self.pool_max)),
+            "size": int(stats.get("pool_size") or 0),
+            "available": int(stats.get("pool_available") or 0),
+            "waiting": int(stats.get("requests_waiting") or 0),
+            "acquisitions": acquisitions,
+            "queued": int(stats.get("requests_queued") or 0),
+            "timeouts": self._timeouts,
+            "avg_acquire_ms": round(waited_ms / acquisitions, 2) if acquisitions else 0.0,
+            "opens": int(stats.get("connections_num") or 0),
+            "open_ms_total": int(stats.get("connections_ms") or 0),
+            "usage_ms_total": int(stats.get("usage_ms") or 0),
+        }
+
+    def close_pool(self) -> None:
+        """Release pool connections (used by tests and clean process shutdown)."""
         self.pool.close()
 
     def now(self) -> int:
@@ -82,45 +149,25 @@ class Repository:
         return ids.new_id()
 
     def _one(self, sql: str, params: tuple = ()) -> Optional[dict]:
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-                return cur.fetchone()
-        with self.pool.connection() as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 return cur.fetchone()
 
     def _all(self, sql: str, params: tuple = ()) -> list:
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-                return cur.fetchall()
-        with self.pool.connection() as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 return cur.fetchall()
 
     def _run(self, sql: str, params: tuple = ()) -> int:
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-                return cur.rowcount
-        with self.pool.connection() as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 return cur.rowcount
 
     def _run_many(self, sql: str, params_seq) -> None:
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            with conn.cursor() as cur:
-                cur.executemany(sql, params_seq)
-            return
-        with self.pool.connection() as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.executemany(sql, params_seq)
 
@@ -219,6 +266,12 @@ class Repository:
 
     def delete_public_account(self, uid: str) -> None:
         """Delete a public portal account and its portal-owned data."""
+        # Events stay append-only for aggregate history but are anonymised:
+        # no event can be linked back to the deleted visitor (#320).
+        self._run(
+            "UPDATE listen_events SET user_id = NULL, anonymized_at = %s WHERE user_id = %s",
+            (int(time.time()), uid),
+        )
         self._run("DELETE FROM listen_progress WHERE user_id = %s", (uid,))
         self._run("DELETE FROM listen_favorites WHERE user_id = %s", (uid,))
         self._run("DELETE FROM listen_bookmarks WHERE user_id = %s", (uid,))
@@ -294,6 +347,51 @@ class Repository:
             (user_id, *object_ids),
         )
         return {r["object_id"]: float(r["position_seconds"]) for r in rows}
+
+    # -- append-only listening events (#320) ------------------------------
+    def record_listen_event(
+        self, user_id: str, object_id: str, kind: str, position_seconds: float,
+        delta_seconds: float, now: int, client_event_id: str = "",
+    ) -> bool:
+        """Insert one idempotent event; False means it was already recorded."""
+        eid = listen_events.event_id(
+            user_id, object_id, kind, position_seconds, now, client_event_id
+        )
+        return self._run(
+            "INSERT INTO listen_events "
+            "(event_id, user_id, object_id, kind, position_seconds, delta_seconds, "
+            "created_at, anonymized_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL) "
+            "ON CONFLICT (event_id) DO NOTHING",
+            (eid, user_id, object_id, kind, max(0.0, float(position_seconds)),
+             max(0.0, float(delta_seconds)), int(now)),
+        ) == 1
+
+    def last_listen_event_at(self, user_id: str, object_id: str) -> int:
+        row = self._one(
+            "SELECT COALESCE(MAX(created_at), 0) AS t FROM listen_events "
+            "WHERE user_id = %s AND object_id = %s", (user_id, object_id),
+        )
+        return int(row["t"] or 0)
+
+    def listening_totals(self, user_id: str, now: int, retention_seconds: int) -> dict:
+        """Prune expired events, then project one visitor's measured totals."""
+        cutoff = int(now) - max(0, int(retention_seconds))
+        self._run("DELETE FROM listen_events WHERE created_at < %s", (cutoff,))
+        row = self._one(
+            "SELECT COALESCE(SUM(delta_seconds), 0) AS listened, "
+            "COALESCE(SUM(CASE WHEN kind = 'start' THEN 1 ELSE 0 END), 0) AS starts, "
+            "COALESCE(SUM(CASE WHEN kind = 'end' THEN 1 ELSE 0 END), 0) AS ends, "
+            "COUNT(*) AS samples, COALESCE(MAX(created_at), 0) AS last_at "
+            "FROM listen_events WHERE user_id = %s AND created_at >= %s",
+            (user_id, cutoff),
+        )
+        return {
+            "listened_seconds": int(float(row["listened"])),
+            "starts": int(row["starts"]),
+            "ends": int(row["ends"]),
+            "samples": int(row["samples"]),
+            "last_event_at": int(row["last_at"]),
+        }
 
     def portal_stats(self, period: str, available: str) -> dict:
         """Aggregate portal figures per published book: no visitor is identifiable."""
@@ -821,13 +919,16 @@ class Repository:
     def consume_share(self, sid: str, now: int) -> bool:
         # See api/db.py: the guard is part of the UPDATE so a last use cannot be
         # redeemed twice by concurrent requests.
-        return self._run(
-            "UPDATE object_shares SET use_count = use_count + 1, "
-            "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
-            "AND expires_at > %s "
-            "AND (max_uses IS NULL OR use_count < max_uses)",
-            (now, sid, now),
-        ) == 1
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE object_shares SET use_count = use_count + 1, "
+                    "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
+                    "AND expires_at > %s "
+                    "AND (max_uses IS NULL OR use_count < max_uses)",
+                    (now, sid, now),
+                )
+                return cur.rowcount == 1
 
     def revoke_share(self, sid: str, now: int) -> None:
         self._run(
@@ -872,13 +973,16 @@ class Repository:
         )
 
     def consume_folder_share(self, sid: str, now: int) -> bool:
-        return self._run(
-            "UPDATE folder_shares SET use_count = use_count + 1, "
-            "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
-            "AND expires_at > %s "
-            "AND (max_uses IS NULL OR use_count < max_uses)",
-            (now, sid, now),
-        ) == 1
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE folder_shares SET use_count = use_count + 1, "
+                    "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
+                    "AND expires_at > %s "
+                    "AND (max_uses IS NULL OR use_count < max_uses)",
+                    (now, sid, now),
+                )
+                return cur.rowcount == 1
 
     def revoke_folder_share(self, sid: str, now: int) -> None:
         self._run(
@@ -1045,6 +1149,13 @@ class Repository:
 
     def set_object_cover(self, oid: str, cover_key: Optional[str]) -> None:
         self._run("UPDATE objects SET cover_key = %s WHERE id = %s", (cover_key, oid))
+
+    def set_object_emblematic(self, oid: str, emblematic: bool) -> None:
+        """Curate real cover art for one book (0/1 for portability)."""
+        self._run(
+            "UPDATE objects SET emblematic_cover = %s WHERE id = %s",
+            (int(bool(emblematic)), oid),
+        )
 
     def set_object_duration(self, oid: str, duration_seconds: float) -> None:
         self._run(
@@ -1971,6 +2082,107 @@ class Repository:
             "UPDATE objects SET subtitle_object_id = %s, updated_at = %s WHERE id = %s",
             (subtitle_id, self.now(), oid),
         )
+
+    # -- audio classification jobs (bac à sable) -------------------------
+    def enqueue_audio_classification(self, jid: str, oid: str, space_id: str) -> str:
+        row = self._one(
+            "SELECT id FROM audio_classification_jobs WHERE object_id = %s "
+            "AND status IN ('queued', 'processing') ORDER BY created_at DESC LIMIT 1",
+            (oid,),
+        )
+        if row is not None:
+            return row["id"]
+        now = self.now()
+        self._run(
+            "INSERT INTO audio_classification_jobs "
+            "(id, object_id, space_id, status, attempts, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'queued', 0, %s, %s)",
+            (jid, oid, space_id, now, now),
+        )
+        return jid
+
+    def claim_audio_classification_job(self, lease_until: int, max_attempts: int = 5):
+        now = self.now()
+        row = self._one(
+            "SELECT * FROM audio_classification_jobs "
+            "WHERE status = 'queued' AND attempts < %s "
+            "ORDER BY created_at LIMIT 1",
+            (max_attempts,),
+        )
+        if row is None:
+            return None
+        changed = self._run(
+            "UPDATE audio_classification_jobs SET status = 'processing', "
+            "attempts = attempts + 1, lease_until = %s, updated_at = %s, error = NULL "
+            "WHERE id = %s AND status = 'queued'",
+            (lease_until, now, row["id"]),
+        )
+        return row if changed else None
+
+    def complete_audio_classification_job(self, jid: str, *, provider: str, model: str,
+                                          confidence: float | None, suggested_category: str | None,
+                                          suggested_themes: str | None, suggested_language: str | None,
+                                          suggested_folder: str | None, quality_json: str | None,
+                                          transcript_excerpt: str | None, reason: str | None,
+                                          result_json: str | None, status: str = "needs_review") -> None:
+        self._run(
+            "UPDATE audio_classification_jobs SET status = %s, provider = %s, model = %s, "
+            "confidence = %s, suggested_category = %s, suggested_themes = %s, "
+            "suggested_language = %s, suggested_folder = %s, quality_json = %s, "
+            "transcript_excerpt = %s, reason = %s, result_json = %s, error = NULL, "
+            "lease_until = NULL, updated_at = %s WHERE id = %s",
+            (status, provider, model, confidence, suggested_category, suggested_themes,
+             suggested_language, suggested_folder, quality_json, transcript_excerpt,
+             reason, result_json, self.now(), jid),
+        )
+
+    def fail_audio_classification_job(self, jid: str, error: str, *, requeue: bool = False) -> None:
+        status = "queued" if requeue else "failed"
+        self._run(
+            "UPDATE audio_classification_jobs SET status = %s, error = %s, "
+            "lease_until = NULL, updated_at = %s WHERE id = %s",
+            (status, error[:1000], self.now(), jid),
+        )
+
+    def get_audio_classification_job(self, jid: str):
+        return self._one("SELECT * FROM audio_classification_jobs WHERE id = %s", (jid,))
+
+    def get_latest_audio_classification_job(self, oid: str):
+        return self._one(
+            "SELECT * FROM audio_classification_jobs WHERE object_id = %s "
+            "ORDER BY created_at DESC LIMIT 1", (oid,),
+        )
+
+    def list_audio_classification_jobs(self, space_id: str, *, status: str | None = None,
+                                       limit: int = 100, offset: int = 0) -> list:
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        if status:
+            return self._all(
+                "SELECT j.*, o.display_name, o.content_type, o.size_bytes, o.bucket, o.object_key "
+                "FROM audio_classification_jobs j "
+                "LEFT JOIN objects o ON o.id = j.object_id "
+                "WHERE j.space_id = %s AND j.status = %s "
+                "ORDER BY j.created_at DESC LIMIT %s OFFSET %s",
+                (space_id, status, limit, offset),
+            )
+        return self._all(
+            "SELECT j.*, o.display_name, o.content_type, o.size_bytes, o.bucket, o.object_key "
+            "FROM audio_classification_jobs j "
+            "LEFT JOIN objects o ON o.id = j.object_id "
+            "WHERE j.space_id = %s ORDER BY j.created_at DESC LIMIT %s OFFSET %s",
+            (space_id, limit, offset),
+        )
+
+    def review_audio_classification_job(self, jid: str, *, status: str, reviewed_by: str) -> bool:
+        changed = self._run(
+            "UPDATE audio_classification_jobs SET status = %s, reviewed_by = %s, "
+            "reviewed_at = %s, updated_at = %s WHERE id = %s "
+            "AND status IN ('needs_review', 'failed')",
+            (status, reviewed_by, self.now(), self.now(), jid),
+        )
+        return bool(changed)
+
     def stats(self) -> dict:
         objects = {
             row["status"]: row["n"]

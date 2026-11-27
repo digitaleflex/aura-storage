@@ -13,10 +13,13 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import urlencode
 
+from . import public_classification, public_facets, public_series
+
 _ASSET_DIR = Path(__file__).with_name("portal_assets")
 _ASSET_TYPES = {
     ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
     ".webmanifest": "application/manifest+json", ".png": "image/png", ".svg": "image/svg+xml",
+    ".woff2": "font/woff2", ".ttf": "font/ttf", ".txt": "text/plain; charset=utf-8",
 }
 
 
@@ -77,6 +80,238 @@ _PWA_TAGS = (
 
 # Keyboard users must be able to skip the branded header on every page.
 _SKIP_LINK = '<a class="skip-link" href="#main">Aller au contenu</a>'
+
+# --- Refonte AURA : coquille partagée ------------------------------------
+# Petits tracés SVG (pas d'émoji, pas de dépendance extérieure, CSP stricte).
+_NAV_ICONS = {
+    "accueil": '<path d="m3 11 9-7 9 7"/><path d="M5.5 10v10h13V10"/>',
+    "decouvrir": '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z"/>',
+    "bibliotheque": '<path d="M4 5.5h6a2 2 0 0 1 2 2V20H6a2 2 0 0 1-2-2V5.5Z"/>'
+                    '<path d="M20 5.5h-6a2 2 0 0 0-2 2V20h6a2 2 0 0 0 2-2V5.5Z"/>',
+    "encours": '<path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="2.5" y="14" width="4.5" height="7" rx="2.2"/>'
+               '<rect x="17" y="14" width="4.5" height="7" rx="2.2"/>',
+    "profil": '<circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/>',
+    "recherche": '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+    "favori": '<path d="M12 20.5S4.5 16 4.5 10.3A3.9 3.9 0 0 1 12 8.1a3.9 3.9 0 0 1 7.5 2.2C19.5 16 12 20.5 12 20.5Z"/>',
+    "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    "grid": '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/>'
+            '<rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',
+    "sprout": '<path d="M12 21v-8"/><path d="M12 13C7 13 5 10 5 6c5 0 7 2 7 7Z"/>'
+              '<path d="M12 10c0-4 2-6 7-6 0 4-2 6-7 6Z"/>',
+    "chart": '<path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 15 4-4 3 2 5-7"/>',
+    "compass": '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z"/>',
+    "heart": '<path d="M12 20.5S4.5 16 4.5 10.3A3.9 3.9 0 0 1 12 8.1a3.9 3.9 0 0 1 7.5 2.2C19.5 16 12 20.5 12 20.5Z"/>',
+    "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/>',
+    "shield": '<path d="M12 3 5 6v5c0 4.5 3 7.5 7 10 4-2.5 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/>',
+    "book": '<path d="M4 5.5h6a2 2 0 0 1 2 2V20H6a2 2 0 0 1-2-2V5.5Z"/>'
+            '<path d="M20 5.5h-6a2 2 0 0 0-2 2V20h6a2 2 0 0 0 2-2V5.5Z"/>',
+    "lotus": '<path d="M12 20c-4 0-7-2.5-7-6 2.5 0 5 1.5 7 4 2-2.5 4.5-4 7-4 0 3.5-3 6-7 6Z"/>'
+             '<path d="M12 16c-3-1-5-3.5-5-7 3 0 5 2 5 5 0-3 2-5 5-5 0 3.5-2 6-5 7Z"/>',
+    "tag": '<path d="M4 4h7l9 9-7 7-9-9V4Z"/><circle cx="8" cy="8" r="1"/>',
+    "chevron-left": '<path d="m15 5-7 7 7 7"/>',
+    "chevron-right": '<path d="m9 5 7 7-7 7"/>',
+}
+
+
+def _nav_icon(name: str) -> str:
+    return (
+        '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+        + _NAV_ICONS.get(name, "") + '</svg>'
+    )
+
+
+def category_theme_nav(
+    *, facet_options: dict | None = None, active_facets: dict | None = None,
+    href, include_categories: bool = True, include_themes: bool = True,
+) -> str:
+    """Shared category/theme shortcut row for anonymous and signed-in catalogues."""
+    facet_options = facet_options or {}
+    active_facets = active_facets or {}
+    categories = list(facet_options.get("categories") or [])[:8] if include_categories else []
+    themes = list(facet_options.get("themes") or [])[:10] if include_themes else []
+    if not categories and not themes:
+        return ""
+    parts = []
+    if categories:
+        all_link = (
+            f'<a class="cat-chip facet-chip" href="{ESC(href(categorie=None, page=None))}" '
+            f'aria-pressed="false">'
+            f'<span class="facet-icon">{_nav_icon("grid")}</span><span>Toutes catégories</span></a>'
+        )
+        chips = [all_link]
+        for option in categories:
+            value = str(option.get("value") or "")
+            label = public_facets.facet_label("category", value)
+            count = int(option.get("count") or 0)
+            icon = public_classification.CATEGORY_ICONS.get(value, "tag")
+            chips.append(
+                f'<a class="cat-chip facet-chip" href="{ESC(href(categorie=value, page=None))}" '
+                f'aria-pressed="{str(active_facets.get("category") == value).lower()}">'
+                f'<span class="facet-icon">{_nav_icon(icon)}</span><span>{ESC(label)}</span>'
+                f'<small>{count}</small></a>'
+            )
+        parts.append('<section class="cat-row" aria-label="Catégories">' + "".join(chips) + '</section>')
+    if themes:
+        all_link = (
+            f'<a class="cat-chip theme-chip" href="{ESC(href(theme=None, page=None))}" '
+            f'aria-pressed="false">Tous thèmes</a>'
+        )
+        chips = [all_link]
+        for option in themes:
+            value = str(option.get("value") or "")
+            label = public_facets.facet_label("theme", value)
+            count = int(option.get("count") or 0)
+            chips.append(
+                f'<a class="cat-chip theme-chip" href="{ESC(href(theme=value, page=None))}" '
+                f'aria-pressed="{str(active_facets.get("theme") == value).lower()}">'
+                f'{ESC(label)} <small>{count}</small></a>'
+            )
+        parts.append('<section class="cat-row theme-row" aria-label="Thèmes">' + "".join(chips) + '</section>')
+    return "".join(parts)
+
+
+def carousel_shelf(
+    shelf: dict, *, use_covers: bool = False, all_href: str = "",
+) -> str:
+    """Horizontal book shelf: uniform jackets, or real covers for curated series."""
+    items = list(shelf.get("items") or [])
+    if not items:
+        return ""
+    slug = str(shelf.get("slug") or "serie")
+    label = str(shelf.get("label") or "Série")
+    track_id = f"carousel-{slug}"
+    cards = []
+    for item in items:
+        title = str(item.get("title") or item.get("display_name") or "Livre")
+        author = str(item.get("author") or "")
+        inner = fallback_cover_inner(title, author)
+        if use_covers:
+            inner += real_cover_img(item)
+        cards.append(
+            f'<li><a class="carousel-card" href="/livre/{ESC(item.get("id") or "")}">'
+            f'<span class="carousel-cover" style="--cover-h:{cover_hue(title)}">{inner}</span>'
+            f'<span class="carousel-title">{ESC(title)}</span>'
+            f'<span class="carousel-author">{ESC(author or "Livre audio")}</span>'
+            '</a></li>'
+        )
+    heading_id = f"{track_id}-title"
+    all_link = (
+        f'<a class="carousel-all" href="{ESC(all_href)}">Tout voir</a>'
+        if all_href else ""
+    )
+    return "".join([
+        '<section class="carousel-shelf" aria-labelledby="', ESC(heading_id), '">',
+        '<div class="carousel-head"><div>',
+        f'<h2 id="{ESC(heading_id)}">{ESC(label)}</h2>',
+        all_link,
+        '</div><div class="carousel-controls">',
+        f'<button type="button" class="carousel-nav" data-carousel="{ESC(track_id)}" '
+        f'data-carousel-direction="prev" aria-label="Faire défiler {ESC(label)} vers la gauche">'
+        f'{_nav_icon("chevron-left")}</button>',
+        f'<button type="button" class="carousel-nav" data-carousel="{ESC(track_id)}" '
+        f'data-carousel-direction="next" aria-label="Faire défiler {ESC(label)} vers la droite">'
+        f'{_nav_icon("chevron-right")}</button>',
+        '</div></div>',
+        f'<ul class="carousel-track" id="{ESC(track_id)}" tabindex="0" '
+        f'aria-label="Livres de la sélection {ESC(label)}">',
+        "".join(cards), '</ul></section>',
+    ])
+
+
+def carousel_shelves(items: list[dict], *, limit: int = 4) -> str:
+    """Series carousels first (real covers), then category carousels (uniform)."""
+    series = public_series.group_series(items, limit=limit)
+    categories = public_series.group_categories(items, limit=limit)
+    parts = []
+    for shelf in series:
+        parts.append(carousel_shelf(shelf, use_covers=True))
+    for shelf in categories:
+        parts.append(carousel_shelf(
+            shelf,
+            all_href="/?" + urlencode({"categorie": shelf["slug"]}),
+        ))
+    return "".join(parts)
+
+
+def site_header(active: str = "", principal: dict | None = None) -> str:
+    """En-tête éditorial : navigation complète sur desktop, icônes sur mobile."""
+    links = [
+        ("/", "Accueil", "accueil"),
+        ("/#decouvrir", "Découvrir", "decouvrir"),
+        ("/#tous", "Bibliothèque", "bibliotheque"),
+    ]
+    if principal:
+        links.append(("/#resume", "En cours", "encours"))
+    nav = "".join(
+        f'<a href="{href}"{cur}>{label}</a>'
+        for href, label, cur in (
+            (h, l, ' aria-current="page"' if l == active else '') for h, l, _ in links
+        )
+    )
+    name = ""
+    if principal:
+        name = str(principal.get("display_name") or principal.get("email") or "Auditeur").strip()[:1].upper()
+    avatar = (f'<a class="avatar" href="/profil" aria-label="Mon profil">{ESC(name)}</a>'
+              if name else "")
+    favorites = (
+        '<a class="head-icon" href="/#favoris" aria-label="Mes favoris">'
+        + _nav_icon("favori") + '</a>'
+        if principal else ""
+    )
+    return "".join([
+        '<header class="topbar"><a class="brand" href="/" aria-label="AURA, accueil">',
+        _BRAND, '<span class="word">AURA</span></a>',
+        f'<nav class="site-nav" aria-label="Navigation principale">{nav}</nav>',
+        '<div class="head-end">',
+        '<a class="head-icon" href="/#recherche" aria-label="Rechercher">', _nav_icon("recherche"), '</a>',
+        favorites,
+        avatar,
+        '</div></header>',
+    ])
+
+
+def mobile_nav(active: str = "Accueil", principal: dict | None = None) -> str:
+    """Navigation mobile simplifiée, à portée de pouce."""
+    items = [
+        ("/", "Accueil", "accueil"),
+        ("/#decouvrir", "Découvrir", "decouvrir"),
+        ("/#tous", "Bibliothèque", "bibliotheque"),
+    ]
+    if principal:
+        items.append(("/#resume", "En cours", "encours"))
+    items.append(("/profil", "Profil", "profil"))
+    links = "".join(
+        f'<a href="{href}"{cur}>{_nav_icon(icon)}<span>{label}</span></a>'
+        for href, label, icon, cur in (
+            (h, l, i, ' aria-current="page"' if l == active else '') for h, l, i in items
+        )
+    )
+    return f'<nav class="mobile-nav" aria-label="Navigation mobile">{links}</nav>'
+
+
+def site_footer(principal: dict | None = None) -> str:
+    account = ""
+    if principal:
+        csrf = ESC(principal.get("csrf") or "")
+        account = (
+            '<a href="/profil">Mon profil</a>'
+            '<form method="post" action="/api/public/logout" class="foot-logout">'
+            f'<input type="hidden" name="csrf_token" value="{csrf}">'
+            '<button type="submit" class="link-plain">Déconnexion</button></form>'
+        )
+    return "".join([
+        '<footer class="site-foot"><div class="foot-grid">',
+        '<div class="foot-brand"><div class="brand">', _BRAND,
+        '<span class="word">AURA</span></div><p>Une bibliothèque à écouter.</p></div>',
+        '<nav class="foot-links" aria-label="Liens de pied de page">',
+        account,
+        '<a href="/">À propos</a><a href="/">La collection</a>',
+        '<a href="/profil">Accessibilité</a><a href="/profil">Confidentialité</a>',
+        '<a href="/">Contact</a></nav>',
+        '<p class="foot-legal">AURA · Écoute privée.</p>',
+        '</div></footer>',
+    ])
 
 # Human wording for the reasons produced by the audiobook scoring engine.
 _REASON_LABELS = {
@@ -181,14 +416,7 @@ def profile_page(
     return "".join([
         _HEAD,
         _title("AURA — Mon profil"),
-        '<header class="topbar"><div class="brand">', _BRAND,
-        '<span class="word">AURA</span></div><div class="member">',
-        f'<span class="member-name">{ESC(name)}</span>',
-        '<a class="text-button" href="/">Bibliothèque</a>',
-        '<form method="post" action="/api/public/logout">',
-        f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
-        '<button class="text-button" type="submit">Déconnexion</button>',
-        '</form></div></header>',
+        site_header("Profil", principal),
         '<main class="profile-shell" id="main">',
         '<a class="back-link" href="/">← Retour à la bibliothèque</a>',
         '<header class="library-header profile-head"><h1>Mon profil</h1>',
@@ -208,7 +436,10 @@ def profile_page(
         '<section class="profile-card" aria-labelledby="stats-title">',
         '<h2 id="stats-title">Mon écoute</h2>',
         (f'<dl class="stats-grid">'
-         f'<div><dt>Temps écouté estimé</dt><dd>{_duration_text(float(stats.get("estimated_listened_seconds") or 0))}</dd></div>'
+         f'<div><dt>'
+         + ("Temps écouté mesuré" if int(stats.get("listen_events") or 0) > 0
+            else "Temps écouté estimé")
+         + f'</dt><dd>{_duration_text(float(stats.get("measured_listened_seconds") or stats.get("estimated_listened_seconds") or 0))}</dd></div>'
          f'<div><dt>Livres terminés</dt><dd>{int(stats.get("completed") or 0)}</dd></div>'
          f'<div><dt>Favoris</dt><dd>{int(stats.get("favorites") or 0)}</dd></div>'
          f'<div><dt>Marque-pages</dt><dd>{int(stats.get("bookmarks") or 0)}</dd></div>'
@@ -252,7 +483,8 @@ def profile_page(
         f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
         '<div class="profile-actions"><button class="danger-button" type="submit">Supprimer mon compte</button></div>',
         '</form></section>',
-        '</main></body></html>',
+        mobile_nav("Profil", principal),
+        '</main>', site_footer(principal), '</body></html>',
     ])
 
 
@@ -269,24 +501,56 @@ def _duration_text(seconds) -> str:
     return f"{secs} s"
 
 
+# Curated hues: the fallback stays in the AURA palette instead of cycling
+# through the whole colour wheel (which produced off-brand neon jackets).
+COVER_HUES = (28, 152, 205, 262)
+
+
 def cover_hue(label: str) -> int:
-    """Stable colour for a book with no artwork."""
-    return sum(ord(c) for c in str(label or "")) * 37 % 360
+    """Stable, brand-safe colour for a book with no artwork."""
+    return COVER_HUES[sum(ord(c) for c in str(label or "")) % len(COVER_HUES)]
+
+
+def use_real_cover(item: dict) -> bool:
+    """Editorial gate: real artwork only for curated, emblematic books.
+
+    Everything else keeps the AURA jacket, even when a cover key exists:
+    locally generated jackets and unreviewed third-party art stay uniform.
+    """
+    return bool(item.get("emblematic_cover") and item.get("cover_url"))
+
+
+def real_cover_img(item: dict) -> str:
+    """The cover image layered over the typographic jacket, when curated."""
+    if not use_real_cover(item):
+        return ""
+    return (
+        f'<img src="{ESC(item["cover_url"])}" alt="" loading="lazy" data-fallback>'
+    )
 
 
 def fallback_cover_inner(label: str, author: str = "") -> str:
-    """Typographic placeholder shown until/unless the real cover loads."""
+    """Typographic AURA jacket shown until/unless the real cover loads."""
     title = str(label or "").strip() or "Livre"
-    byline = str(author or "").strip()
+    byline = str(author or "").strip() or "Livre audio"
     return "".join([
         '<span class="cover-fallback" aria-hidden="true">',
+        '<span class="cover-spine"></span>',
         f'<span class="cover-monogram">{ESC(title[:1].upper())}</span>',
         '<span class="cover-copy">',
         '<span class="cover-kicker">Livre audio</span>',
         f'<span class="cover-title">{ESC(title)}</span>',
-        f'<span class="cover-author">{ESC(byline or "AURA")}</span>',
+        f'<span class="cover-author">{ESC(byline)}</span>',
         '</span></span>',
     ])
+
+
+def hero_cover_html(item: dict) -> str:
+    """Editorial hero jacket: typographic by default, real art when curated."""
+    label = str(item.get("title") or item.get("display_name") or "Livre")
+    inner = fallback_cover_inner(label, item.get("author") or "")
+    inner += real_cover_img(item)
+    return f'<div class="hero-cover" style="--cover-h:{cover_hue(label)}">{inner}</div>'
 
 
 def _position_text(seconds) -> str:
@@ -372,12 +636,22 @@ def _track_html(item: dict) -> str:
     hue = cover_hue(label)
     duration = float(item.get("duration_seconds") or 0)
     progress = float(item.get("progress_seconds") or 0)
+    facets = public_facets.item_facets(item)
+    classifications = [
+        public_facets.facet_label("category", value) for value in facets["categories"]
+    ] + [
+        public_facets.facet_label("theme", value) for value in facets["themes"]
+    ]
+    classifications = classifications[:2]
     pct = min(100.0, progress / duration * 100) if duration else 0.0
-    cover = item.get("cover_url") or ""
     cover_inner = fallback_cover_inner(label, author)
-    if cover:
-        cover_inner += f'<img src="{ESC(cover)}" alt="" loading="lazy" data-fallback>'
     stream_url = str(item.get("url") or "")
+    availability = "Disponible"
+    availability_class = ""
+    if not stream_url:
+        availability = "Extrait gratuit"
+        availability_class = " free"
+    badge = f'<span class="track-availability{availability_class}">{ESC(availability)}</span>'
     download_url = "/d/" + stream_url[3:] if stream_url.startswith("/m/") else ""
     return "".join([
         '<li><button type="button" class="track-button"',
@@ -391,19 +665,21 @@ def _track_html(item: dict) -> str:
         f' data-object-id="{ESC(item.get("id") or "")}"',
         f' data-title="{ESC(label)}"',
         f' data-author="{ESC(author)}"',
-        f' data-cover="{ESC(cover)}"',
         f' data-duration="{duration:.0f}"',
         f' data-progress="{progress:.0f}"',
         f' style="--cover-h:{hue}" aria-label="Écouter {ESC(label)}">',
-        f'<span class="cover" aria-hidden="true">{cover_inner}</span>',
+        f'<span class="cover" aria-hidden="true">{cover_inner}{real_cover_img(item)}</span>',
+        badge,
         '<span class="track-copy">',
         f'<span class="track-title">{ESC(label)}</span>',
         f'<span class="track-author">{ESC(author or "Livre audio")}</span>',
+        f'<span class="track-categories">{ESC(" · ".join(classifications))}</span>' if classifications else '',
         (f'<span class="reco-why">{ESC(_REASON_LABELS.get(str((item.get("reco_reasons") or [""])[0]), ""))}</span>'
          if item.get("reco_reasons") else ''),
         f'<span class="track-progress"><i style="width:{pct:.1f}%"></i></span>',
         '</span>',
         f'<span class="track-duration">{ESC(_duration_text(duration))}</span>',
+        '<span class="track-listen">Écouter</span>',
         '</button>',
         _heart_button(item),
         f'<button type="button" class="playlist-add-button" data-add-playlist="{ESC(item.get("id") or "")}" '
@@ -413,21 +689,132 @@ def _track_html(item: dict) -> str:
     ])
 
 
+def catalog_hidden_fields(values: dict) -> str:
+    return "".join(
+        f'<input type="hidden" name="{ESC(key)}" value="{ESC(value)}">'
+        for key, value in values.items() if value not in (None, "")
+    )
+
+
+def facet_select(
+    field_id: str,
+    label: str,
+    name: str,
+    options: list[dict],
+    active: str = "",
+    all_label: str = "Tous",
+) -> str:
+    if not options:
+        return ""
+    parts = [
+        '<div class="filter-field">',
+        f'<label for="{ESC(field_id)}">{ESC(label)}</label>',
+        f'<select id="{ESC(field_id)}" name="{ESC(name)}">',
+        f'<option value=""{"" if active else " selected"}>{ESC(all_label)}</option>',
+    ]
+    for option in options:
+        value = str(option.get("value") or "")
+        chosen = " selected" if value == active else ""
+        count = int(option.get("count") or 0)
+        parts.append(
+            f'<option value="{ESC(value)}"{chosen}>{ESC(option.get("label") or value)} ({count})</option>'
+        )
+    parts.append('</select></div>')
+    return "".join(parts)
+
+
+def catalog_filter_fields(
+    *,
+    authors: list[str] | None = None,
+    active_author: str = "",
+    author_counts: dict[str, int] | None = None,
+    facet_options: dict | None = None,
+    active_facets: dict | None = None,
+    include_sort: bool = False,
+    sort: str = "",
+    preserve: dict | None = None,
+) -> str:
+    authors = authors or []
+    author_counts = author_counts or {}
+    facet_options = facet_options or {}
+    active_facets = active_facets or {}
+    parts = [catalog_hidden_fields(preserve or {})]
+    if authors:
+        parts.append('<div class="filter-field"><label for="author-select">Auteur</label>')
+        parts.append('<select id="author-select" name="auteur">')
+        parts.append(
+            f'<option value=""{"" if active_author else " selected"}>Tous les auteurs</option>'
+        )
+        for author in authors:
+            chosen = " selected" if author == active_author else ""
+            count = int(author_counts.get(author, 0))
+            suffix = f" ({count})" if count else ""
+            parts.append(f'<option value="{ESC(author)}"{chosen}>{ESC(author)}{suffix}</option>')
+        parts.append('</select></div>')
+    parts.append(facet_select(
+        "collection-select", "Collection", "collection",
+        facet_options.get("collections", []), active_facets.get("collection", ""),
+        "Toutes les collections",
+    ))
+    parts.append(facet_select(
+        "category-select", "Catégorie", "categorie",
+        facet_options.get("categories", []), active_facets.get("category", ""),
+        "Toutes les catégories",
+    ))
+    parts.append(facet_select(
+        "theme-select", "Thème", "theme",
+        facet_options.get("themes", []), active_facets.get("theme", ""),
+        "Tous les thèmes",
+    ))
+    parts.append(facet_select(
+        "language-select", "Langue", "langue",
+        facet_options.get("languages", []), active_facets.get("language", ""),
+        "Toutes les langues",
+    ))
+    parts.append(facet_select(
+        "format-select", "Format", "format",
+        facet_options.get("formats", []), active_facets.get("format", ""),
+        "Tous les formats",
+    ))
+    parts.extend([
+        '<div class="filter-field"><label for="duration-min">Durée min. (min)</label>',
+        f'<input id="duration-min" name="duree_min" type="number" min="0" step="1" '
+        f'value="{ESC(active_facets.get("duration_min", ""))}" inputmode="numeric"></div>',
+        '<div class="filter-field"><label for="duration-max">Durée max. (min)</label>',
+        f'<input id="duration-max" name="duree_max" type="number" min="0" step="1" '
+        f'value="{ESC(active_facets.get("duration_max", ""))}" inputmode="numeric"></div>',
+    ])
+    if include_sort:
+        parts.append('<div class="filter-field"><label for="sort-select">Tri</label>')
+        parts.append('<select id="sort-select" name="tri">')
+        for label, value in SORTS:
+            chosen = " selected" if value == sort else ""
+            parts.append(f'<option value="{ESC(value)}"{chosen}>{ESC(label)}</option>')
+        parts.append('</select></div>')
+    return "".join(parts)
+
+
 def catalog_page(
     principal: dict,
     collections: list[dict],
     query: str = "",
-    view: str = "liste",
+    view: str = "grille",
     authors: list[str] | None = None,
     active_author: str = "",
+    author_counts: dict[str, int] | None = None,
     sort: str = "",
     premium: bool = False,
     page: int = 1,
     page_size: int = 60,
     recommend_fn=None,
     search_note: str = "",
+    facet_options: dict | None = None,
+    active_facets: dict | None = None,
+    filter_error: str = "",
 ) -> str:
     authors = authors or []
+    facet_options = facet_options or {}
+    active_facets = active_facets or {}
     name = (
         principal.get("display_name")
         or principal.get("email")
@@ -450,7 +837,7 @@ def catalog_page(
         params = {}
         if query:
             params["q"] = query
-        if view != "liste":
+        if view not in ("liste", "grille"):
             params["vue"] = view
         if active_author:
             params["auteur"] = active_author
@@ -458,6 +845,13 @@ def catalog_page(
             params["tri"] = sort
         if page > 1:
             params["page"] = str(page)
+        for key in ("collection", "categorie", "theme", "langue", "format", "duree_min", "duree_max"):
+            value = active_facets.get({
+                "categorie": "category", "langue": "language", "duree_min": "duration_min",
+                "duree_max": "duration_max",
+            }.get(key, key), "")
+            if value:
+                params[key] = value
         for key, value in changes.items():
             if value in (None, ""):
                 params.pop(key, None)
@@ -466,6 +860,12 @@ def catalog_page(
         return "/?" + urlencode(params) if params else "/"
 
     all_items = [item for col in collections for item in col.get("items", [])]
+    if author_counts is None:
+        author_counts = {}
+        for item in all_items:
+            author_name = str(item.get("author") or "").strip()
+            if author_name:
+                author_counts[author_name] = author_counts.get(author_name, 0) + 1
     # Paginate the browse list only. The shelves below keep the whole catalogue
     # (they are small, personalised selections) so navigation does not change.
     page = max(1, page)
@@ -506,50 +906,85 @@ def catalog_page(
     featured = resume[0] if resume else (all_items[0] if all_items else None)
     featured_idx = id_to_index.get(str(featured.get("id"))) if featured else -1
 
-    from collections import Counter
-    author_counts = Counter(
-        str(item.get("author") or "").strip()
-        for item in all_items
-        if str(item.get("author") or "").strip()
+    # Couvertures du catalogue pour le hero éditorial : l'artwork réel quand
+    # il existe, sinon la jaquette typographique du livre.
+    hero_items = all_items[:3]
+    hero_figure = ""
+    if hero_items:
+        hero_figure = (
+            '<div class="hero-figure"><div class="hero-stack">'
+            + "".join(hero_cover_html(i) for i in hero_items)
+            + '</div><div class="hero-note"><p class="eyebrow">À découvrir</p>'
+              '<p>Un catalogue choisi, à écouter à votre rythme.</p></div></div>'
+        )
+
+    facet_nav = category_theme_nav(
+        facet_options=facet_options, active_facets=active_facets, href=href,
     )
-    author_options = sorted(author_counts.keys(), key=lambda a: a.lower())
-    collection_options = [
-        {"title": col.get("title") or "Bibliothèque", "count": len(col.get("items", []))}
-        for col in collections
-    ]
 
     parts = [
         _HEAD,
         _title("AURA — Bibliothèque"),
-        '<header class="topbar"><div class="brand">', _BRAND,
-        '<span class="word">AURA</span></div><div class="member">',
-        f'<span class="member-name">{ESC(name)}</span>',
-        '<a class="text-button" href="/profil">Mon profil</a>',
-        '<form method="post" action="/api/public/logout">',
-        f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
-        '<button class="text-button" type="submit">Déconnexion</button>',
-        '</form></div></header>',
+        site_header("Accueil", principal),
         f'<main class="library view-{ESC(view)}" id="main">',
-        '<header class="library-header"><h1>Bon retour.</h1>',
-        '<p class="lede">Reprenez là où votre esprit s\'est arrêté.</p>',
-        '<form class="search-form" method="get" action="/">',
+        '<header class="library-header"><div class="hero-grid"><div class="hero-copy">',
+        '<p class="eyebrow">La bibliothèque audio</p>',
+        '<h1>Des histoires<br>qui vous <em>suivent</em>.</h1>',
+        '<p class="lede">Une bibliothèque choisie, des voix qui donnent vie aux textes. '
+        'Un extrait pour découvrir, un compte pour tout écouter — et reprendre '
+        'exactement là où vous vous êtes arrêté.</p>',
+        '<div class="hero-actions"><a class="primary-button" href="#decouvrir">Explorer la bibliothèque</a>',
+        '<a class="secondary-link" href="#resume-card">Reprendre l’écoute</a></div>',
+        f'<p class="hero-caption">{len(all_items)} titres · à écouter où vous voulez.</p>',
+        '</div>', hero_figure, '</div></header>',
+        '<section class="search-section" id="recherche" aria-label="Recherche principale">',
+        '<form class="search-form" method="get" action="/" role="search">',
+        _nav_icon("recherche").replace('<svg ', '<svg class="search-icon" '),
         f'<input type="search" name="q" value="{ESC(query)}" '
-        'placeholder="Rechercher un livre, un auteur…" aria-label="Rechercher un livre, un auteur">',
+        'placeholder="Un titre, un auteur, une envie…" aria-label="Rechercher un livre, un auteur ou un thème">',
+        catalog_hidden_fields({
+            "auteur": active_author,
+            "collection": active_facets.get("collection"),
+            "categorie": active_facets.get("category"),
+            "theme": active_facets.get("theme"),
+            "langue": active_facets.get("language"),
+            "format": active_facets.get("format"),
+            "duree_min": active_facets.get("duration_min"),
+            "duree_max": active_facets.get("duration_max"),
+            "vue": view if view not in ("liste", "grille") else "",
+            "tri": sort,
+        }),
         '<button type="submit">Rechercher</button></form>',
+        '<div class="search-suggest"><span>En ce moment :</span>',
+        '<a href="/?categorie=litterature&amp;duree_max=240">Romans courts</a>',
+        '<a href="/?duree_max=60">Moins d’une heure</a>',
+        '<a href="/?tri=recent">Nouveautés</a></div></section>',
+        facet_nav,
     ]
     if search_note:
         parts.append(f'<p class="search-note" role="status">Compris comme : {ESC(search_note)}</p>')
-    filters_active = (view != "liste") or bool(active_author) or bool(sort)
-    filter_count = (1 if view != "liste" else 0) + (1 if active_author else 0) + (1 if sort else 0)
-    if active_author or query:
+    facet_values = (
+        active_facets.get("collection"), active_facets.get("category"),
+        active_facets.get("theme"), active_facets.get("language"),
+        active_facets.get("format"), active_facets.get("duration_min"),
+        active_facets.get("duration_max"),
+    )
+    filters_active = bool(
+        query or active_author or sort or view not in ("liste", "grille") or any(facet_values) or filter_error
+    )
+    filter_count = (
+        (1 if query else 0) + (1 if active_author else 0) + (1 if sort else 0) +
+        (1 if view not in ("liste", "grille") else 0) + sum(1 for value in facet_values if value)
+    )
+    if filters_active:
         parts.append(
-            f'<p class="filters-reset"><a class="facet-clear" href="{ESC(href(auteur=None, q=None))}">'
-            'Effacer les filtres</a></p>'
+            '<p class="filters-reset"><a class="facet-clear" href="/">'
+            'Effacer tous les filtres</a></p>'
         )
     badge = f' <span class="filters-badge">{filter_count}</span>' if filter_count else ""
     parts.append(
         f'<details class="filters-fold" id="filters-fold"{" open" if filters_active else ""}>'
-        f'<summary>Affichage et filtres{badge}</summary>'
+        f'<summary>Filtrer et trier{badge}</summary>'
     )
     parts.append('<div class="controls-block">')
     parts.append('<nav class="control-row" aria-label="Mode d\'affichage"><span class="label">Vue</span>')
@@ -557,7 +992,7 @@ def catalog_page(
         # aria-current must be absent when false, not "false".
         current = ' aria-current="true"' if view == value else ""
         parts.append(
-            f'<a class="view-link" href="{ESC(href(vue=value if value != "liste" else None))}"'
+            f'<a class="view-link" href="{ESC(href(vue=None if value == "grille" else value, page=None))}"'
             f'{current}>{label}</a>'
         )
     parts.append('</nav>')
@@ -565,48 +1000,33 @@ def catalog_page(
     for label, value in SORTS:
         current = ' aria-current="true"' if sort == value else ""
         parts.append(
-            f'<a class="view-link" href="{ESC(href(tri=value or None))}"{current}>{label}</a>'
+            f'<a class="view-link" href="{ESC(href(tri=value or None, page=None))}"{current}>{label}</a>'
         )
     parts.append('</nav>')
 
-    # Collections: only worth a row when there is something to choose between.
-    if len(collection_options) > 1:
-        parts.append('<nav class="control-row" aria-label="Collections"><span class="label">Collections</span>')
-        for copt in collection_options:
-            parts.append(
-                f'<span class="pill pill-static" title="{ESC(copt["title"])}">'
-                f'{ESC(copt["title"])} <small>({copt["count"]})</small></span>'
-            )
-        parts.append('</nav>')
-
-    # Authors: one select (a long library has dozens), sent as a plain GET form.
-    if author_options:
-        parts.append(
-            '<form class="control-row author-form" method="get" action="/" aria-label="Filtrer par auteur">'
-            '<label class="label" for="author-select">Auteur</label>'
-        )
-        if query:
-            parts.append(f'<input type="hidden" name="q" value="{ESC(query)}">')
-        if view != "liste":
-            parts.append(f'<input type="hidden" name="vue" value="{ESC(view)}">')
-        parts.append('<select id="author-select" name="auteur">')
-        parts.append(
-            f'<option value=""{"" if active_author else " selected"}>'
-            f'Tous les auteurs ({len(all_items)})</option>'
-        )
-        for author in author_options:
-            count = author_counts.get(author, 0)
-            chosen = " selected" if active_author == author else ""
-            parts.append(
-                f'<option value="{ESC(author)}"{chosen}>{ESC(author)} ({count})</option>'
-            )
-        parts.append('</select>')
-        parts.append('<noscript><button type="submit" class="text-button">Filtrer</button></noscript>')
-        parts.append('</form>')
+    parts.append(
+        '<form class="catalog-filters" method="get" action="/" '
+        'aria-label="Filtrer le catalogue">'
+    )
+    parts.append(catalog_filter_fields(
+        authors=authors,
+        active_author=active_author,
+        author_counts=author_counts,
+        facet_options=facet_options,
+        active_facets=active_facets,
+        preserve={"q": query, "vue": view if view != "liste" else "", "tri": sort},
+    ))
+    if filter_error:
+        parts.append(f'<p class="filter-error" role="alert">{ESC(filter_error)}</p>')
+    parts.append('<button type="submit" class="filter-apply">Appliquer les filtres</button>')
+    parts.append('</form>')
+    parts.append(
+        f'<p class="filter-result-count" role="status">{len(all_items)} '
+        f'titre{"" if len(all_items) == 1 else "s"} affiché{"" if len(all_items) == 1 else "s"}</p>'
+    )
 
     parts.append('</div></details>')
-
-    parts.append('</header>')
+    parts.append(carousel_shelves(all_items))
 
     # The first book in progress is the resume card itself: the shelf lists the others.
     resume_shelf = resume[1:] if resume else []
@@ -636,11 +1056,14 @@ def catalog_page(
             '<p class="eyebrow">Bibliothèque</p>',
             '<h2>Aucun livre à afficher</h2>',
             '<p>Essayez d’élargir votre recherche, de retirer un filtre ou de revenir à toute la bibliothèque.</p>',
-            f'<p><a class="facet-clear" href="{ESC(href(auteur=None, q=None, vue=None))}">Réinitialiser la vue</a></p>',
+            '<p><a class="facet-clear" href="/">Réinitialiser tous les filtres</a></p>',
             '</section>',
         ])
 
-    # Prominent continue card for resumed listening (non-immersive view focus)
+    # Prominent continue card for resumed listening (non-immersive view focus).
+    # Construit ici mais inséré après la sélection « À découvrir » pour respecter
+    # l'ordre éditorial de la page d'accueil.
+    resume_card_parts = []
     if featured and view != "immersif":
         flabel = str(featured.get("title") or featured.get("display_name") or "Livre")
         fauthor = str(featured.get("author") or "Livre audio")
@@ -648,10 +1071,7 @@ def catalog_page(
         fduration = float(featured.get("duration_seconds") or 0)
         fpct = min(100.0, (fprogress / fduration * 100) if fduration else 0.0)
         fhue = cover_hue(flabel)
-        fcover = featured.get("cover_url") or ""
         fcover_inner = fallback_cover_inner(flabel, featured.get("author") or "")
-        if fcover:
-            fcover_inner += f'<img src="{ESC(fcover)}" alt="" data-fallback>'
         fmeta = "Prêt à être écouté"
         if fprogress and fduration:
             remaining = max(0.0, fduration - fprogress)
@@ -662,9 +1082,10 @@ def catalog_page(
             fmeta = _duration_text(fduration)
         cta = "Continuer l'écoute" if fprogress > 0 else "Lancer l'écoute"
         feyebrow = "Reprendre l'écoute" if fprogress > 0 else "Pour commencer"
-        parts.extend([
+        resume_card_parts = [
             '<section class="resume-card" id="resume-card" aria-label="Reprendre l\'écoute">',
-            f'<div class="resume-cover" style="--cover-h:{fhue}">{fcover_inner}</div>',
+            f'<div class="resume-cover" style="--cover-h:{fhue}">'
+            f'{fcover_inner}{real_cover_img(featured)}</div>',
             f'<div class="resume-copy"><p class="eyebrow">{ESC(feyebrow)}</p>',
             f'<h2>{ESC(flabel)}</h2><p>{ESC(fauthor)}</p>',
             f'<p class="resume-meta">{ESC(fmeta)}</p>',
@@ -672,22 +1093,20 @@ def catalog_page(
             '</div><div class="resume-actions">',
             f'<button type="button" class="primary-button" id="resume-continue" data-track-index="{featured_idx}">{cta}</button>',
             '</div></section>',
-        ])
+        ]
 
     # Immersive hero
     if view == "immersif" and all_items:
         first = featured or all_items[0]
-        cover = first.get("cover_url") or ""
         label = str(first.get("title") or first.get("display_name") or "Livre")
         author = str(first.get("author") or "Livre audio")
         hue = cover_hue(label)
         cover_inner = fallback_cover_inner(label, first.get("author") or "")
-        img = f'<img src="{ESC(cover)}" alt="" data-fallback>' if cover else ""
         idx = id_to_index.get(str(first.get("id")), 0)
         parts.extend([
             '<section class="hero" id="resume-card" aria-label="Lecture immersive">',
             f'<div class="big-cover" style="--cover-h:{hue}" id="immersive-cover-host">',
-            f'{cover_inner}{img}</div>',
+            f'{cover_inner}{real_cover_img(first)}</div>',
             '<div><p class="eyebrow">Lecture immersive</p>',
             f'<h2>{ESC(label)}</h2>',
             f'<p>{ESC(author)}</p>',
@@ -707,11 +1126,13 @@ def catalog_page(
             parts.append(_track_html(item))
         parts.append('</ul></section>')
 
+    # Ordre voulu : sélection à découvrir, puis reprise, puis le reste.
+    shelf("decouvrir", "À découvrir", discover, "Une sélection pour varier vos prochaines écoutes.")
+    parts.extend(resume_card_parts)
     shelf("resume", "Reprendre l'écoute", resume_shelf, "Vos autres lectures en cours, à la dernière position.")
-    shelf("favoris", "Mes favoris", favorites, "Les livres que vous avez marqués d'un cœur.")
     shelf("pour-vous", "Pour vous", suggested, "Dans la veine de vos favoris et de vos écoutes.")
     shelf("nouveautes", "Nouveautés", newest, "Les titres récemment ajoutés à votre bibliothèque.")
-    shelf("decouvrir", "À découvrir", discover, "Une sélection pour varier vos prochaines écoutes.")
+    shelf("favoris", "Mes favoris", favorites, "Les livres que vous avez marqués d'un cœur.")
     for col in visible_collections:
         shelf("tous", col.get("title") or "Bibliothèque", col.get("items", []))
 
@@ -840,12 +1261,16 @@ def catalog_page(
         '<p class="sync-prompt" id="sync-prompt" role="status" hidden>'
         '<span id="sync-text"></span> <button type="button" class="text-button" id="sync-go">Reprendre</button></p>',
 
+        '<script defer src="' + asset_url("carousel.js") + '"></script>',
         '<script src="' + asset_url("player.js") + '"></script>',
         '<script src="' + asset_url("shelf.js") + '"></script>',
         '<script src="' + asset_url("favorites.js") + '"></script>',
         '<script src="' + asset_url("playlists.js") + '"></script>',
         '<script src="' + asset_url("offline.js") + '"></script>',
         '<script src="' + asset_url("bookmarks.js") + '"></script>',
-        '</main></body></html>',
+        mobile_nav("Accueil", principal),
+        '</main>',
+        site_footer(principal),
+        '</body></html>',
     ])
     return "".join(parts)

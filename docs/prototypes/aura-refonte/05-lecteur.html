@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="AURA — maquette de design, bibliothèque audio éditoriale.">
+<title>Lecteur audio — AURA</title>
+<link rel="stylesheet" href="assets/aura.css"></head>
+<body class="player-page">
+<a class="skip" href="#main">Aller au contenu</a>
+<header class="site-head"><div class="wrap head-inner">
+      <a class="brand" href="index.html" aria-label="AURA, accueil"><svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="9" stroke="currentColor" stroke-width="1.3" opacity=".45"/><path d="M11 12.5h6.2c1.5 0 2.8 1.2 2.8 2.8V29H12a1 1 0 0 1-1-1V12.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M29 12.5h-6.2c-1.5 0-2.8 1.2-2.8 2.8V29H28a1 1 0 0 0 1-1V12.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M14 18h2.5M23.5 18H26M14 22h2.5M23.5 22H26" stroke="currentColor" stroke-width="1.2"/></svg><span class="brand-word">AURA</span></a><nav class="head-nav" aria-label="Navigation principale">
+        <a href="01-accueil-desktop.html">Accueil</a><a href="03-bibliotheque.html">Bibliothèque</a>
+        <a href="04-livre-detail.html">Le livre</a><a href="05-lecteur.html" aria-current="page">Lecteur</a></nav>
+      <div class="head-end"><button class="icon-btn" aria-label="Rechercher"><svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
+      <span class="avatar" aria-hidden="true">CL</span><button class="icon-btn head-menu-toggle" aria-label="Ouvrir le menu"><svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button></div>
+    </div></header>
+    <main id="main"><div class="wrap player-stage">
+      <div class="player-cover"><img src="assets/covers/la-peste.svg" alt="Couverture de La Peste"></div>
+      <div class="player-meta">
+        <p class="eyebrow">En cours d'écoute</p>
+        <h1>La Peste</h1>
+        <p class="author">Albert Camus · lu par Camille Delcourt</p>
+        <p class="chapter">Chapitre IV — Les messagers</p>
+        <div class="seek-wrap">
+          <input class="seek" type="range" min="0" max="100" value="38" aria-label="Position dans le livre" style="background:linear-gradient(90deg,#D6B67F 0 38%,rgba(255,255,255,.22) 38% 100%)">
+          <div class="times"><span>3 h 19</span><span>Il reste 5 h 23</span></div>
+        </div>
+        <div class="transport" role="group" aria-label="Commandes de lecture">
+          <button class="t-btn small" aria-label="Titre précédent"><svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v14M19 5 9 12l10 7V5Z"/></svg></button>
+          <button class="t-btn small" aria-label="Reculer de 15 secondes"><svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m11 7-5 5 5 5"/><path d="M6 12h8a5 5 0 1 1 0 10"/></svg></button>
+          <button class="t-btn main" aria-label="Mettre en pause"><svg class="ic ic-lg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="5" width="3.4" height="14" rx="1" fill="currentColor"/><rect x="13.6" y="5" width="3.4" height="14" rx="1" fill="currentColor"/></svg></button>
+          <button class="t-btn small" aria-label="Avancer de 15 secondes"><svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m13 7 5 5-5 5"/><path d="M18 12h-8a5 5 0 1 0 0 10"/></svg></button>
+          <button class="t-btn small" aria-label="Titre suivant"><svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5v14M5 5l10 7L5 19V5Z"/></svg></button>
+        </div>
+        <div class="player-options">
+          <button class="opt" aria-label="Vitesse de lecture">1× · Vitesse</button>
+          <button class="opt" aria-label="Minuteur de sommeil"><svg class="ic ic-sm" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg> Sommeil</button>
+          <button class="opt" aria-pressed="true"><svg class="ic ic-sm" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4h11v17l-5.5-3.8L6.5 21V4Z"/></svg> Marque-pages</button>
+          <button class="opt"><svg class="ic ic-sm" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg> File d'attente</button>
+          <button class="opt"><svg class="ic ic-sm" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 9v6h4L14 19V5L8.5 9h-4Z"/><path d="M17 9a4 4 0 0 1 0 6"/></svg> Volume</button>
+        </div>
+        <div class="player-chapters"><h2>Les chapitres</h2><div class="ch-row"><span class="n">01</span><span class="t">I. La ville</span><span class="d">0:00</span></div><div class="ch-row"><span class="n">02</span><span class="t">II. La peste</span><span class="d">38:12</span></div><div class="ch-row"><span class="n">03</span><span class="t">III. La quarantaine</span><span class="d">1:34:05</span></div><div class="ch-row current"><span class="n">04</span><span class="t">IV. Les messagers</span><span class="d">2:41:50</span></div><div class="ch-row"><span class="n">05</span><span class="t">V. Le sacrifice</span><span class="d">4:02:18</span></div><div class="ch-row"><span class="n">06</span><span class="t">VI. La fin</span><span class="d">6:58:44</span></div></div>
+      </div>
+    </div></main>
+<script src="assets/app.js" defer></script>
+</body></html>

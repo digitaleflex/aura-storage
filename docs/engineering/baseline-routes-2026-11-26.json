@@ -1,0 +1,914 @@
+[
+  {
+    "method": "GET",
+    "path": "/health/live",
+    "handler": "live",
+    "line": 1076
+  },
+  {
+    "method": "GET",
+    "path": "/health/ready",
+    "handler": "ready",
+    "line": 1089
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/diag/ping",
+    "handler": "diag_ping",
+    "line": 1118
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/diag/download",
+    "handler": "diag_download",
+    "line": 1136
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/diag/upload",
+    "handler": "diag_upload",
+    "line": 1154
+  },
+  {
+    "method": "GET",
+    "path": "/s/{token}",
+    "handler": "redeem_share",
+    "line": 1194
+  },
+  {
+    "method": "GET",
+    "path": "/f/{token}",
+    "handler": "view_folder_share",
+    "line": 1348
+  },
+  {
+    "method": "GET",
+    "path": "/f/{token}/o/{oid}",
+    "handler": "redeem_folder_share_object",
+    "line": 1407
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/login",
+    "handler": "login",
+    "line": 1477
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/logout",
+    "handler": "logout",
+    "line": 1506
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/me",
+    "handler": "me",
+    "line": 1518
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/auth/google",
+    "handler": "public_auth_google",
+    "line": 1585
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/auth/callback",
+    "handler": "public_auth_callback",
+    "line": 1610
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/auth/email",
+    "handler": "public_email_link_request",
+    "line": 1731
+  },
+  {
+    "method": "GET",
+    "path": "/connexion/lien",
+    "handler": "public_email_link_open",
+    "line": 1764
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/auth/email/confirm",
+    "handler": "public_email_link_confirm",
+    "line": 1779
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/me",
+    "handler": "public_me",
+    "line": 1827
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/public/me",
+    "handler": "public_me_patch",
+    "line": 1851
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/me",
+    "handler": "public_me_delete",
+    "line": 1859
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/logout",
+    "handler": "public_logout",
+    "line": 1872
+  },
+  {
+    "method": "GET",
+    "path": "/sw.js",
+    "handler": "portal_service_worker",
+    "line": 1938
+  },
+  {
+    "method": "GET",
+    "path": "/hors-ligne",
+    "handler": "portal_offline_page",
+    "line": 1952
+  },
+  {
+    "method": "GET",
+    "path": "/portal-assets/{name}",
+    "handler": "portal_asset",
+    "line": 1967
+  },
+  {
+    "method": "GET",
+    "path": "/profil",
+    "handler": "public_profile",
+    "line": 1985
+  },
+  {
+    "method": "POST",
+    "path": "/profil",
+    "handler": "public_profile_update",
+    "line": 2004
+  },
+  {
+    "method": "POST",
+    "path": "/profil/supprimer",
+    "handler": "public_profile_delete",
+    "line": 2020
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/library",
+    "handler": "public_library",
+    "line": 2143
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/progress",
+    "handler": "public_progress",
+    "line": 2152
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/progress",
+    "handler": "public_progress_get",
+    "line": 2183
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/bookmarks",
+    "handler": "public_bookmarks",
+    "line": 2191
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/bookmarks",
+    "handler": "public_bookmark_add",
+    "line": 2197
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/bookmarks/{bookmark_id}",
+    "handler": "public_bookmark_delete",
+    "line": 2211
+  },
+  {
+    "method": "PUT",
+    "path": "/api/public/favorites/{oid}",
+    "handler": "public_favorite_add",
+    "line": 2233
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/favorites/{oid}",
+    "handler": "public_favorite_remove",
+    "line": 2239
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/playlists/create",
+    "handler": "public_playlist_create_form",
+    "line": 2252
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/playlists/{pid}/delete",
+    "handler": "public_playlist_delete_form",
+    "line": 2264
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/stats",
+    "handler": "public_stats",
+    "line": 2321
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/playlists",
+    "handler": "public_playlists",
+    "line": 2327
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/playlists",
+    "handler": "public_playlist_create",
+    "line": 2333
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/public/playlists/{pid}",
+    "handler": "public_playlist_rename",
+    "line": 2344
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/playlists/{pid}",
+    "handler": "public_playlist_delete",
+    "line": 2358
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/playlists/{pid}/items",
+    "handler": "public_playlist_items",
+    "line": 2369
+  },
+  {
+    "method": "PUT",
+    "path": "/api/public/playlists/{pid}/items/{oid}",
+    "handler": "public_playlist_add_item",
+    "line": 2375
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/playlists/{pid}/items/{oid}",
+    "handler": "public_playlist_remove_item",
+    "line": 2388
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "handler": "public_portal",
+    "line": 2400
+  },
+  {
+    "method": "GET",
+    "path": "/livre/{oid}",
+    "handler": "public_book_page",
+    "line": 2539
+  },
+  {
+    "method": "GET",
+    "path": "/extrait/{oid}",
+    "handler": "public_preview",
+    "line": 2584
+  },
+  {
+    "method": "GET",
+    "path": "/robots.txt",
+    "handler": "public_robots",
+    "line": 2616
+  },
+  {
+    "method": "GET",
+    "path": "/sitemap.xml",
+    "handler": "public_sitemap",
+    "line": 2630
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/me/master-mode",
+    "handler": "master_mode_on",
+    "line": 2659
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/me/master-mode",
+    "handler": "master_mode_off",
+    "line": 2682
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/bulk-purge",
+    "handler": "bulk_purge",
+    "line": 2722
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/trash/empty",
+    "handler": "empty_trash",
+    "line": 2731
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/upload-intents",
+    "handler": "upload_intent",
+    "line": 2754
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/replace-intents",
+    "handler": "create_replace_intent",
+    "line": 2983
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}/multipart",
+    "handler": "multipart_status",
+    "line": 3252
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/multipart/parts",
+    "handler": "multipart_part_urls",
+    "line": 3265
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/commit",
+    "handler": "commit_object",
+    "line": 3476
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/abort",
+    "handler": "abort_object",
+    "line": 3743
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/public-access",
+    "handler": "create_public_access",
+    "line": 3793
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/objects/{oid}/public-access",
+    "handler": "revoke_public_access",
+    "line": 3822
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects",
+    "handler": "list_objects",
+    "line": 3852
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/tags",
+    "handler": "list_object_tags",
+    "line": 3901
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}",
+    "handler": "get_object",
+    "line": 3917
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/transfers",
+    "handler": "list_transfers",
+    "line": 3926
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/transfers/{tid}",
+    "handler": "get_transfer",
+    "line": 3970
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}/analytics",
+    "handler": "object_analytics",
+    "line": 3981
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/objects/{oid}",
+    "handler": "soft_delete_object",
+    "line": 4008
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/restore",
+    "handler": "restore_object",
+    "line": 4025
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/objects/{oid}",
+    "handler": "update_object",
+    "line": 4044
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/share",
+    "handler": "create_object_share",
+    "line": 4070
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}/shares",
+    "handler": "list_object_shares",
+    "line": 4137
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/objects/{oid}/shares/{sid}",
+    "handler": "revoke_object_share",
+    "line": 4168
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/purge",
+    "handler": "purge",
+    "line": 4202
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/download-intent",
+    "handler": "download_intent",
+    "line": 4223
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/preview-intent",
+    "handler": "preview_intent",
+    "line": 4299
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}/thumbnail",
+    "handler": "object_thumbnail",
+    "line": 4431
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/objects/{oid}/publication",
+    "handler": "set_object_publication",
+    "line": 4463
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/replace",
+    "handler": "replace_object_content",
+    "line": 4494
+  },
+  {
+    "method": "GET",
+    "path": "/m/{slug}",
+    "handler": "public_media",
+    "line": 4575
+  },
+  {
+    "method": "GET",
+    "path": "/d/{slug}",
+    "handler": "public_download",
+    "line": 4614
+  },
+  {
+    "method": "GET",
+    "path": "/a/{token}",
+    "handler": "public_granted_media",
+    "line": 4659
+  },
+  {
+    "method": "GET",
+    "path": "/covers/{oid}.jpg",
+    "handler": "public_cover",
+    "line": 4705
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/hls",
+    "handler": "prepare_hls",
+    "line": 4756
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}/hls/status",
+    "handler": "hls_status",
+    "line": 4773
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}/hls/index.m3u8",
+    "handler": "hls_playlist",
+    "line": 4787
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}/hls/{segment}",
+    "handler": "hls_segment",
+    "line": 4798
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/objects/{oid}/subtitle",
+    "handler": "set_subtitle",
+    "line": 4813
+  },
+  {
+    "method": "GET",
+    "path": "/hls/{slug}.m3u8",
+    "handler": "public_hls_playlist",
+    "line": 4836
+  },
+  {
+    "method": "GET",
+    "path": "/hls/{slug}/{segment}",
+    "handler": "public_hls_segment",
+    "line": 4856
+  },
+  {
+    "method": "GET",
+    "path": "/m/{slug}/subtitles.vtt",
+    "handler": "public_subtitle",
+    "line": 4880
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/objects/{oid}/tags",
+    "handler": "set_object_tags",
+    "line": 4931
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/collections",
+    "handler": "list_collections",
+    "line": 4948
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/collections",
+    "handler": "create_collection",
+    "line": 4954
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/collections/{cid}",
+    "handler": "get_collection",
+    "line": 4971
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/collections/{cid}",
+    "handler": "update_collection",
+    "line": 4981
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/collections/{cid}/items",
+    "handler": "set_collection_items",
+    "line": 5008
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/collections/{cid}",
+    "handler": "delete_collection",
+    "line": 5029
+  },
+  {
+    "method": "GET",
+    "path": "/p/{slug}.json",
+    "handler": "public_collection_manifest",
+    "line": 5038
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/folders",
+    "handler": "list_folders",
+    "line": 5104
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/folders/{fid}",
+    "handler": "get_folder",
+    "line": 5138
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/folders",
+    "handler": "create_folder",
+    "line": 5150
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/folders/{fid}",
+    "handler": "update_folder",
+    "line": 5165
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/folders/{fid}",
+    "handler": "delete_folder",
+    "line": 5220
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/folders/{fid}/share",
+    "handler": "create_folder_share",
+    "line": 5247
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/folders/{fid}/shares",
+    "handler": "list_folder_shares",
+    "line": 5302
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/folders/{fid}/shares/{sid}",
+    "handler": "revoke_folder_share",
+    "line": 5331
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/reconcile",
+    "handler": "reconcile",
+    "line": 5360
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/reconcile-terminal",
+    "handler": "reconcile_terminal_route",
+    "line": 5389
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/reconcile-reverse",
+    "handler": "reconcile_reverse_route",
+    "line": 5398
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/integrity",
+    "handler": "integrity_report",
+    "line": 5406
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/integrity/scrub",
+    "handler": "integrity_scrub_now",
+    "line": 5425
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/objects/{oid}/reverify",
+    "handler": "reverify_object",
+    "line": 5434
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/orphans",
+    "handler": "list_orphan_candidates",
+    "line": 5481
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/storage-orphans",
+    "handler": "storage_orphans",
+    "line": 5509
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/storage-orphans/cleanup",
+    "handler": "storage_orphans_cleanup",
+    "line": 5557
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/stats",
+    "handler": "admin_stats",
+    "line": 5581
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/audit",
+    "handler": "search_audit",
+    "line": 5592
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/audit/prune",
+    "handler": "prune_audit",
+    "line": 5633
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/portal-stats",
+    "handler": "admin_portal_stats",
+    "line": 5646
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/usage",
+    "handler": "admin_usage",
+    "line": 5680
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/health",
+    "handler": "admin_health",
+    "line": 5753
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/applications",
+    "handler": "create_application",
+    "line": 5829
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/applications",
+    "handler": "list_applications",
+    "line": 5838
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/applications/{aid}",
+    "handler": "get_application",
+    "line": 5843
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/applications/{aid}",
+    "handler": "update_application",
+    "line": 5855
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/spaces",
+    "handler": "create_space",
+    "line": 5897
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/spaces",
+    "handler": "list_spaces",
+    "line": 5921
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/spaces/{sid}",
+    "handler": "get_space",
+    "line": 5926
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/spaces/{sid}",
+    "handler": "update_space",
+    "line": 5934
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/admin/spaces/{sid}/quotas",
+    "handler": "set_space_quotas",
+    "line": 5973
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/spaces/{sid}/buckets",
+    "handler": "create_space_bucket",
+    "line": 5993
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/buckets",
+    "handler": "list_buckets",
+    "line": 6014
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/buckets/{bid}",
+    "handler": "update_bucket",
+    "line": 6034
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/identities",
+    "handler": "create_identity",
+    "line": 6100
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/identities",
+    "handler": "list_identities",
+    "line": 6107
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/partner-sites",
+    "handler": "list_partner_sites",
+    "line": 6146
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/partner-sites",
+    "handler": "create_partner_site",
+    "line": 6152
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/partner-sites/{pid}",
+    "handler": "update_partner_site",
+    "line": 6190
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/partner-sites/{pid}",
+    "handler": "delete_partner_site",
+    "line": 6229
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/identities/{iid}/rotate",
+    "handler": "rotate_identity",
+    "line": 6253
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/identities/{iid}/revoke",
+    "handler": "revoke_identity",
+    "line": 6265
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/import-jobs",
+    "handler": "create_import_job",
+    "line": 6278
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/import-jobs",
+    "handler": "list_import_jobs",
+    "line": 6300
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/import-jobs/{jid}/cancel",
+    "handler": "cancel_import_job",
+    "line": 6318
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}/revisions",
+    "handler": "list_object_revisions",
+    "line": 6377
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}/revisions/{rid}",
+    "handler": "get_object_revision",
+    "line": 6390
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/objects/{oid}/revisions/{rid}/download-intent",
+    "handler": "download_revision_intent",
+    "line": 6396
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/objects/{oid}/revisions/{rid}",
+    "handler": "delete_object_revision",
+    "line": 6433
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/objects/{oid}/revisions/{rid}/keep-forever",
+    "handler": "set_revision_keep_forever",
+    "line": 6464
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/objects/{oid}/revisions/{rid}/keep-forever",
+    "handler": "unset_revision_keep_forever",
+    "line": 6487
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/objects/{oid}/revisions/{rid}/restore",
+    "handler": "restore_object_revision",
+    "line": 6501
+  }
+]

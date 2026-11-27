@@ -19,6 +19,16 @@ def _int(name: str, default: int) -> int:
         raise RuntimeError(f"Environment variable {name} must be an integer")
 
 
+def _float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise RuntimeError(f"Environment variable {name} must be a number")
+
+
 def _csv_lower(name: str) -> tuple[str, ...]:
     """Parse a comma-separated setting into normalized, non-empty values."""
     return tuple(
@@ -49,10 +59,12 @@ class Settings:
     # PostgreSQL DSN, e.g. postgresql://aura:PASSWORD@localhost:5432/aura.
     # Only used when backend is 'postgres'. Never logged.
     db_dsn: str = os.environ.get("AURA_API_DSN", "")
-    # PostgreSQL connection pool (psycopg_pool). Only used by the postgres backend.
-    pg_pool_min: int = _int("AURA_PG_POOL_MIN", 1)
-    pg_pool_max: int = _int("AURA_PG_POOL_MAX", 4)
-    pg_pool_timeout: float = float(os.environ.get("AURA_PG_POOL_TIMEOUT", "30"))
+    # Integrated PostgreSQL pool (#325). A single VPS has no separate proxy:
+    # psycopg_pool keeps a bounded set of connections per process and reports
+    # acquisitions/timeouts through Repository.pool_metrics().
+    db_pool_min: int = _int("AURA_DB_POOL_MIN", 2)
+    db_pool_max: int = _int("AURA_DB_POOL_MAX", 10)
+    db_pool_timeout_s: float = _float("AURA_DB_POOL_TIMEOUT", 5.0)
     # Lifetimes (seconds).
     # Human session cookie lifetime: 8 hours by default (audit H6 kept the
     # default short). A longer session (e.g. 2592000 = 30 days) widens the window
@@ -124,12 +136,27 @@ class Settings:
     # In-process HLS worker (one job at a time, ffmpeg nice + 1 thread). Disable
     # when running several API replicas until the lease/queue is externalised.
     media_worker_enabled: bool = os.environ.get("AURA_MEDIA_WORKER", "1") == "1"
+    # AI audio analysis / classification. Disabled by default: enabling requires
+    # explicit opt-in and valid provider keys. Gemini is the primary provider
+    # (native audio input); Claude is the fallback (transcript/text classification).
+    ai_classification_enabled: bool = os.environ.get("AURA_AI_CLASSIFICATION_ENABLED", "0") == "1"
+    ai_primary_provider: str = os.environ.get("AURA_AI_PRIMARY_PROVIDER", "gemini").strip().lower()
+    ai_fallback_provider: str = os.environ.get("AURA_AI_FALLBACK_PROVIDER", "claude").strip().lower()
+    gemini_api_key: str = os.environ.get("AURA_GEMINI_API_KEY", "")
+    gemini_model: str = os.environ.get("AURA_GEMINI_MODEL", "gemini-4-hydrogen")
+    anthropic_api_key: str = os.environ.get("AURA_ANTHROPIC_API_KEY", "")
+    anthropic_model: str = os.environ.get("AURA_ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    ai_confidence_threshold: float = _float("AURA_AI_CONFIDENCE_THRESHOLD", 0.80)
+    ai_timeout_s: int = _int("AURA_AI_TIMEOUT_S", 120)
     multipart_threshold_bytes: int = _int("AURA_MULTIPART_THRESHOLD_BYTES", 100 * 1024 * 1024)
     # Each part is one request through the edge proxy: keep part / slowest
     # supported rate well under Traefik's readTimeout (see the plan).
     multipart_part_bytes: int = _int("AURA_MULTIPART_PART_BYTES", 16 * 1024 * 1024)
-    multipart_max_object_bytes: int = _int(
-        "AURA_MULTIPART_MAX_OBJECT_BYTES", 1024 * 1024 * 1024 * 1024
+    # Never allow a planned part above S3's 5 GiB ceiling: 5,000 operational
+    # parts × 5 GiB (≈ 24.4 TiB) is the largest object the server can plan.
+    multipart_max_object_bytes: int = min(
+        _int("AURA_MULTIPART_MAX_OBJECT_BYTES", 1024 * 1024 * 1024 * 1024),
+        5_000 * 5 * 1024 * 1024 * 1024,
     )
     # A multipart session outlives a single-PUT intent: a large upload may be
     # paused (reload, sleep, network loss) and resumed within this window.
@@ -302,6 +329,11 @@ class Settings:
         "0", "false", "no", "off")
     # Free preview length for anonymous visitors (MP3 only); 0 disables it.
     public_preview_seconds: int = _int("AURA_PUBLIC_PREVIEW_SECONDS", 60)
+    # Append-only listening events (#320). Events older than this are pruned
+    # when a visitor's stats are projected; the legacy position-based estimate
+    # remains available for comparisons. Anonymised events keep aggregate value
+    # without identifying a deleted account.
+    listen_event_retention_days: int = _int("AURA_LISTEN_EVENT_RETENTION_DAYS", 365)
     # Legacy switch kept for compatibility: it used to gate full-file access.
     # Listening is now always available to signed-in listeners (/m/{slug});
     # use public_download_require_premium for the paid capability.
@@ -365,3 +397,9 @@ if settings.reconcile_interval_s < 30:
     raise RuntimeError("AURA_RECONCILE_INTERVAL_S must be >= 30")
 if settings.transfer_history_retention_days < 1:
     raise RuntimeError("AURA_TRANSFER_HISTORY_RETENTION_DAYS must be >= 1")
+if settings.listen_event_retention_days < 1:
+    raise RuntimeError("AURA_LISTEN_EVENT_RETENTION_DAYS must be >= 1")
+if settings.db_pool_min < 1 or settings.db_pool_max < settings.db_pool_min:
+    raise RuntimeError("AURA_DB_POOL_MIN/MAX must satisfy 1 <= min <= max")
+if settings.db_pool_timeout_s <= 0:
+    raise RuntimeError("AURA_DB_POOL_TIMEOUT must be > 0")

@@ -97,7 +97,7 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | POST | `/api/v1/objects/{oid}/multipart/parts` | `objects:write` | presigned part PUTs (≤100 per call, exact signed length per part) |
 | POST | `/api/v1/objects/{oid}/restore` | `objects:delete` | undo a soft delete (trash); 409 unless the object is `deleted` and was fully uploaded |
 | POST | `/api/v1/objects/{oid}/purge` | `objects:purge` | destructive, operator/admin; a storage failure keeps the catalogue row and returns **502** (M06) |
-| POST | `/api/v1/admin/objects/{oid}/reverify` | `admin:write` | re-hash a published/`suspect` object; republishes it on a checksum match, otherwise 409 and stays `suspect` |
+| POST | `/api/v1/admin/objects/{oid}/reverify` | `admin:write` | re-hash an `available`, `suspect` or `failed` object; republishes it on a checksum match, otherwise 409 and stays `suspect` |
 | POST | `/api/v1/import-jobs` | `objects:write` | create a bulk import job for the caller's space; status `queued` |
 | GET | `/api/v1/import-jobs` | `objects:read` | list import jobs for the caller's space, optional `status` filter |
 | POST | `/api/v1/import-jobs/{jid}/cancel` | `objects:write` | cancel a queued/running import job; idempotent |
@@ -110,6 +110,12 @@ Grant the minimum needed; e.g. a read-only consumer gets only `objects:read`.
 | GET | `/api/v1/folders/{fid}/shares` | `objects:read` | **human only**; lists links without their tokens, `active` computed server-side |
 | DELETE | `/api/v1/folders/{fid}/shares/{sid}` | `objects:read` | **human only**, creator only; immediate, idempotent revocation |
 | POST | `/api/v1/admin/reconcile` | `admin:write` | bounded global sweep of stale intents (`limit` 1..5000, oldest first; repeat until 0); returns `{expired, storage_deletes_attempted, storage_failures}` — a storage failure keeps the intent `pending` for the next sweep and is counted in `storage_failures`, never as cleaned (M06) |
+| POST | `/api/v1/admin/reconcile-terminal` | `admin:write` | **destructive**: delete bytes then rows for `failed`, `aborted`, `deleted` and `expired` objects older than 7 days (`limit` 1..5000 per status); storage failures keep the row for a later sweep |
+| POST | `/api/v1/admin/reconcile-reverse` | `admin:write` | storage → catalogue sweep (≤500 keys/bucket); `dry_run=true` by default, `dry_run=false` **deletes** unreferenced keys; revision keys excluded |
+| GET | `/api/v1/admin/cover-candidates` | `admin:read` | cover review: books, safe HTTPS candidates and match badges; no network call and no publication |
+| POST | `/api/v1/admin/covers/search` | `admin:write` | search candidates for one book by ISBN or title + author (Google Books, then Open Library, then iTunes); updates the review only; CSRF required |
+| POST | `/api/v1/admin/covers/select` | `admin:write` | select or clear one candidate in the review file; applied books are immutable; CSRF required |
+| POST | `/api/v1/admin/covers/apply` | `admin:write` | bounded publication of selected covers, `dry_run` by default and explicit `confirm`; CSRF required |
 | GET | `/api/v1/admin/stats` | `admin:read` | aggregate counts, no content |
 | GET | `/api/v1/admin/audit` | `admin:read` | audit search newest-first (period/actor/action/result/space/application/request filters, `limit` 1..500 + `offset`); `total` counts window matches, `truncated` warns of older history (M07) |
 | POST | `/api/v1/admin/audit/prune` | `admin:write` | enforce `AURA_AUDIT_RETENTION_DAYS`

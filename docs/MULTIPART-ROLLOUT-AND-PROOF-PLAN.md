@@ -92,8 +92,8 @@ Compléter avec : `tests/test_multipart.py` (offline), e2e multipart web, et les
 | Condition | Statut / action |
 |---|---|
 | Items 1–6 compat 4.48 | Mesurés (logs 2026-10-25/26) — invariants §2.1 verrouillés |
-| UNKNOWN #1 reclaim | Campagne §4.1 à exécuter & consigner, ou activer avec mitigations capacité |
-| UNKNOWN #2 10k parts | Campagne §4.2 à exécuter & consigner, ou plafonner parts/objets en prod |
+| UNKNOWN #1 reclaim | **Levée** (2026-11-27) : 1 GiB de parties uniques, 1 048 602 058 → 458 octets après vacuum ; mitigations capacité maintenues |
+| UNKNOWN #2 10k parts | **Levée** (2026-11-27) : 10 000 parties complétées, HEAD/Range/SHA-256 conformes ; plafond opérationnel 5 000 parts conservé malgré la preuve |
 | Proxy `readTimeout` vs part size | Vérifié au dimensionnement (§2.2) avant activation |
 | Observabilité & rollback | Kill-switch flag + seuil + alertes en place |
 

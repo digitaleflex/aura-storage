@@ -12,7 +12,7 @@ Il ne donne **aucun** accès aux objets, dossiers ou routes d'administration.
 | Chemin (sur `PUBLIC_DOMAIN`) | Rôle |
 |---|---|
 | `GET /` | **anonyme** : vitrine du catalogue publié (recherche, filtre par auteur, bouton Google) ; **connecté** : catalogue avec lecteur `<audio>`. Avec `AURA_PUBLIC_BROWSE=0`, les anonymes voient seulement la page de connexion |
-| `GET /livre/{id}` | page d'un livre, lisible sans compte : couverture, durée, chapitres, extrait gratuit, partage (WhatsApp, copier le lien), balises Open Graph/Twitter et JSON-LD `Audiobook` |
+| `GET /livre/{id}` | page d'un livre, lisible sans compte : jaquette typographique, durée, chapitres, extrait gratuit, partage (WhatsApp, copier le lien), balises Open Graph/Twitter et JSON-LD `Audiobook` |
 | `GET /extrait/{id}` | extrait gratuit : **1 minute** d'un **MP3** publié, découpée côté serveur (`AURA_PUBLIC_PREVIEW_SECONDS`, 60 par défaut, 0 = désactivé), sans compte et sans téléchargement (`controlsList="nodownload"`, `Accept-Ranges: none`) |
 | `GET /sitemap.xml`, `GET /robots.txt` | référencement : accueil et pages livre uniquement |
 | `GET /api/public/auth/google` | démarre le flux Google (state + PKCE) |
@@ -84,6 +84,17 @@ couleur claire (`theme-color`). Un cœur sur chaque livre (catalogue et page liv
 l'étagère « Mes favoris » ; l'état est privé, supprimé avec le compte, et le clic est annulé côté
 page si le serveur refuse.
 
+## Listes privées depuis les cartes du catalogue
+
+Un bouton « + Liste » est proposé sur chaque carte de livre (catalogue et page livre) pour les
+visiteurs connectés. Il ouvre une boîte de dialogue native (`#playlist-dialog`) listant les listes
+privées du visiteur avec l'état « déjà ajouté » ; le champ libre permet une création rapide. L'ajout
+confirmé s'affiche dans le statut de la dialogue, et une erreur serveur laisse la dialogue ouverte
+avec un bouton « Réessayer » (les champs restent saisis). Parcours couvert par les tests e2e
+`web/e2e/public-playlist-dialog.spec.ts`. Les listes restent privées et sont supprimées avec le
+compte (`listen_playlists` / `listen_playlist_items`). Le bouton et la dialogue ne sont pas rendus
+sur une page anonyme.
+
 ## Marque-pages et reprise depuis un autre appareil
 
 - **Marque-pages** : bouton « + Ici » dans le panneau Chapitres du lecteur (note facultative de 200
@@ -100,8 +111,9 @@ page si le serveur refuse.
 d'ensemble de la console : comptes visiteurs, livres publiés, et pour chaque livre (50 premiers,
 classés par auditeurs) : auditeurs, livres **terminés** (≥ 90 % de la durée), favoris, ouvertures du
 mois. Ce sont des **comptages agrégés** calculés à partir de `listen_progress`, `listen_favorites` et
-`object_usage_monthly` : aucune table de suivi n'a été ajoutée, aucun visiteur, e-mail ou historique
-individuel n'est renvoyé. Les ouvertures comptent les redirections `/m/` et les extraits.
+`object_usage_monthly` : ces comptages n'utilisent pas la table d'événements individuels ajoutée
+en `0028` pour les statistiques du visiteur, et aucun visiteur, e-mail ou historique individuel
+n'est renvoyé. Les ouvertures comptent les redirections `/m/` et les extraits.
 
 ## Recherche, tri et recommandations
 
@@ -176,17 +188,27 @@ dans `audio_chapters` et `objects.duration_seconds` (migration `0020`), puis
 exposés dans `/api/public/library`.
 
 Trois modes d'affichage sont disponibles via `?vue=liste|grille|immersif` :
-liste compacte, grille de cartes avec pochettes, et vue immersive avec une
-grande couverture et un bouton « Lancer l'écoute ». Les auteurs sont extraits
-des noms `Auteur - Titre` et proposés comme filtres (`?auteur=`). Des boutons
-de découverte mènent à « Reprendre l'écoute », « Nouveautés », « À découvrir »
-et « Toute la bibliothèque ».
+liste compacte, grille de cartes et vue immersive avec une grande jaquette et un
+bouton « Lancer l'écoute ». Les auteurs sont extraits des noms `Auteur - Titre`
+et proposés comme filtres (`?auteur=`). Des boutons de découverte mènent à
+« Reprendre l'écoute », « Nouveautés », « À découvrir » et « Toute la bibliothèque ».
 
-Les couvertures sont d'abord cherchées **localement** : tous les flux d'artwork
+Le portail utilise désormais une **jaquette typographique AURA uniforme** pour
+le hero, les cartes, les rayons, la vue immersive et le lecteur : titre en serif,
+auteur, monogramme, tranche et teinte stable choisie dans une palette
+bronze/vert/bleu/violet. Les vraies couvertures ne sont plus affichées que dans
+les **carrousels de séries** (regroupements éditoriaux). Les carrousels de
+catégories utilisent uniquement les jaquettes typographiques, pour rester
+cohérents. Les carrousels sont navigables au toucher, au trackpad et avec les
+boutons précédent/suivant.
+
+Les couvertures sont toujours cherchées **localement** : tous les flux d'artwork
 intégrés au fichier, puis une image stockée à côté de l'audio dans le même bucket
 (`cover.jpg`, `folder.jpg`, image de même stem). L'image retenue est redimensionnée
-par ffmpeg et servie par `/covers/{oid}.jpg`. Sans image locale, une couverture
-typographique deterministe (titre, auteur, teinte stable) reste affichée.
+par ffmpeg et servie par `/covers/{oid}.jpg` uniquement depuis les carrousels de
+séries. Les catégories et les séries sont dérivées des étiquettes publiques et
+d'une liste de dossiers approuvés ; les noms de dossiers non approuvés restent
+privés.
 Deux voies optionnelles permettent d'enrichir les livres récalcitrants : des
 **candidats externes à valider** et l'**ajout manuel** d'une image (voir ci-dessous).
 Aucun service externe n'est contacté par le déploiement ni par le cron de
@@ -207,31 +229,13 @@ livres indéfiniment.
 #### Candidats externes (validation obligatoire)
 
 `scripts/cover_candidates.sh [limite] [itunes|openlibrary|all]` interroge des API
-publiques (iTunes Search, Open Library) et écrit un fichier de revue dans
-`$AURA_DATA_DIR/cover-candidates.json`. **Aucune image n'est publiée** :
-le fichier liste les candidats par livre. Une régénération bornée conserve les
-livres déjà appliqués, leurs choix et les entrées hors limite. Les résultats
-peuvent être erronés (mauvaise édition) et les droits d'image doivent être vérifiés
-avant publication.
-
-Pour automatiser la préparation (sans publication), `scripts/refresh_cover_review.sh`
-rafraîchit les candidats, applique une **pré-sélection automatique** très
-conservative, puis régénère `/srv/aura-storage/cover-review.html`. La
-pré-sélection ne publie rien : elle marque `selected` dans le fichier de revue
-uniquement quand les règles sont toutes satisfaites (titre normalisé exact,
-auteur normalisé exact si connu, un seul candidat correspondant, URL HTTPS sur
-hôte autorisé, aucun conflit titre exact/auteur différent). Les cas ambigus
-restent `pending` pour revue manuelle. Audit JSON dans
-`$AURA_AUDIT_DIR/cover-auto-select-*.json`.
-
-Variables : `AURA_COVER_AUTO_SELECT=1` (défaut) pour activer la
-pré-sélection, `AURA_COVER_AUTO_SELECT_LIMIT=0` pour ne pas limiter.
-
-Exemple cron :
-
-```cron
-30 4 * * * cd /home/aura-admin/aura-storage && ./scripts/refresh_cover_review.sh >> /srv/aura-storage/audit/cover-review-refresh.log 2>&1
-```
+publiques (iTunes Search, Open Library) et écrit le fichier de revue canonique
+dans `$AURA_DATA_DIR/cover-review/cover-candidates.json`, monté en lecture-écriture
+dans le conteneur API. **Aucune image n'est publiée** : le fichier
+liste les candidats par livre. Une régénération bornée conserve les livres déjà
+appliqués, leurs choix et les entrées hors limite. Les résultats peuvent être
+erronés (mauvaise édition) et les droits d'image doivent être vérifiés avant
+publication.
 
 Une fois un candidat retenu :
 
@@ -246,7 +250,17 @@ renseignent `cover_key`. Le fichier de revue marque le livre comme `applied`.
 
 #### Validation et application en lot
 
-Une page HTML locale facilite la revue des propositions :
+La page **Administration → Couvertures** (`/admin/covers`) affiche les
+propositions par livre. Le bouton **« Rechercher une couverture »** interroge
+Google Books en priorité (par ISBN si fourni, sinon titre + auteur), puis Open
+Library et iTunes en repli. Une clé `AURA_GOOGLE_BOOKS_API_KEY` évite le quota
+limité de l'API publique. Chaque proposition conserve sa source, sa taille et
+son URL d'origine ; la validation d'un choix ne publie rien, seule l'action de
+lot explicitement confirmée écrit la couverture dans le catalogue. La lecture
+exige `admin:read`, la recherche, la validation et l'application `admin:write`
+avec CSRF.
+
+Une page HTML locale reste disponible pour une revue hors ligne :
 
 ```bash
 python3 scripts/render_cover_review.py \
@@ -284,9 +298,16 @@ revue sans empêcher le traitement des suivants. Le mode `--dry-run` laisse le
 fichier canonique inchangé.
 
 La position est enregistrée via `/api/public/progress` (table `listen_progress`,
-ajoutée par la migration cumulative `0018`, aujourd'hui `0020_audio_chapters`)
-et restaurée à la sélection du livre. Le filtre `?q=` permet de rechercher un
-titre ou un auteur côté serveur.
+ajoutée par la migration cumulative `0018`, aujourd'hui `0028_listen_events`)
+et restaurée à la sélection du livre. Depuis la migration `0028`, chaque échantillon du lecteur
+écrit aussi un événement append-only dans `listen_events` (`start`, `position`, `end`) : l'identifiant
+d'événement est déterministe (même échantillon dans la même minute = un seul événement) et le delta
+est plafonné par le temps réellement écoulé, donc un seek en avant n'est pas compté comme de l'écoute.
+Les événements sont purgés après `AURA_LISTEN_EVENT_RETENTION_DAYS` (365 jours par défaut) et
+anonymisés (`user_id=NULL`) à la suppression du compte. `GET /api/public/stats` conserve
+`estimated_listened_seconds` (ancienne estimation) et ajoute `measured_listened_seconds` ; la page
+`/profil` affiche « Temps écouté mesuré » dès qu'un événement existe. Le filtre `?q=` permet de
+rechercher un titre ou un auteur côté serveur.
 
 Les URL `/m/{slug}` utilisent un TTL dédié (`AURA_PUBLIC_MEDIA_TTL`, 12 h par
 défaut) : le TTL de 15 min des intentions d'upload coupait la lecture d'un livre

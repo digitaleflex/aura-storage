@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 900" role="img" aria-label="Couverture : Le Comte de Monte-Cristo">
+  <rect width="600" height="900" fill="#233C3A"/>
+  <g color="#F4EBDD"><rect x="66" y="66" width="468" height="768" fill="none" stroke="#D0A56C" stroke-width="1.5" opacity=".7"/><rect x="78" y="78" width="444" height="744" fill="none" stroke="#D0A56C" stroke-width=".7" opacity=".35"/>
+    <text x="300" y="104" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="17" letter-spacing="5" fill="#D0A56C">AURA</text>
+    <text x="300" y="136" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="12" letter-spacing="3" opacity=".62">BIBLIOTHÈQUE AUDIO</text>
+    <text x="300" y="342" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="74" fill="currentColor">Le Comte de</text><text x="300" y="426" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="74" fill="currentColor">Monte-Cristo</text>
+    <line x1="210" y1="552" x2="390" y2="552" stroke="#D0A56C" stroke-width="1.5" opacity=".9"/>
+    <text x="300" y="596" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="16" letter-spacing="3.5" fill="#F4EBDD" opacity=".9">ALEXANDRE DUMAS</text>
+    <text x="300" y="826" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="11" letter-spacing="4" fill="#D0A56C" opacity=".8">ÉDITIONS AURA</text>
+  </g>
+</svg>
