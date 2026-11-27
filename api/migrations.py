@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0029_emblematic_cover"
+SCHEMA_VERSION = "0030_audio_classification_jobs"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -483,6 +483,30 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_media_jobs_status "
         "ON media_jobs(status, created_at)"
+    )
+    # Audio classification jobs (bac à sable). Additive for upgraded catalogues.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS audio_classification_jobs ("
+        "id TEXT PRIMARY KEY, object_id TEXT NOT NULL, space_id TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, "
+        "lease_until INTEGER, provider TEXT, model TEXT, confidence REAL, "
+        "suggested_category TEXT, suggested_themes TEXT, suggested_language TEXT, "
+        "suggested_folder TEXT, quality_json TEXT, transcript_excerpt TEXT, "
+        "reason TEXT, error TEXT, result_json TEXT, "
+        "reviewed_by TEXT, reviewed_at INTEGER, "
+        "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_status "
+        "ON audio_classification_jobs(status, created_at)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_object "
+        "ON audio_classification_jobs(object_id, created_at)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_space "
+        "ON audio_classification_jobs(space_id, status, created_at)"
     )
     # Per-object monthly analytics (Sprint 3).
     runner.exec(

@@ -301,6 +301,37 @@ CREATE TABLE IF NOT EXISTS media_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_media_jobs_status ON media_jobs(status, created_at);
 
+-- Audio classification jobs (P1 bac à sable). One job per object analysis;
+-- claimed with a lease by the in-process worker. Stores AI suggestions only;
+-- no automatic move/publish is performed.
+CREATE TABLE IF NOT EXISTS audio_classification_jobs (
+  id TEXT PRIMARY KEY,
+  object_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued', -- queued|processing|needs_review|accepted|rejected|failed
+  attempts INTEGER NOT NULL DEFAULT 0,
+  lease_until INTEGER,
+  provider TEXT,
+  model TEXT,
+  confidence REAL,
+  suggested_category TEXT,
+  suggested_themes TEXT,      -- JSON array
+  suggested_language TEXT,
+  suggested_folder TEXT,
+  quality_json TEXT,          -- JSON object from ffprobe/analysis
+  transcript_excerpt TEXT,
+  reason TEXT,
+  error TEXT,
+  result_json TEXT,           -- normalized full result
+  reviewed_by TEXT,
+  reviewed_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_status ON audio_classification_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_object ON audio_classification_jobs(object_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_space ON audio_classification_jobs(space_id, status, created_at);
+
 -- Import jobs (bulk object import). Tracks a batch of items submitted by a
 -- human operator, with per-item status and a sanitised summary for UI polling.
 CREATE TABLE IF NOT EXISTS import_jobs (

@@ -2261,6 +2261,116 @@ class Repository:
             (subtitle_id, self.now(), oid),
         )
         self.conn.commit()
+
+    # -- audio classification jobs (bac à sable) -------------------------
+    def enqueue_audio_classification(self, jid: str, oid: str, space_id: str) -> str:
+        row = self.conn.execute(
+            "SELECT id FROM audio_classification_jobs WHERE object_id = ? "
+            "AND status IN ('queued', 'processing') ORDER BY created_at DESC LIMIT 1",
+            (oid,),
+        ).fetchone()
+        if row is not None:
+            return row["id"]
+        now = self.now()
+        self.conn.execute(
+            "INSERT INTO audio_classification_jobs "
+            "(id, object_id, space_id, status, attempts, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'queued', 0, ?, ?)",
+            (jid, oid, space_id, now, now),
+        )
+        self.conn.commit()
+        return jid
+
+    def claim_audio_classification_job(self, lease_until: int, max_attempts: int = 5):
+        now = self.now()
+        row = self.conn.execute(
+            "SELECT * FROM audio_classification_jobs "
+            "WHERE status = 'queued' AND attempts < ? "
+            "ORDER BY created_at LIMIT 1",
+            (max_attempts,),
+        ).fetchone()
+        if row is None:
+            return None
+        cur = self.conn.execute(
+            "UPDATE audio_classification_jobs SET status = 'processing', "
+            "attempts = attempts + 1, lease_until = ?, updated_at = ?, error = NULL "
+            "WHERE id = ? AND status = 'queued'",
+            (lease_until, now, row["id"]),
+        )
+        self.conn.commit()
+        return _as_dict(row) if cur.rowcount else None
+
+    def complete_audio_classification_job(self, jid: str, *, provider: str, model: str,
+                                          confidence: float | None, suggested_category: str | None,
+                                          suggested_themes: str | None, suggested_language: str | None,
+                                          suggested_folder: str | None, quality_json: str | None,
+                                          transcript_excerpt: str | None, reason: str | None,
+                                          result_json: str | None, status: str = "needs_review") -> None:
+        self.conn.execute(
+            "UPDATE audio_classification_jobs SET status = ?, provider = ?, model = ?, "
+            "confidence = ?, suggested_category = ?, suggested_themes = ?, "
+            "suggested_language = ?, suggested_folder = ?, quality_json = ?, "
+            "transcript_excerpt = ?, reason = ?, result_json = ?, error = NULL, "
+            "lease_until = NULL, updated_at = ? WHERE id = ?",
+            (status, provider, model, confidence, suggested_category, suggested_themes,
+             suggested_language, suggested_folder, quality_json, transcript_excerpt,
+             reason, result_json, self.now(), jid),
+        )
+        self.conn.commit()
+
+    def fail_audio_classification_job(self, jid: str, error: str, *, requeue: bool = False) -> None:
+        status = "queued" if requeue else "failed"
+        self.conn.execute(
+            "UPDATE audio_classification_jobs SET status = ?, error = ?, "
+            "lease_until = NULL, updated_at = ? WHERE id = ?",
+            (status, error[:1000], self.now(), jid),
+        )
+        self.conn.commit()
+
+    def get_audio_classification_job(self, jid: str):
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM audio_classification_jobs WHERE id = ?", (jid,),
+        ).fetchone())
+
+    def get_latest_audio_classification_job(self, oid: str):
+        return _as_dict(self.conn.execute(
+            "SELECT * FROM audio_classification_jobs WHERE object_id = ? "
+            "ORDER BY created_at DESC LIMIT 1", (oid,),
+        ).fetchone())
+
+    def list_audio_classification_jobs(self, space_id: str, *, status: str | None = None,
+                                       limit: int = 100, offset: int = 0) -> list:
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        if status:
+            rows = self.conn.execute(
+                "SELECT j.*, o.display_name, o.content_type, o.size_bytes, o.bucket, o.object_key "
+                "FROM audio_classification_jobs j "
+                "LEFT JOIN objects o ON o.id = j.object_id "
+                "WHERE j.space_id = ? AND j.status = ? "
+                "ORDER BY j.created_at DESC LIMIT ? OFFSET ?",
+                (space_id, status, limit, offset),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT j.*, o.display_name, o.content_type, o.size_bytes, o.bucket, o.object_key "
+                "FROM audio_classification_jobs j "
+                "LEFT JOIN objects o ON o.id = j.object_id "
+                "WHERE j.space_id = ? ORDER BY j.created_at DESC LIMIT ? OFFSET ?",
+                (space_id, limit, offset),
+            ).fetchall()
+        return [_as_dict(r) for r in rows]
+
+    def review_audio_classification_job(self, jid: str, *, status: str, reviewed_by: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE audio_classification_jobs SET status = ?, reviewed_by = ?, "
+            "reviewed_at = ?, updated_at = ? WHERE id = ? "
+            "AND status IN ('needs_review', 'failed', 'accepted', 'rejected')",
+            (status, reviewed_by, self.now(), self.now(), jid),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def stats(self) -> dict:
         objects = {
             row["status"]: row["n"]

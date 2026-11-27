@@ -2082,6 +2082,107 @@ class Repository:
             "UPDATE objects SET subtitle_object_id = %s, updated_at = %s WHERE id = %s",
             (subtitle_id, self.now(), oid),
         )
+
+    # -- audio classification jobs (bac à sable) -------------------------
+    def enqueue_audio_classification(self, jid: str, oid: str, space_id: str) -> str:
+        row = self._one(
+            "SELECT id FROM audio_classification_jobs WHERE object_id = %s "
+            "AND status IN ('queued', 'processing') ORDER BY created_at DESC LIMIT 1",
+            (oid,),
+        )
+        if row is not None:
+            return row["id"]
+        now = self.now()
+        self._run(
+            "INSERT INTO audio_classification_jobs "
+            "(id, object_id, space_id, status, attempts, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'queued', 0, %s, %s)",
+            (jid, oid, space_id, now, now),
+        )
+        return jid
+
+    def claim_audio_classification_job(self, lease_until: int, max_attempts: int = 5):
+        now = self.now()
+        row = self._one(
+            "SELECT * FROM audio_classification_jobs "
+            "WHERE status = 'queued' AND attempts < %s "
+            "ORDER BY created_at LIMIT 1",
+            (max_attempts,),
+        )
+        if row is None:
+            return None
+        changed = self._run(
+            "UPDATE audio_classification_jobs SET status = 'processing', "
+            "attempts = attempts + 1, lease_until = %s, updated_at = %s, error = NULL "
+            "WHERE id = %s AND status = 'queued'",
+            (lease_until, now, row["id"]),
+        )
+        return row if changed else None
+
+    def complete_audio_classification_job(self, jid: str, *, provider: str, model: str,
+                                          confidence: float | None, suggested_category: str | None,
+                                          suggested_themes: str | None, suggested_language: str | None,
+                                          suggested_folder: str | None, quality_json: str | None,
+                                          transcript_excerpt: str | None, reason: str | None,
+                                          result_json: str | None, status: str = "needs_review") -> None:
+        self._run(
+            "UPDATE audio_classification_jobs SET status = %s, provider = %s, model = %s, "
+            "confidence = %s, suggested_category = %s, suggested_themes = %s, "
+            "suggested_language = %s, suggested_folder = %s, quality_json = %s, "
+            "transcript_excerpt = %s, reason = %s, result_json = %s, error = NULL, "
+            "lease_until = NULL, updated_at = %s WHERE id = %s",
+            (status, provider, model, confidence, suggested_category, suggested_themes,
+             suggested_language, suggested_folder, quality_json, transcript_excerpt,
+             reason, result_json, self.now(), jid),
+        )
+
+    def fail_audio_classification_job(self, jid: str, error: str, *, requeue: bool = False) -> None:
+        status = "queued" if requeue else "failed"
+        self._run(
+            "UPDATE audio_classification_jobs SET status = %s, error = %s, "
+            "lease_until = NULL, updated_at = %s WHERE id = %s",
+            (status, error[:1000], self.now(), jid),
+        )
+
+    def get_audio_classification_job(self, jid: str):
+        return self._one("SELECT * FROM audio_classification_jobs WHERE id = %s", (jid,))
+
+    def get_latest_audio_classification_job(self, oid: str):
+        return self._one(
+            "SELECT * FROM audio_classification_jobs WHERE object_id = %s "
+            "ORDER BY created_at DESC LIMIT 1", (oid,),
+        )
+
+    def list_audio_classification_jobs(self, space_id: str, *, status: str | None = None,
+                                       limit: int = 100, offset: int = 0) -> list:
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        if status:
+            return self._all(
+                "SELECT j.*, o.display_name, o.content_type, o.size_bytes, o.bucket, o.object_key "
+                "FROM audio_classification_jobs j "
+                "LEFT JOIN objects o ON o.id = j.object_id "
+                "WHERE j.space_id = %s AND j.status = %s "
+                "ORDER BY j.created_at DESC LIMIT %s OFFSET %s",
+                (space_id, status, limit, offset),
+            )
+        return self._all(
+            "SELECT j.*, o.display_name, o.content_type, o.size_bytes, o.bucket, o.object_key "
+            "FROM audio_classification_jobs j "
+            "LEFT JOIN objects o ON o.id = j.object_id "
+            "WHERE j.space_id = %s ORDER BY j.created_at DESC LIMIT %s OFFSET %s",
+            (space_id, limit, offset),
+        )
+
+    def review_audio_classification_job(self, jid: str, *, status: str, reviewed_by: str) -> bool:
+        changed = self._run(
+            "UPDATE audio_classification_jobs SET status = %s, reviewed_by = %s, "
+            "reviewed_at = %s, updated_at = %s WHERE id = %s "
+            "AND status IN ('needs_review', 'failed', 'accepted', 'rejected')",
+            (status, reviewed_by, self.now(), self.now(), jid),
+        )
+        return bool(changed)
+
     def stats(self) -> dict:
         objects = {
             row["status"]: row["n"]
