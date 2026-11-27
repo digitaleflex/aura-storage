@@ -143,7 +143,7 @@ class Settings:
     ai_primary_provider: str = os.environ.get("AURA_AI_PRIMARY_PROVIDER", "gemini").strip().lower()
     ai_fallback_provider: str = os.environ.get("AURA_AI_FALLBACK_PROVIDER", "claude").strip().lower()
     gemini_api_key: str = os.environ.get("AURA_GEMINI_API_KEY", "")
-    gemini_model: str = os.environ.get("AURA_GEMINI_MODEL", "gemini-2.5-flash")
+    gemini_model: str = os.environ.get("AURA_GEMINI_MODEL", "gemini-4-hydrogen")
     anthropic_api_key: str = os.environ.get("AURA_ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.environ.get("AURA_ANTHROPIC_MODEL", "claude-sonnet-4-6")
     ai_confidence_threshold: float = _float("AURA_AI_CONFIDENCE_THRESHOLD", 0.80)
