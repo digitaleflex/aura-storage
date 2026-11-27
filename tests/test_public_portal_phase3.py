@@ -3,6 +3,7 @@ import os
 import secrets
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -130,6 +131,43 @@ def test_natural_language_search_is_translated_into_filters():
     assert plain.q == "Nuit" and not plain.recognised
 
 
+def test_local_synonyms_are_canonicalised_without_rewriting_the_query():
+    intent = portal_search.parse_search("un polar sur l'IA")
+    assert intent.q == "un polar sur l'IA"
+    assert "synonyme local : thriller" in intent.explanation
+    assert "synonyme local : intelligence artificielle" in intent.explanation
+    assert portal_search.search_tokens("polar") == ["thriller"]
+    assert portal_search.search_tokens("Nuit inconnue") == ["nuit", "inconnue"]
+
+
+def test_synonym_search_matches_the_indexed_facets():
+    collections = [{
+        "slug": "classiques", "title": "Classiques", "items": [
+            {
+                "id": "a", "display_name": "La Nuit", "author": "Awa Diallo",
+                "title": "La Nuit", "duration_seconds": 3600,
+                "categories": [], "themes": ["thriller"], "languages": [], "format": "mp3",
+            },
+            {
+                "id": "b", "display_name": "Le Jardin", "author": "Awa Diallo",
+                "title": "Le Jardin", "duration_seconds": 3600,
+                "categories": [], "themes": ["romance"], "languages": [], "format": "mp3",
+            },
+        ],
+    }]
+    found = main._filter_collections(collections, "polar", "")
+    assert [i["id"] for col in found for i in col["items"]] == ["a"]
+    assert [i["id"] for col in main._filter_collections(collections, "romantique", "")
+            for i in col["items"]] == ["b"]
+
+
+def test_search_enrichment_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("AURA_SEARCH_ENRICHMENT", "0")
+    assert portal_search.search_tokens("polar") == ["polar"]
+    assert not portal_search.synonym_notes("polar")
+    assert not portal_search.parse_search("un polar").recognised
+
+
 def test_book_page_shows_spoiler_free_recap_and_series_position(monkeypatch):
     first = {"id": OID, "title": "Tome 1", "author": "Auteur", "chapters": []}
     second = {"id": NEXT_OID, "title": "Tome 2", "author": "Autre auteur", "chapters": []}
@@ -178,3 +216,25 @@ def test_catalog_playlist_dialog_and_idempotent_add():
     items = client.get(f"/api/public/playlists/{pid}/items", headers=headers)
     assert items.status_code == 200
     assert [i["object_id"] for i in items.json()["items"]] == [oid]
+
+
+def test_anonymous_cards_have_no_playlist_button():
+    collections = [{
+        "slug": "classiques", "title": "Classiques", "items": [{
+            "id": "anon", "title": "Livre public", "display_name": "Livre public",
+            "author": "Auteur", "url": "/m/livre-public", "duration_seconds": 600,
+        }],
+    }]
+    page = main.public_book.landing_page(collections)
+    assert "Livre public" in page
+    assert "data-add-playlist" not in page
+    assert 'id="playlist-dialog"' not in page
+
+
+def test_playlist_button_and_dialog_keep_their_styles():
+    css = (Path(__file__).resolve().parents[1] / "api/portal_assets/portal.css").read_text(
+        encoding="utf-8"
+    )
+    for selector in (".playlist-add-button", "#playlist-dialog", ".playlist-pick",
+                     ".playlist-dialog-status.is-error"):
+        assert selector in css, f"missing style for {selector}"

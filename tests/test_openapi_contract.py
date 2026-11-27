@@ -67,6 +67,18 @@ def test_openapi_methods_match_implemented_routes():
         )
 
 
+def test_service_identity_scopes_match_backend():
+    """The M2M form and OpenAPI must never offer a human-only purge scope."""
+    from api.authz import SERVICE_SCOPES
+
+    spec = _spec()
+    operation = spec["paths"]["/api/v1/admin/identities"]["post"]
+    schema = operation["requestBody"]["content"]["application/json"]["schema"]
+    documented = set(schema["properties"]["scopes"]["items"]["enum"])
+    assert documented == set(SERVICE_SCOPES)
+    assert "objects:purge" not in documented
+
+
 def test_every_documented_operation_is_described():
     spec = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     for path, methods in spec.get("paths", {}).items():

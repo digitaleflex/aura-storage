@@ -8,12 +8,17 @@ from .models import (
     MetadataContributor,
     MetadataQuery,
 )
-from .providers import ITunesMetadataProvider, OpenLibraryMetadataProvider
+from .providers import (
+    GoogleBooksMetadataProvider,
+    ITunesMetadataProvider,
+    OpenLibraryMetadataProvider,
+)
 from .transport import MetadataProviderError, UrllibJsonTransport
 
 __all__ = [
     "CoverCandidate",
     "ExternalIdentifier",
+    "GoogleBooksMetadataProvider",
     "ITunesMetadataProvider",
     "MetadataAggregator",
     "MetadataCandidate",

@@ -73,6 +73,7 @@ class Settings:
     metadata_cache_ttl_seconds: int = 300
     metadata_provider_timeout_seconds: int = 5
     metadata_itunes_country: str = "FR"
+    google_books_api_key: str = ""
     ingest_staging_dir: str = ""
     ingest_max_bytes: int = 5_368_709_120
     ingest_av_command: str = ""
@@ -186,6 +187,7 @@ class Settings:
                 "AUDIOBOOK_METADATA_TIMEOUT_SECONDS", 5
             ),
             metadata_itunes_country=_env("AUDIOBOOK_METADATA_ITUNES_COUNTRY", "FR"),
+            google_books_api_key=_env("AURA_GOOGLE_BOOKS_API_KEY").strip(),
             ingest_staging_dir=_env("AUDIOBOOK_INGEST_STAGING_DIR").strip(),
             ingest_max_bytes=_int("AUDIOBOOK_INGEST_MAX_BYTES", 5_368_709_120),
             ingest_av_command=_env("AUDIOBOOK_INGEST_AV_CMD"),

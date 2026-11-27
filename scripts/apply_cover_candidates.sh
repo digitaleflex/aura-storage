@@ -14,19 +14,19 @@ for arg in "$@"; do
   [[ "$arg" == "--dry-run" ]] && DRY_RUN=1
 done
 
-LOCK_FILE="${TMPDIR:-/tmp}/aura-cover-review.lock"
+REVIEW_FILE="${AURA_COVER_REVIEW_FILE:-${AURA_DATA_DIR:-/srv/aura-storage}/cover-review/cover-candidates.json}"
+mkdir -p "$(dirname "$REVIEW_FILE")"
+LOCK_FILE="$REVIEW_FILE.lock"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "une autre operation sur les couvertures est en cours" >&2
   exit 1
 fi
 
-REVIEW_FILE="${AURA_DATA_DIR:-/srv/aura-storage}/cover-candidates.json"
 TMP_INPUT="/tmp/aura-cover-input-$$.json"
 TMP_OUTPUT="/tmp/aura-cover-output-$$.json"
 HOST_SELECTION="$REVIEW_FILE.selection-$$.json"
 HOST_OUTPUT="$REVIEW_FILE.tmp.$$"
-mkdir -p "$(dirname "$REVIEW_FILE")"
 
 valid_review() {
   python3 - "$1" <<'PY'
