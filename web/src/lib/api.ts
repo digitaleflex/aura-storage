@@ -59,6 +59,8 @@ export interface ObjectItem {
   hls_status?: string | null;
   /** True when a WebVTT subtitle is linked. */
   subtitle?: boolean;
+  /** True when this book is curated to show its real cover art. */
+  emblematic_cover?: boolean;
 }
 
 export interface CollectionItem {
@@ -424,6 +426,8 @@ export interface CoverCandidateBook {
   chosen_url: string | null;
   /** Cover already attached to the book, or null when it has none. */
   cover_url: string | null;
+  /** Editorial gate: real artwork is displayed only for curated books. */
+  emblematic_cover: boolean;
   candidates: CoverCandidate[];
 }
 
@@ -1749,6 +1753,19 @@ export const api = {
     return request<{ book: CoverCandidateBook }>("/api/v1/admin/covers/select", {
       method: "POST",
       body: input,
+      csrf,
+    });
+  },
+
+  /** Curate real cover art for one book; all other books keep the AURA jacket. */
+  setObjectEmblematicCover(
+    objectId: string,
+    emblematic: boolean,
+    csrf: string,
+  ): Promise<{ id: string; emblematic_cover: boolean }> {
+    return request(`/api/v1/admin/objects/${encodeURIComponent(objectId)}/emblematic-cover`, {
+      method: "PUT",
+      body: { emblematic },
       csrf,
     });
   },

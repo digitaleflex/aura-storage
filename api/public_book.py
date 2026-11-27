@@ -12,7 +12,8 @@ from .public_ui import (
     ESC, _BRAND, _GOOGLE, _SKIP_LINK, _duration_text, _heart_button, _nav_icon,
     _position_text, asset_url, carousel_shelves, catalog_filter_fields,
     category_theme_nav, cover_hue, email_form, fallback_cover_inner,
-    hero_cover_html, mobile_nav, page_head, site_footer, site_header,
+    hero_cover_html, mobile_nav, page_head, real_cover_img, site_footer,
+    site_header, use_real_cover,
 )
 
 SITE_NAME = "AURA"
@@ -27,7 +28,7 @@ def _cover(item: dict) -> str:
     inner = fallback_cover_inner(label, item.get("author") or "")
     return (
         f'<span class="cover cover-large" style="--cover-h:{cover_hue(label)}" '
-        f'aria-hidden="true">{inner}</span>'
+        f'aria-hidden="true">{inner}{real_cover_img(item)}</span>'
     )
 
 
@@ -245,6 +246,12 @@ def book_page(
     ]
     if base_url:
         meta.append(("property", "og:url", url))
+    if base_url and use_real_cover(item):
+        # Social previews follow the same editorial rule as the page: only a
+        # curated emblematic book may show its real artwork.
+        image_url = base_url + str(item["cover_url"])
+        meta.append(("property", "og:image", image_url))
+        meta.append(("name", "twitter:image", image_url))
     facets = public_facets.item_facets(item)
     classifications = [
         public_facets.facet_label("category", value) for value in facets["categories"]

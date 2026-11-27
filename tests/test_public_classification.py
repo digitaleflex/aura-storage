@@ -130,7 +130,11 @@ def test_carousels_show_real_covers_only_for_curated_series():
         assert 'href="/livre/one"' in html
         assert 'aria-label="Faire défiler Robert Greene vers la droite"' in html
     assert "<img" not in uniform
-    assert "/covers/one.jpg" in series
+    # A cover key alone is not enough: real art needs the editorial flag.
+    assert "<img" not in series
+    curated = dict(shelf)
+    curated["items"] = [dict(shelf["items"][0], emblematic_cover=True)]
+    assert "/covers/one.jpg" in public_ui.carousel_shelf(curated, use_covers=True)
 
 
 def test_anonymous_landing_renders_the_shared_category_navigation():

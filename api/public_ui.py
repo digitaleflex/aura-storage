@@ -186,11 +186,8 @@ def carousel_shelf(
         title = str(item.get("title") or item.get("display_name") or "Livre")
         author = str(item.get("author") or "")
         inner = fallback_cover_inner(title, author)
-        if use_covers and item.get("cover_url"):
-            inner += (
-                f'<img src="{ESC(item["cover_url"])}" alt="" loading="lazy" '
-                'data-fallback>'
-            )
+        if use_covers:
+            inner += real_cover_img(item)
         cards.append(
             f'<li><a class="carousel-card" href="/livre/{ESC(item.get("id") or "")}">'
             f'<span class="carousel-cover" style="--cover-h:{cover_hue(title)}">{inner}</span>'
@@ -509,6 +506,24 @@ def cover_hue(label: str) -> int:
     return COVER_HUES[sum(ord(c) for c in str(label or "")) % len(COVER_HUES)]
 
 
+def use_real_cover(item: dict) -> bool:
+    """Editorial gate: real artwork only for curated, emblematic books.
+
+    Everything else keeps the AURA jacket, even when a cover key exists:
+    locally generated jackets and unreviewed third-party art stay uniform.
+    """
+    return bool(item.get("emblematic_cover") and item.get("cover_url"))
+
+
+def real_cover_img(item: dict) -> str:
+    """The cover image layered over the typographic jacket, when curated."""
+    if not use_real_cover(item):
+        return ""
+    return (
+        f'<img src="{ESC(item["cover_url"])}" alt="" loading="lazy" data-fallback>'
+    )
+
+
 def fallback_cover_inner(label: str, author: str = "") -> str:
     """Typographic AURA jacket shown until/unless the real cover loads."""
     title = str(label or "").strip() or "Livre"
@@ -526,9 +541,10 @@ def fallback_cover_inner(label: str, author: str = "") -> str:
 
 
 def hero_cover_html(item: dict) -> str:
-    """One uniform typographic jacket for the editorial hero."""
+    """Editorial hero jacket: typographic by default, real art when curated."""
     label = str(item.get("title") or item.get("display_name") or "Livre")
     inner = fallback_cover_inner(label, item.get("author") or "")
+    inner += real_cover_img(item)
     return f'<div class="hero-cover" style="--cover-h:{cover_hue(label)}">{inner}</div>'
 
 
@@ -647,7 +663,7 @@ def _track_html(item: dict) -> str:
         f' data-duration="{duration:.0f}"',
         f' data-progress="{progress:.0f}"',
         f' style="--cover-h:{hue}" aria-label="Écouter {ESC(label)}">',
-        f'<span class="cover" aria-hidden="true">{cover_inner}</span>',
+        f'<span class="cover" aria-hidden="true">{cover_inner}{real_cover_img(item)}</span>',
         badge,
         '<span class="track-copy">',
         f'<span class="track-title">{ESC(label)}</span>',
@@ -1061,7 +1077,8 @@ def catalog_page(
         feyebrow = "Reprendre l'écoute" if fprogress > 0 else "Pour commencer"
         resume_card_parts = [
             '<section class="resume-card" id="resume-card" aria-label="Reprendre l\'écoute">',
-            f'<div class="resume-cover" style="--cover-h:{fhue}">{fcover_inner}</div>',
+            f'<div class="resume-cover" style="--cover-h:{fhue}">'
+            f'{fcover_inner}{real_cover_img(featured)}</div>',
             f'<div class="resume-copy"><p class="eyebrow">{ESC(feyebrow)}</p>',
             f'<h2>{ESC(flabel)}</h2><p>{ESC(fauthor)}</p>',
             f'<p class="resume-meta">{ESC(fmeta)}</p>',
@@ -1082,7 +1099,7 @@ def catalog_page(
         parts.extend([
             '<section class="hero" id="resume-card" aria-label="Lecture immersive">',
             f'<div class="big-cover" style="--cover-h:{hue}" id="immersive-cover-host">',
-            f'{cover_inner}</div>',
+            f'{cover_inner}{real_cover_img(first)}</div>',
             '<div><p class="eyebrow">Lecture immersive</p>',
             f'<h2>{ESC(label)}</h2>',
             f'<p>{ESC(author)}</p>',
