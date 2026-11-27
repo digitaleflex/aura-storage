@@ -484,8 +484,7 @@ _ensure_bootstrap_admin()
 _DUMMY_PASS_HASH = hash_password(new_token(32))
 
 
-def _as_dict(row) -> dict:
-    return dict(row) if not isinstance(row, dict) else row
+from .normalizers import as_dict as _as_dict
 
 
 def _canonical_id(value: str, field: str) -> str:
@@ -839,13 +838,7 @@ class FolderShareIn(BaseModel):
     max_uses: int | None = Field(default=None, ge=1, le=1_000_000)
 
 
-class ObjectPatchIn(BaseModel):
-    # Object reassignment into a logical folder (#62). `model_fields_set`
-    # distinguishes "not sent" from an explicit null (which unfiles the object
-    # back to the root level).
-    model_config = ConfigDict(extra="forbid")
-    folder_id: Uuid4 | None = None
-
+from .routes_objects_mutations import ObjectPatchIn  # noqa: E402
 
 class ApplicationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -4161,95 +4154,6 @@ def get_transfer(tid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
     return _transfer_public(row)
 
 
-@app.get("/api/v1/objects/{oid}/analytics")
-def object_analytics(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
-    """This month's views/downloads/share opens and lifetime totals."""
-    oid = _canonical_id(oid, "object id")
-    if repo.get_object(oid, **_object_scope(principal)) is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    period = _usage_period()
-    month = repo.get_object_usage(oid, period) or {}
-    totals = repo.get_object_usage_totals(oid)
-    return {
-        "object_id": oid, "period": period,
-        "month": {
-            "views": int(month.get("views") or 0),
-            "downloads": int(month.get("downloads") or 0),
-            "share_opens": int(month.get("share_opens") or 0),
-            "egress_bytes": int(month.get("egress_bytes") or 0),
-        },
-        "totals": {
-            "views": int(totals.get("views") or 0),
-            "downloads": int(totals.get("downloads") or 0),
-            "share_opens": int(totals.get("share_opens") or 0),
-            "egress_bytes": int(totals.get("egress_bytes") or 0),
-        },
-        "last_access_at": totals.get("last_access_at"),
-    }
-
-
-@app.delete("/api/v1/objects/{oid}")
-def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(row)
-    if row["status"] not in ("available", "pending"):
-        raise HTTPException(status_code=409, detail="object not deletable")
-    if row["status"] == "pending":
-        # Parts of an unfinished multipart upload are not an object yet: free them.
-        _abort_multipart_session(row)
-    repo.set_status(oid, "deleted")
-    audit_event("delete", principal["id"], "success", {"object_id": oid})
-    return {"id": oid, "status": "deleted"}
-
-
-@app.post("/api/v1/objects/{oid}/restore")
-def restore_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
-    # Undo a soft delete (trash). Same scope as the delete it reverses. Only a
-    # committed object can come back: a pending intent that was soft-deleted
-    # never received its bytes (size_bytes stays -1), so it is not restorable.
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(row)
-    if row["status"] != DELETED:
-        raise HTTPException(status_code=409, detail="object is not in the trash")
-    if row["size_bytes"] < 0:
-        raise HTTPException(status_code=409, detail="object was never uploaded")
-    repo.set_status(oid, AVAILABLE)
-    audit_event("restore", principal["id"], "success", {"object_id": oid})
-    return _object_public(repo.get_object(oid, **_object_scope(principal)))
-
-
-@app.patch("/api/v1/objects/{oid}")
-def update_object(
-    oid: str, body: ObjectPatchIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    # File an object into a logical folder (or unfile it). Folders are owned by a
-    # human user (#61), so this metadata move is a human-only capability; a
-    # service identity has no folder to target and is refused by `human=True`.
-    oid = _canonical_id(oid, "object id")
-    if "folder_id" not in body.model_fields_set:
-        raise HTTPException(status_code=422, detail="no fields to update")
-    if repo.get_object(oid, **_object_scope(principal)) is None:
-        # 404 (not 403) so the caller cannot probe for objects outside its scope.
-        raise HTTPException(status_code=404, detail="object not found")
-    if body.folder_id is not None and repo.get_folder(
-        body.folder_id, owner_id=principal["id"]
-    ) is None:
-        # The target folder is owner-scoped: a foreign/unknown id is a 404.
-        raise HTTPException(status_code=404, detail="folder not found")
-    repo.set_object_folder(oid, folder_id=body.folder_id)
-    audit_event("object.move", principal["id"], "success", {
-        "object_id": oid, "folder_id": body.folder_id,
-    })
-    return _object_public(repo.get_object(oid, **_object_scope(principal)))
-
-
 @app.post("/api/v1/objects/{oid}/share")
 def create_object_share(
     oid: str, body: ShareIn,
@@ -6935,3 +6839,6 @@ def restore_object_revision(
         "head_revision_number": next_no,
         "status": "available",
     }
+
+from .routes_objects_mutations import router as objects_mutations_router  # noqa: E402
+app.include_router(objects_mutations_router)
