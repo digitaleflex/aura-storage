@@ -104,6 +104,24 @@ describe("scanDuplicates", () => {
     expect(report.results.get("a")?.status).toBe("ready");
   });
 
+  it("reuses precomputed checksums without rehashing the file", async () => {
+    const content = "déjà haché";
+    const file = entry("a", "rapport.pdf", content);
+    const sha256 = await checksum(content);
+    const digest = vi.spyOn(crypto.subtle, "digest");
+    const report = await scanDuplicates(
+      [file],
+      new Map([["", [{
+        id: "obj-1", display_name: "autre.pdf", size_bytes: file.file.size, checksum_sha256: sha256,
+      }]]]),
+      { checksums: new Map([["a", sha256]]) },
+    );
+    expect(report.matches[0]?.reason).toBe("checksum");
+    expect(report.checksums.get("a")).toBe(sha256);
+    expect(digest).not.toHaveBeenCalled();
+    digest.mockRestore();
+  });
+
   it("marks a file as unverified when its required hash fails", async () => {
     const digest = vi.spyOn(crypto.subtle, "digest").mockRejectedValueOnce(new Error("hash failed"));
     const report = await scanDuplicates([entry("a", "a.pdf", "x")], new Map());
