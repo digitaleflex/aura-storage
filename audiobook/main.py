@@ -35,6 +35,7 @@ from .errors import (
 )
 from .ids import constant_time_equal, new_token
 from .metadata import (
+    GoogleBooksMetadataProvider,
     ITunesMetadataProvider,
     OpenLibraryMetadataProvider,
     UrllibJsonTransport,
@@ -108,6 +109,9 @@ def create_app(
             timeout_seconds=settings.metadata_provider_timeout_seconds
         )
         metadata_providers = (
+            GoogleBooksMetadataProvider(
+                transport, api_key=settings.google_books_api_key
+            ),
             OpenLibraryMetadataProvider(transport),
             ITunesMetadataProvider(
                 transport, country=settings.metadata_itunes_country

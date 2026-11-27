@@ -44,7 +44,14 @@ import {
   parentDirOf,
   planFolders,
 } from "../lib/folderTree";
-import { findDuplicates, type DuplicateMatch } from "../lib/duplicateCheck";
+import {
+  scanDuplicates,
+  type DuplicateEntry,
+  type DuplicateMatch,
+  type ExistingObjectRef,
+  type PreflightResult,
+} from "../lib/duplicateCheck";
+import { ImportPreflight } from "../components/ImportPreflight";
 import { useAuth, useSession } from "../lib/auth";
 import { ConfirmAction, Dialog } from "../components/Dialog";
 import { makeToast, ToastStack, type Toast } from "../components/Toasts";
@@ -416,8 +423,73 @@ export function ObjectsPage() {
   const [duplicateMatches, setDuplicateMatches] = useState<DuplicateMatch[] | null>(null);
   const [duplicateChecking, setDuplicateChecking] = useState(false);
   const [pendingUploadAfterDuplicate, setPendingUploadAfterDuplicate] = useState<
-    { files: File[]; relPaths: string[]; folderMode: boolean } | null
+    { files: File[]; relPaths: string[]; keys: string[]; folderMode: boolean } | null
   >(null);
+  const fileIdsRef = useRef(new WeakMap<File, string>());
+  const nextImportIdRef = useRef(1);
+  const importId = useCallback((file: File): string => {
+    const existing = fileIdsRef.current.get(file);
+    if (existing) return existing;
+    const id = `import-${nextImportIdRef.current++}`;
+    fileIdsRef.current.set(file, id);
+    return id;
+  }, []);
+  const preflightGenerationRef = useRef(0);
+  const submitGenerationRef = useRef(0);
+  const submitAbortRef = useRef<AbortController | null>(null);
+  const invalidateSubmitScan = useCallback(() => {
+    submitGenerationRef.current += 1;
+    submitAbortRef.current?.abort();
+    setDuplicateChecking(false);
+    setDuplicateMatches(null);
+    setPendingUploadAfterDuplicate(null);
+  }, []);
+  const autoQueueArmedRef = useRef(false);
+  const [preflightResults, setPreflightResults] = useState<Record<string, PreflightResult>>({});
+  const [preflightRunning, setPreflightRunning] = useState(false);
+  const [preflightComplete, setPreflightComplete] = useState(false);
+  const [preflightSignature, setPreflightSignature] = useState("");
+  const [preflightMatches, setPreflightMatches] = useState<DuplicateMatch[]>([]);
+  const importCandidates = useMemo<DuplicateEntry[]>(
+    () => [
+      ...pendingFolderEntries.map((entry) => ({
+        key: importId(entry.file),
+        file: entry.file,
+        rel: entry.rel,
+      })),
+      ...pendingFiles.map((file) => ({ key: importId(file), file, rel: file.name })),
+    ],
+    [pendingFiles, pendingFolderEntries, importId],
+  );
+  const importSignature = useMemo(
+    () => `${currentFolderId ?? "root"}:${importCandidates.map((entry) => entry.key).join(",")}`,
+    [currentFolderId, importCandidates],
+  );
+  const preflightItems = useMemo(
+    () => importCandidates.map((entry) => {
+      const result = preflightResults[entry.key];
+      const slash = entry.rel.lastIndexOf("/");
+      return {
+        id: entry.key,
+        name: entry.file.name,
+        rel: entry.rel,
+        root: slash > 0 ? entry.rel.slice(0, slash) : undefined,
+        size: entry.file.size,
+        status: result?.status ?? "queued",
+        duplicateReason: result?.match?.reason,
+        duplicateOf: result?.match?.duplicateOf,
+      };
+    }),
+    [importCandidates, preflightResults],
+  );
+  const pendingFolderRoots = useMemo(() => {
+    const roots = new Map<string, number>();
+    for (const entry of pendingFolderEntries) {
+      const root = entry.rel.split("/")[0] || entry.file.name;
+      roots.set(root, (roots.get(root) ?? 0) + 1);
+    }
+    return [...roots.entries()];
+  }, [pendingFolderEntries]);
   // Retours d'action : des toasts (là où l'action a eu lieu), plus des
   // bandeaux qui poussent le contenu. Les succès disparaissent seuls, les
   // erreurs restent jusqu'à fermeture. `null` est ignoré (ancien « effacer »).
@@ -716,37 +788,40 @@ export function ObjectsPage() {
   /** True while any file of the queue is transferring (blocks double submit). */
   const transferActive = queue.active > 0;
 
-  // File d'attente automatique : quand le transfert se termine et qu'il y a
-  // des fichiers/dossiers en attente, les lancer automatiquement.
+  // Backlog automatique : uniquement après un transfert explicitement mis en
+  // attente. Une simple sélection de fichiers/dossiers ne doit jamais démarrer
+  // un import sans le clic de l'utilisateur, ni contourner le contrôle des doublons.
   useEffect(() => {
-    if (transferActive) return;
-    if (pendingFiles.length === 0 && pendingFolderEntries.length === 0) return;
+    if (pendingFiles.length === 0 && pendingFolderEntries.length === 0) {
+      autoQueueArmedRef.current = false;
+      return;
+    }
+    if (transferActive || !autoQueueArmedRef.current) return;
     if (!csrf) return;
-    // Petite temporisation pour laisser l'UI se stabiliser
     const timer = setTimeout(() => {
-      if (pendingFolderEntries.length > 0) {
-        const folderList = pendingFolderEntries.map((entry) => entry.file);
-        const folderRels = pendingFolderEntries.map((entry) => entry.rel);
-        const looseList = pendingFiles;
-        const looseRels = pendingFiles.map((file) => file.name);
-        void uploadRelPaths([...folderList, ...looseList], [...folderRels, ...looseRels]);
-        setPendingFiles([]);
-        setPendingFolderEntries([]);
-      } else {
-        launchQueue(
-          csrf,
-          pendingFiles.map((file) => ({ file, rel: file.name, folderId: currentFolderId })),
-        );
-        setPendingFiles([]);
-      }
+      autoQueueArmedRef.current = false;
+      const folderMode = pendingFolderEntries.length > 0;
+      const files = [
+        ...pendingFolderEntries.map((entry) => entry.file),
+        ...pendingFiles,
+      ];
+      const relPaths = [
+        ...pendingFolderEntries.map((entry) => entry.rel),
+        ...pendingFiles.map((file) => file.name),
+      ];
+      void startUploadWithDuplicateCheck(files, relPaths, folderMode, { forceFresh: true });
       setNotice(null);
     }, 500);
     return () => clearTimeout(timer);
-  }, [transferActive, pendingFiles.length, pendingFolderEntries.length, csrf, currentFolderId]);
+    // startUploadWithDuplicateCheck est une fonction stable du render courant ;
+    // les fichiers/dossiers sont capturés ici pour former un seul lot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transferActive, pendingFiles, pendingFolderEntries, csrf, currentFolderId]);
 
   // -- Upload journal: resume a long import after a reload --------------------
   const owner = session.data?.id ?? null;
   const [resumable, setResumable] = useState<JournalEntry[]>([]);
+  const [resumeDragOver, setResumeDragOver] = useState(false);
   const resumeFilesRef = useRef<HTMLInputElement>(null);
   const resumeDirRef = useRef<HTMLInputElement>(null);
   /** Journal keys already forgotten, so each settled file is removed once. */
@@ -786,12 +861,13 @@ export function ObjectsPage() {
       const target = event.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
       event.preventDefault();
+      invalidateSubmitScan();
       setPendingFiles((prev) => [...prev, ...Array.from(files)]);
       setIntakeOpen(true);
     }
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, []);
+  }, [invalidateSubmitScan]);
 
   // Keep the screen (and so the machine) awake while files are being sent.
   // Best effort: unsupported browsers or a refused lock change nothing.
@@ -855,12 +931,13 @@ export function ObjectsPage() {
     });
   }
 
-  /** Re-selected files: send only those the journal still lists. */
-  function handleResume(selected: FileList | null) {
-    if (!selected || selected.length === 0 || !owner || !csrf || transferActive) return;
+  /** Re-selected files or folders: send only those the journal still lists. */
+  function handleResumeEntries(entries: Array<{ file: File; rel: string }>) {
+    if (entries.length === 0 || !owner || !csrf || transferActive) return;
     const byKey = new Map(resumable.map((entry) => [entry.key, entry]));
-    // Same file picked through the other picker (plain files vs folder) has a
-    // different relative path: fall back to name + size + mtime.
+    // Same file picked through another picker (loose file, single folder or a
+    // drop of several folders) has a different relative path: fall back to
+    // name + size + mtime, which is the journal fingerprint.
     const byName = new Map(
       resumable.map((entry) => [
         `${entry.rel.split("/").pop()}\u0000${entry.size}`,
@@ -874,10 +951,8 @@ export function ObjectsPage() {
       idempotencyKey?: string;
     }> = [];
     const seen = new Set<string>();
-    for (const file of Array.from(selected)) {
-      const rel = normalizeRelativePath(
-        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
-      );
+    for (const { file, rel: selectedRel } of entries) {
+      const rel = normalizeRelativePath(selectedRel);
       const entry =
         byKey.get(fingerprint(owner, rel, file)) ??
         (() => {
@@ -896,7 +971,7 @@ export function ObjectsPage() {
         idempotencyKey: entry.idempotencyKey,
       });
     }
-    const ignored = selected.length - matched.length;
+    const ignored = entries.length - matched.length;
     if (matched.length === 0) {
       setUploadError(
         "Aucun des fichiers choisis ne correspond à l'import interrompu (même nom, taille et date de modification).",
@@ -909,6 +984,18 @@ export function ObjectsPage() {
         (ignored > 0 ? ` ; ${ignored} déjà envoyé(s) ou hors import ignoré(s).` : "."),
     );
     launchQueue(csrf, matched);
+  }
+
+  function handleResume(selected: FileList | null) {
+    if (!selected) return;
+    handleResumeEntries(
+      Array.from(selected).map((file) => ({
+        file,
+        rel: normalizeRelativePath(
+          (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+        ),
+      })),
+    );
   }
 
   function forgetResumable() {
@@ -1048,7 +1135,7 @@ export function ObjectsPage() {
     objectsQuery.isFetchingNextPage,
   ]);
 
-  const tree = treeQuery.data?.items ?? [];
+  const tree = useMemo(() => treeQuery.data?.items ?? [], [treeQuery.data]);
   const byId = useMemo(() => new Map(tree.map((f) => [f.id, f])), [tree]);
   // A restored folder may have been deleted while the session was away.
   useEffect(() => {
@@ -1439,13 +1526,14 @@ export function ObjectsPage() {
     }
   }
 
-  function launchPreparedUpload(files: File[], relPaths: string[], folderMode: boolean) {
+  async function launchPreparedUpload(files: File[], relPaths: string[], folderMode: boolean): Promise<boolean> {
     if (!csrf) {
       setUploadError("Session expirée. Reconnectez-vous.");
-      return;
+      return false;
     }
     if (folderMode) {
-      void uploadRelPaths(files, relPaths);
+      const started = await uploadRelPaths(files, relPaths);
+      if (!started) return false;
     } else {
       launchQueue(
         csrf,
@@ -1456,30 +1544,58 @@ export function ObjectsPage() {
         })),
       );
     }
-    setPendingFiles([]);
-    setPendingFolderEntries([]);
+    const launched = new Set(files);
+    setPendingFiles((current) => current.filter((file) => !launched.has(file)));
+    setPendingFolderEntries((current) => current.filter((entry) => !launched.has(entry.file)));
+    return true;
   }
 
-  async function startUploadWithDuplicateCheck(files: File[], relPaths: string[], folderMode: boolean) {
-    setDuplicateChecking(true);
+  async function startUploadWithDuplicateCheck(
+    files: File[],
+    relPaths: string[],
+    folderMode: boolean,
+    options: { forceFresh?: boolean } = {},
+  ) {
     setUploadError(null);
-    try {
-      const matches = await checkUploadDuplicates(files, relPaths, folderMode);
-      if (matches.length > 0) {
-        setDuplicateMatches(matches);
-        setPendingUploadAfterDuplicate({ files, relPaths, folderMode });
+    const generation = ++submitGenerationRef.current;
+    submitAbortRef.current?.abort();
+    const controller = new AbortController();
+    submitAbortRef.current = controller;
+    let matches: DuplicateMatch[];
+    if (!options.forceFresh && preflightComplete && preflightSignature === importSignature && !preflightRunning) {
+      matches = preflightMatches;
+    } else {
+      setDuplicateChecking(true);
+      try {
+        matches = await checkUploadDuplicates(files, relPaths, folderMode, {
+          csrf: csrf ?? "",
+          keys: files.map(importId),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (generation !== submitGenerationRef.current) return;
+        setDuplicateChecking(false);
+        setUploadError("Vérification des doublons impossible. Votre sélection est conservée ; réessayez.");
+        notify("error", "Vérification des doublons impossible. Aucun fichier n'a été envoyé.");
         return;
+      } finally {
+        if (generation === submitGenerationRef.current) setDuplicateChecking(false);
       }
-    } catch (err) {
-      // Duplicate check is a safety aid; do not block upload on transient scan errors.
-      notify("info", "Vérification des doublons indisponible, l'import continue.");
-    } finally {
-      setDuplicateChecking(false);
     }
-    launchPreparedUpload(files, relPaths, folderMode);
+    if (generation !== submitGenerationRef.current) return;
+    if (matches.length > 0) {
+      setDuplicateMatches(matches);
+      setPendingUploadAfterDuplicate({ files, relPaths, keys: files.map(importId), folderMode });
+      return;
+    }
+    await launchPreparedUpload(files, relPaths, folderMode);
   }
 
   function cancelDuplicateUpload() {
+    submitGenerationRef.current += 1;
+    submitAbortRef.current?.abort();
+    setDuplicateChecking(false);
     setDuplicateMatches(null);
     setPendingUploadAfterDuplicate(null);
   }
@@ -1491,15 +1607,15 @@ export function ObjectsPage() {
     setPendingUploadAfterDuplicate(null);
     if (!pending) return;
     if (mode === "include") {
-      launchPreparedUpload(pending.files, pending.relPaths, pending.folderMode);
+      void launchPreparedUpload(pending.files, pending.relPaths, pending.folderMode);
       return;
     }
-    const duplicateRelSet = new Set(matches.map((m) => m.rel));
+    const duplicateKeySet = new Set(matches.map((match) => match.key));
     const keptFiles: File[] = [];
     const keptRels: string[] = [];
     pending.files.forEach((file, index) => {
       const rel = pending.relPaths[index] ?? file.name;
-      if (duplicateRelSet.has(rel)) return;
+      if (duplicateKeySet.has(pending.keys[index] ?? importId(file))) return;
       keptFiles.push(file);
       keptRels.push(rel);
     });
@@ -1508,7 +1624,7 @@ export function ObjectsPage() {
       return;
     }
     notify("info", `${matches.length} doublon(s) ignoré(s).`);
-    launchPreparedUpload(keptFiles, keptRels, pending.folderMode);
+    void launchPreparedUpload(keptFiles, keptRels, pending.folderMode);
   }
 
   function handleUpload(event: FormEvent) {
@@ -1520,6 +1636,7 @@ export function ObjectsPage() {
       return;
     }
     if (transferActive) {
+      autoQueueArmedRef.current = true;
       if (pendingFiles.length > 0) {
         setNotice(
           `${pendingFiles.length} fichier(s) mis en file d'attente — ils seront uploadés automatiquement à la fin du transfert en cours.`,
@@ -1572,6 +1689,7 @@ export function ObjectsPage() {
   /** Directory import (#64): recreate the missing folders, then upload in place. */
   async function handleFolderUpload(selected: FileList | null) {
     if (!selected || selected.length === 0) return;
+    invalidateSubmitScan();
     const list = Array.from(selected);
     const relPaths = list.map((file) =>
       normalizeRelativePath(
@@ -1585,71 +1703,142 @@ export function ObjectsPage() {
     ]);
   }
 
-  async function fetchAllObjectsInFolder(folderId: string | null): Promise<ObjectItem[]> {
-    const out: ObjectItem[] = [];
-    let offset = 0;
-    const limit = 100;
-    for (let guard = 0; guard < 200; guard += 1) {
-      const page = await api.listObjects({ folderId, limit, offset });
-      out.push(...page.items);
-      if (page.items.length < limit) break;
-      offset += page.items.length;
-    }
-    return out;
-  }
-
   async function checkUploadDuplicates(
     files: File[],
     relPaths: string[],
-    folderMode: boolean,
+    _folderMode: boolean,
+    options: {
+      csrf: string;
+      signal?: AbortSignal;
+      keys?: string[];
+      onResult?: (entry: DuplicateEntry, result: PreflightResult) => void;
+    },
   ): Promise<DuplicateMatch[]> {
-    const entries = files.map((file, index) => ({ file, rel: relPaths[index] ?? file.name }));
-    const existingByKey = new Map<string, { id: string; display_name: string; size_bytes: number; checksum_sha256?: string | null }[]>();
+    const entries: DuplicateEntry[] = files.map((file, index) => ({
+      key: options.keys?.[index] ?? importId(file),
+      file,
+      rel: relPaths[index] ?? file.name,
+    }));
+    const plan = planFolders(relPaths);
+    const tooDeep = new Set(plan.tooDeep);
+    const scanEntries = entries.filter((entry) => !tooDeep.has(entry.rel));
+    for (const entry of entries) {
+      if (!tooDeep.has(entry.rel)) continue;
+      const result: PreflightResult = { status: "error" };
+      options.onResult?.(entry, result);
+    }
+    for (const entry of scanEntries) options.onResult?.(entry, { status: "checking" });
 
-    if (!folderMode) {
-      const currentObjects = await fetchAllObjectsInFolder(currentFolderId);
-      existingByKey.set("", currentObjects.map((o) => ({
-        id: o.id, display_name: o.display_name, size_bytes: o.size_bytes, checksum_sha256: o.checksum_sha256,
-      })));
-    } else {
-      const plan = planFolders(relPaths);
-      const keyOf = (parentId: string | null, name: string) => `${parentId ?? "root"}/${name}`;
-      const existingFolderIds = new Map<string, string>();
-      for (const folder of tree) existingFolderIds.set(keyOf(folder.parent_id, folder.name), folder.id);
-      const folderIds = new Map<string, string>();
-      for (const folder of plan.folders) {
-        const parentId = folder.parentPath ? folderIds.get(folder.parentPath) ?? currentFolderId : currentFolderId;
-        const id = existingFolderIds.get(keyOf(parentId, folder.name));
-        if (id) folderIds.set(folder.path, id);
-      }
-      const neededKeys = new Set<string>([""]);
-      for (const entry of entries) {
-        const parent = entry.rel.includes("/") ? entry.rel.slice(0, entry.rel.lastIndexOf("/")) : "";
-        neededKeys.add(parent);
-      }
-      for (const key of neededKeys) {
-        const folderId = key === "" ? currentFolderId : folderIds.get(key) ?? null;
-        if (key !== "" && !folderIds.has(key)) {
-          existingByKey.set(key, []);
-          continue;
-        }
-        const objs = await fetchAllObjectsInFolder(folderId);
-        existingByKey.set(key, objs.map((o) => ({
-          id: o.id, display_name: o.display_name, size_bytes: o.size_bytes, checksum_sha256: o.checksum_sha256,
-        })));
+    const hashOptions = {
+      computeHash: true,
+      hashMaxBytes: 256 * 1024 * 1024,
+      hashAllUnderBytes: 8 * 1024 * 1024,
+      signal: options.signal,
+    };
+    const hashed = await scanDuplicates(scanEntries, new Map(), hashOptions);
+    if ([...hashed.results.values()].some((result) => result.status === "error")) {
+      throw new Error("L'empreinte d'au moins un fichier n'a pas pu être vérifiée.");
+    }
+
+    const fingerprints = scanEntries.map((entry) => ({
+      parentPath: parentDirOf(entry.rel) ?? "",
+      name: entry.file.name,
+      sizeBytes: entry.file.size,
+      sha256: hashed.checksums.get(entry.key) ?? null,
+    }));
+    const existingByKey = new Map<string, ExistingObjectRef[]>();
+    for (let index = 0; index < fingerprints.length; index += 5000) {
+      const response = await api.scanDuplicates(
+        fingerprints.slice(index, index + 5000), options.csrf,
+      );
+      for (const [parent, objects] of Object.entries(response.byParent)) {
+        existingByKey.set(parent, objects);
       }
     }
 
-    return findDuplicates(entries, existingByKey, { computeHash: true, hashMaxBytes: 256 * 1024 * 1024 });
+    const report = await scanDuplicates(scanEntries, existingByKey, {
+      ...hashOptions,
+      checksums: hashed.checksums,
+      onResult: options.onResult,
+    });
+    if (tooDeep.size > 0) {
+      throw new Error("Certains fichiers dépassent la profondeur maximale et ne peuvent pas être importés.");
+    }
+    if ([...report.results.values()].some((result) => result.status === "error")) {
+      throw new Error("L'empreinte d'au moins un fichier n'a pas pu être vérifiée.");
+    }
+    return report.matches;
   }
 
+  // Progressive preflight: every picker/drop/paste updates the panel while the
+  // batch is scanned. A generation token prevents an older scan from writing
+  // results into a newer selection.
+  useEffect(() => {
+    const generation = ++preflightGenerationRef.current;
+    invalidateSubmitScan();
+    const controller = new AbortController();
+    if (importCandidates.length === 0 || !csrf) {
+      setPreflightResults({});
+      setPreflightMatches([]);
+      setPreflightSignature("");
+      setPreflightRunning(false);
+      setPreflightComplete(false);
+      return () => controller.abort();
+    }
+
+    setPreflightResults(
+      Object.fromEntries(importCandidates.map((entry) => [entry.key, { status: "queued" }])),
+    );
+    setPreflightMatches([]);
+    setPreflightSignature("");
+    setPreflightRunning(true);
+    setPreflightComplete(false);
+
+    const timer = setTimeout(() => {
+      void checkUploadDuplicates(
+        importCandidates.map((entry) => entry.file),
+        importCandidates.map((entry) => entry.rel),
+        importCandidates.some((entry) => entry.rel.includes("/")),
+        {
+          csrf,
+          signal: controller.signal,
+          keys: importCandidates.map((entry) => entry.key),
+          onResult: (entry, result) => {
+            if (generation !== preflightGenerationRef.current) return;
+            setPreflightResults((current) => ({ ...current, [entry.key]: result }));
+          },
+        },
+      ).then((matches) => {
+        if (generation !== preflightGenerationRef.current) return;
+        setPreflightMatches(matches);
+        setPreflightSignature(importSignature);
+        setPreflightComplete(true);
+      }).catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (generation !== preflightGenerationRef.current) return;
+        setPreflightResults(
+          Object.fromEntries(importCandidates.map((entry) => [entry.key, { status: "error" }])),
+        );
+        notify("info", "Vérification des doublons indisponible. Vous pourrez relancer l'import.");
+      }).finally(() => {
+        if (generation === preflightGenerationRef.current) setPreflightRunning(false);
+      });
+    }, 220);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importCandidates, currentFolderId, csrf, tree, treeQuery.isSuccess]);
+
   /** Shared core: plan folders, create them, queue files with folder ids. */
-  async function uploadRelPaths(list: File[], relPaths: string[]) {
+  async function uploadRelPaths(list: File[], relPaths: string[]): Promise<boolean> {
     if (!csrf) {
       setUploadError("Session expirée. Reconnectez-vous.");
-      return;
+      return false;
     }
-    if (transferActive) return;
+    if (transferActive) return false;
     setUploadError(null);
     setNotice(null);
 
@@ -1660,7 +1849,7 @@ export function ObjectsPage() {
       .filter((item) => !tooDeep.has(item.rel));
     if (kept.length === 0) {
       setUploadError("Aucun fichier importable dans cette sélection.");
-      return;
+      return false;
     }
 
     const keyOf = (parentId: string | null, name: string) =>
@@ -1729,7 +1918,7 @@ export function ObjectsPage() {
             "réponse inattendue du serveur",
           )}`,
         );
-        return;
+        return false;
       }
     }
     setFolderProgress(null);
@@ -1751,9 +1940,11 @@ export function ObjectsPage() {
         };
       }),
     );
+    return true;
   }
 
   function handleCancelUpload() {
+    autoQueueArmedRef.current = false;
     transfers.cancelAll();
   }
 
@@ -1765,6 +1956,7 @@ export function ObjectsPage() {
   function handleFilesChange(selected: FileList | File[] | null) {
     const list = selected ? Array.from(selected) : [];
     if (list.length === 0) return;
+    invalidateSubmitScan();
     setUploadError(null);
     setPendingFiles((current) => [...current, ...list]);
   }
@@ -1855,6 +2047,7 @@ export function ObjectsPage() {
   /** Drop intake: loose files buffer, folders reuse the folder pipeline. */
   async function handleDrop(e: React.DragEvent) {
     e.preventDefault();
+    invalidateSubmitScan();
     setDragDepth(0);
     setIntakeOpen(true);
     setUploadError(null);
@@ -1899,6 +2092,7 @@ export function ObjectsPage() {
         setUploadError(message);
         return;
       }
+      invalidateSubmitScan();
       const hasFolders = entries.some((entry) => entry.rel.includes("/"));
       if (transferActive) {
         const loose = entries.filter((entry) => !entry.rel.includes("/"));
@@ -1915,14 +2109,14 @@ export function ObjectsPage() {
             `Transfert en cours — ${
               loose.length === 1
                 ? "1 fichier ajouté à la file d'attente."
-                : `${loose.length} fichiers ajoutés à la file d'attente.`
+                : `${loose.length} fichiers ajoutés à la sélection en attente.`
             }` + (hasFolders ? " Les dossiers attendront la fin du transfert." : ""),
           );
         }
         if (hasFolders) {
           const folderEntries = entries.filter((entry) => entry.rel.includes("/"));
           setPendingFolderEntries((current) => [...current, ...folderEntries]);
-          notify("info", "Transfert en cours — dossiers mis en attente, ils seront importés ensuite.");
+          notify("info", "Transfert en cours — dossiers ajoutés à la sélection en attente.");
         }
         if (loose.length === 0 && !hasFolders) {
           // Folder creation needs a free queue: say so instead of swallowing.
@@ -1932,21 +2126,21 @@ export function ObjectsPage() {
         }
         return;
       }
-      if (hasFolders) {
-        notify(
-          "info",
-          entries.length === 1
-            ? "1 fichier prêt — vérification des doublons…"
-            : `${entries.length} fichiers prêts — vérification des doublons…`,
-        );
-        await startUploadWithDuplicateCheck(
-          entries.map((entry) => entry.file),
-          entries.map((entry) => entry.rel),
-          true,
-        );
-      } else {
-        handleFilesChange(entries.map((entry) => entry.file));
+      const folderEntries = entries.filter((entry) => entry.rel.includes("/"));
+      const looseEntries = entries.filter((entry) => !entry.rel.includes("/"));
+      if (folderEntries.length > 0) {
+        setPendingFolderEntries((current) => [...current, ...folderEntries]);
       }
+      if (looseEntries.length > 0) {
+        handleFilesChange(looseEntries.map((entry) => entry.file));
+      }
+      setIntakeOpen(true);
+      notify(
+        "info",
+        entries.length === 1
+          ? "1 fichier prêt — vérification des doublons…"
+          : `${entries.length} fichiers prêts — vérification des doublons…`,
+      );
     } catch (error) {
       setUploadError(describeError(error, "Lecture du dépôt impossible."));
     } finally {
@@ -1954,8 +2148,17 @@ export function ObjectsPage() {
     }
   }
 
-  function removePendingFile(index: number) {
-    setPendingFiles((current) => current.filter((_, i) => i !== index));
+  function removeImportCandidate(id: string) {
+    invalidateSubmitScan();
+    setPendingFiles((current) => current.filter((file) => importId(file) !== id));
+    setPendingFolderEntries((current) => current.filter((entry) => importId(entry.file) !== id));
+  }
+
+  function removePendingFolderRoot(root: string) {
+    invalidateSubmitScan();
+    setPendingFolderEntries((current) =>
+      current.filter((entry) => (entry.rel.split("/")[0] || entry.file.name) !== root),
+    );
   }
 
   async function handleDownload(item: ObjectItem) {
@@ -2897,12 +3100,35 @@ export function ObjectsPage() {
       ) : null}
 
       {resumable.length > 0 && !transferActive ? (
-        <div role="region" aria-label="Import interrompu" className="alert alert-warn resume-banner">
+        <div
+          role="region"
+          aria-label="Import interrompu"
+          className={`alert alert-warn resume-banner${resumeDragOver ? " drop-over" : ""}`}
+          onDragEnter={(e) => {
+            e.preventDefault();
+            setResumeDragOver(true);
+          }}
+          onDragOver={(e) => e.preventDefault()}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              setResumeDragOver(false);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setResumeDragOver(false);
+            if (e.dataTransfer.items.length === 0) return;
+            void collectDroppedEntries(e.dataTransfer.items).then(({ entries }) => {
+              handleResumeEntries(entries);
+            });
+          }}
+        >
           <p>
             <strong>Import interrompu</strong> : {resumable.length} fichier(s) restant(s) (
             {formatBytes(resumable.reduce((sum, entry) => sum + entry.size, 0))}). Choisissez
-            à nouveau les mêmes fichiers ou le même dossier : seuls ceux qui manquent
-            seront envoyés.
+            à nouveau les mêmes fichiers, le même dossier ou <strong>plusieurs dossiers</strong>,
+            ou déposez-les ici : seuls ceux qui manquent seront envoyés.
           </p>
           <div className="resume-actions">
             <button
@@ -3026,7 +3252,7 @@ export function ObjectsPage() {
           <h2 id="upload-title">
             Importer{currentName ? ` dans « ${currentName} »` : ""}
           </h2>
-          {!transferActive && pendingFiles.length === 0 && dropScan === null ? (
+          {!transferActive && pendingFiles.length === 0 && pendingFolderEntries.length === 0 && dropScan === null ? (
             <button
               type="button"
               className="btn btn-ghost btn-small"
@@ -3042,9 +3268,10 @@ export function ObjectsPage() {
         </div>
         <p className="muted">
           Déposez des fichiers ou des dossiers n'importe où sur la page, ou
-          choisissez-les. Vous pouvez ajouter plusieurs dossiers successivement
-          avant de lancer l'import. Un fichier n'est déclaré disponible qu'une fois sa
-          taille et son empreinte SHA-256 vérifiées par le serveur.
+          choisissez-les. Vous pouvez ajouter plusieurs fichiers et plusieurs dossiers
+          successivement avant de lancer l'import. Les doublons sont signalés au fil
+          de la sélection. Un fichier n'est déclaré disponible qu'une fois sa taille
+          et son empreinte SHA-256 vérifiées par le serveur.
         </p>
         {dropScan ? (
           <p className="pending-hint import-scan" role="status">
@@ -3067,6 +3294,12 @@ export function ObjectsPage() {
             {folderProgress.total} — «&nbsp;{folderProgress.name}&nbsp;»
           </p>
         ) : null}
+        <ImportPreflight
+          items={preflightItems}
+          running={preflightRunning || duplicateChecking}
+          formatBytes={formatBytes}
+          onRemove={removeImportCandidate}
+        />
         <form onSubmit={handleUpload} className="form form-inline">
           <div className="field file-field">
             <span>Fichiers</span>
@@ -3117,9 +3350,9 @@ export function ObjectsPage() {
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={(pendingFiles.length === 0 && pendingFolderEntries.length === 0) || duplicateChecking}
+            disabled={(pendingFiles.length === 0 && pendingFolderEntries.length === 0) || duplicateChecking || preflightRunning}
           >
-            {duplicateChecking ? "Vérification…" : transferActive ? "Transfert…" : "Importer et valider"}
+            {duplicateChecking || preflightRunning ? "Vérification…" : transferActive ? "Mettre en attente" : "Importer et valider"}
           </button>
           {transferActive ? (
             <ConfirmAction
@@ -3149,47 +3382,43 @@ export function ObjectsPage() {
           ) : null}
         </form>
 
-        {pendingFolderEntries.length > 0 ? (
+        {pendingFolderRoots.length > 0 ? (
           <div className="pending-folders">
-            <p className="pending-hint" role="status">
-              Dossiers en attente :{" "}
-              {Array.from(new Set(pendingFolderEntries.map((e) => e.rel.split("/")[0]))).join(", ")}{" "}
-              — {pendingFolderEntries.length} fichier(s).
-            </p>
-            <button
-              type="button"
-              className="btn btn-ghost btn-small"
-              onClick={() => setPendingFolderEntries([])}
-            >
-              Retirer les dossiers
-            </button>
-          </div>
-        ) : null}
-        {pendingFiles.length > 0 ? (
-          <>
-            {transferActive ? (
-              <p className="pending-hint" role="status">
-                En attente du prochain import — le transfert en cours se termine
-                d'abord.
-              </p>
-            ) : null}
-            <ul className="pending">
-              {pendingFiles.map((pending, index) => (
-                <li key={`${pending.name}-${index}`} className="pending-item">
-                  <span className="transfer-name">{pending.name}</span>
-                  <span className="muted">{formatBytes(pending.size)}</span>
+            <div className="import-roots" role="list" aria-label="Dossiers sélectionnés">
+              {pendingFolderRoots.map(([root, count]) => (
+                <div className="import-root" role="listitem" key={root}>
+                  <span className="import-root-name" title={root}>{root}</span>
+                  <span className="import-root-count">
+                    {count} fichier{count > 1 ? "s" : ""}
+                  </span>
                   <button
                     type="button"
-                    className="btn btn-ghost btn-small"
-                    aria-label={`Retirer ${pending.name}`}
-                    onClick={() => removePendingFile(index)}
+                    className="preflight-remove"
+                    aria-label={`Retirer le dossier ${root}`}
+                    onClick={() => removePendingFolderRoot(root)}
                   >
                     ×
                   </button>
-                </li>
+                </div>
               ))}
-            </ul>
-          </>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => {
+                invalidateSubmitScan();
+                setPendingFolderEntries([]);
+              }}
+            >
+              Retirer tous les dossiers
+            </button>
+          </div>
+        ) : null}
+        {transferActive && importCandidates.length > 0 ? (
+          <p className="pending-hint" role="status">
+            En attente du prochain import — le transfert en cours se termine
+            d'abord. La vérification des doublons sera relancée automatiquement.
+          </p>
         ) : null}
 
         {uploadError ? (
@@ -4760,14 +4989,21 @@ export function ObjectsPage() {
       >
         <p className="dialog-text">
           {duplicateMatches?.length ?? 0} fichier(s) semblent déjà présents dans la destination
-          (même nom et taille, ou même empreinte SHA-256). Vous pouvez les ignorer ou les importer quand même.
+          ou dans le lot sélectionné (même nom et taille, ou même empreinte SHA-256).
+          Vous pouvez les ignorer ou les importer quand même.
         </p>
         <ul className="pending" style={{ marginTop: "1rem" }}>
           {(duplicateMatches ?? []).slice(0, 20).map((m, i) => (
             <li key={`${m.rel}-${i}`} className="pending-item">
               <span className="transfer-name">{m.rel}</span>
               <span className="muted">
-                {m.reason === "checksum" ? "empreinte identique" : "nom + taille identiques"}
+                {m.reason === "checksum"
+                  ? "empreinte identique"
+                  : m.reason === "batch_checksum"
+                    ? "empreinte identique dans le lot"
+                    : m.reason === "batch_name_size"
+                      ? "nom + taille identiques dans le lot"
+                      : "nom + taille identiques"}
               </span>
             </li>
           ))}

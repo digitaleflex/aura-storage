@@ -5,6 +5,7 @@ and S3 through short-lived presigned URLs. The API never stores a browser sessio
 token in the response body and never puts S3 credentials in the frontend.
 """
 import hashlib
+import json
 import logging
 import os
 import re
@@ -24,7 +25,11 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, folder_shares, google_oauth, ids, magic_link, netinfo, public_book, public_ui, shares
+from . import (
+    authz, folder_shares, google_oauth, ids, listen_events, magic_link, netinfo,
+    public_book, public_classification, public_facets, public_series, public_ui,
+    shares,
+)
 from .audit import (
     audit_event,
     audit_path,
@@ -54,7 +59,7 @@ from .authz import (
     require_public,
 )
 from .config import settings
-from . import media_worker
+from . import audio_classification_worker, media_worker
 from .identity import fingerprint, format_token, new_secret
 from .lifecycle import (
     purge_object,
@@ -230,6 +235,11 @@ log = logging.getLogger("uvicorn.error")
 @app.on_event("startup")
 def _start_media_worker() -> None:
     media_worker.start()
+
+
+@app.on_event("startup")
+def _start_audio_classification_worker() -> None:
+    audio_classification_worker.start()
 
 
 @app.on_event("startup")
@@ -480,8 +490,7 @@ _ensure_bootstrap_admin()
 _DUMMY_PASS_HASH = hash_password(new_token(32))
 
 
-def _as_dict(row) -> dict:
-    return dict(row) if not isinstance(row, dict) else row
+from .normalizers import as_dict as _as_dict
 
 
 def _canonical_id(value: str, field: str) -> str:
@@ -665,7 +674,21 @@ def _normalize_slug(value: str) -> str:
     return slug
 
 
-from .routes_objects_ops import PublicationIn  # noqa: E402
+class PublicationIn(BaseModel):
+    """Publish or unpublish an object under a stable public slug.
+
+    The slug is the permanent capability: it survives a content replacement, so
+    course sites never have to be edited when a file is updated.
+    """
+    model_config = ConfigDict(extra="forbid")
+    slug: str | None = Field(default=None, max_length=63)
+    published: bool = True
+
+    @field_validator("slug")
+    @classmethod
+    def valid_slug(cls, value: str | None) -> str | None:
+        return None if value is None else _normalize_slug(value)
+
 
 class ReplaceObjectIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -700,6 +723,16 @@ class TagsIn(BaseModel):
     @classmethod
     def valid_tags(cls, value: list[str]) -> list[str]:
         return _normalize_tags(value)
+
+
+class AudioClassificationEnqueueIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    object_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class AudioClassificationReviewIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["accept", "reject"]
 
 
 class SubtitleIn(BaseModel):
@@ -740,10 +773,17 @@ class CollectionItemsIn(BaseModel):
 
 
 class ProgressIn(BaseModel):
-    """Playback position posted by the public player (CSRF-protected)."""
+    """Playback position posted by the public player (CSRF-protected).
+
+    ``kind`` is advisory: the server decides ``start`` for a first sample or a
+    backward seek, and only accepts ``end`` from the player. ``client_event_id``
+    is an optional deduplication key for retried samples (#320).
+    """
     model_config = ConfigDict(extra="forbid")
     object_id: Uuid4
     position_seconds: float = Field(ge=0, le=864000)
+    kind: Literal["start", "position", "end"] = "position"
+    client_event_id: str = Field(default="", max_length=120)
 
 
 class BookmarkIn(BaseModel):
@@ -814,13 +854,7 @@ class FolderShareIn(BaseModel):
     max_uses: int | None = Field(default=None, ge=1, le=1_000_000)
 
 
-class ObjectPatchIn(BaseModel):
-    # Object reassignment into a logical folder (#62). `model_fields_set`
-    # distinguishes "not sent" from an explicit null (which unfiles the object
-    # back to the root level).
-    model_config = ConfigDict(extra="forbid")
-    folder_id: Uuid4 | None = None
-
+from .routes_objects_mutations import ObjectPatchIn  # noqa: E402
 
 class ApplicationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1878,7 +1912,7 @@ def _portal_csp() -> str:
     s3 = f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
     media = f"'self' {s3}".strip()
     return (
-        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; "
         "style-src-attr 'unsafe-inline'; "
         f"img-src {media}; media-src {media}; connect-src {media}; "
         "manifest-src 'self'; worker-src 'self'; "
@@ -2022,8 +2056,26 @@ def _split_audio_name(display_name: str) -> tuple[str, str]:
     stem = display_name.rsplit(".", 1)[0] if "." in display_name else display_name
     if " - " in stem:
         author, title = stem.split(" - ", 1)
-        return author.strip(), title.strip()
-    return "", stem.strip()
+        author, title = author.strip(), title.strip()
+        # `06 - Titre` is an episode number, not an author.
+        if author.isdigit():
+            return "", title
+        return author, title
+    # `001_Titre` and `06 - Titre` fall back to a clean, unnumbered title.
+    stem = re.sub(r"^\d{1,3}\s*[-_]\s*", "", stem)
+    return "", stem.replace("_", " ").strip()
+
+
+def _folder_names(folder_ids: list[str]) -> dict:
+    ids = list({fid for fid in folder_ids if fid})
+    if not ids:
+        return {}
+    mark = "?" if settings.db_backend == "sqlite" else "%s"
+    placeholders = ",".join(mark for _ in ids)
+    rows = repo.conn.execute(
+        f"SELECT id, name FROM folders WHERE id IN ({placeholders})", tuple(ids),
+    ).fetchall()
+    return {r["id"]: r["name"] for r in rows}
 
 
 def _library_items(col: dict, only_published: bool = False) -> list:
@@ -2037,8 +2089,9 @@ def _library_items(col: dict, only_published: bool = False) -> list:
         if only_published and not published:
             continue
         rows.append((pos, row, published))
-    # One query for every chapter of the pack instead of one per book.
+    # One query for every chapter and folder name instead of one per book.
     chapters = repo.get_audio_chapters_map([row["id"] for _, row, _ in rows])
+    folder_names = _folder_names([row.get("folder_id") for _, row, _ in rows])
     items = []
     for pos, row, published in rows:
         author, title = _split_audio_name(row["display_name"])
@@ -2048,6 +2101,9 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             "display_name": row["display_name"],
             "title": title,
             "author": author,
+            "series": public_series.series_for_folder(
+                folder_names.get(row.get("folder_id"), "")
+            ),
             "created_at": row.get("created_at"),
             "content_type": row["content_type"],
             "size_bytes": row["size_bytes"],
@@ -2055,6 +2111,7 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             "chapters": chapters.get(row["id"], []),
             "published_slug": row.get("public_slug"),
             "cover_url": f"/covers/{row['id']}.jpg" if row.get("cover_key") else None,
+            "emblematic_cover": bool(row.get("emblematic_cover")),
             "url": f"/m/{row['public_slug']}" if published else None,
             "subtitle_url": (
                 f"/m/{row['public_slug']}/subtitles.vtt"
@@ -2062,6 +2119,22 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             ),
         })
     return items
+
+
+def _attach_public_facets(collections: list) -> list:
+    """Attach only approved public facets, loading tags in bounded batches."""
+    object_ids = list({
+        item["id"] for col in collections for item in col.get("items", [])
+    })
+    tags_by_object: dict[str, list[str]] = {}
+    for start in range(0, len(object_ids), 500):
+        tags_by_object.update(repo.list_tags_for_objects(object_ids[start:start + 500]))
+    for col in collections:
+        col["items"] = [
+            public_facets.enrich_public_item(item, tags_by_object.get(item["id"], []))
+            for item in col.get("items", [])
+        ]
+    return collections
 
 
 def _public_catalog() -> list:
@@ -2075,7 +2148,7 @@ def _public_catalog() -> list:
             "updated_at": col["updated_at"],
             "items": _library_items(col, only_published=True),
         })
-    return collections
+    return _attach_public_facets(collections)
 
 
 def _public_collections(principal: dict) -> list:
@@ -2094,23 +2167,47 @@ def _public_collections(principal: dict) -> list:
 def _filter_collections(
     collections: list, query: str, author: str, sort: str = "",
     *, min_seconds: int | None = None, max_seconds: int | None = None,
+    collection: str = "", category: str = "", theme: str = "",
+    language: str = "", media_format: str = "",
 ) -> list:
-    """Search (accent-insensitive, every word must match), author filter and sort."""
-    words = public_ui.fold(query).split()
+    """Search and combine public facets with AND semantics."""
+    # Query and indexed text share the same canonicalisation, so « polar »
+    # finds a book tagged « thriller » while unknown words keep plain matching.
+    from . import portal_search
+    words = portal_search.search_tokens(query)
+    raw_format = (media_format or "").strip().lower()
+    wanted_format = public_facets.normalize_format(raw_format, unknown=raw_format) if raw_format else ""
+    wanted_author = public_ui.fold(author) if author else ""
     out = []
     for col in collections:
-        items = col["items"]
-        if words:
-            items = [
-                i for i in items
-                if all(w in public_ui.fold(f'{i["display_name"]} {i["author"]}') for w in words)
-            ]
-        if author:
-            items = [i for i in items if i["author"] == author]
-        if min_seconds is not None:
-            items = [i for i in items if float(i.get("duration_seconds") or 0) >= min_seconds]
-        if max_seconds is not None:
-            items = [i for i in items if 0 < float(i.get("duration_seconds") or 0) <= max_seconds]
+        if collection and col.get("slug") != collection:
+            continue
+        prepared = []
+        for item in col["items"]:
+            facets = public_facets.item_facets(item)
+            searchable = portal_search.canonicalize(
+                f'{item.get("display_name", "")} {item.get("author", "")} '
+                f'{item.get("title", "")} {" ".join(facets["categories"])} '
+                f'{" ".join(facets["themes"])}'
+            )
+            prepared.append((item, facets, searchable, float(item.get("duration_seconds") or 0)))
+        items = [
+            item for item, facets, searchable, duration in prepared
+            if (not words or all(word in searchable for word in words))
+            and (not wanted_author or public_ui.fold(item.get("author", "")) == wanted_author)
+            and (not category or category in facets["categories"])
+            and (not theme or theme in facets["themes"])
+            and (not language or language in facets["languages"])
+            and (not wanted_format or facets["format"] == wanted_format)
+            and (
+                (min_seconds is None and max_seconds is None)
+                or (
+                    duration > 0
+                    and (min_seconds is None or duration >= min_seconds)
+                    and (max_seconds is None or duration <= max_seconds)
+                )
+            )
+        ]
         if items:
             out.append({**col, "items": public_ui.sort_items(items, sort)})
     return out
@@ -2121,8 +2218,54 @@ def _sort_param(request: Request) -> str:
     return value if value in {v for _, v in public_ui.SORTS} else ""
 
 
+def _catalog_filter_state(request: Request, intent) -> tuple[dict, dict, str]:
+    """Parse explicit URL facets; explicit duration bounds override NLP ones."""
+    params = request.query_params
+    raw_format = (params.get("format") or "").strip().lower()
+    active = {
+        "collection": (params.get("collection") or "").strip()[:120],
+        "category": (params.get("categorie") or "").strip().lower()[:64],
+        "theme": (params.get("theme") or "").strip().lower()[:64],
+        "language": (params.get("langue") or "").strip().lower()[:16],
+        "format": public_facets.normalize_format(raw_format, unknown=raw_format)[:32],
+        "duration_min": (params.get("duree_min") or "").strip()[:6],
+        "duration_max": (params.get("duree_max") or "").strip()[:6],
+    }
+    error = ""
+    try:
+        explicit_min = public_facets.minutes_to_seconds(active["duration_min"])
+        explicit_max = public_facets.minutes_to_seconds(active["duration_max"])
+        min_seconds = explicit_min if active["duration_min"] else intent.min_seconds
+        max_seconds = explicit_max if active["duration_max"] else intent.max_seconds
+        # The form works in whole minutes. Round NLP-derived bounds down before
+        # filtering so submitting the form later cannot silently change results.
+        if not active["duration_min"] and min_seconds is not None:
+            min_seconds = (min_seconds // 60) * 60
+        if not active["duration_max"] and max_seconds is not None:
+            max_seconds = (max_seconds // 60) * 60
+        if min_seconds is not None and max_seconds is not None and min_seconds > max_seconds:
+            raise ValueError("duration")
+    except ValueError:
+        min_seconds = max_seconds = None
+        error = "Durée invalide : indiquez des minutes entières et une borne minimale inférieure à la maximale."
+    if not active["duration_min"] and min_seconds is not None:
+        active["duration_min"] = str(min_seconds // 60)
+    if not active["duration_max"] and max_seconds is not None:
+        active["duration_max"] = str(max_seconds // 60)
+    return active, {"min_seconds": min_seconds, "max_seconds": max_seconds}, error
+
+
 def _catalog_authors(collections: list) -> list:
     return sorted({i["author"] for col in collections for i in col["items"] if i["author"]})
+
+
+def _catalog_author_counts(collections: list) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in public_facets.unique_items(collections):
+        author = str(item.get("author") or "").strip()
+        if author:
+            counts[author] = counts.get(author, 0) + 1
+    return counts
 
 
 @app.get("/api/public/library")
@@ -2147,9 +2290,29 @@ def public_progress(
     row = _as_dict(row) if row is not None else None
     if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
         raise HTTPException(status_code=404, detail="object not found")
-    repo.save_progress(
-        principal["id"], oid, body.position_seconds, int(time.time())
+    now = int(time.time())
+    uid = principal["id"]
+    previous_position = repo.get_progress_map(uid, [oid]).get(oid, 0.0)
+    last_event_at = repo.last_listen_event_at(uid, oid)
+    # A first sample, or a backward seek (a new playback session), starts a
+    # session; the player may explicitly close one with ``end``. A plain sample
+    # counts at most the elapsed wall-clock time, so seeking forward cannot be
+    # reported as listening (#320).
+    if last_event_at <= 0 or body.position_seconds < float(previous_position):
+        kind = "start"
+    elif body.kind == "end":
+        kind = "end"
+    else:
+        kind = "position"
+    elapsed = max(0, now - last_event_at) if last_event_at else 0
+    delta = (
+        listen_events.listened_delta(float(previous_position), body.position_seconds, elapsed)
+        if kind != "start" else 0.0
     )
+    repo.record_listen_event(
+        uid, oid, kind, body.position_seconds, delta, now, body.client_event_id
+    )
+    repo.save_progress(uid, oid, body.position_seconds, now)
     return {"object_id": oid, "position_seconds": body.position_seconds}
 
 
@@ -2257,10 +2420,12 @@ async def public_playlist_delete_form(
 
 
 def _public_listening_stats(principal: dict) -> dict:
-    """Lightweight listener stats, derived from data the portal already stores.
+    """Listener stats: a measured projection plus the legacy estimate.
 
-    Only the latest position is kept per book, so the listened time is an
-    estimate from saved positions, never a claim of exact playback duration.
+    ``estimated_listened_seconds`` still sums the latest saved positions for
+    compatibility, but it is only an estimate. ``measured_listened_seconds``
+    sums the capped deltas of the append-only events (#320) within the retention
+    window; the profile labels whichever figure it displays accordingly.
     """
     collections = _public_collections(principal)
     items = [item for col in collections for item in col["items"]]
@@ -2289,9 +2454,15 @@ def _public_listening_stats(principal: dict) -> dict:
                 "started": len(started),
                 "total": len(col_items),
             })
+    totals = repo.listening_totals(
+        principal["id"], int(time.time()),
+        settings.listen_event_retention_days * 86400,
+    )
     return {
         "items_in_library": len(items),
         "estimated_listened_seconds": int(listened),
+        "measured_listened_seconds": totals["listened_seconds"],
+        "listen_events": totals["samples"],
         "completed": completed,
         "favorites": len(favourites),
         "bookmarks": bookmarks,
@@ -2409,9 +2580,7 @@ def public_portal(request: Request):
         query = intent.q
         author = author or intent.author
         sort = sort or intent.sort
-    duration_filters = dict(
-        min_seconds=intent.min_seconds, max_seconds=intent.max_seconds,
-    )
+    active_facets, duration_filters, filter_error = _catalog_filter_state(request, intent)
     if principal is None:
         if not settings.public_browse:
             return HTMLResponse(
@@ -2419,21 +2588,55 @@ def public_portal(request: Request):
                 headers=_public_profile_headers(),
             )
         catalog = _public_catalog()
+        facet_options = public_facets.catalog_facets(catalog)
+        filtered = _filter_collections(
+            catalog, query, author, sort, **duration_filters,
+            collection=active_facets["collection"],
+            category=active_facets["category"],
+            theme=active_facets["theme"],
+            language=active_facets["language"],
+            media_format=active_facets["format"],
+        )
+        filters_active = bool(
+            query or author or sort or filter_error or
+            duration_filters["min_seconds"] is not None or
+            duration_filters["max_seconds"] is not None or
+            any(active_facets[key] for key in (
+                "collection", "category", "theme", "language", "format",
+                "duration_min", "duration_max",
+            ))
+        )
+        try:
+            page = max(1, int(request.query_params.get("page", "1")))
+        except ValueError:
+            page = 1
         return HTMLResponse(
             public_book.landing_page(
-                _filter_collections(catalog, query, author, sort, **duration_filters),
-                query=query, search_note=search_note,
+                filtered, query=query, search_note=search_note,
                 authors=_catalog_authors(catalog), active_author=author, sort=sort,
+                author_counts=_catalog_author_counts(catalog),
+                facet_options=facet_options, active_facets=active_facets,
+                filter_error=filter_error,
                 base_url=_public_base_url(), with_email=magic_link.enabled(settings),
+                page=page,
             ),
-            headers=_public_profile_headers(indexable=not (query or author or sort)),
+            headers=_public_profile_headers(indexable=not filters_active),
         )
-    view = request.query_params.get("vue", "liste").strip().lower()
+    view = request.query_params.get("vue", "grille").strip().lower()
     if view not in ("liste", "grille", "immersif"):
         view = "liste"
     collections = _public_collections(principal)
     authors = _catalog_authors(collections)
-    collections = _filter_collections(collections, query, author, sort, **duration_filters)
+    author_counts = _catalog_author_counts(collections)
+    facet_options = public_facets.catalog_facets(collections)
+    collections = _filter_collections(
+        collections, query, author, sort, **duration_filters,
+        collection=active_facets["collection"],
+        category=active_facets["category"],
+        theme=active_facets["theme"],
+        language=active_facets["language"],
+        media_format=active_facets["format"],
+    )
     try:
         page = max(1, int(request.query_params.get("page", "1")))
     except ValueError:
@@ -2446,6 +2649,9 @@ def public_portal(request: Request):
         public_ui.catalog_page(
             principal, collections, query=query, view=view, search_note=search_note,
             authors=authors, active_author=author, sort=sort,
+            author_counts=author_counts,
+            facet_options=facet_options, active_facets=active_facets,
+            filter_error=filter_error,
             premium=str(principal.get("plan") or "free").lower() == "premium",
             page=page, recommend_fn=recommend_fn,
         ),
@@ -2499,6 +2705,7 @@ def _find_public_book(oid: str):
     for col_row in repo.get_published_collections_for_object(oid):
         col = _as_dict(col_row)
         items = _library_items(col, only_published=True)
+        items = _attach_public_facets([{"items": items}])[0]["items"]
         item = next((i for i in items if i["id"] == oid), None)
         if item is not None:
             return item, {
@@ -2676,7 +2883,10 @@ def _require_master(principal: dict) -> None:
         raise HTTPException(status_code=403, detail="master mode required")
 
 
-from .routes_objects_ops import BulkIdsIn  # noqa: E402
+class BulkIdsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(min_length=1)
+
 
 def _bulk_purge(ids: list[str], principal: dict) -> dict:
     from .lifecycle import PurgeBlockedError, StorageDeleteError
@@ -2699,6 +2909,32 @@ def _bulk_purge(ids: list[str], principal: dict) -> dict:
         "purged": len(purged), "not_found": len(not_found), "failed": len(failed),
     })
     return {"purged": purged, "not_found": not_found, "failed": failed}
+
+
+@app.post("/api/v1/objects/bulk-purge")
+def bulk_purge(body: BulkIdsIn, principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
+    """Master mode: purge many objects in one call, no per-item confirmation."""
+    _require_master(principal)
+    if len(body.ids) > settings.master_bulk_max:
+        raise HTTPException(status_code=422, detail=f"at most {settings.master_bulk_max} ids per call")
+    return _bulk_purge(body.ids, principal)
+
+
+@app.post("/api/v1/objects/trash/empty")
+def empty_trash(principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
+    """Master mode: purge the caller's trash (at most master_bulk_max per call)."""
+    _require_master(principal)
+    # Deliberately owner-scoped even for an operator/admin: "empty my trash"
+    # must never silently destroy every user's deleted objects in the space.
+    scope = {"space_id": principal["space_id"], "owner_id": principal["id"]}
+    rows = repo.list_objects(
+        **scope, status=DELETED, limit=settings.master_bulk_max,
+    )
+    ids = [_as_dict(r)["id"] for r in rows]
+    out = _bulk_purge(ids, principal)
+    # More than one call's worth: the client simply calls again.
+    out["more"] = bool(repo.list_objects(**scope, status=DELETED, limit=1))
+    return out
 
 
 def _upload_headers(content_type: str) -> dict:
@@ -3746,6 +3982,51 @@ def _require_public_access_scopes(principal: dict) -> None:
         raise HTTPException(status_code=403, detail="forbidden")
 
 
+@app.post("/api/v1/objects/{oid}/public-access")
+def create_public_access(
+    oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Mint a short revocable public URL after an external entitlement decision.
+
+    Reserved for machine identities acting as a trusted service (the audiobook
+    API). The returned token is shown once; only its SHA-256 is stored.
+    """
+    _require_public_access_scopes(principal)
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != AVAILABLE:
+        raise HTTPException(status_code=409, detail="object not available")
+    token = secrets.token_urlsafe(32)
+    now = int(time.time())
+    expires_at = now + settings.public_access_grant_ttl
+    repo.create_public_access_grant(
+        hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        oid, row["space_id"], principal["id"], now, expires_at,
+    )
+    audit_event("public-access-grant", principal["id"], "created",
+                {"object_id": oid, "expires_at": expires_at})
+    return {"token": token, "url": f"/a/{token}", "expires_at": expires_at}
+
+
+@app.delete("/api/v1/objects/{oid}/public-access")
+def revoke_public_access(
+    oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    """Revoke every outstanding public grant for one object."""
+    _require_public_access_scopes(principal)
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    revoked = repo.revoke_public_access_grants_for_object(oid, int(time.time()))
+    audit_event("public-access-grant", principal["id"], "revoked",
+                {"object_id": oid, "count": revoked})
+    return {"revoked": revoked}
+
+
 def _query_tags(value: str | None) -> list[str]:
     """Normalize a comma-separated tag filter like stored tags (max 10)."""
     if not value:
@@ -3809,6 +4090,144 @@ def list_objects(
     }
 
 
+# ---------------------------------------------------------------------------
+# Authoritative duplicate scan. The browser sends one fingerprint per file it
+# is about to import; the API answers with the *actual* available objects in
+# each destination folder. Matching stays in the client: this route supplies
+# catalogue truth only, and never guesses a folder from a matching leaf name.
+# ---------------------------------------------------------------------------
+_DUPLICATE_SCAN_MAX_ITEMS = 5000
+_DUPLICATE_SCAN_PAGE = 1000
+_DUPLICATE_SCAN_CAP = 20000
+_SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _normalize_parent_path(value: str) -> str:
+    """Exact backend twin of web/src/lib/folderTree.ts::normalizeRelativePath."""
+    return "/".join(
+        part for part in value.replace("\\", "/").split("/")
+        if part not in ("", ".", "..")
+    )
+
+
+class DuplicateScanItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    parentPath: str
+    name: str = Field(min_length=1)
+    sizeBytes: int = Field(ge=0)
+    sha256: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be empty")
+        return value
+
+    @field_validator("sha256")
+    @classmethod
+    def _sha256(cls, value: str | None) -> str | None:
+        if value is not None and not _SHA256_HEX.fullmatch(value):
+            raise ValueError("sha256 must be 64 hexadecimal characters")
+        return value
+
+
+class DuplicateScanIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[DuplicateScanItemIn] = Field(max_length=_DUPLICATE_SCAN_MAX_ITEMS)
+
+
+def _resolve_duplicate_scan_paths(
+    *, owner_id: str, paths: list[str],
+) -> tuple[dict[str, str | None], list[str]]:
+    """Resolve normalized paths to folder ids through one strict parent chain.
+
+    ``repo.list_folders`` is owner-scoped; a child is only looked up under the
+    parent id resolved on the previous step. A missing ancestor therefore puts
+    the whole path in ``unresolved`` instead of guessing from a same-named
+    folder elsewhere in the tree. The empty path (space root) maps to ``None``.
+    """
+    by_parent: dict[str | None, dict[str, str]] = {}
+
+    def children(parent_id: str | None) -> dict[str, str]:
+        if parent_id not in by_parent:
+            by_parent[parent_id] = {
+                row["name"]: row["id"]
+                for row in repo.list_folders(owner_id=owner_id, parent_id=parent_id)
+            }
+        return by_parent[parent_id]
+
+    resolved: dict[str, str | None] = {}
+    unresolved: list[str] = []
+    for path in paths:
+        if not path:
+            resolved[path] = None
+            continue
+        current: str | None = None
+        for part in path.split("/"):
+            found = children(current).get(part)
+            if found is None:
+                break
+            current = found
+        else:
+            resolved[path] = current
+            continue
+        unresolved.append(path)
+    return resolved, unresolved
+
+
+def _duplicate_scan_objects(scope: dict, folder_filter: str) -> list[dict]:
+    """All available objects in one destination, paged with a hard cap."""
+    rows: list[dict] = []
+    for offset in range(0, _DUPLICATE_SCAN_CAP, _DUPLICATE_SCAN_PAGE):
+        page = repo.list_objects(
+            **scope, folder_id=folder_filter, status="available",
+            limit=_DUPLICATE_SCAN_PAGE, offset=offset,
+            sort="created_at", order="asc",
+        )
+        rows.extend(
+            {
+                "id": row["id"],
+                "display_name": row["display_name"],
+                "size_bytes": row["size_bytes"],
+                "checksum_sha256": row["checksum_sha256"],
+            }
+            for row in page
+        )
+        if len(page) < _DUPLICATE_SCAN_PAGE:
+            break
+    return rows
+
+
+@app.post("/api/v1/objects/duplicate-scan")
+def duplicate_scan(
+    body: DuplicateScanIn,
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+):
+    # Normalize exactly like the browser planner, then collapse duplicates: one
+    # authoritative listing per destination path, whatever the item count.
+    paths = list(dict.fromkeys(
+        _normalize_parent_path(item.parentPath) for item in body.items
+    ))
+    resolved, unresolved = _resolve_duplicate_scan_paths(
+        owner_id=principal["id"], paths=paths,
+    )
+    unresolved_set = set(unresolved)
+    scope = _object_scope(principal)
+    by_parent: dict[str, list[dict]] = {}
+    for path in paths:
+        if path in unresolved_set:
+            continue
+        # repo.list_objects reads "" as "folder_id IS NULL"; None would mean
+        # "no folder filter" and leak objects filed elsewhere in the space.
+        by_parent[path] = _duplicate_scan_objects(scope, resolved[path] or "")
+    audit_event("duplicate-scan", principal["id"], "success", {
+        "item_count": len(body.items),
+        "unresolved_count": len(unresolved),
+    })
+    return {"byParent": by_parent, "unresolved": sorted(unresolved)}
+
+
 @app.get("/api/v1/objects/tags")
 def list_object_tags(
     principal: dict = Depends(authorize(OBJECTS_READ)),
@@ -3823,6 +4242,138 @@ def list_object_tags(
     """
     rows = repo.list_tag_counts(**_object_scope(principal), limit=limit)
     return {"items": [{"tag": row["tag"], "count": row["n"]} for row in rows]}
+
+
+def _audio_job_public(row: dict) -> dict:
+    return {
+        "id": row.get("id"),
+        "object_id": row.get("object_id"),
+        "space_id": row.get("space_id"),
+        "status": row.get("status"),
+        "attempts": row.get("attempts", 0),
+        "provider": row.get("provider"),
+        "model": row.get("model"),
+        "confidence": row.get("confidence"),
+        "suggested_category": row.get("suggested_category"),
+        "suggested_themes": json.loads(row["suggested_themes"]) if row.get("suggested_themes") else [],
+        "suggested_language": row.get("suggested_language"),
+        "suggested_folder": row.get("suggested_folder"),
+        "quality": json.loads(row["quality_json"]) if row.get("quality_json") else None,
+        "transcript_excerpt": row.get("transcript_excerpt"),
+        "reason": row.get("reason"),
+        "error": row.get("error"),
+        "reviewed_by": row.get("reviewed_by"),
+        "reviewed_at": row.get("reviewed_at"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "object": {
+            "display_name": row.get("display_name"),
+            "content_type": row.get("content_type"),
+            "size_bytes": row.get("size_bytes"),
+        } if row.get("display_name") is not None else None,
+    }
+
+
+@app.get("/api/v1/audio-classifications")
+def list_audio_classifications(
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    rows = repo.list_audio_classification_jobs(
+        principal["space_id"], status=status, limit=limit, offset=offset
+    )
+    return {"items": [_audio_job_public(r) for r in rows]}
+
+
+@app.get("/api/v1/audio-classifications/{jid}")
+def get_audio_classification(jid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    jid = _canonical_id(jid, "job id")
+    row = repo.get_audio_classification_job(jid)
+    if row is None or row.get("space_id") != principal["space_id"]:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _audio_job_public(row)
+
+
+@app.post("/api/v1/audio-classifications/enqueue")
+def enqueue_audio_classifications(
+    body: AudioClassificationEnqueueIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    if not settings.ai_classification_enabled:
+        raise HTTPException(status_code=409, detail="audio classification is disabled")
+    enqueued = []
+    skipped = []
+    for raw in body.object_ids:
+        try:
+            oid = _canonical_id(raw, "object id")
+        except Exception:
+            skipped.append({"id": raw, "reason": "invalid_id"})
+            continue
+        row = repo.get_object(oid, **_object_scope(principal))
+        if row is None:
+            skipped.append({"id": oid, "reason": "not_found"})
+            continue
+        row = _as_dict(row)
+        if row.get("status") != "available":
+            skipped.append({"id": oid, "reason": "not_available"})
+            continue
+        if not str(row.get("content_type") or "").startswith("audio/"):
+            skipped.append({"id": oid, "reason": "not_audio"})
+            continue
+        jid = repo.enqueue_audio_classification(ids.new_id(), oid, principal["space_id"])
+        enqueued.append({"object_id": oid, "job_id": jid})
+    if enqueued:
+        audit_event("audio_classification.enqueue", principal.get("sub") or principal.get("id"), "ok",
+                    {"count": len(enqueued), "space_id": principal.get("space_id")})
+    return {"enqueued": enqueued, "skipped": skipped}
+
+
+@app.post("/api/v1/audio-classifications/{jid}/review")
+def review_audio_classification(
+    jid: str,
+    body: AudioClassificationReviewIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    jid = _canonical_id(jid, "job id")
+    row = repo.get_audio_classification_job(jid)
+    if row is None or row.get("space_id") != principal["space_id"]:
+        raise HTTPException(status_code=404, detail="job not found")
+    status = "accepted" if body.action == "accept" else "rejected"
+    ok = repo.review_audio_classification_job(jid, status=status, reviewed_by=principal.get("sub") or principal.get("id"))
+    if not ok:
+        raise HTTPException(status_code=409, detail="job cannot be reviewed")
+    # On accept, apply suggested tags as metadata (no move).
+    if status == "accepted":
+        oid = row.get("object_id")
+        obj = repo.get_object_global(oid) if oid else None
+        if obj is not None:
+            tags = []
+            cat = row.get("suggested_category")
+            if cat:
+                tags.append(f"categorie-{cat}")
+            try:
+                themes = json.loads(row.get("suggested_themes") or "[]")
+            except Exception:
+                themes = []
+            for t in themes[:3]:
+                t = str(t).strip().lower().replace(" ", "-")
+                if t:
+                    tags.append(f"theme-{t}")
+            lang = row.get("suggested_language")
+            if lang:
+                tags.append(f"langue-{lang}")
+            existing = repo.get_object_tags(oid)
+            merged = list(existing)
+            for t in tags:
+                if t not in merged:
+                    merged.append(t)
+            repo.set_object_tags(oid, merged[:20])
+    fresh = repo.get_audio_classification_job(jid)
+    audit_event("audio_classification.review", principal.get("sub") or principal.get("id"), "ok",
+                {"job_id": jid, "action": body.action, "space_id": principal.get("space_id")})
+    return _audio_job_public(fresh or row)
 
 
 @app.get("/api/v1/objects/{oid}")
@@ -3887,95 +4438,6 @@ def get_transfer(tid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
         # 404 (not 403) so a caller cannot probe another owner's/space's ids.
         raise HTTPException(status_code=404, detail="transfer not found")
     return _transfer_public(row)
-
-
-@app.get("/api/v1/objects/{oid}/analytics")
-def object_analytics(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
-    """This month's views/downloads/share opens and lifetime totals."""
-    oid = _canonical_id(oid, "object id")
-    if repo.get_object(oid, **_object_scope(principal)) is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    period = _usage_period()
-    month = repo.get_object_usage(oid, period) or {}
-    totals = repo.get_object_usage_totals(oid)
-    return {
-        "object_id": oid, "period": period,
-        "month": {
-            "views": int(month.get("views") or 0),
-            "downloads": int(month.get("downloads") or 0),
-            "share_opens": int(month.get("share_opens") or 0),
-            "egress_bytes": int(month.get("egress_bytes") or 0),
-        },
-        "totals": {
-            "views": int(totals.get("views") or 0),
-            "downloads": int(totals.get("downloads") or 0),
-            "share_opens": int(totals.get("share_opens") or 0),
-            "egress_bytes": int(totals.get("egress_bytes") or 0),
-        },
-        "last_access_at": totals.get("last_access_at"),
-    }
-
-
-@app.delete("/api/v1/objects/{oid}")
-def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(row)
-    if row["status"] not in ("available", "pending"):
-        raise HTTPException(status_code=409, detail="object not deletable")
-    if row["status"] == "pending":
-        # Parts of an unfinished multipart upload are not an object yet: free them.
-        _abort_multipart_session(row)
-    repo.set_status(oid, "deleted")
-    audit_event("delete", principal["id"], "success", {"object_id": oid})
-    return {"id": oid, "status": "deleted"}
-
-
-@app.post("/api/v1/objects/{oid}/restore")
-def restore_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
-    # Undo a soft delete (trash). Same scope as the delete it reverses. Only a
-    # committed object can come back: a pending intent that was soft-deleted
-    # never received its bytes (size_bytes stays -1), so it is not restorable.
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(row)
-    if row["status"] != DELETED:
-        raise HTTPException(status_code=409, detail="object is not in the trash")
-    if row["size_bytes"] < 0:
-        raise HTTPException(status_code=409, detail="object was never uploaded")
-    repo.set_status(oid, AVAILABLE)
-    audit_event("restore", principal["id"], "success", {"object_id": oid})
-    return _object_public(repo.get_object(oid, **_object_scope(principal)))
-
-
-@app.patch("/api/v1/objects/{oid}")
-def update_object(
-    oid: str, body: ObjectPatchIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    # File an object into a logical folder (or unfile it). Folders are owned by a
-    # human user (#61), so this metadata move is a human-only capability; a
-    # service identity has no folder to target and is refused by `human=True`.
-    oid = _canonical_id(oid, "object id")
-    if "folder_id" not in body.model_fields_set:
-        raise HTTPException(status_code=422, detail="no fields to update")
-    if repo.get_object(oid, **_object_scope(principal)) is None:
-        # 404 (not 403) so the caller cannot probe for objects outside its scope.
-        raise HTTPException(status_code=404, detail="object not found")
-    if body.folder_id is not None and repo.get_folder(
-        body.folder_id, owner_id=principal["id"]
-    ) is None:
-        # The target folder is owner-scoped: a foreign/unknown id is a 404.
-        raise HTTPException(status_code=404, detail="folder not found")
-    repo.set_object_folder(oid, folder_id=body.folder_id)
-    audit_event("object.move", principal["id"], "success", {
-        "object_id": oid, "folder_id": body.folder_id,
-    })
-    return _object_public(repo.get_object(oid, **_object_scope(principal)))
 
 
 @app.post("/api/v1/objects/{oid}/share")
@@ -4369,6 +4831,60 @@ def object_thumbnail(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)
         "Cache-Control": "private, max-age=300",
         "X-Content-Type-Options": "nosniff",
     })
+
+
+def _classify_published_audio(row: dict) -> bool:
+    """Add missing public facets to a newly published audio object."""
+    if not str(row.get("content_type") or "").lower().startswith("audio/"):
+        return False
+    folder_name = ""
+    if row.get("folder_id"):
+        mark = "?" if settings.db_backend == "sqlite" else "%s"
+        folder = repo.conn.execute(
+            f"SELECT name FROM folders WHERE id = {mark}", (row["folder_id"],),
+        ).fetchone()
+        folder_name = str(folder["name"]) if folder else ""
+    classification = public_classification.classify_public_item(
+        row["display_name"], folder_name,
+    )
+    existing = repo.get_object_tags(row["id"])
+    merged = public_classification.merge_public_tags(existing, classification)
+    if set(merged) == set(existing):
+        return False
+    repo.set_object_tags(row["id"], merged)
+    return True
+
+
+@app.put("/api/v1/objects/{oid}/publication")
+def set_object_publication(
+    oid: str, body: PublicationIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
+):
+    """Publish/unpublish an object under a stable slug (human only).
+
+    Unpublishing keeps the slug reserved so the same URL can be re-enabled;
+    the public route requires `published_at`, so it answers 404 meanwhile.
+    """
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] != AVAILABLE:
+        raise HTTPException(status_code=409, detail="object not available")
+    if body.published and not body.slug:
+        raise HTTPException(status_code=422, detail="slug is required to publish")
+    if body.slug:
+        existing = repo.get_object_by_slug(body.slug)
+        if existing is not None and existing["id"] != oid:
+            raise HTTPException(status_code=409, detail="slug already in use")
+    published_at = int(time.time()) if body.published else None
+    repo.set_object_publication(oid, body.slug, published_at)
+    classified = _classify_published_audio(row) if body.published else False
+    audit_event("object.publish" if body.published else "object.unpublish",
+                principal["id"], "success",
+                {"object_id": oid, "slug": body.slug, "classified": classified})
+    return _object_public(repo.get_object(oid, **_object_scope(principal)))
 
 
 @app.post("/api/v1/objects/{oid}/replace")
@@ -5237,6 +5753,157 @@ def revoke_folder_share(
 # ---------------------------------------------------------------------------
 # Administration (#35, #36, #38): require the admin:* capabilities.
 # ---------------------------------------------------------------------------
+class CoverSelectionIn(BaseModel):
+    object_id: str = Field(min_length=1, max_length=64)
+    candidate_url: str | None = Field(default=None, max_length=2048)
+    model_config = ConfigDict(extra="forbid")
+
+
+class CoverSearchIn(BaseModel):
+    object_id: str = Field(min_length=1, max_length=64)
+    isbn: str | None = Field(default=None, max_length=32)
+    limit: int = Field(default=12, ge=1, le=20)
+    model_config = ConfigDict(extra="forbid")
+
+
+class CoverApplyIn(BaseModel):
+    dry_run: bool = True
+    confirm: bool = False
+    limit: int = Field(default=50, ge=1, le=200)
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmblematicCoverIn(BaseModel):
+    emblematic: bool
+    model_config = ConfigDict(extra="forbid")
+
+
+@app.get("/api/v1/admin/cover-candidates")
+def admin_cover_candidates(principal: dict = Depends(authorize(ADMIN_READ))):
+    """Operator review of external cover candidates. Never publishes anything."""
+    from . import cover_review as cr
+
+    review = cr.public_review(cr.read_review())
+    # Display policy, not review state: read the curation flag from the
+    # catalogue so the admin can toggle real artwork per book.
+    for book in review["books"]:
+        obj = repo.get_object_unscoped(str(book.get("object_id") or ""))
+        book["emblematic_cover"] = bool(obj and obj.get("emblematic_cover"))
+    return review
+
+
+@app.put("/api/v1/admin/objects/{oid}/emblematic-cover")
+def admin_set_emblematic_cover(
+    oid: str, body: EmblematicCoverIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Curate whether one book may show its real cover art on the portal."""
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    repo.set_object_emblematic(oid, body.emblematic)
+    audit_event("admin.cover.emblematic", principal["id"], "success", {
+        "object_id": oid,
+        "emblematic": bool(body.emblematic),
+    })
+    return {"id": oid, "emblematic_cover": bool(body.emblematic)}
+
+
+@app.post("/api/v1/admin/covers/select")
+def admin_select_cover(body: CoverSelectionIn,
+                       principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Record or clear one operator decision. The cover is not published yet."""
+    from . import cover_review as cr
+
+    path = cr.review_path()
+    with cr.review_lock(path):
+        review = cr.read_review(path, strict=True)
+        try:
+            book = cr.select_cover(review, body.object_id, body.candidate_url)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="book not in review")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        cr.write_review(review, path)
+    audit_event("admin.cover.select", principal["id"], "success", {
+        "object_id": body.object_id,
+        "chosen": bool(body.candidate_url),
+    })
+    return {"book": cr.public_review({"books": [book]})["books"][0]}
+
+
+@app.post("/api/v1/admin/covers/search")
+def admin_search_cover(body: CoverSearchIn,
+                       principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Search new candidates for one book; ISBN first, then title + author."""
+    from . import cover_enrichment as ce
+    from . import cover_review as cr
+
+    isbn = (body.isbn or "").strip()
+    if isbn and not re.fullmatch(r"[0-9Xx\- ]{8,20}", isbn):
+        raise HTTPException(status_code=400, detail="invalid ISBN")
+    path = cr.review_path()
+    with cr.review_lock(path):
+        review = cr.read_review(path, strict=True)
+        book = cr.find_book(review, body.object_id)
+        if book is None:
+            raise HTTPException(status_code=404, detail="book not in review")
+        title, author = _split_audio_name(
+            str(book.get("display_name") or book.get("title") or "")
+        )
+        found = ce.search_candidates(title, author, isbn, body.limit)
+        chosen_url = book.get("chosen_url")
+        if chosen_url and not any(candidate.get("url") == chosen_url for candidate in found):
+            previous = next(
+                (candidate for candidate in (book.get("candidates") or [])
+                 if candidate.get("url") == chosen_url),
+                None,
+            )
+            if previous:
+                found.append(previous)
+        merged = []
+        seen_urls = set()
+        for candidate in found + list(book.get("candidates") or []):
+            url = candidate.get("url")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            merged.append(candidate)
+        book["candidates"] = merged
+        book["last_search_at"] = int(time.time())
+        book["search_isbn"] = isbn or None
+        book["search_title"] = title
+        book["search_author"] = author
+        cr.write_review(review, path)
+        updated = cr.public_review({"books": [book]})["books"][0]
+    audit_event("admin.cover.search", principal["id"], "success", {
+        "object_id": body.object_id, "isbn": bool(isbn),
+        "candidates": len(updated["candidates"]),
+    })
+    return {"book": updated}
+
+
+@app.post("/api/v1/admin/covers/apply")
+def admin_apply_covers(body: CoverApplyIn,
+                       principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Publish the explicitly selected candidates, bounded and resumable."""
+    from . import cover_review as cr
+
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="confirm must be true")
+    path = cr.review_path()
+    with cr.review_lock(path):
+        review = cr.read_review(path, strict=True)
+        out = cr.apply_selected(
+            review, dry_run=body.dry_run, limit=body.limit,
+        )
+        if not body.dry_run:
+            cr.write_review(review, path)
+    audit_event("admin.cover.apply", principal["id"], "success", out)
+    return out
+
+
 @app.post("/api/v1/admin/reconcile")
 def reconcile(limit: int = 500,
               principal: dict = Depends(authorize(ADMIN_WRITE))):
@@ -6459,5 +7126,5 @@ def restore_object_revision(
         "status": "available",
     }
 
-from .routes_objects_ops import router as objects_ops_router  # noqa: E402
-app.include_router(objects_ops_router)
+from .routes_objects_mutations import router as objects_mutations_router  # noqa: E402
+app.include_router(objects_mutations_router)

@@ -43,6 +43,41 @@ export interface FolderPlan {
   tooDeep: string[];
 }
 
+/** Minimal shape needed to match planned paths against existing folders. */
+export interface ExistingFolderRef {
+  id: string;
+  name: string;
+  parent_id: string | null;
+}
+
+function folderKey(parentId: string | null, name: string): string {
+  return `${parentId ?? "root"}/${name}`;
+}
+
+/**
+ * Resolve planned folder paths to existing folder ids without guessing.
+ *
+ * A nested folder can only match when its parent was itself resolved. If a
+ * parent is new, every child below it is new too — falling back to the current
+ * folder would compare against an unrelated folder with the same leaf name.
+ */
+export function resolvePlannedFolderIds(
+  plan: FolderPlan,
+  tree: readonly ExistingFolderRef[],
+  currentFolderId: string | null,
+): Map<string, string> {
+  const existing = new Map<string, string>();
+  for (const folder of tree) existing.set(folderKey(folder.parent_id, folder.name), folder.id);
+  const resolved = new Map<string, string>();
+  for (const folder of plan.folders) {
+    const parentId = folder.parentPath ? resolved.get(folder.parentPath) : currentFolderId;
+    if (folder.parentPath && !parentId) continue;
+    const id = existing.get(folderKey(parentId ?? null, folder.name));
+    if (id) resolved.set(folder.path, id);
+  }
+  return resolved;
+}
+
 /** Build the folder set for a set of file relative paths. */
 export function planFolders(
   relativePaths: string[],

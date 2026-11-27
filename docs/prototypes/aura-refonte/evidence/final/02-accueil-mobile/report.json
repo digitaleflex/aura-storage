@@ -1,0 +1,22 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "390x844",
+    "zoom": 1,
+    "animationWaitMs": 523,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "eyebrow",
+        "label": "标题上方的眉标",
+        "count": 5,
+        "examples": [
+          "p.eyebrow「BIBLIOTHÈQUE AUDIO」",
+          "p.eyebrow「LA SÉLECTION DE LA RÉDAC」",
+          "p.eyebrow「EN COURS」"
+        ]
+      }
+    ]
+  }
+]

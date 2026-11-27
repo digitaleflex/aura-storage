@@ -1,4 +1,4 @@
-> **Document historique (octobre 2026).** Chiffres et statuts périmés (multipart annoncé désactivé, statuts « tout résolu » contradictoires). Source de vérité : [`docs/ETAT-DES-FONCTIONNALITES.md`](../docs/ETAT-DES-FONCTIONNALITES.md) et son journal [`verification-log-2026-11-24-portail-perf.md`](../docs/verification-log-2026-11-24-portail-perf.md). Suivi : issue #324.
+> **Document historique (octobre 2026).** Chiffres et statuts périmés (multipart annoncé désactivé, statuts « tout résolu » contradictoires). Source de vérité : [`docs/ETAT-DES-FONCTIONNALITES.md`](../docs/ETAT-DES-FONCTIONNALITES.md), chiffres régénérés dans [`docs/CODE-METRICS.md`](../docs/CODE-METRICS.md) et journal [`verification-log-2026-11-24-portail-perf.md`](../docs/verification-log-2026-11-24-portail-perf.md). Suivi : issue #324. Les « 97+ routes » et « 377 tests » ci-dessous sont des instantanés périmés.
 
 # AURA Storage — Structured Map for Product/Engineering Suggestions
 
@@ -12,11 +12,11 @@
 
 | Layer | Files/Paths | Description |
 |-------|-------------|-------------|
-| **API** | `api/main.py` (≈450 routes), `api/config.py`, `api/authz.py`, `api/audit.py`, `api/lifecycle.py`, `api/transfer.py`, `api/s3.py`, `api/store.py`, `api/reconciler.py`, `api/verifier.py`, `api/scrubber.py` | FastAPI application with 97+ HTTP routes. Handles auth, object/folder CRUD, shares, transfers, multipart, admin, audit, reconciliation, verifier, scrubber. |
+| **API** | `api/main.py` (6 861 lignes), `api/config.py`, `api/authz.py`, `api/audit.py`, `api/lifecycle.py`, `api/transfer.py`, `api/s3.py`, `api/store.py`, `api/reconciler.py`, `api/verifier.py`, `api/scrubber.py` | FastAPI application with **156 HTTP routes** (regenerated 2026-11-27, see `docs/CODE-METRICS.md`). Handles auth, object/folder CRUD, shares, transfers, multipart, admin, audit, reconciliation, verifier, scrubber. |
 | **Web (UI)** | `web/src/`, `web/src/pages/`, `web/src/components/`, `web/src/lib/` | React + Vite + TanStack Router. 11+ screens: Files, Transferts, Dashboard, Partages, Corbeille, Paramètres, Aide, Onboarding, Diagnostic, Administration. |
 | **Infra** | `docker-compose.yml`, `config/traefik/`, `config/seaweedfs/`, `scripts/` | Docker Compose with Traefik (HTTPS, Let's Encrypt), SeaweedFS master/volume/filer (S3 gateway), PostgreSQL catalogue, nginx app proxy. |
 | **Scripts** | `scripts/` | Host bootstrap, config generation, preflight diagnostics, backup/restore, VPS validation. |
-| **Tests** | `tests/` | 377 backend tests + 30 frontend unit tests. |
+| **Tests** | `tests/`, `web/src/**/*.test.ts(x)` | 641 backend test functions (750 collected cases) + 102 frontend test cases (104 executed), 2026-11-27 — see `docs/CODE-METRICS.md`. |
 
 ### Key Capabilities Implemented
 - **Auth**: Session cookie (HttpOnly, Secure, SameSite=Strict) + CSRF double-submit; M2M Bearer tokens with scoped capabilities; default-deny role→scopes map; master mode (password-confirmed elevation, 15 min TTL).
