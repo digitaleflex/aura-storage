@@ -43,6 +43,7 @@ import {
   normalizeRelativePath,
   parentDirOf,
   planFolders,
+  resolvePlannedFolderIds,
 } from "../lib/folderTree";
 import {
   scanDuplicates,
@@ -473,7 +474,7 @@ export function ObjectsPage() {
         id: entry.key,
         name: entry.file.name,
         rel: entry.rel,
-        root: slash > 0 ? entry.rel.split("/")[0] : undefined,
+        root: slash > 0 ? entry.rel.slice(0, slash) : undefined,
         size: entry.file.size,
         status: result?.status ?? "queued",
         duplicateReason: result?.match?.reason,
@@ -1733,6 +1734,14 @@ export function ObjectsPage() {
       file,
       rel: relPaths[index] ?? file.name,
     }));
+    const plan = planFolders(relPaths);
+    const tooDeep = new Set(plan.tooDeep);
+    const scanEntries = entries.filter((entry) => !tooDeep.has(entry.rel));
+    for (const entry of entries) {
+      if (!tooDeep.has(entry.rel)) continue;
+      const result: PreflightResult = { status: "error" };
+      options.onResult?.(entry, result);
+    }
     const existingByKey = new Map<string, ExistingObjectRef[]>();
 
     if (!folderMode) {
@@ -1741,18 +1750,12 @@ export function ObjectsPage() {
         id: o.id, display_name: o.display_name, size_bytes: o.size_bytes, checksum_sha256: o.checksum_sha256,
       })));
     } else {
-      const plan = planFolders(relPaths);
-      const keyOf = (parentId: string | null, name: string) => `${parentId ?? "root"}/${name}`;
-      const existingFolderIds = new Map<string, string>();
-      for (const folder of tree) existingFolderIds.set(keyOf(folder.parent_id, folder.name), folder.id);
-      const folderIds = new Map<string, string>();
-      for (const folder of plan.folders) {
-        const parentId = folder.parentPath ? folderIds.get(folder.parentPath) ?? currentFolderId : currentFolderId;
-        const id = existingFolderIds.get(keyOf(parentId, folder.name));
-        if (id) folderIds.set(folder.path, id);
-      }
+      // The cached folder tree can be stale after a recent import. Read it again
+      // so nested destinations are compared against the real current folders.
+      const freshTree = await api.listAllFolders();
+      const folderIds = resolvePlannedFolderIds(plan, freshTree.items, currentFolderId);
       const neededKeys = new Set<string>([""]);
-      for (const entry of entries) {
+      for (const entry of scanEntries) {
         const parent = entry.rel.includes("/") ? entry.rel.slice(0, entry.rel.lastIndexOf("/")) : "";
         neededKeys.add(parent);
       }
@@ -1769,13 +1772,16 @@ export function ObjectsPage() {
       }
     }
 
-    const report = await scanDuplicates(entries, existingByKey, {
+    const report = await scanDuplicates(scanEntries, existingByKey, {
       computeHash: true,
       hashMaxBytes: 256 * 1024 * 1024,
       hashAllUnderBytes: 8 * 1024 * 1024,
       signal: options.signal,
       onResult: options.onResult,
     });
+    if (tooDeep.size > 0) {
+      throw new Error("Certains fichiers dépassent la profondeur maximale et ne peuvent pas être importés.");
+    }
     if ([...report.results.values()].some((result) => result.status === "error")) {
       throw new Error("L'empreinte d'au moins un fichier n'a pas pu être vérifiée.");
     }
