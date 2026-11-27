@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import audit_event
-from .auth import new_token, verify_password
+from .auth import new_token
 from .authz import authorize, effective_scopes, master_mode_active
 from .config import settings
 from .store import repo
@@ -29,6 +29,7 @@ router = APIRouter()
 def login(body: LoginIn, request: Request, response: Response):
     from .main import (
         _DUMMY_PASS_HASH, _client_ip, _login_blocked, _login_clear, _login_record_failure,
+        verify_password,
     )
     client_ip = _client_ip(request)
     if _login_blocked(client_ip):
