@@ -1,3 +1,5 @@
+import { normalizeRelativePath } from "./folderTree";
+
 export interface ExistingObjectRef {
   id: string;
   display_name: string;
@@ -56,7 +58,7 @@ async function sha256Hex(file: File): Promise<string> {
 }
 
 function partsOf(rel: string): { parent: string; name: string } {
-  const normalized = rel.replace(/\\/g, "/");
+  const normalized = normalizeRelativePath(rel);
   const slash = normalized.lastIndexOf("/");
   return {
     parent: slash >= 0 ? normalized.slice(0, slash) : "",

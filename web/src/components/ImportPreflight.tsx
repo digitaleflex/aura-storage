@@ -79,6 +79,9 @@ export function ImportPreflight({ items, running, formatBytes, onRemove }: Impor
             {checked}/{items.length} fichier{items.length > 1 ? "s" : ""} traité
             {items.length > 1 ? "s" : ""} · rien n'est encore envoyé
           </p>
+          <p className="preflight-scope">
+            Doublons comparés dans le dossier de destination de chaque fichier.
+          </p>
         </div>
         <div className="import-preflight-stats" aria-label="Résumé de la vérification">
           <span className="preflight-stat is-ready">
