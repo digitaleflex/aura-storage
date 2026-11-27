@@ -33,6 +33,8 @@
   --sand:#E6DDCE; --clay:#9C5F42; --sage:#5E735F; --night:#142438;
   --paper:#FBF9F4; --night-soft:#2B3E57; --ochre-soft:#F3EBDC;
   --focus-on-dark:#D6B67F;
+  --r-xs:4px; --r-sm:8px; --r-md:14px; --r-lg:22px;
+  --r-pill:999px; --r-cover:3px;
   --danger-bg:#F7E9E5; --danger-text:#93493F; --danger-line:#C9908A;
   --err-bg:#F7E9E5; --err-text:#93493F; --err-line:#C9908A;
   --serif:"Instrument Serif",Georgia,"Iowan Old Style",serif;
@@ -1150,7 +1152,21 @@ button,input,select{font:inherit;color:inherit}
 .resume-cover .cover-kicker,
 .resume-cover .cover-author { display:none; }
 .preview .eyebrow { font-size:11px; }
-.preview audio { accent-color:var(--bronze); }
+.preview-player { display:flex; align-items:center; gap:.65rem; margin-top:.25rem; }
+.preview-player audio { display:none; }
+.preview-play {
+  width:40px; height:40px; flex:none; display:grid; place-items:center;
+  border:0; border-radius:50%; background:var(--ink); color:var(--surface);
+  cursor:pointer;
+}
+.preview-play:hover { background:var(--ink-hover); }
+.preview-play svg { width:18px; height:18px; }
+.preview-time {
+  min-width:2.8rem; font-size:13px; color:var(--muted);
+  font-variant-numeric:tabular-nums;
+}
+.preview-time:last-child { text-align:right; }
+.preview-seek { flex:1; min-width:0; height:6px; accent-color:var(--bronze); }
 
 /* --- Profil : statistiques sans cartes imbriquées ----------------------- */
 .stats-grid {
@@ -1174,6 +1190,27 @@ button,input,select{font:inherit;color:inherit}
 .fav-svg { width:18px; height:18px; display:block; }
 .playlist-add-button svg { width:16px; height:16px; }
 .panel-close svg { width:18px; height:18px; }
+.player-bar .premium-hint {
+  background:transparent; border:1px solid rgba(247,244,237,.32);
+  color:rgba(247,244,237,.78);
+}
+.carousel-nav:disabled {
+  opacity:.35; cursor:default;
+}
+.carousel-nav:disabled:hover {
+  border-color:var(--line); background:var(--surface);
+}
+
+/* --- Échelle de rayons : 8 pour les contrôles, 14 pour les surfaces -------- */
+.panel, .hero, .resume-card, .empty-state, .profile-card, .search-form,
+.preview, .queue-panel, .recap, dialog { border-radius:var(--r-md); }
+.google-button, .search-form input, .catalog-search select,
+.catalog-filters select, .catalog-filters input, .email-row input,
+.profile-field input, .playlist-pick, .hero-note, .icon-button {
+  border-radius:var(--r-sm);
+}
+.cover, .cover-large, .carousel-cover, .hero-cover, .resume-cover,
+.player-cover { border-radius:var(--r-cover); }
 
 /* --- Hero : la note ne recouvre plus les jaquettes ----------------------- */
 .hero-figure { display:flex; flex-direction:column; justify-content:center; gap:14px; }

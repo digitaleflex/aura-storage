@@ -3,6 +3,7 @@
 **Date :** 27 novembre 2026  
 **Référence audit :** [`AUDIT-UI-PORTAIL.md`](AUDIT-UI-PORTAIL.md)  
 **Lot précédent :** [`CORRECTIFS-LOT1.md`](CORRECTIFS-LOT1.md)  
+**Suite :** plusieurs points ci-dessous ont été traités dans [`CORRECTIFS-LOT3.md`](CORRECTIFS-LOT3.md) (extrait custom, libellés lecteur, carrousels, rayons).  
 **Tests :** `101 passed` (`test_public_portal`, `test_public_portal_a11y`, `test_public_classification`, `test_cover_jacket`).
 
 ---

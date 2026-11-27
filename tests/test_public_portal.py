@@ -771,6 +771,7 @@ def test_book_page_has_share_metadata_chapters_and_the_right_call_to_action(monk
     assert "1 h 02 min" in t and "Extrait gratuit" in t
     assert f'src="/extrait/{oid}"' in t
     assert 'controlsList="nodownload"' in t and "Extrait gratuit · 1 min, sans compte" in t
+    assert 'data-preview-player' in t and 'data-preview-audio' in t
     assert "Continuer avec Google pour écouter en entier" in t
     assert media_slug not in t and "/m/" not in t
     assert "noindex" not in page.headers.get("x-robots-tag", "")
