@@ -1,8 +1,8 @@
 # Audit des routes API réelles (réconciliation docs/OpenAPI)
 
-> **Généré le 2026-11-26** depuis `api/main.py`. La parité avec `docs/openapi.yaml` est vérifiée par `tests/test_openapi_contract.py`. La source de vérité fonctionnelle est [`ETAT-DES-FONCTIONNALITES.md`](ETAT-DES-FONCTIONNALITES.md). Issue #324.
+> **Généré le 2026-11-26, chiffres régénérés le 2026-11-27** depuis `api/main.py`. La parité avec `docs/openapi.yaml` est vérifiée par `tests/test_openapi_contract.py`. La source de vérité fonctionnelle est [`ETAT-DES-FONCTIONNALITES.md`](ETAT-DES-FONCTIONNALITES.md) ; le comptage reproductible est dans [`CODE-METRICS.md`](CODE-METRICS.md) (`scripts/regenerate-doc-metrics.py`). Issue #324.
 
-Source : `api/main.py` — **152 routes applicatives** détectées (hors `/docs`, `/redoc`, `/openapi.json` gérés par FastAPI).
+Source : `api/main.py` — **156 routes applicatives** détectées (hors `/docs`, `/redoc`, `/openapi.json` gérés par FastAPI).
 
 
 ## Santé
@@ -155,6 +155,10 @@ Source : `api/main.py` — **152 routes applicatives** détectées (hors `/docs`
 - `GET /api/v1/admin/audit`
 - `POST /api/v1/admin/audit/prune`
 - `GET /api/v1/admin/portal-stats`
+- `GET /api/v1/admin/cover-candidates`
+- `POST /api/v1/admin/covers/search`
+- `POST /api/v1/admin/covers/select`
+- `POST /api/v1/admin/covers/apply`
 - `GET /api/v1/admin/usage`
 - `GET /api/v1/admin/health`
 - `POST /api/v1/admin/applications`

@@ -338,6 +338,85 @@ paths:
         "401": { description: Authentication required }
         "403": { description: Access denied }
         "422": { description: "Malformed folder_id, or an unsupported status/sort/order value" }
+  /api/v1/objects/duplicate-scan:
+    post:
+      summary: Authoritative destination objects for a duplicate preflight
+      tags: [objects]
+      description: >-
+        Read-only preflight for an import batch (objects:read; humans and service
+        identities). The caller sends one fingerprint per file; the API resolves
+        each parentPath through the caller's own folder tree and returns the
+        available objects already filed in that destination. An empty parentPath
+        targets the space root. No duplicate decision is made here: the client
+        compares names, sizes and checksums against these rows. Unresolvable
+        parent paths are reported without a byParent entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 5000
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [parentPath, name, sizeBytes]
+                    properties:
+                      parentPath:
+                        type: string
+                        description: >-
+                          Destination path, normalized like the client tree planner;
+                          an empty string is the space root.
+                      name:
+                        type: string
+                        minLength: 1
+                      sizeBytes:
+                        type: integer
+                        minimum: 0
+                      sha256:
+                        type: [string, "null"]
+                        pattern: "^[0-9a-fA-F]{64}$"
+            examples:
+              batch:
+                summary: Two files going to the same destination
+                value:
+                  items:
+                    - { parentPath: Livres/2026, name: rapport.pdf, sizeBytes: 11, sha256: null }
+      responses:
+        "200":
+          description: >-
+            Available objects per resolved parent, plus normalized parent paths
+            that could not be resolved. A resolved destination with no objects
+            appears as an empty array.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [byParent, unresolved]
+                properties:
+                  byParent:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: object
+                        required: [id, display_name, size_bytes, checksum_sha256]
+                        properties:
+                          id: { $ref: "#/components/schemas/Uuid4" }
+                          display_name: { type: string }
+                          size_bytes: { type: integer, minimum: 0 }
+                          checksum_sha256: { type: [string, "null"] }
+                  unresolved:
+                    type: array
+                    items: { type: string }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "422": { description: "More than 5000 items or an invalid fingerprint" }
   /api/v1/objects/bulk-purge:
     post:
       summary: Purge many objects in one call (objects:purge, human only, master mode)
@@ -1058,6 +1137,99 @@ paths:
         "401": { description: Authentication required }
         "404": { description: Object not found or not visible }
         "422": { description: Invalid tag }
+  /api/v1/audio-classifications:
+    get:
+      summary: List audio classification jobs for the caller's space
+      tags: [objects]
+      description: >-
+        Read-only view of the opt-in classification queue. Suggestions are
+        stored for human review and are never applied automatically.
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [queued, processing, needs_review, accepted, rejected, failed] }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200": { description: "Jobs newest-first with object summaries (items)" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "422": { description: Invalid pagination or status filter }
+  /api/v1/audio-classifications/enqueue:
+    post:
+      summary: Queue audio analysis for available objects (objects:write)
+      tags: [objects]
+      description: >-
+        Only available audio objects visible in the caller's space are queued;
+        other entries are returned with a reason. Returns 409 unless the
+        classification sandbox is enabled with AURA_AI_CLASSIFICATION_ENABLED=1.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [object_ids]
+              properties:
+                object_ids:
+                  type: array
+                  maxItems: 100
+                  items: { type: string, minLength: 1, maxLength: 64 }
+      responses:
+        "200": { description: "Queued jobs and skipped ids with reasons" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "409": { description: Audio classification is disabled }
+  /api/v1/audio-classifications/{jid}:
+    get:
+      summary: Get one audio classification job
+      tags: [objects]
+      parameters:
+        - in: path
+          name: jid
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+      responses:
+        "200": { description: "Job with normalized suggestions" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+        "404": { description: Job not found in the caller's space }
+        "422": { description: Identifier is not a canonical UUID v4 }
+  /api/v1/audio-classifications/{jid}/review:
+    post:
+      summary: Accept or reject one classification proposal (objects:write)
+      tags: [objects]
+      description: >-
+        Accepting applies only the normalized suggested tags to the object;
+        nothing is moved or published. Rejecting records the decision without
+        changing the object.
+      parameters:
+        - in: path
+          name: jid
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid4" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action]
+              properties:
+                action: { type: string, enum: [accept, reject] }
+      responses:
+        "200": { description: "Reviewed job with its final status" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "404": { description: Job not found in the caller's space }
+        "409": { description: Job cannot be reviewed }
+        "422": { description: Invalid action or identifier }
   /api/v1/collections:
     get:
       summary: List the caller's ordered packs (human only)
@@ -1396,6 +1568,109 @@ paths:
         "403": { description: Not the creator of this share link }
         "404": { description: "Folder or share not found, or the share belongs to another folder" }
         "422": { description: Identifier is not a canonical UUID v4 }
+  /api/v1/admin/cover-candidates:
+    get:
+      summary: List external cover candidates for published audiobooks (admin:read)
+      tags: [administration]
+      description: >-
+        Reads the operator review file and returns one entry per audiobook with
+        safe HTTPS candidates from iTunes and Open Library. Nothing is published.
+      responses:
+        "200": { description: "Review file with candidate counts and match badges" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised }
+  /api/v1/admin/objects/{oid}/emblematic-cover:
+    put:
+      summary: Curate real cover art for one book (admin:write)
+      tags: [administration]
+      description: >-
+        Sets the editorial flag that allows real artwork on the public portal.
+        Every other book keeps the uniform AURA typographic jacket.
+      parameters:
+        - $ref: "#/components/parameters/ObjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [emblematic]
+              properties:
+                emblematic: { type: boolean }
+      responses:
+        "200": { description: "Updated curation flag for the book" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "404": { description: Object not found or not visible }
+  /api/v1/admin/covers/select:
+    post:
+      summary: Select or clear one cover candidate (admin:write)
+      tags: [administration]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [object_id]
+              properties:
+                object_id: { type: string, minLength: 1, maxLength: 64 }
+                candidate_url: { type: string, nullable: true, maxLength: 2048 }
+      responses:
+        "200": { description: "Updated review entry; the cover is not published yet" }
+        "400": { description: "Invalid, stale or already applied candidate" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "404": { description: "Book not present in the review" }
+  /api/v1/admin/covers/search:
+    post:
+      summary: Search cover candidates for one audiobook (admin:write)
+      tags: [administration]
+      description: >-
+        Google Books is queried first (by ISBN when supplied, otherwise title
+        and author), then Open Library, then iTunes as a last resort. The review
+        file is updated but nothing is published.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [object_id]
+              properties:
+                object_id: { type: string, minLength: 1, maxLength: 64 }
+                isbn: { type: string, nullable: true, maxLength: 32 }
+                limit: { type: integer, minimum: 1, maximum: 20, default: 12 }
+      responses:
+        "200": { description: "Updated book with fresh candidates and provenance" }
+        "400": { description: "Invalid ISBN" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "404": { description: "Book not present in the review" }
+  /api/v1/admin/covers/apply:
+    post:
+      summary: Publish selected cover candidates (admin:write)
+      tags: [administration]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirm]
+              properties:
+                dry_run: { type: boolean, default: true }
+                confirm: { type: boolean }
+                limit: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200": { description: "Applied, failed and skipped counts" }
+        "400": { description: "confirm must be true" }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
   /api/v1/admin/reconcile:
     post:
       summary: Expire stale pending uploads (admin:write)
@@ -1414,7 +1689,7 @@ paths:
       summary: Delete bytes of terminal rows past retention (admin:write)
       tags: [administration]
       description: >-
-        Sweeps failed, aborted and soft-deleted rows older than the 7-day
+        Sweeps failed, aborted, soft-deleted and expired rows older than the 7-day
         retention, across every space. A row is dropped only after its bytes were
         actually deleted; a storage failure keeps it for a later sweep and is
         counted in storage_failures.
@@ -1884,7 +2159,7 @@ paths:
                   type: array
                   items:
                     type: string
-                    enum: [objects:read, objects:write, objects:delete, objects:purge]
+                    enum: [objects:read, objects:write, objects:delete]
                 ttl_seconds: { type: integer, minimum: 1, nullable: true }
       responses:
         "200": { description: Identity created; response contains the one-time token }
@@ -2426,25 +2701,9 @@ paths:
       responses:
         "200": { description: "Master mode ended" }
         "401": { description: "Authentication required" }
-  /api/v1/admin/integrity:
-    get:
-      summary: "Periodic integrity scrub report: results, oldest check and problem objects (admin:read)"
-      tags: [administration]
-      responses:
-        "200": { description: "Integrity summary" }
-        "401": { description: "Authentication required" }
-        "403": { description: "Not authorised" }
-  /api/v1/admin/integrity/scrub:
-    post:
-      summary: "Run one bounded integrity scrub pass now (admin:write)"
-      tags: [administration]
-      responses:
-        "200": { description: "Pass counters" }
-        "401": { description: "Authentication required" }
-        "403": { description: "Not authorised" }
   /api/v1/admin/objects/{oid}/reverify:
     post:
-      summary: "Re-hash one published object and leave suspect/failed if it matches (admin:write)"
+      summary: "Re-hash one published object; republish on a match, otherwise 409/suspect (admin:write)"
       tags: [administration]
       description: >-
         Exit path from the ``suspect`` state: re-reads the bytes from storage,
@@ -2453,46 +2712,36 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ObjectId"
       responses:
-        "200": { description: "Object re-verified and available" }
+        "200":
+          description: "Object re-verified and available"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status, size_bytes, checksum_sha256]
+                properties:
+                  id: { $ref: "#/components/schemas/Uuid4" }
+                  status: { type: string, enum: [available] }
+                  size_bytes: { type: integer }
+                  checksum_sha256: { type: string }
         "401": { description: "Authentication required" }
         "403": { description: "Not authorised" }
         "404": { description: "Object not found or not visible" }
-        "409": { description: "Bytes still diverge from the catalogue" }
+        "409":
+          description: "Bytes still diverge from the catalogue; the object stays suspect"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status, reason, size_bytes, checksum_sha256]
+                properties:
+                  id: { $ref: "#/components/schemas/Uuid4" }
+                  status: { type: string, enum: [suspect] }
+                  reason: { type: string, enum: [checksum_mismatch] }
+                  size_bytes: { type: integer, description: Bytes actually read }
+                  checksum_sha256: { type: string, description: Digest actually computed }
         "413": { description: "Object exceeds the configured cap" }
         "502": { description: "Storage unavailable" }
-  /api/v1/admin/reconcile-reverse:
-    post:
-      summary: "Find catalogue objects missing at the storage (reverse reconciliation) (admin:write)"
-      tags: [administration]
-      responses:
-        "200": { description: "Findings" }
-        "401": { description: "Authentication required" }
-        "403": { description: "Not authorised" }
-  /api/v1/admin/reconcile-terminal:
-    post:
-      summary: "Delete storage bytes left by objects in a terminal state (admin:write)"
-      tags: [administration]
-      responses:
-        "200": { description: "Cleanup counters" }
-        "401": { description: "Authentication required" }
-        "403": { description: "Not authorised" }
-  /api/v1/admin/storage-orphans:
-    get:
-      summary: "List storage objects that no catalogue row references (admin:read)"
-      tags: [administration]
-      responses:
-        "200": { description: "Orphan keys older than the grace period" }
-        "401": { description: "Authentication required" }
-        "403": { description: "Not authorised" }
-  /api/v1/admin/storage-orphans/cleanup:
-    post:
-      summary: "Delete selected storage orphans (admin:write)"
-      tags: [administration]
-      responses:
-        "200": { description: "Per-key outcome" }
-        "401": { description: "Authentication required" }
-        "403": { description: "Not authorised" }
-        "422": { description: "Invalid key list" }
   /api/v1/diag/ping:
     get:
       summary: "Minimal round-trip probe for the network diagnostic (any authenticated principal)"

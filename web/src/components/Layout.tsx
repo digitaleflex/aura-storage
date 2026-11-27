@@ -223,6 +223,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
     location.pathname === "/" || location.pathname === "";
   const isTransfersPage = location.pathname === "/transfers";
   const isDiagPage = location.pathname === "/diagnostic";
+  const isAdminCoversPage = location.pathname === "/admin/covers";
+  const isAudioClassificationPage = location.pathname === "/audio-classifications";
   const isOnboardingPage = location.pathname === "/onboarding";
 
   // Rediriger vers l'onboarding si l'utilisateur ne l'a pas encore vu
@@ -246,12 +248,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
       // Compteur purement décoratif (aria-hidden) : le nom du lien suffit.
       badge: transfers.queue.items.length,
     },
+    { to: "/audio-classifications", label: "Bac à sable audio", icon: "search", active: isAudioClassificationPage },
     { to: "/dashboard", label: "Tableau de bord", icon: "dashboard", active: location.pathname === "/dashboard" },
     { to: "/shares", label: "Partages", icon: "share", active: location.pathname === "/shares" },
     { to: "/trash", label: "Corbeille", icon: "trash", active: location.pathname === "/trash" },
     { to: "/diagnostic", label: "Diagnostic réseau", icon: "pulse", active: isDiagPage },
     ...(canAdmin
-      ? [{ to: "/admin", label: "Administration", icon: "shield" as const, active: location.pathname === "/admin" }]
+      ? [
+          { to: "/admin", label: "Administration", icon: "shield" as const, active: location.pathname === "/admin" },
+          { to: "/admin/covers", label: "Couvertures", icon: "shield" as const, active: isAdminCoversPage },
+        ]
       : []),
     { to: "/settings", label: "Paramètres", icon: "settings", active: location.pathname === "/settings" },
     { to: "/help", label: "Aide", icon: "help", active: location.pathname === "/help" },

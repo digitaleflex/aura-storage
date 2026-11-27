@@ -24,7 +24,12 @@ from urllib.parse import urlparse
 
 APPLIED_STATES = {"applied", "already_applied"}
 AUTHOR_STOPWORDS = {"and", "de", "du", "et", "la", "le", "les", "the"}
-ALLOWED_HOSTS = ("covers.openlibrary.org", ".mzstatic.com")
+# Keep in sync with api/cover_review.ALLOWED_HOSTS: Google Books candidates
+# are reviewable and publishable, so they must be auto-selectable too.
+ALLOWED_HOSTS = (
+    "covers.openlibrary.org", ".mzstatic.com",
+    "books.google.com", ".googleusercontent.com", ".gstatic.com",
+)
 
 
 def reject_constant(value: str):
@@ -41,7 +46,7 @@ def load_review(path: Path) -> dict:
 def normalize(value: object) -> str:
     text = unicodedata.normalize("NFKD", str(value or ""))
     text = "".join(char for char in text if not unicodedata.combining(char))
-    text = text.casefold()
+    text = text.casefold().split(":", 1)[0]
     text = re.sub(r"\([^)]*\)", " ", text)
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return " ".join(text.split())

@@ -68,7 +68,9 @@ const USAGE = {
     available_count: 1,
     // 2048 bytes -> "2.0 Ko" via the page's formatBytes.
     stored_bytes: 2048,
+    egress_bytes_month: 0,
   },
+  capacity: { capacity_bytes: 4096 },
   spaces: [],
 };
 
@@ -85,11 +87,13 @@ interface Options {
 interface Mocks {
   calls: string[];
   usageRequests: () => number;
+  statsRequests: () => number;
 }
 
 async function installMocks(page: Page, options: Options = {}): Promise<Mocks> {
   const calls: string[] = [];
   let usageRequests = 0;
+  let statsRequests = 0;
   let objectId = "obj-1";
   let deletes = 0;
   const deleteStatuses = options.folderDeleteStatuses ?? [200];
@@ -174,6 +178,21 @@ async function installMocks(page: Page, options: Options = {}): Promise<Mocks> {
       await route.fulfill({ json: USAGE });
       return;
     }
+    if (path === "/api/v1/admin/stats" && method === "GET") {
+      statsRequests += 1;
+      calls.push("admin-stats");
+      await route.fulfill({
+        json: {
+          objects_by_status: { available: 1 },
+          applications: 2,
+          spaces: 3,
+          buckets: 4,
+          service_identities: 5,
+          active_service_identities: 4,
+        },
+      });
+      return;
+    }
     await route.fulfill({ status: 404, json: { detail: `unmocked ${method} ${path}` } });
   });
 
@@ -184,7 +203,7 @@ async function installMocks(page: Page, options: Options = {}): Promise<Mocks> {
     await route.fulfill({ status: 200, body: "" }).catch(() => undefined);
   });
 
-  return { calls, usageRequests: () => usageRequests };
+  return { calls, usageRequests: () => usageRequests, statsRequests: () => statsRequests };
 }
 
 async function login(page: Page, role = "admin"): Promise<void> {
@@ -315,6 +334,16 @@ test("storage usage is fetched and shown for an operator (admin:read)", async ({
     page.getByRole("complementary", { name: "Barre latérale AURA Vault" }).getByText("2.0 Ko"),
   ).toBeVisible();
   await expect(page.getByText(/Usage réel \(admin\)/)).toBeVisible();
+});
+
+test("an operator sees global statistics on the dashboard", async ({ page }) => {
+  const mocks = await installMocks(page, { role: "operator", usage: true });
+  await login(page, "operator");
+
+  await page.getByRole("link", { name: "Tableau de bord" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Tableau de bord" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Statistiques globales" })).toBeVisible();
+  await expect.poll(() => mocks.statsRequests()).toBeGreaterThanOrEqual(1);
 });
 
 // -- 4. conditional SHA-256 chip --------------------------------------------
