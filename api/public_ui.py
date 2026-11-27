@@ -983,7 +983,7 @@ def catalog_page(
         )
     badge = f' <span class="filters-badge">{filter_count}</span>' if filter_count else ""
     parts.append(
-        f'<details class="filters-fold" id="filters-fold"{" open" if filters_active else ""}>'
+        '<details class="filters-fold" id="filters-fold" open>'
         f'<summary>Filtrer et trier{badge}</summary>'
     )
     parts.append('<div class="controls-block">')
