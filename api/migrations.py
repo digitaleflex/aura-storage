@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0030_audio_classification_jobs"
+SCHEMA_VERSION = "0031_rate_counter_double_precision"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -613,9 +613,28 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE TABLE IF NOT EXISTS public_rate_counters ("
         "key TEXT PRIMARY KEY, "
-        "window_start REAL NOT NULL, "
+        # DOUBLE PRECISION, not REAL: window_start is a Unix time (~1.8e9). On
+        # PostgreSQL REAL is a 4-byte float whose spacing at that magnitude is
+        # 128 s, so a 60 s window was stored up to 64 s off and about one start
+        # time in ten let ten failed logins through without blocking the next.
+        # SQLite maps both spellings to 8-byte REAL.
+        "window_start DOUBLE PRECISION NOT NULL, "
         "hits INTEGER NOT NULL DEFAULT 1)"
     )
+    # Catalogues created before the fix still have the 4-byte column. Widening
+    # is lossless and the table only holds short-lived counters; only run it
+    # when needed so a normal start takes no table lock.
+    if runner.dialect == "postgres":
+        kind = runner.scalar(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_name = ? AND column_name = ?",
+            ("public_rate_counters", "window_start"),
+        )
+        if kind == "real":
+            runner.exec(
+                "ALTER TABLE public_rate_counters "
+                "ALTER COLUMN window_start TYPE DOUBLE PRECISION"
+            )
     # Short, revocable public media grants (gate D-08). The token is stored as a
     # SHA-256 fingerprint, never in clear, and never logged. The audiobook
     # service asks for one after its own entitlement decision.
