@@ -52,9 +52,9 @@ def _card(item: dict) -> str:
     ])
 
 
-def _brand_bar(principal: dict | None) -> str:
+def _brand_bar(principal: dict | None, active: str = "Accueil") -> str:
     """En-tête partagé avec le portail connecté (même composant)."""
-    return site_header("Accueil", principal)
+    return site_header(active, principal)
 
 
 def landing_page(
@@ -147,50 +147,65 @@ def landing_page(
         _GOOGLE, '<span>Continuer avec Google</span></a></div>',
         email_form() if with_email else '', '</div>', hero_figure, '</div></section>',
         category_nav,
-        '<section class="search-section" aria-label="Recherche principale">',
-        '<form class="search-form catalog-search" method="get" action="/" role="search">',
+        '<section class="search-section" id="recherche" aria-label="Recherche principale">',
+        '<form class="search-form" method="get" action="/" role="search">',
         _nav_icon("recherche").replace('<svg ', '<svg class="search-icon" '),
         f'<input type="search" name="q" value="{ESC(query)}" '
         'placeholder="Un titre, un auteur, une envie…" aria-label="Rechercher un livre, un auteur ou un thème">',
-        catalog_filter_fields(
-            authors=authors,
-            active_author=active_author,
-            author_counts=author_counts,
-            facet_options=facet_options,
-            active_facets=active_facets,
-            include_sort=True,
-            sort=sort,
-        ),
-    ]
-    if filter_error:
-        parts.append(f'<p class="filter-error" role="alert">{ESC(filter_error)}</p>')
-    parts.append('<button type="submit">Appliquer les filtres</button></form>')
-    parts.append(
+        '<button type="submit">Rechercher</button></form>',
         '<div class="search-suggest"><span>En ce moment :</span>'
-        '<button type="button">Romans courts</button>'
-        '<button type="button">Moins d’une heure</button>'
-        '<button type="button">Nouveautés</button></div></section>'
-    )
-    parts.append(theme_nav)
-    parts.append(carousel_shelves(items))
-    if search_note:
-        parts.append(f'<p class="search-note" role="status">Compris comme : {ESC(search_note)}</p>')
-    parts.append(
-        f'<p class="filter-result-count" role="status">{len(items)} '
-        f'titre{"" if len(items) == 1 else "s"} affiché{"" if len(items) == 1 else "s"}</p>'
-    )
+        '<a href="/?categorie=litterature&amp;duree_max=240">Romans courts</a>'
+        '<a href="/?duree_max=60">Moins d’une heure</a>'
+        '<a href="/?tri=recent">Nouveautés</a></div></section>',
+    ]
     facet_values = (
         active_facets.get("collection"), active_facets.get("category"),
         active_facets.get("theme"), active_facets.get("language"),
         active_facets.get("format"), active_facets.get("duration_min"),
         active_facets.get("duration_max"),
     )
-    if query or active_author or sort or any(facet_values) or filter_error:
+    filters_active = bool(query or active_author or sort or any(facet_values) or filter_error)
+    filter_count = (
+        (1 if query else 0) + (1 if active_author else 0) + (1 if sort else 0)
+        + sum(1 for value in facet_values if value)
+    )
+    badge = f' <span class="filters-badge">{filter_count}</span>' if filter_count else ""
+    parts.append(
+        f'<details class="filters-fold" id="filters-fold"{" open" if filters_active else ""}>'
+        f'<summary>Filtrer et trier{badge}</summary><div class="controls-block">'
+        '<form class="catalog-filters" method="get" action="/" aria-label="Filtrer le catalogue">'
+    )
+    parts.append(catalog_filter_fields(
+        authors=authors,
+        active_author=active_author,
+        author_counts=author_counts,
+        facet_options=facet_options,
+        active_facets=active_facets,
+        include_sort=True,
+        sort=sort,
+        preserve={"q": query},
+    ))
+    if filter_error:
+        parts.append(f'<p class="filter-error" role="alert">{ESC(filter_error)}</p>')
+    parts.append(
+        '<button type="submit" class="filter-apply">Appliquer les filtres</button>'
+        '</form></div></details>'
+    )
+    if search_note:
+        parts.append(f'<p class="search-note" role="status">Compris comme : {ESC(search_note)}</p>')
+    parts.append(
+        f'<p class="filter-result-count" role="status">{len(items)} '
+        f'titre{"" if len(items) == 1 else "s"} affiché{"" if len(items) == 1 else "s"}</p>'
+    )
+    if filters_active:
         parts.append('<p class="filters-reset"><a class="facet-clear" href="/">Effacer tous les filtres</a></p>')
+    parts.append(theme_nav)
+    parts.append('<div id="decouvrir"></div>')
+    parts.append(carousel_shelves(items))
     if not items:
         parts.append('<p class="empty">Aucun livre ne correspond à votre recherche.</p>')
     else:
-        parts.append('<section class="shelf"><div class="shelf-head"><h2>Tous les livres</h2>'
+        parts.append('<section class="shelf" id="tous"><div class="shelf-head"><h2>Tous les livres</h2>'
                      f'<p class="desc">Page {page} sur {pages} · {total} titre{"s" if total != 1 else ""}</p>'
                      '</div><ul class="book-grid catalog-grid">')
         parts.extend(_card(i) for i in page_items)
@@ -211,7 +226,7 @@ def landing_page(
         parts.append('</section>')
     parts.extend([
         f'<script defer src="{asset_url("carousel.js")}"></script>',
-        mobile_nav("Découvrir"),
+        mobile_nav("Accueil"),
         '</main>', site_footer(), '</body></html>',
     ])
     return "".join(parts)
@@ -276,7 +291,7 @@ def book_page(
     if base_url:
         parts.append(f'<link rel="canonical" href="{ESC(url)}">')
     parts.append('<script type="application/ld+json">' + json.dumps(ld, ensure_ascii=False).replace("</", "<\\/") + '</script>')
-    parts += ['</head><body>', _SKIP_LINK, _brand_bar(principal), '<main class="library book" id="main">',
+    parts += ['</head><body>', _SKIP_LINK, _brand_bar(principal, "Bibliothèque"), '<main class="library book" id="main">',
               '<p class="crumbs"><a href="/">← Toute la bibliothèque</a></p>',
               '<article class="book-hero">', _cover(item), '<div class="book-info">',
               f'<h1>{ESC(label)}</h1>']
@@ -344,7 +359,7 @@ def book_page(
     if preview_seconds:
         parts.append('<script src="' + asset_url("preview.js") + '"></script>')
     parts.extend([
-        mobile_nav("Découvrir"),
+        mobile_nav("Bibliothèque", principal),
         '</main>', site_footer(principal), '</body></html>',
     ])
     return "".join(parts)

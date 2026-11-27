@@ -236,12 +236,13 @@ def carousel_shelves(items: list[dict], *, limit: int = 4) -> str:
 
 def site_header(active: str = "", principal: dict | None = None) -> str:
     """En-tête éditorial : navigation complète sur desktop, icônes sur mobile."""
-    links = (
+    links = [
         ("/", "Accueil", "accueil"),
-        ("/?vue=grille", "Découvrir", "decouvrir"),
-        ("/", "Bibliothèque", "bibliotheque"),
-        ("/?vue=immersif", "En cours", "encours"),
-    )
+        ("/#decouvrir", "Découvrir", "decouvrir"),
+        ("/#tous", "Bibliothèque", "bibliotheque"),
+    ]
+    if principal:
+        links.append(("/#resume", "En cours", "encours"))
     nav = "".join(
         f'<a href="{href}"{cur}>{label}</a>'
         for href, label, cur in (
@@ -253,29 +254,33 @@ def site_header(active: str = "", principal: dict | None = None) -> str:
         name = str(principal.get("display_name") or principal.get("email") or "Auditeur").strip()[:1].upper()
     avatar = (f'<a class="avatar" href="/profil" aria-label="Mon profil">{ESC(name)}</a>'
               if name else "")
+    favorites = (
+        '<a class="head-icon" href="/#favoris" aria-label="Mes favoris">'
+        + _nav_icon("favori") + '</a>'
+        if principal else ""
+    )
     return "".join([
         '<header class="topbar"><a class="brand" href="/" aria-label="AURA, accueil">',
         _BRAND, '<span class="word">AURA</span></a>',
         f'<nav class="site-nav" aria-label="Navigation principale">{nav}</nav>',
         '<div class="head-end">',
-        '<a class="head-icon" href="/" aria-label="Rechercher">', _nav_icon("recherche"), '</a>',
-        '<a class="head-icon" href="/?vue=grille" aria-label="Mes favoris">', _nav_icon("favori"), '</a>',
+        '<a class="head-icon" href="/#recherche" aria-label="Rechercher">', _nav_icon("recherche"), '</a>',
+        favorites,
         avatar,
-        '<a class="head-icon head-menu-toggle" href="/" aria-label="Ouvrir le menu">',
-        _nav_icon("menu"), '</a>',
         '</div></header>',
     ])
 
 
-def mobile_nav(active: str = "Accueil") -> str:
+def mobile_nav(active: str = "Accueil", principal: dict | None = None) -> str:
     """Navigation mobile simplifiée, à portée de pouce."""
-    items = (
+    items = [
         ("/", "Accueil", "accueil"),
-        ("/?vue=grille", "Découvrir", "decouvrir"),
-        ("/", "Bibliothèque", "bibliotheque"),
-        ("/?vue=immersif", "En cours", "encours"),
-        ("/profil", "Profil", "profil"),
-    )
+        ("/#decouvrir", "Découvrir", "decouvrir"),
+        ("/#tous", "Bibliothèque", "bibliotheque"),
+    ]
+    if principal:
+        items.append(("/#resume", "En cours", "encours"))
+    items.append(("/profil", "Profil", "profil"))
     links = "".join(
         f'<a href="{href}"{cur}>{_nav_icon(icon)}<span>{label}</span></a>'
         for href, label, icon, cur in (
@@ -478,7 +483,7 @@ def profile_page(
         f'<input type="hidden" name="csrf_token" value="{ESC(csrf)}">',
         '<div class="profile-actions"><button class="danger-button" type="submit">Supprimer mon compte</button></div>',
         '</form></section>',
-        mobile_nav("Profil"),
+        mobile_nav("Profil", principal),
         '</main>', site_footer(principal), '</body></html>',
     ])
 
@@ -498,7 +503,7 @@ def _duration_text(seconds) -> str:
 
 # Curated hues: the fallback stays in the AURA palette instead of cycling
 # through the whole colour wheel (which produced off-brand neon jackets).
-COVER_HUES = (28, 42, 152, 190, 262)
+COVER_HUES = (28, 152, 205, 262)
 
 
 def cover_hue(label: str) -> int:
@@ -702,7 +707,8 @@ def facet_select(
     if not options:
         return ""
     parts = [
-        f'<label class="filter-field" for="{ESC(field_id)}">{ESC(label)}</label>',
+        '<div class="filter-field">',
+        f'<label for="{ESC(field_id)}">{ESC(label)}</label>',
         f'<select id="{ESC(field_id)}" name="{ESC(name)}">',
         f'<option value=""{"" if active else " selected"}>{ESC(all_label)}</option>',
     ]
@@ -713,7 +719,7 @@ def facet_select(
         parts.append(
             f'<option value="{ESC(value)}"{chosen}>{ESC(option.get("label") or value)} ({count})</option>'
         )
-    parts.append('</select>')
+    parts.append('</select></div>')
     return "".join(parts)
 
 
@@ -734,7 +740,7 @@ def catalog_filter_fields(
     active_facets = active_facets or {}
     parts = [catalog_hidden_fields(preserve or {})]
     if authors:
-        parts.append('<label class="filter-field" for="author-select">Auteur</label>')
+        parts.append('<div class="filter-field"><label for="author-select">Auteur</label>')
         parts.append('<select id="author-select" name="auteur">')
         parts.append(
             f'<option value=""{"" if active_author else " selected"}>Tous les auteurs</option>'
@@ -744,7 +750,7 @@ def catalog_filter_fields(
             count = int(author_counts.get(author, 0))
             suffix = f" ({count})" if count else ""
             parts.append(f'<option value="{ESC(author)}"{chosen}>{ESC(author)}{suffix}</option>')
-        parts.append('</select>')
+        parts.append('</select></div>')
     parts.append(facet_select(
         "collection-select", "Collection", "collection",
         facet_options.get("collections", []), active_facets.get("collection", ""),
@@ -771,20 +777,20 @@ def catalog_filter_fields(
         "Tous les formats",
     ))
     parts.extend([
-        '<label class="filter-field" for="duration-min">Durée min. (min)</label>',
+        '<div class="filter-field"><label for="duration-min">Durée min. (min)</label>',
         f'<input id="duration-min" name="duree_min" type="number" min="0" step="1" '
-        f'value="{ESC(active_facets.get("duration_min", ""))}" inputmode="numeric">',
-        '<label class="filter-field" for="duration-max">Durée max. (min)</label>',
+        f'value="{ESC(active_facets.get("duration_min", ""))}" inputmode="numeric"></div>',
+        '<div class="filter-field"><label for="duration-max">Durée max. (min)</label>',
         f'<input id="duration-max" name="duree_max" type="number" min="0" step="1" '
-        f'value="{ESC(active_facets.get("duration_max", ""))}" inputmode="numeric">',
+        f'value="{ESC(active_facets.get("duration_max", ""))}" inputmode="numeric"></div>',
     ])
     if include_sort:
-        parts.append('<label class="filter-field" for="sort-select">Tri</label>')
+        parts.append('<div class="filter-field"><label for="sort-select">Tri</label>')
         parts.append('<select id="sort-select" name="tri">')
         for label, value in SORTS:
             chosen = " selected" if value == sort else ""
             parts.append(f'<option value="{ESC(value)}"{chosen}>{ESC(label)}</option>')
-        parts.append('</select>')
+        parts.append('</select></div>')
     return "".join(parts)
 
 
@@ -931,7 +937,7 @@ def catalog_page(
         '<a class="secondary-link" href="#resume-card">Reprendre l’écoute</a></div>',
         f'<p class="hero-caption">{len(all_items)} titres · à écouter où vous voulez.</p>',
         '</div>', hero_figure, '</div></header>',
-        '<section class="search-section" aria-label="Recherche principale">',
+        '<section class="search-section" id="recherche" aria-label="Recherche principale">',
         '<form class="search-form" method="get" action="/" role="search">',
         _nav_icon("recherche").replace('<svg ', '<svg class="search-icon" '),
         f'<input type="search" name="q" value="{ESC(query)}" '
@@ -950,8 +956,9 @@ def catalog_page(
         }),
         '<button type="submit">Rechercher</button></form>',
         '<div class="search-suggest"><span>En ce moment :</span>',
-        '<button type="button">Romans courts</button><button type="button">Moins d’une heure</button>',
-        '<button type="button">Nouveautés</button></div></section>',
+        '<a href="/?categorie=litterature&amp;duree_max=240">Romans courts</a>',
+        '<a href="/?duree_max=60">Moins d’une heure</a>',
+        '<a href="/?tri=recent">Nouveautés</a></div></section>',
         facet_nav,
     ]
     if search_note:
@@ -1261,7 +1268,7 @@ def catalog_page(
         '<script src="' + asset_url("playlists.js") + '"></script>',
         '<script src="' + asset_url("offline.js") + '"></script>',
         '<script src="' + asset_url("bookmarks.js") + '"></script>',
-        mobile_nav("Accueil"),
+        mobile_nav("Accueil", principal),
         '</main>',
         site_footer(principal),
         '</body></html>',
