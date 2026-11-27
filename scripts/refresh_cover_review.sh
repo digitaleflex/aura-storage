@@ -15,7 +15,7 @@ fi
 
 LIMIT="${AURA_COVER_CANDIDATE_LIMIT:-20}"
 PROVIDER="${AURA_COVER_CANDIDATE_PROVIDER:-all}"
-REVIEW_FILE="${AURA_DATA_DIR:-/srv/aura-storage}/cover-candidates.json"
+REVIEW_FILE="${AURA_COVER_REVIEW_FILE:-${AURA_DATA_DIR:-/srv/aura-storage}/cover-review/cover-candidates.json}"
 REVIEW_HTML="${AURA_COVER_REVIEW_HTML:-${AURA_DATA_DIR:-/srv/aura-storage}/cover-review.html}"
 
 AUTO_SELECT="${AURA_COVER_AUTO_SELECT:-1}"

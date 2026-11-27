@@ -191,6 +191,9 @@ MIN_PART_BYTES = 5 * 1024 * 1024
 # automatically: a 50 GiB object gets ~11 MiB parts (~4 600 parts), not ~10 000.
 MAX_PARTS = 10_000
 MAX_OPERATIONAL_PARTS = 5_000
+# S3 hard ceiling for a single part. With the operational cap above, the
+# largest object the server will plan is 5,000 × 5 GiB ≈ 24.4 TiB.
+MAX_PART_BYTES = 5 * 1024 * 1024 * 1024
 _MIB = 1024 * 1024
 
 
@@ -205,7 +208,15 @@ def plan_parts(size_bytes: int, preferred_part_bytes: int) -> tuple[int, int]:
         raise ValueError("multipart needs a positive size")
     part = max(preferred_part_bytes, MIN_PART_BYTES, -(-size_bytes // MAX_OPERATIONAL_PARTS))
     part = -(-part // _MIB) * _MIB
+    # Round to MiB before clamping to the S3 per-part ceiling: a size that
+    # needs more than the operational cap at 5 GiB/part is a config error.
+    part = min(part, MAX_PART_BYTES)
     count = -(-size_bytes // part)
+    if count > MAX_OPERATIONAL_PARTS:
+        raise ValueError(
+            "multipart object exceeds the operational part cap; "
+            "lower AURA_MULTIPART_MAX_OBJECT_BYTES"
+        )
     return part, count
 
 

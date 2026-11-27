@@ -9,7 +9,11 @@ from audiobook.metadata.models import (
     MetadataCandidate,
     MetadataQuery,
 )
-from audiobook.metadata.providers import ITunesMetadataProvider, OpenLibraryMetadataProvider
+from audiobook.metadata.providers import (
+    GoogleBooksMetadataProvider,
+    ITunesMetadataProvider,
+    OpenLibraryMetadataProvider,
+)
 from audiobook.metadata.transport import MetadataProviderError, UrllibJsonTransport
 
 
@@ -165,3 +169,67 @@ def test_transport_refuses_plain_http():
     transport = UrllibJsonTransport()
     with pytest.raises(MetadataProviderError, match="HTTPS"):
         transport.get_json("http://openlibrary.org/search.json")
+
+
+def test_google_books_normalizes_cover_isbn_and_authors():
+    transport = FakeTransport([{
+        "items": [{
+            "id": "VOL42",
+            "volumeInfo": {
+                "title": "Les Voix de la Nuit",
+                "authors": ["Awa Diallo", "Un autre auteur"],
+                "publisher": "Éditions Test",
+                "publishedDate": "2021-05-04",
+                "language": "fra",
+                "description": "<p>Un livre.</p>",
+                "categories": ["Fiction"],
+                "industryIdentifiers": [
+                    {"type": "ISBN_13", "identifier": "9782070000011"},
+                    {"type": "ISBN_10", "identifier": "invalid"},
+                ],
+                "imageLinks": {
+                    "thumbnail": "http://books.google.com/books/content?id=VOL42&img=1",
+                    "large": "https://books.google.com/books/content?id=VOL42&img=2",
+                },
+            },
+        }]
+    }])
+    provider = GoogleBooksMetadataProvider(transport, api_key="secret-key")
+    candidates = provider.search(MetadataQuery(text="Voix Nuit", kind="ebook"))
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.provider == "google_books"
+    assert candidate.provider_id == "VOL42"
+    assert candidate.kind == "ebook"
+    assert candidate.language == "fr"
+    assert candidate.publisher == "Éditions Test"
+    assert candidate.description == "Un livre."
+    assert candidate.categories == ("Fiction",)
+    assert [item.value for item in candidate.identifiers] == [
+        "VOL42", "9782070000011",
+    ]
+    assert [item.role for item in candidate.contributors] == ["author", "author"]
+    assert candidate.cover_candidates[0].url.startswith("https://books.google.com/")
+    url, params = transport.calls[0]
+    assert url.endswith("/volumes")
+    assert params["q"] == 'intitle:"Voix Nuit"'
+    assert params["key"] == "secret-key"
+
+
+def test_google_books_uses_isbn_hint_and_rejects_missing_items():
+    transport = FakeTransport([{
+        "items": [{
+            "id": "VOL43",
+            "volumeInfo": {"title": "Sans image"},
+        }]
+    }])
+    provider = GoogleBooksMetadataProvider(transport)
+    query = MetadataQuery(identifier="9782070000011", identifier_kind="isbn")
+    candidate = provider.search(query)[0]
+    assert candidate.cover_candidates == ()
+    assert transport.calls[0][1]["q"] == "isbn:9782070000011"
+    assert "key" not in transport.calls[0][1]
+
+    transport = FakeTransport([{}])
+    with pytest.raises(MetadataProviderError, match="items"):
+        GoogleBooksMetadataProvider(transport).search(MetadataQuery(text="Livre"))

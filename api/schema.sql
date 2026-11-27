@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS objects (
   hls_status TEXT,
   hls_prefix TEXT,
   subtitle_object_id TEXT,
+  -- Curated real cover art: only emblematic books may use their uploaded
+  -- artwork on the public portal; everyone else keeps the AURA jacket.
+  emblematic_cover INTEGER NOT NULL DEFAULT 0,
   UNIQUE (bucket, object_key)
 );
 CREATE TABLE IF NOT EXISTS applications (
@@ -298,6 +301,37 @@ CREATE TABLE IF NOT EXISTS media_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_media_jobs_status ON media_jobs(status, created_at);
 
+-- Audio classification jobs (P1 bac à sable). One job per object analysis;
+-- claimed with a lease by the in-process worker. Stores AI suggestions only;
+-- no automatic move/publish is performed.
+CREATE TABLE IF NOT EXISTS audio_classification_jobs (
+  id TEXT PRIMARY KEY,
+  object_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued', -- queued|processing|needs_review|accepted|rejected|failed
+  attempts INTEGER NOT NULL DEFAULT 0,
+  lease_until INTEGER,
+  provider TEXT,
+  model TEXT,
+  confidence REAL,
+  suggested_category TEXT,
+  suggested_themes TEXT,      -- JSON array
+  suggested_language TEXT,
+  suggested_folder TEXT,
+  quality_json TEXT,          -- JSON object from ffprobe/analysis
+  transcript_excerpt TEXT,
+  reason TEXT,
+  error TEXT,
+  result_json TEXT,           -- normalized full result
+  reviewed_by TEXT,
+  reviewed_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_status ON audio_classification_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_object ON audio_classification_jobs(object_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_audio_class_jobs_space ON audio_classification_jobs(space_id, status, created_at);
+
 -- Import jobs (bulk object import). Tracks a batch of items submitted by a
 -- human operator, with per-item status and a sanitised summary for UI polling.
 CREATE TABLE IF NOT EXISTS import_jobs (
@@ -371,21 +405,25 @@ CREATE TABLE IF NOT EXISTS listen_progress (
 CREATE INDEX IF NOT EXISTS idx_listen_progress_user
   ON listen_progress(user_id, updated_at);
 
--- Append-only listening events (#320): the projection source for real stats.
--- Idempotent by natural key so retries/duplicate heartbeats do not inflate time.
+-- Append-only listening events (#320). `start` / `position` / `end` rows let
+-- the portal compute measured listening time instead of guessing from the
+-- single saved position. `event_id` is deterministic so a repeated player
+-- sample cannot count twice. user_id becomes NULL (anonymized_at is set) when
+-- the visitor deletes their account: aggregates survive, identity does not.
 CREATE TABLE IF NOT EXISTS listen_events (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id),
+  event_id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id),
   object_id TEXT NOT NULL REFERENCES objects(id),
-  kind TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('start', 'position', 'end')),
   position_seconds REAL NOT NULL DEFAULT 0,
-  occurred_at INTEGER NOT NULL,
-  UNIQUE (user_id, object_id, kind, occurred_at, position_seconds)
+  delta_seconds REAL NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  anonymized_at INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_listen_events_user
-  ON listen_events(user_id, occurred_at);
-CREATE INDEX IF NOT EXISTS idx_listen_events_object
-  ON listen_events(object_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_listen_events_user_time
+  ON listen_events(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_listen_events_object_time
+  ON listen_events(object_id, created_at);
 
 -- Public portal bookmarks: a named position in a book, private to the visitor.
 CREATE TABLE IF NOT EXISTS listen_bookmarks (

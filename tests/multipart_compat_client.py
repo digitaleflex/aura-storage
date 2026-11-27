@@ -1212,7 +1212,7 @@ def _plan_parts_from_source() -> tuple[dict, dict, str]:
         tree = ast.parse(fh.read(), filename=src)
     ns: dict = {}
     lines: dict[str, int] = {}
-    wanted = {"MIN_PART_BYTES", "MAX_PARTS", "_MIB"}
+    wanted = {"MIN_PART_BYTES", "MAX_PARTS", "MAX_OPERATIONAL_PARTS", "MAX_PART_BYTES", "_MIB"}
     for node in tree.body:
         if isinstance(node, ast.Assign):
             names = [t.id for t in node.targets if isinstance(t, ast.Name)]
@@ -1232,45 +1232,56 @@ def point12(client, bucket: str) -> None:
     _MIB = 1024 ** 2
     _GIB = 1024 ** 3
     _TIB = 1024 ** 4
-    _PIB = 1024 ** 5
     maxp = 10_000
+    maxop = 5_000
 
     # --- (a) what the server-side plan computes, read from the real source -------
     try:
         ns, lines, src = _plan_parts_from_source()
         plan = ns["plan_parts"]
         maxp = int(ns["MAX_PARTS"])
+        maxop = int(ns["MAX_OPERATIONAL_PARTS"])
+        maxpart = int(ns["MAX_PART_BYTES"])
         minp = int(ns["MIN_PART_BYTES"])
         evidence(f"api/s3.py ({src}) constants: MIN_PART_BYTES={minp} "
                  f"({minp // _MIB} MiB) at line {lines.get('MIN_PART_BYTES')}, "
                  f"MAX_PARTS={maxp} at line {lines.get('MAX_PARTS')}, "
-                 f"def plan_parts at line {lines.get('plan_parts')}")
+                 f"MAX_OPERATIONAL_PARTS={maxop} at line {lines.get('MAX_OPERATIONAL_PARTS')}, "
+                 f"MAX_PART_BYTES={maxpart} ({maxpart // _GIB} GiB) at line "
+                 f"{lines.get('MAX_PART_BYTES')}, def plan_parts at line "
+                 f"{lines.get('plan_parts')}")
         if minp == 5 * _MIB:
             ok(f"[Q5] plan_parts enforces MIN_PART_BYTES={minp} (5 MiB)")
         else:
             fail(f"[Q5] MIN_PART_BYTES={minp}, expected 5 MiB")
-        if maxp == 10_000:
-            ok(f"[Q5] plan_parts uses MAX_PARTS={maxp}")
+        if maxp == 10_000 and maxop == 5_000 and maxpart == 5 * _GIB:
+            ok(f"[Q5] plan_parts uses MAX_PARTS={maxp}, "
+               f"MAX_OPERATIONAL_PARTS={maxop}, MAX_PART_BYTES={maxpart}")
         else:
-            fail(f"[Q5] MAX_PARTS={maxp}, expected 10000")
+            fail(f"[Q5] unexpected part limits: MAX_PARTS={maxp}, "
+                 f"MAX_OPERATIONAL_PARTS={maxop}, MAX_PART_BYTES={maxpart}")
 
+        # The configured multipart object ceiling is 1 TiB by default and is
+        # capped at 5,000 × 5 GiB ≈ 24.4 TiB; beyond that no S3 plan is valid.
         samples = [1 * _MIB, 5 * _MIB, 100 * _MIB, 5 * _GIB, 100 * _GIB,
-                   1 * _TIB, 10 * _TIB, 50 * _TIB, 500 * _TIB, 5 * _PIB]
+                   1 * _TIB, 10 * _TIB, 24 * _TIB]
         over = 0
         for size in samples:
             part, count = plan(size, 8 * _MIB)
             evidence(f"plan_parts(size={size} bytes = {size / _GIB:.3f} GiB, "
                      f"preferred=8 MiB) -> part_bytes={part} "
                      f"({part / _MIB:.1f} MiB) part_count={count} "
-                     f"count<=MAX_PARTS={count <= maxp}")
-            if count > maxp:
+                     f"count<=MAX_OPERATIONAL_PARTS={count <= maxop}")
+            if count > maxop or part > maxpart:
                 over += 1
         if over:
-            fail(f"[Q5] plan_parts exceeded MAX_PARTS for {over} sample size(s)")
+            fail(f"[Q5] plan_parts exceeded the operational cap or the 5 GiB "
+                 f"part ceiling for {over} sample size(s)")
         else:
-            ok(f"[Q5] for every sampled size up to 5 PiB plan_parts keeps count <= {maxp} "
-               f"by raising the part size above the 8 MiB preference (5 GiB -> 8 MiB, "
-               f"50 TiB -> ~5.1 GiB, 5 PiB -> ~524 GiB)")
+            ok(f"[Q5] for every sampled size up to 24 TiB plan_parts keeps "
+               f"count <= {maxop} and part <= {maxpart // _GIB} GiB by raising "
+               f"the part size (5 GiB -> 8 MiB, 10 TiB -> ~2 GiB, "
+               f"24 TiB -> ~4.9 GiB)")
     except Exception as exc:  # noqa: BLE001
         fail(f"[Q5] could not read/replay plan_parts from api/s3.py: {err_detail(exc)}")
 
