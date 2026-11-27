@@ -1178,8 +1178,12 @@ button,input,select{font:inherit;color:inherit}
 /* --- Hero : la note ne recouvre plus les jaquettes ----------------------- */
 .hero-figure { display:flex; flex-direction:column; justify-content:center; gap:14px; }
 .hero-note { position:static; right:auto; bottom:auto; margin:0 auto; max-width:250px; }
+/* Les jaquettes arrière ne montrent que leur monogramme : pas de titre coupé. */
+.hero-cover:nth-child(1) .cover-copy,
+.hero-cover:nth-child(3) .cover-copy { display:none; }
 @media (max-width:820px){
   .hero-note { display:none; }
+  .hero-cover .cover-kicker { display:none; }
 }
 
 /* --- Lecteur mobile : au-dessus de la nav, options visibles -------------- */
