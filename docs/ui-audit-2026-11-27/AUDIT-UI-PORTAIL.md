@@ -8,7 +8,7 @@
 **Preuves :** captures desktop 1440×900 et mobile 390×844 dans [`evidence/`](evidence/).  
 **Méthode :** revue du code (`api/public_ui.py`, `api/public_book.py`, `api/portal_assets/portal.css`), rendu Chromium, styles calculés, calcul de contraste WCAG 2.1, comparaison avec le design system déclaré (`docs/prototypes/aura-refonte/README.md`, `docs/PUBLIC-PORTAL-UI.md`, `docs/BRAND-IDENTITY.md`).
 
-> **Mise à jour 27/11/2026 :** le **lot 1** de correctifs est appliqué (lecteur mobile, typographie, jaquettes, filtres, navigation, note du hero). Voir [`CORRECTIFS-LOT1.md`](CORRECTIFS-LOT1.md) et les captures [`evidence-after/`](evidence-after/). Les constats ci-dessous décrivent l’état audité **avant** correction ; les points restants sont listés dans le suivi.
+> **Mise à jour 27/11/2026 :** les **lots 1 et 2** de correctifs sont appliqués (lecteur mobile, typographie, jaquettes, filtres, navigation, hero, auteurs absents, PWA, pied de page, hiérarchie, métadonnées, profil, fiche livre, icônes). Voir [`CORRECTIFS-LOT1.md`](CORRECTIFS-LOT1.md), [`CORRECTIFS-LOT2.md`](CORRECTIFS-LOT2.md), [`evidence-after/`](evidence-after/) et [`evidence-after-lot2/`](evidence-after-lot2/). Les constats ci-dessous décrivent l’état audité **avant** correction ; les points restants sont listés dans les suivis.
 
 ---
 

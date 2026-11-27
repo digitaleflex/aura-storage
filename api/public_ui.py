@@ -72,7 +72,7 @@ _GOOGLE = (
 # Installable app: manifest, icons and theme colour. The public portal is
 # deliberately light-only, so the address bar keeps the light brand colour.
 _PWA_TAGS = (
-    '<meta name="theme-color" content="#F8F6F1">'
+    '<meta name="theme-color" content="#F7F4ED">'
     '<link rel="manifest" href="' + asset_url("manifest.webmanifest") + '">'
     '<link rel="icon" href="' + asset_url("icon.svg") + '" type="image/svg+xml">'
     '<link rel="apple-touch-icon" href="' + asset_url("icon-192.png") + '">'
@@ -118,6 +118,34 @@ def _nav_icon(name: str) -> str:
         '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
         'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
         + _NAV_ICONS.get(name, "") + '</svg>'
+    )
+
+
+_PLAYER_ICONS = {
+    "play": '<path d="m9 6 9 6-9 6V6Z" fill="currentColor" stroke="none"/>',
+    "pause": '<path d="M8 5v14M16 5v14"/>',
+    "prev": '<path d="M6 5v14"/><path d="m18 6-8 6 8 6V6Z" fill="currentColor" stroke="none"/>',
+    "next": '<path d="M18 5v14"/><path d="m6 6 8 6-8 6V6Z" fill="currentColor" stroke="none"/>',
+    "close": '<path d="m6 6 12 12M18 6 6 18"/>',
+    "plus": '<path d="M12 5v14M5 12h14"/>',
+}
+
+
+def _player_icon(name: str) -> str:
+    return (
+        '<svg class="player-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        + _PLAYER_ICONS.get(name, "") + '</svg>'
+    )
+
+
+def _heart_svg(filled: bool) -> str:
+    fill = "currentColor" if filled else "none"
+    return (
+        f'<svg class="fav-svg" aria-hidden="true" viewBox="0 0 24 24" fill="{fill}" '
+        'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M12 20.5S4.5 16 4.5 10.3A3.9 3.9 0 0 1 12 8.1a3.9 3.9 0 0 1 7.5 2.2'
+        'C19.5 16 12 20.5 12 20.5Z"/></svg>'
     )
 
 
@@ -184,15 +212,16 @@ def carousel_shelf(
     cards = []
     for item in items:
         title = str(item.get("title") or item.get("display_name") or "Livre")
-        author = str(item.get("author") or "")
+        author = str(item.get("author") or "").strip()
         inner = fallback_cover_inner(title, author)
         if use_covers:
             inner += real_cover_img(item)
+        author_html = f'<span class="carousel-author">{ESC(author)}</span>' if author else ""
         cards.append(
             f'<li><a class="carousel-card" href="/livre/{ESC(item.get("id") or "")}">'
             f'<span class="carousel-cover" style="--cover-h:{cover_hue(title)}">{inner}</span>'
             f'<span class="carousel-title">{ESC(title)}</span>'
-            f'<span class="carousel-author">{ESC(author or "Livre audio")}</span>'
+            f'{author_html}'
             '</a></li>'
         )
     heading_id = f"{track_id}-title"
@@ -300,15 +329,15 @@ def site_footer(principal: dict | None = None) -> str:
             f'<input type="hidden" name="csrf_token" value="{csrf}">'
             '<button type="submit" class="link-plain">Déconnexion</button></form>'
         )
+    else:
+        account = '<a href="/api/public/auth/google">Se connecter</a>'
     return "".join([
         '<footer class="site-foot"><div class="foot-grid">',
         '<div class="foot-brand"><div class="brand">', _BRAND,
         '<span class="word">AURA</span></div><p>Une bibliothèque à écouter.</p></div>',
         '<nav class="foot-links" aria-label="Liens de pied de page">',
         account,
-        '<a href="/">À propos</a><a href="/">La collection</a>',
-        '<a href="/profil">Accessibilité</a><a href="/profil">Confidentialité</a>',
-        '<a href="/">Contact</a></nav>',
+        '<a href="/#tous">La collection</a></nav>',
         '<p class="foot-legal">AURA · Écoute privée.</p>',
         '</div></footer>',
     ])
@@ -325,18 +354,21 @@ _REASON_LABELS = {
     "recent_catalog": "Nouveauté de la bibliothèque",
 }
 
-_HEAD = (
-    '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
-    '<meta name="viewport" content="width=device-width, initial-scale=1">'
-    + _PWA_TAGS +
-    '<link rel="stylesheet" href="' + asset_url("portal.css") + '">'
-    '<script defer src="' + asset_url("common.js") + '"></script>'
-    '</head><body>' + _SKIP_LINK
-)
-
-
 def _title(title: str) -> str:
     return f'<title>{ESC(title)}</title>'
+
+
+def _head(title: str) -> str:
+    """Common head for pages built without ``page_head`` (title stays in head)."""
+    return (
+        '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        + _title(title)
+        + _PWA_TAGS
+        + '<link rel="stylesheet" href="' + asset_url("portal.css") + '">'
+        '<script defer src="' + asset_url("common.js") + '"></script>'
+        '</head><body>' + _SKIP_LINK
+    )
 
 
 def page_head(title: str, description: str = "", meta: list | None = None) -> str:
@@ -368,9 +400,9 @@ def email_form(next_label: str = "Ou recevez un lien par e-mail") -> str:
 
 
 def login_page(with_email: bool = False) -> str:
-    return _HEAD + _title("AURA — Votre bibliothèque audio") + """
-<div class="stage">
-  <main class="intro">
+    return _head("AURA — Votre bibliothèque audio") + """
+<main class="stage" id="main">
+  <div class="intro">
     <div class="brand">""" + _BRAND + """<span class="word">AURA</span></div>
     <p class="kicker">Bibliothèque audio privée</p>
     <h1>Votre bibliothèque,<br><span class="nowrap">à l'écoute.</span></h1>
@@ -379,7 +411,7 @@ def login_page(with_email: bool = False) -> str:
     <div class="wave" aria-hidden="true">
       <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
     </div>
-  </main>
+  </div>
   <section class="access" aria-labelledby="access-title">
     <div class="panel">
       <p class="eyebrow">Accès membre</p>
@@ -396,7 +428,7 @@ def login_page(with_email: bool = False) -> str:
     <div class="rule" aria-hidden="true"><span></span><i></i><span></span></div>
     <p class="foot">AURA · Écoute privée</p>
   </section>
-</div>
+</main>
 </body></html>"""
 
 
@@ -414,8 +446,7 @@ def profile_page(
     elif error:
         notice = f'<p class="notice notice-err" role="alert">{ESC(error)}</p>'
     return "".join([
-        _HEAD,
-        _title("AURA — Mon profil"),
+        _head("AURA — Mon profil"),
         site_header("Profil", principal),
         '<main class="profile-shell" id="main">',
         '<a class="back-link" href="/">← Retour à la bibliothèque</a>',
@@ -532,7 +563,8 @@ def real_cover_img(item: dict) -> str:
 def fallback_cover_inner(label: str, author: str = "") -> str:
     """Typographic AURA jacket shown until/unless the real cover loads."""
     title = str(label or "").strip() or "Livre"
-    byline = str(author or "").strip() or "Livre audio"
+    byline = str(author or "").strip()
+    author_html = f'<span class="cover-author">{ESC(byline)}</span>' if byline else ""
     return "".join([
         '<span class="cover-fallback" aria-hidden="true">',
         '<span class="cover-spine"></span>',
@@ -540,7 +572,7 @@ def fallback_cover_inner(label: str, author: str = "") -> str:
         '<span class="cover-copy">',
         '<span class="cover-kicker">Livre audio</span>',
         f'<span class="cover-title">{ESC(title)}</span>',
-        f'<span class="cover-author">{ESC(byline)}</span>',
+        author_html,
         '</span></span>',
     ])
 
@@ -625,8 +657,8 @@ def _heart_button(item: dict, label: bool = False) -> str:
         f'<button type="button" class="fav-button{" fav-labeled" if label else ""}" '
         f'data-favorite="{ESC(item.get("id") or "")}" aria-pressed="{"true" if on else "false"}" '
         f'aria-label="Favori : {ESC(title)}" title="Favori">'
-        f'<span aria-hidden="true" class="fav-icon">{"♥" if on else "♡"}</span>'
-        f'{f"<span class=fav-text>{ESC(text)}</span>" if label else ""}</button>'
+        f'<span aria-hidden="true" class="fav-icon">{_heart_svg(on)}</span>'
+        f'{"<span class=\"fav-text\">" + ESC(text) + "</span>" if label else ""}</button>'
     )
 
 
@@ -672,7 +704,7 @@ def _track_html(item: dict) -> str:
         badge,
         '<span class="track-copy">',
         f'<span class="track-title">{ESC(label)}</span>',
-        f'<span class="track-author">{ESC(author or "Livre audio")}</span>',
+        (f'<span class="track-author">{ESC(author)}</span>' if author else ''),
         f'<span class="track-categories">{ESC(" · ".join(classifications))}</span>' if classifications else '',
         (f'<span class="reco-why">{ESC(_REASON_LABELS.get(str((item.get("reco_reasons") or [""])[0]), ""))}</span>'
          if item.get("reco_reasons") else ''),
@@ -684,7 +716,7 @@ def _track_html(item: dict) -> str:
         _heart_button(item),
         f'<button type="button" class="playlist-add-button" data-add-playlist="{ESC(item.get("id") or "")}" '
         f'aria-haspopup="dialog" aria-label="Ajouter à une liste : {ESC(label)}" '
-        f'title="Ajouter à une liste"><span aria-hidden="true">+</span></button>',
+        f'title="Ajouter à une liste">{_player_icon("plus")}</button>',
         '</li>',
     ])
 
@@ -923,8 +955,7 @@ def catalog_page(
     )
 
     parts = [
-        _HEAD,
-        _title("AURA — Bibliothèque"),
+        _head("AURA — Bibliothèque"),
         site_header("Accueil", principal),
         f'<main class="library view-{ESC(view)}" id="main">',
         '<header class="library-header"><div class="hero-grid"><div class="hero-copy">',
@@ -1032,7 +1063,7 @@ def catalog_page(
     resume_shelf = resume[1:] if resume else []
     discovery_links = []
     if resume:
-        discovery_links.append(("#resume" if resume_shelf else "#resume-card", "Reprendre l'écoute"))
+        discovery_links.append(("#resume-card", "Reprendre l'écoute"))
     if favorites:
         discovery_links.append(("#favoris", "Mes favoris"))
     if suggested:
@@ -1066,7 +1097,7 @@ def catalog_page(
     resume_card_parts = []
     if featured and view != "immersif":
         flabel = str(featured.get("title") or featured.get("display_name") or "Livre")
-        fauthor = str(featured.get("author") or "Livre audio")
+        fauthor = str(featured.get("author") or "").strip()
         fprogress = float(featured.get("progress_seconds") or 0)
         fduration = float(featured.get("duration_seconds") or 0)
         fpct = min(100.0, (fprogress / fduration * 100) if fduration else 0.0)
@@ -1087,7 +1118,7 @@ def catalog_page(
             f'<div class="resume-cover" style="--cover-h:{fhue}">'
             f'{fcover_inner}{real_cover_img(featured)}</div>',
             f'<div class="resume-copy"><p class="eyebrow">{ESC(feyebrow)}</p>',
-            f'<h2>{ESC(flabel)}</h2><p>{ESC(fauthor)}</p>',
+            f'<h2>{ESC(flabel)}</h2>' + (f'<p>{ESC(fauthor)}</p>' if fauthor else ''),
             f'<p class="resume-meta">{ESC(fmeta)}</p>',
             f'<div class="resume-progress" aria-hidden="true"><i style="width:{fpct:.1f}%"></i></div>',
             '</div><div class="resume-actions">',
@@ -1129,7 +1160,7 @@ def catalog_page(
     # Ordre voulu : sélection à découvrir, puis reprise, puis le reste.
     shelf("decouvrir", "À découvrir", discover, "Une sélection pour varier vos prochaines écoutes.")
     parts.extend(resume_card_parts)
-    shelf("resume", "Reprendre l'écoute", resume_shelf, "Vos autres lectures en cours, à la dernière position.")
+    shelf("resume", "Vos autres lectures", resume_shelf, "Les livres commencés, à reprendre à la dernière position.")
     shelf("pour-vous", "Pour vous", suggested, "Dans la veine de vos favoris et de vos écoutes.")
     shelf("nouveautes", "Nouveautés", newest, "Les titres récemment ajoutés à votre bibliothèque.")
     shelf("favoris", "Mes favoris", favorites, "Les livres que vous avez marqués d'un cœur.")
@@ -1172,13 +1203,13 @@ def catalog_page(
 
         '<div class="player-center">',
         '<div class="transport" role="group" aria-label="Commandes de lecture">',
-        '<button type="button" class="icon-button skip" id="prev" aria-label="Titre précédent" title="Titre précédent"><span aria-hidden="true">⏮</span></button>',
-        '<button type="button" class="icon-button skip" id="prev-chapter" aria-label="Chapitre précédent" title="Chapitre précédent"><span aria-hidden="true">«</span></button>',
+        f'<button type="button" class="icon-button skip" id="prev" aria-label="Titre précédent" title="Titre précédent">{_player_icon("prev")}</button>',
+        f'<button type="button" class="icon-button skip" id="prev-chapter" aria-label="Chapitre précédent" title="Chapitre précédent">{_nav_icon("chevron-left")}</button>',
         '<button type="button" class="icon-button skip" id="back15" aria-label="Reculer de 15 secondes" title="Reculer de 15 secondes"><span aria-hidden="true">−15s</span></button>',
-        '<button type="button" class="icon-button main" id="play-toggle" aria-label="Lire" title="Lecture / pause"><span aria-hidden="true">▶</span></button>',
+        f'<button type="button" class="icon-button main" id="play-toggle" aria-label="Lire" title="Lecture / pause">{_player_icon("play")}</button>',
         '<button type="button" class="icon-button skip" id="fwd15" aria-label="Avancer de 15 secondes" title="Avancer de 15 secondes"><span aria-hidden="true">+15s</span></button>',
-        '<button type="button" class="icon-button skip" id="next-chapter" aria-label="Chapitre suivant" title="Chapitre suivant"><span aria-hidden="true">»</span></button>',
-        '<button type="button" class="icon-button skip" id="next" aria-label="Titre suivant" title="Titre suivant"><span aria-hidden="true">⏭</span></button>',
+        f'<button type="button" class="icon-button skip" id="next-chapter" aria-label="Chapitre suivant" title="Chapitre suivant">{_nav_icon("chevron-right")}</button>',
+        f'<button type="button" class="icon-button skip" id="next" aria-label="Titre suivant" title="Titre suivant">{_player_icon("next")}</button>',
         '</div>',
         '<div class="seek-row">',
         '<span class="time start" id="time-now">0:00</span>',
@@ -1235,7 +1266,7 @@ def catalog_page(
         '<dialog id="playlist-dialog" aria-labelledby="playlist-dialog-title">',
         '<div class="playlist-dialog-head">',
         '<h3 id="playlist-dialog-title">Ajouter à une liste</h3>',
-        '<button type="button" class="icon-button panel-close" id="playlist-dialog-close" aria-label="Fermer">×</button>',
+        f'<button type="button" class="icon-button panel-close" id="playlist-dialog-close" aria-label="Fermer">{_player_icon("close")}</button>',
         '</div>',
         '<p class="track-author" id="playlist-dialog-book"></p>',
         '<div id="playlist-dialog-status" class="playlist-dialog-status" role="status" aria-live="polite"></div>',
@@ -1249,11 +1280,11 @@ def catalog_page(
 
         '<aside class="queue-panel" id="queue-panel" hidden aria-label="File d\'attente">',
         '<div class="queue-panel-head"><h3>Dans la file</h3>'
-        '<button type="button" class="icon-button panel-close" data-close-panel="queue-panel" aria-label="Fermer la file" title="Fermer">×</button></div>'
+        f'<button type="button" class="icon-button panel-close" data-close-panel="queue-panel" aria-label="Fermer la file" title="Fermer">{_player_icon("close")}</button></div>'
         '<div id="queue-list" class="panel-list"></div></aside>',
         '<aside class="queue-panel" id="chapters-panel" hidden aria-label="Chapitres">',
         '<div class="queue-panel-head"><h3>Chapitres</h3>'
-        '<button type="button" class="icon-button panel-close" data-close-panel="chapters-panel" aria-label="Fermer les chapitres" title="Fermer">×</button></div>'
+        f'<button type="button" class="icon-button panel-close" data-close-panel="chapters-panel" aria-label="Fermer les chapitres" title="Fermer">{_player_icon("close")}</button></div>'
         '<div id="chapters-list" class="panel-list"></div>'
         '<div class="bookmarks" id="bookmarks"><div class="bookmarks-head"><h4>Marque-pages</h4>'
         '<button type="button" class="pill-button" id="bookmark-add" disabled>+ Ici</button></div>'
