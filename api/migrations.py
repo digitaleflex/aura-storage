@@ -37,7 +37,7 @@ LEGACY_APPLICATION_ID = "00000000-0000-0000-0000-000000000001"
 LEGACY_SPACE_ID = "00000000-0000-0000-0000-000000000002"
 LEGACY_BUCKET_ID = "00000000-0000-0000-0000-000000000003"
 
-SCHEMA_VERSION = "0027_perf_indexes"
+SCHEMA_VERSION = "0028_listen_events"
 
 # (table, column, declaration) added only if absent. A constant DEFAULT is
 # allowed by both engines on ADD COLUMN, so existing rows are filled with the
@@ -300,6 +300,26 @@ def apply_migrations(conn, dialect: str = "sqlite") -> None:
     runner.exec(
         "CREATE INDEX IF NOT EXISTS idx_listen_progress_user "
         "ON listen_progress(user_id, updated_at)"
+    )
+    # Append-only listening events (#320). Same definition as schema.sql so an
+    # upgraded catalogue gets the table even though schema.sql only runs on
+    # fresh installs. event_id makes a repeated player sample idempotent.
+    runner.exec(
+        "CREATE TABLE IF NOT EXISTS listen_events ("
+        "event_id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), "
+        "object_id TEXT NOT NULL REFERENCES objects(id), "
+        "kind TEXT NOT NULL CHECK (kind IN ('start', 'position', 'end')), "
+        "position_seconds REAL NOT NULL DEFAULT 0, "
+        "delta_seconds REAL NOT NULL DEFAULT 0, "
+        "created_at INTEGER NOT NULL, anonymized_at INTEGER)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_listen_events_user_time "
+        "ON listen_events(user_id, created_at)"
+    )
+    runner.exec(
+        "CREATE INDEX IF NOT EXISTS idx_listen_events_object_time "
+        "ON listen_events(object_id, created_at)"
     )
     # Public portal bookmarks (additive, private to the visitor).
     runner.exec(

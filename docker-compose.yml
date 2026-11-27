@@ -269,6 +269,11 @@ services:
       # Full listening requires a public session; trusted embeds can be allowlisted.
       AURA_PUBLIC_MEDIA_REQUIRE_AUTH: ${AURA_PUBLIC_MEDIA_REQUIRE_AUTH:-1}
       AURA_PUBLIC_MEDIA_OPEN_SLUGS: "${AURA_PUBLIC_MEDIA_OPEN_SLUGS:-}"
+      # Append-only listening events (#320): retention in days (minimum 1).
+      AURA_LISTEN_EVENT_RETENTION_DAYS: ${AURA_LISTEN_EVENT_RETENTION_DAYS:-365}
+      # Local search canonicalisation (#321): set to 0 to fall back to exact
+      # accent-folded keywords without redeploying code.
+      AURA_SEARCH_ENRICHMENT: ${AURA_SEARCH_ENRICHMENT:-1}
       # Listening is signed-in. Downloads (/d/) and published share links are
       # premium. Verified e-mails here are promoted at sign-in, never downgraded.
       AURA_PUBLIC_REQUIRE_PREMIUM: ${AURA_PUBLIC_REQUIRE_PREMIUM:-1}

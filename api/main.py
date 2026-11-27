@@ -24,7 +24,10 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, folder_shares, google_oauth, ids, magic_link, netinfo, public_book, public_facets, public_ui, shares
+from . import (
+    authz, folder_shares, google_oauth, ids, listen_events, magic_link, netinfo,
+    public_book, public_facets, public_ui, shares,
+)
 from .audit import (
     audit_event,
     audit_path,
@@ -754,10 +757,17 @@ class CollectionItemsIn(BaseModel):
 
 
 class ProgressIn(BaseModel):
-    """Playback position posted by the public player (CSRF-protected)."""
+    """Playback position posted by the public player (CSRF-protected).
+
+    ``kind`` is advisory: the server decides ``start`` for a first sample or a
+    backward seek, and only accepts ``end`` from the player. ``client_event_id``
+    is an optional deduplication key for retried samples (#320).
+    """
     model_config = ConfigDict(extra="forbid")
     object_id: Uuid4
     position_seconds: float = Field(ge=0, le=864000)
+    kind: Literal["start", "position", "end"] = "position"
+    client_event_id: str = Field(default="", max_length=120)
 
 
 class BookmarkIn(BaseModel):
@@ -2244,9 +2254,29 @@ def public_progress(
     row = _as_dict(row) if row is not None else None
     if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
         raise HTTPException(status_code=404, detail="object not found")
-    repo.save_progress(
-        principal["id"], oid, body.position_seconds, int(time.time())
+    now = int(time.time())
+    uid = principal["id"]
+    previous_position = repo.get_progress_map(uid, [oid]).get(oid, 0.0)
+    last_event_at = repo.last_listen_event_at(uid, oid)
+    # A first sample, or a backward seek (a new playback session), starts a
+    # session; the player may explicitly close one with ``end``. A plain sample
+    # counts at most the elapsed wall-clock time, so seeking forward cannot be
+    # reported as listening (#320).
+    if last_event_at <= 0 or body.position_seconds < float(previous_position):
+        kind = "start"
+    elif body.kind == "end":
+        kind = "end"
+    else:
+        kind = "position"
+    elapsed = max(0, now - last_event_at) if last_event_at else 0
+    delta = (
+        listen_events.listened_delta(float(previous_position), body.position_seconds, elapsed)
+        if kind != "start" else 0.0
     )
+    repo.record_listen_event(
+        uid, oid, kind, body.position_seconds, delta, now, body.client_event_id
+    )
+    repo.save_progress(uid, oid, body.position_seconds, now)
     return {"object_id": oid, "position_seconds": body.position_seconds}
 
 
@@ -2354,10 +2384,12 @@ async def public_playlist_delete_form(
 
 
 def _public_listening_stats(principal: dict) -> dict:
-    """Lightweight listener stats, derived from data the portal already stores.
+    """Listener stats: a measured projection plus the legacy estimate.
 
-    Only the latest position is kept per book, so the listened time is an
-    estimate from saved positions, never a claim of exact playback duration.
+    ``estimated_listened_seconds`` still sums the latest saved positions for
+    compatibility, but it is only an estimate. ``measured_listened_seconds``
+    sums the capped deltas of the append-only events (#320) within the retention
+    window; the profile labels whichever figure it displays accordingly.
     """
     collections = _public_collections(principal)
     items = [item for col in collections for item in col["items"]]
@@ -2386,9 +2418,15 @@ def _public_listening_stats(principal: dict) -> dict:
                 "started": len(started),
                 "total": len(col_items),
             })
+    totals = repo.listening_totals(
+        principal["id"], int(time.time()),
+        settings.listen_event_retention_days * 86400,
+    )
     return {
         "items_in_library": len(items),
         "estimated_listened_seconds": int(listened),
+        "measured_listened_seconds": totals["listened_seconds"],
+        "listen_events": totals["samples"],
         "completed": completed,
         "favorites": len(favourites),
         "bookmarks": bookmarks,

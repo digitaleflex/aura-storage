@@ -3,6 +3,7 @@ import os
 import secrets
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -178,3 +179,25 @@ def test_catalog_playlist_dialog_and_idempotent_add():
     items = client.get(f"/api/public/playlists/{pid}/items", headers=headers)
     assert items.status_code == 200
     assert [i["object_id"] for i in items.json()["items"]] == [oid]
+
+
+def test_anonymous_cards_have_no_playlist_button():
+    collections = [{
+        "slug": "classiques", "title": "Classiques", "items": [{
+            "id": "anon", "title": "Livre public", "display_name": "Livre public",
+            "author": "Auteur", "url": "/m/livre-public", "duration_seconds": 600,
+        }],
+    }]
+    page = main.public_book.landing_page(collections)
+    assert "Livre public" in page
+    assert "data-add-playlist" not in page
+    assert 'id="playlist-dialog"' not in page
+
+
+def test_playlist_button_and_dialog_keep_their_styles():
+    css = (Path(__file__).resolve().parents[1] / "api/portal_assets/portal.css").read_text(
+        encoding="utf-8"
+    )
+    for selector in (".playlist-add-button", "#playlist-dialog", ".playlist-pick",
+                     ".playlist-dialog-status.is-error"):
+        assert selector in css, f"missing style for {selector}"

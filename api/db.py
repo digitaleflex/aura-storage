@@ -1,11 +1,12 @@
 """SQLite catalogue behind a small Repository interface (#18; PostgreSQL in #19)."""
+import hashlib
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Optional
 
-from . import ids
+from . import ids, listen_events
 from .auth import new_token, session_key
 from .dblock import synchronized
 from .migrations import (
@@ -165,6 +166,12 @@ class Repository:
 
     def delete_public_account(self, uid: str) -> None:
         """Delete a public portal account and its portal-owned data."""
+        # Events stay append-only for aggregate history but are anonymised:
+        # no event can be linked back to the deleted visitor (#320).
+        self.conn.execute(
+            "UPDATE listen_events SET user_id = NULL, anonymized_at = ? WHERE user_id = ?",
+            (int(time.time()), uid),
+        )
         self.conn.execute("DELETE FROM listen_progress WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM listen_favorites WHERE user_id = ?", (uid,))
         self.conn.execute("DELETE FROM listen_bookmarks WHERE user_id = ?", (uid,))
@@ -243,6 +250,53 @@ class Repository:
             (user_id, *object_ids),
         ).fetchall()
         return {r["object_id"]: float(r["position_seconds"]) for r in rows}
+
+    # -- append-only listening events (#320) ------------------------------
+    def record_listen_event(
+        self, user_id: str, object_id: str, kind: str, position_seconds: float,
+        delta_seconds: float, now: int, client_event_id: str = "",
+    ) -> bool:
+        """Insert one idempotent event; False means it was already recorded."""
+        eid = listen_events.event_id(
+            user_id, object_id, kind, position_seconds, now, client_event_id
+        )
+        cur = self.conn.execute(
+            "INSERT OR IGNORE INTO listen_events "
+            "(event_id, user_id, object_id, kind, position_seconds, delta_seconds, "
+            "created_at, anonymized_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+            (eid, user_id, object_id, kind, max(0.0, float(position_seconds)),
+             max(0.0, float(delta_seconds)), int(now)),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def last_listen_event_at(self, user_id: str, object_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT COALESCE(MAX(created_at), 0) AS t FROM listen_events "
+            "WHERE user_id = ? AND object_id = ?", (user_id, object_id),
+        ).fetchone()
+        return int(row["t"] or 0)
+
+    def listening_totals(self, user_id: str, now: int, retention_seconds: int) -> dict:
+        """Prune expired events, then project one visitor's measured totals."""
+        cutoff = int(now) - max(0, int(retention_seconds))
+        self.conn.execute("DELETE FROM listen_events WHERE created_at < ?", (cutoff,))
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(delta_seconds), 0) AS listened, "
+            "COALESCE(SUM(CASE WHEN kind = 'start' THEN 1 ELSE 0 END), 0) AS starts, "
+            "COALESCE(SUM(CASE WHEN kind = 'end' THEN 1 ELSE 0 END), 0) AS ends, "
+            "COUNT(*) AS samples, COALESCE(MAX(created_at), 0) AS last_at "
+            "FROM listen_events WHERE user_id = ? AND created_at >= ?",
+            (user_id, cutoff),
+        ).fetchone()
+        self.conn.commit()
+        return {
+            "listened_seconds": int(float(row["listened"])),
+            "starts": int(row["starts"]),
+            "ends": int(row["ends"]),
+            "samples": int(row["samples"]),
+            "last_event_at": int(row["last_at"]),
+        }
 
     def portal_stats(self, period: str, available: str) -> dict:
         """Aggregate portal figures per published book: no visitor is identifiable."""

@@ -84,6 +84,17 @@ couleur claire (`theme-color`). Un cœur sur chaque livre (catalogue et page liv
 l'étagère « Mes favoris » ; l'état est privé, supprimé avec le compte, et le clic est annulé côté
 page si le serveur refuse.
 
+## Listes privées depuis les cartes du catalogue
+
+Un bouton « + Liste » est proposé sur chaque carte de livre (catalogue et page livre) pour les
+visiteurs connectés. Il ouvre une boîte de dialogue native (`#playlist-dialog`) listant les listes
+privées du visiteur avec l'état « déjà ajouté » ; le champ libre permet une création rapide. L'ajout
+confirmé s'affiche dans le statut de la dialogue, et une erreur serveur laisse la dialogue ouverte
+avec un bouton « Réessayer » (les champs restent saisis). Parcours couvert par les tests e2e
+`web/e2e/public-playlist-dialog.spec.ts`. Les listes restent privées et sont supprimées avec le
+compte (`listen_playlists` / `listen_playlist_items`). Le bouton et la dialogue ne sont pas rendus
+sur une page anonyme.
+
 ## Marque-pages et reprise depuis un autre appareil
 
 - **Marque-pages** : bouton « + Ici » dans le panneau Chapitres du lecteur (note facultative de 200
@@ -100,8 +111,9 @@ page si le serveur refuse.
 d'ensemble de la console : comptes visiteurs, livres publiés, et pour chaque livre (50 premiers,
 classés par auditeurs) : auditeurs, livres **terminés** (≥ 90 % de la durée), favoris, ouvertures du
 mois. Ce sont des **comptages agrégés** calculés à partir de `listen_progress`, `listen_favorites` et
-`object_usage_monthly` : aucune table de suivi n'a été ajoutée, aucun visiteur, e-mail ou historique
-individuel n'est renvoyé. Les ouvertures comptent les redirections `/m/` et les extraits.
+`object_usage_monthly` : ces comptages n'utilisent pas la table d'événements individuels ajoutée
+en `0028` pour les statistiques du visiteur, et aucun visiteur, e-mail ou historique individuel
+n'est renvoyé. Les ouvertures comptent les redirections `/m/` et les extraits.
 
 ## Recherche, tri et recommandations
 
@@ -279,9 +291,16 @@ revue sans empêcher le traitement des suivants. Le mode `--dry-run` laisse le
 fichier canonique inchangé.
 
 La position est enregistrée via `/api/public/progress` (table `listen_progress`,
-ajoutée par la migration cumulative `0018`, aujourd'hui `0020_audio_chapters`)
-et restaurée à la sélection du livre. Le filtre `?q=` permet de rechercher un
-titre ou un auteur côté serveur.
+ajoutée par la migration cumulative `0018`, aujourd'hui `0028_listen_events`)
+et restaurée à la sélection du livre. Depuis la migration `0028`, chaque échantillon du lecteur
+écrit aussi un événement append-only dans `listen_events` (`start`, `position`, `end`) : l'identifiant
+d'événement est déterministe (même échantillon dans la même minute = un seul événement) et le delta
+est plafonné par le temps réellement écoulé, donc un seek en avant n'est pas compté comme de l'écoute.
+Les événements sont purgés après `AURA_LISTEN_EVENT_RETENTION_DAYS` (365 jours par défaut) et
+anonymisés (`user_id=NULL`) à la suppression du compte. `GET /api/public/stats` conserve
+`estimated_listened_seconds` (ancienne estimation) et ajoute `measured_listened_seconds` ; la page
+`/profil` affiche « Temps écouté mesuré » dès qu'un événement existe. Le filtre `?q=` permet de
+rechercher un titre ou un auteur côté serveur.
 
 Les URL `/m/{slug}` utilisent un TTL dédié (`AURA_PUBLIC_MEDIA_TTL`, 12 h par
 défaut) : le TTL de 15 min des intentions d'upload coupait la lecture d'un livre

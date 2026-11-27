@@ -302,7 +302,10 @@ def profile_page(
         '<section class="profile-card" aria-labelledby="stats-title">',
         '<h2 id="stats-title">Mon écoute</h2>',
         (f'<dl class="stats-grid">'
-         f'<div><dt>Temps écouté estimé</dt><dd>{_duration_text(float(stats.get("estimated_listened_seconds") or 0))}</dd></div>'
+         f'<div><dt>'
+         + ("Temps écouté mesuré" if int(stats.get("listen_events") or 0) > 0
+            else "Temps écouté estimé")
+         + f'</dt><dd>{_duration_text(float(stats.get("measured_listened_seconds") or stats.get("estimated_listened_seconds") or 0))}</dd></div>'
          f'<div><dt>Livres terminés</dt><dd>{int(stats.get("completed") or 0)}</dd></div>'
          f'<div><dt>Favoris</dt><dd>{int(stats.get("favorites") or 0)}</dd></div>'
          f'<div><dt>Marque-pages</dt><dd>{int(stats.get("bookmarks") or 0)}</dd></div>'

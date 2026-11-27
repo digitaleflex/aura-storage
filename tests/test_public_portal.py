@@ -272,6 +272,102 @@ def test_listening_progress_is_saved_for_the_visitor_only():
         globals()["SUBJECT"] = monkeypatch_sub
 
 
+def test_progress_records_measured_events_without_double_counting(monkeypatch):
+    """#320: positions become append-only events, deduplicated per sample."""
+    previous_subject = globals()["SUBJECT"]
+    globals()["SUBJECT"] = f"listen-subject-{uuid.uuid4().hex[:8]}"
+    try:
+        _published_pack()
+        c = _sign_in(TestClient(main.app))
+        item = c.get("/api/public/library").json()["collections"][0]["items"][0]
+        oid = item["id"]
+        csrf = c.get("/api/public/me").json()["csrf_token"]
+        hdr = {"X-CSRF-Token": csrf}
+        # Place the first sample near a minute boundary so the next one crosses
+        # into the next event_id bucket while keeping a realistic ~4 s interval.
+        clock = [(int(main.time.time()) // 60) * 60 + 58]
+        monkeypatch.setattr(main.time, "time", lambda: clock[0])
+
+        first = c.post("/api/public/progress", headers=hdr, json={
+            "object_id": oid, "position_seconds": 10, "kind": "start",
+        })
+        assert first.status_code == 200, first.text
+        clock[0] += 4
+        second = c.post("/api/public/progress", headers=hdr, json={
+            "object_id": oid, "position_seconds": 60, "kind": "position",
+        })
+        assert second.status_code == 200, second.text
+        # A retried sample in the same minute must not add a second event.
+        retry = c.post("/api/public/progress", headers=hdr, json={
+            "object_id": oid, "position_seconds": 60, "kind": "position",
+        })
+        assert retry.status_code == 200, retry.text
+
+        stats = c.get("/api/public/stats").json()
+        assert stats["listen_events"] == 2
+        assert stats["measured_listened_seconds"] == 10
+        assert stats["estimated_listened_seconds"] == 60  # legacy estimate kept
+        assert "Temps écouté mesuré" in c.get("/profil").text
+    finally:
+        globals()["SUBJECT"] = previous_subject
+
+
+def test_listen_events_retention_and_account_deletion_anonymise(monkeypatch):
+    """#320: old events are pruned, deleted visitors keep no identifiable row."""
+    previous_subject = globals()["SUBJECT"]
+    globals()["SUBJECT"] = f"listen-subject-{uuid.uuid4().hex[:8]}"
+    try:
+        _published_pack()
+        c = _sign_in(TestClient(main.app))
+        oid = c.get("/api/public/library").json()["collections"][0]["items"][0]["id"]
+        uid = main.repo.get_session(c.cookies["aura_public_session"])["user_id"]
+        now = int(main.time.time())
+        monkeypatch.setattr(main.settings, "listen_event_retention_days", 1)
+
+        main.repo.record_listen_event(uid, oid, "position", 100, 90, now - 2 * 86400)
+        main.repo.record_listen_event(uid, oid, "position", 200, 70, now - 10)
+        totals = main.repo.listening_totals(uid, now, 86400)
+        assert totals["listened_seconds"] == 70
+        assert catalogue_sql.fetch_one(
+            "SELECT COUNT(*) AS n FROM listen_events WHERE user_id = ?", (uid,)
+        )["n"] == 1
+        # Scope the assertion to this visitor's events: other tests may have
+        # produced events for the same shared sample object.
+        own_events = [
+            row["event_id"] for row in catalogue_sql.fetch_all(
+                "SELECT event_id FROM listen_events WHERE user_id = ?", (uid,)
+            )
+        ]
+        assert len(own_events) == 1
+
+        csrf = c.get("/api/public/me").json()["csrf_token"]
+        assert c.post("/profil/supprimer", data={"csrf_token": csrf},
+                      follow_redirects=False).status_code == 303
+        placeholders = ", ".join("?" for _ in own_events)
+        rows = catalogue_sql.fetch_all(
+            f"SELECT user_id, anonymized_at FROM listen_events "
+            f"WHERE event_id IN ({placeholders})", tuple(own_events)
+        )
+        assert len(rows) == len(own_events)
+        assert all(r["user_id"] is None and r["anonymized_at"] for r in rows)
+        assert main.repo.listening_totals(uid, now, 86400)["listened_seconds"] == 0
+    finally:
+        globals()["SUBJECT"] = previous_subject
+
+
+def test_listen_event_rules_cap_seeks_and_dedupe_samples():
+    from api.listen_events import event_id, listened_delta
+
+    assert event_id("u", "o", "position", 12.4, 100) == event_id("u", "o", "position", 12.9, 119)
+    assert event_id("u", "o", "position", 12.4, 100) != event_id("u", "o", "end", 12.4, 100)
+    assert listened_delta(10, 20, 5) == 10
+    assert listened_delta(10, 5, 5) == 0
+    assert listened_delta(10, 5000, 5) <= 5 * 1.25 + 5
+    # A suspended tab for an hour must not turn a forward seek into an hour of
+    # measured listening (#320).
+    assert listened_delta(10, 5000, 3600) <= 15 * 1.25 + 5
+
+
 def test_chapters_are_exposed_in_the_player_html():
     _published_pack()
     c = _sign_in(TestClient(main.app))

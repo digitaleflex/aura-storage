@@ -371,6 +371,26 @@ CREATE TABLE IF NOT EXISTS listen_progress (
 CREATE INDEX IF NOT EXISTS idx_listen_progress_user
   ON listen_progress(user_id, updated_at);
 
+-- Append-only listening events (#320). `start` / `position` / `end` rows let
+-- the portal compute measured listening time instead of guessing from the
+-- single saved position. `event_id` is deterministic so a repeated player
+-- sample cannot count twice. user_id becomes NULL (anonymized_at is set) when
+-- the visitor deletes their account: aggregates survive, identity does not.
+CREATE TABLE IF NOT EXISTS listen_events (
+  event_id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id),
+  object_id TEXT NOT NULL REFERENCES objects(id),
+  kind TEXT NOT NULL CHECK (kind IN ('start', 'position', 'end')),
+  position_seconds REAL NOT NULL DEFAULT 0,
+  delta_seconds REAL NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  anonymized_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_listen_events_user_time
+  ON listen_events(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_listen_events_object_time
+  ON listen_events(object_id, created_at);
+
 -- Public portal bookmarks: a named position in a book, private to the visitor.
 CREATE TABLE IF NOT EXISTS listen_bookmarks (
   id TEXT PRIMARY KEY,

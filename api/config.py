@@ -298,6 +298,11 @@ class Settings:
         "0", "false", "no", "off")
     # Free preview length for anonymous visitors (MP3 only); 0 disables it.
     public_preview_seconds: int = _int("AURA_PUBLIC_PREVIEW_SECONDS", 60)
+    # Append-only listening events (#320). Events older than this are pruned
+    # when a visitor's stats are projected; the legacy position-based estimate
+    # remains available for comparisons. Anonymised events keep aggregate value
+    # without identifying a deleted account.
+    listen_event_retention_days: int = _int("AURA_LISTEN_EVENT_RETENTION_DAYS", 365)
     # Legacy switch kept for compatibility: it used to gate full-file access.
     # Listening is now always available to signed-in listeners (/m/{slug});
     # use public_download_require_premium for the paid capability.
@@ -361,3 +366,9 @@ if settings.reconcile_interval_s < 30:
     raise RuntimeError("AURA_RECONCILE_INTERVAL_S must be >= 30")
 if settings.transfer_history_retention_days < 1:
     raise RuntimeError("AURA_TRANSFER_HISTORY_RETENTION_DAYS must be >= 1")
+if settings.listen_event_retention_days < 1:
+    raise RuntimeError("AURA_LISTEN_EVENT_RETENTION_DAYS must be >= 1")
+if settings.db_pool_min < 1 or settings.db_pool_max < settings.db_pool_min:
+    raise RuntimeError("AURA_DB_POOL_MIN/MAX must satisfy 1 <= min <= max")
+if settings.db_pool_timeout_s <= 0:
+    raise RuntimeError("AURA_DB_POOL_TIMEOUT must be > 0")
