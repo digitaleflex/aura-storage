@@ -320,4 +320,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        _exit_code = main()
+    finally:
+        repo.close_pool()
+    raise SystemExit(_exit_code)
