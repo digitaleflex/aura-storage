@@ -914,8 +914,8 @@ def catalog_page(
         hero_figure = (
             '<div class="hero-figure"><div class="hero-stack">'
             + "".join(hero_cover_html(i) for i in hero_items)
-            + '<div class="hero-note"><p class="eyebrow">À découvrir</p>'
-              '<p>Un catalogue choisi, à écouter à votre rythme.</p></div></div></div>'
+            + '</div><div class="hero-note"><p class="eyebrow">À découvrir</p>'
+              '<p>Un catalogue choisi, à écouter à votre rythme.</p></div></div>'
         )
 
     facet_nav = category_theme_nav(

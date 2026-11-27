@@ -131,8 +131,8 @@ def landing_page(
         hero_figure = (
             '<div class="hero-figure"><div class="hero-stack">'
             + "".join(hero_cover_html(i) for i in hero_items)
-            + '<div class="hero-note"><p class="eyebrow">Le catalogue</p>'
-              '<p>Un extrait gratuit sur chaque livre.</p></div></div></div>'
+            + '</div><div class="hero-note"><p class="eyebrow">Le catalogue</p>'
+              '<p>Un extrait gratuit sur chaque livre.</p></div></div>'
         )
     parts = [
         page_head("AURA — Bibliothèque de livres audio", description, meta),
