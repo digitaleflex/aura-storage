@@ -1268,6 +1268,24 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
     onError: (err) => fail(err, "Enregistrement du choix impossible."),
   });
 
+  const setEmblematic = useMutation({
+    mutationFn: (input: { objectId: string; emblematic: boolean }) => {
+      if (!csrf) throw new Error("Session expirée.");
+      return api.setObjectEmblematicCover(input.objectId, input.emblematic, csrf);
+    },
+    onMutate: () => setCoverMessage(null),
+    onSuccess: (_updated, input) => {
+      setError(null);
+      setCoverMessage(
+        input.emblematic
+          ? "Vraie couverture activée pour ce livre (hero, meilleures ventes, partages)."
+          : "Jaquette AURA restaurée pour ce livre.",
+      );
+      refreshAdmin();
+    },
+    onError: (err) => fail(err, "Modification du marqueur de couverture impossible."),
+  });
+
   const clearCover = useMutation({
     mutationFn: (objectId: string) => {
       if (!csrf) throw new Error("Session expirée.");
@@ -1391,8 +1409,10 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
         </div>
         <p className="muted">
           Choisissez la couverture qui correspond à chaque livre, puis appliquez
-          les choix validés par lot. Les aperçus sont chargés directement chez le
-          fournisseur : ils ne transistent pas par AURA.
+          les choix validés par lot. La case « Couverture réelle » réserve
+          l'artwork d'origine aux livres emblématiques (hero, meilleures ventes,
+          partages) ; tous les autres gardent la jaquette AURA. Les aperçus sont
+          chargés directement chez le fournisseur : ils ne transistent pas par AURA.
         </p>
         {coverMessage ? (
           <p role="status" className="alert alert-ok">
@@ -1644,6 +1664,20 @@ export function AdminPage({ onlyCovers = false }: AdminPageProps) {
                       </table>
                     </div>
                     <div className="form form-inline">
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(book.emblematic_cover)}
+                          disabled={!canWrite || setEmblematic.isPending}
+                          onChange={(event) =>
+                            setEmblematic.mutate({
+                              objectId: book.object_id,
+                              emblematic: event.target.checked,
+                            })
+                          }
+                        />
+                        <span>Couverture réelle (emblématique)</span>
+                      </label>
                       <button
                         type="button"
                         className="btn"
