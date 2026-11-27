@@ -338,6 +338,85 @@ paths:
         "401": { description: Authentication required }
         "403": { description: Access denied }
         "422": { description: "Malformed folder_id, or an unsupported status/sort/order value" }
+  /api/v1/objects/duplicate-scan:
+    post:
+      summary: Authoritative destination objects for a duplicate preflight
+      tags: [objects]
+      description: >-
+        Read-only preflight for an import batch (objects:read; humans and service
+        identities). The caller sends one fingerprint per file; the API resolves
+        each parentPath through the caller's own folder tree and returns the
+        available objects already filed in that destination. An empty parentPath
+        targets the space root. No duplicate decision is made here: the client
+        compares names, sizes and checksums against these rows. Unresolvable
+        parent paths are reported without a byParent entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 5000
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [parentPath, name, sizeBytes]
+                    properties:
+                      parentPath:
+                        type: string
+                        description: >-
+                          Destination path, normalized like the client tree planner;
+                          an empty string is the space root.
+                      name:
+                        type: string
+                        minLength: 1
+                      sizeBytes:
+                        type: integer
+                        minimum: 0
+                      sha256:
+                        type: [string, "null"]
+                        pattern: "^[0-9a-fA-F]{64}$"
+            examples:
+              batch:
+                summary: Two files going to the same destination
+                value:
+                  items:
+                    - { parentPath: Livres/2026, name: rapport.pdf, sizeBytes: 11, sha256: null }
+      responses:
+        "200":
+          description: >-
+            Available objects per resolved parent, plus normalized parent paths
+            that could not be resolved. A resolved destination with no objects
+            appears as an empty array.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [byParent, unresolved]
+                properties:
+                  byParent:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: object
+                        required: [id, display_name, size_bytes, checksum_sha256]
+                        properties:
+                          id: { $ref: "#/components/schemas/Uuid4" }
+                          display_name: { type: string }
+                          size_bytes: { type: integer, minimum: 0 }
+                          checksum_sha256: { type: [string, "null"] }
+                  unresolved:
+                    type: array
+                    items: { type: string }
+        "401": { description: Authentication required }
+        "403": { description: Not authorised or missing CSRF }
+        "422": { description: "More than 5000 items or an invalid fingerprint" }
   /api/v1/objects/bulk-purge:
     post:
       summary: Purge many objects in one call (objects:purge, human only, master mode)

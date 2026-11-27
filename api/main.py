@@ -4090,6 +4090,144 @@ def list_objects(
     }
 
 
+# ---------------------------------------------------------------------------
+# Authoritative duplicate scan. The browser sends one fingerprint per file it
+# is about to import; the API answers with the *actual* available objects in
+# each destination folder. Matching stays in the client: this route supplies
+# catalogue truth only, and never guesses a folder from a matching leaf name.
+# ---------------------------------------------------------------------------
+_DUPLICATE_SCAN_MAX_ITEMS = 5000
+_DUPLICATE_SCAN_PAGE = 1000
+_DUPLICATE_SCAN_CAP = 20000
+_SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _normalize_parent_path(value: str) -> str:
+    """Exact backend twin of web/src/lib/folderTree.ts::normalizeRelativePath."""
+    return "/".join(
+        part for part in value.replace("\\", "/").split("/")
+        if part not in ("", ".", "..")
+    )
+
+
+class DuplicateScanItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    parentPath: str
+    name: str = Field(min_length=1)
+    sizeBytes: int = Field(ge=0)
+    sha256: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be empty")
+        return value
+
+    @field_validator("sha256")
+    @classmethod
+    def _sha256(cls, value: str | None) -> str | None:
+        if value is not None and not _SHA256_HEX.fullmatch(value):
+            raise ValueError("sha256 must be 64 hexadecimal characters")
+        return value
+
+
+class DuplicateScanIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[DuplicateScanItemIn] = Field(max_length=_DUPLICATE_SCAN_MAX_ITEMS)
+
+
+def _resolve_duplicate_scan_paths(
+    *, owner_id: str, paths: list[str],
+) -> tuple[dict[str, str | None], list[str]]:
+    """Resolve normalized paths to folder ids through one strict parent chain.
+
+    ``repo.list_folders`` is owner-scoped; a child is only looked up under the
+    parent id resolved on the previous step. A missing ancestor therefore puts
+    the whole path in ``unresolved`` instead of guessing from a same-named
+    folder elsewhere in the tree. The empty path (space root) maps to ``None``.
+    """
+    by_parent: dict[str | None, dict[str, str]] = {}
+
+    def children(parent_id: str | None) -> dict[str, str]:
+        if parent_id not in by_parent:
+            by_parent[parent_id] = {
+                row["name"]: row["id"]
+                for row in repo.list_folders(owner_id=owner_id, parent_id=parent_id)
+            }
+        return by_parent[parent_id]
+
+    resolved: dict[str, str | None] = {}
+    unresolved: list[str] = []
+    for path in paths:
+        if not path:
+            resolved[path] = None
+            continue
+        current: str | None = None
+        for part in path.split("/"):
+            found = children(current).get(part)
+            if found is None:
+                break
+            current = found
+        else:
+            resolved[path] = current
+            continue
+        unresolved.append(path)
+    return resolved, unresolved
+
+
+def _duplicate_scan_objects(scope: dict, folder_filter: str) -> list[dict]:
+    """All available objects in one destination, paged with a hard cap."""
+    rows: list[dict] = []
+    for offset in range(0, _DUPLICATE_SCAN_CAP, _DUPLICATE_SCAN_PAGE):
+        page = repo.list_objects(
+            **scope, folder_id=folder_filter, status="available",
+            limit=_DUPLICATE_SCAN_PAGE, offset=offset,
+            sort="created_at", order="asc",
+        )
+        rows.extend(
+            {
+                "id": row["id"],
+                "display_name": row["display_name"],
+                "size_bytes": row["size_bytes"],
+                "checksum_sha256": row["checksum_sha256"],
+            }
+            for row in page
+        )
+        if len(page) < _DUPLICATE_SCAN_PAGE:
+            break
+    return rows
+
+
+@app.post("/api/v1/objects/duplicate-scan")
+def duplicate_scan(
+    body: DuplicateScanIn,
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+):
+    # Normalize exactly like the browser planner, then collapse duplicates: one
+    # authoritative listing per destination path, whatever the item count.
+    paths = list(dict.fromkeys(
+        _normalize_parent_path(item.parentPath) for item in body.items
+    ))
+    resolved, unresolved = _resolve_duplicate_scan_paths(
+        owner_id=principal["id"], paths=paths,
+    )
+    unresolved_set = set(unresolved)
+    scope = _object_scope(principal)
+    by_parent: dict[str, list[dict]] = {}
+    for path in paths:
+        if path in unresolved_set:
+            continue
+        # repo.list_objects reads "" as "folder_id IS NULL"; None would mean
+        # "no folder filter" and leak objects filed elsewhere in the space.
+        by_parent[path] = _duplicate_scan_objects(scope, resolved[path] or "")
+    audit_event("duplicate-scan", principal["id"], "success", {
+        "item_count": len(body.items),
+        "unresolved_count": len(unresolved),
+    })
+    return {"byParent": by_parent, "unresolved": sorted(unresolved)}
+
+
 @app.get("/api/v1/objects/tags")
 def list_object_tags(
     principal: dict = Depends(authorize(OBJECTS_READ)),
