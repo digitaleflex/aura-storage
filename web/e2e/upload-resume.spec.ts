@@ -48,6 +48,9 @@ async function installMocks(page: Page, state: { failBad: boolean; intents: stri
       }
       return route.fulfill({ json: { id, status: "available", size_bytes: 4, checksum_sha256: "abc" } });
     }
+    if (path === "/api/v1/objects/duplicate-scan" && method === "POST") {
+      return route.fulfill({ json: { byParent: {}, unresolved: [] } });
+    }
     return route.fulfill({ status: 404, json: { detail: `unmocked ${method} ${path}` } });
   });
   await page.route("**/fake-s3/**", (route) => route.fulfill({ status: 200, body: "" }));
@@ -58,7 +61,8 @@ test("an interrupted import resumes with only the missing files", async ({ page 
   mkdirSync(dir, { recursive: true });
   const files = ["alpha.txt", "bad.txt"].map((name) => {
     const path = join(dir, name);
-    writeFileSync(path, "data");
+    // Distinct bytes of the same length: identical files would be flagged as batch duplicates.
+    writeFileSync(path, name === "alpha.txt" ? "aaaa" : "bbbb");
     return path;
   });
 

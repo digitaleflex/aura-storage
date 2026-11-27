@@ -93,6 +93,9 @@ async function installMocks(
         },
       });
     }
+    if (path === "/api/v1/objects/duplicate-scan" && method === "POST") {
+      return route.fulfill({ json: { byParent: {}, unresolved: [] } });
+    }
     return route.fulfill({ status: 404, json: { detail: `unmocked ${method} ${path}` } });
   });
   await page.route("**/fake-s3/**", (route) => route.fulfill({ status: 200, body: "" }));

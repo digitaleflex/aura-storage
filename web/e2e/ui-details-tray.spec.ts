@@ -58,6 +58,8 @@ async function mockApi(page: Page, putDelayMs = 0): Promise<string[]> {
           checksum_sha256: "abc", checksum_algorithm: "sha256",
         },
       });
+    } else if (path === "/api/v1/objects/duplicate-scan" && method === "POST") {
+      await route.fulfill({ json: { byParent: {}, unresolved: [] } });
     } else {
       await route.fulfill({ status: 404, json: { detail: "not mocked" } });
     }

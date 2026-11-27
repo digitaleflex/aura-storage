@@ -50,6 +50,9 @@ async function mock(page: Page) {
         },
       });
     }
+    if (path === "/api/v1/objects/duplicate-scan" && method === "POST") {
+      return route.fulfill({ json: { byParent: {}, unresolved: [] } });
+    }
     return route.fulfill({ status: 404, json: { detail: "unmocked" } });
   });
   // Parts stay in flight: the row keeps its "uploading" layout.

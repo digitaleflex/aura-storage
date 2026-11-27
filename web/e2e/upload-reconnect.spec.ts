@@ -73,6 +73,9 @@ async function installMocks(page: Page, link: Link): Promise<void> {
     if (/\/api\/v1\/objects\/[^/]+\/abort$/.test(path) && method === "POST") {
       return route.fulfill({ json: { id: "obj", status: "aborted", aborted: true } });
     }
+    if (path === "/api/v1/objects/duplicate-scan" && method === "POST") {
+      return route.fulfill({ json: { byParent: {}, unresolved: [] } });
+    }
     return route.fulfill({ status: 404, json: { detail: `unmocked ${method} ${path}` } });
   });
 
