@@ -44,6 +44,7 @@ test("admin can open the console and sees the write controls", async ({ page }) 
   await expect(
     page.getByRole("button", { name: "Créer l'identité" }),
   ).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "objects:purge" })).toHaveCount(0);
   await page.getByRole("tab", { name: "Applications et espaces" }).click();
   await expect(
     page.getByRole("button", { name: "Créer l'espace" }),

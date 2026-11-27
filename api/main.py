@@ -5,6 +5,7 @@ and S3 through short-lived presigned URLs. The API never stores a browser sessio
 token in the response body and never puts S3 credentials in the frontend.
 """
 import hashlib
+import json
 import logging
 import os
 import re
@@ -24,7 +25,11 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import authz, folder_shares, google_oauth, ids, magic_link, netinfo, public_book, public_ui, shares
+from . import (
+    authz, folder_shares, google_oauth, ids, listen_events, magic_link, netinfo,
+    public_book, public_classification, public_facets, public_series, public_ui,
+    shares,
+)
 from .audit import (
     audit_event,
     audit_path,
@@ -54,7 +59,7 @@ from .authz import (
     require_public,
 )
 from .config import settings
-from . import media_worker
+from . import audio_classification_worker, media_worker
 from .identity import fingerprint, format_token, new_secret
 from .lifecycle import (
     purge_object,
@@ -230,6 +235,11 @@ log = logging.getLogger("uvicorn.error")
 @app.on_event("startup")
 def _start_media_worker() -> None:
     media_worker.start()
+
+
+@app.on_event("startup")
+def _start_audio_classification_worker() -> None:
+    audio_classification_worker.start()
 
 
 @app.on_event("startup")
@@ -480,8 +490,7 @@ _ensure_bootstrap_admin()
 _DUMMY_PASS_HASH = hash_password(new_token(32))
 
 
-def _as_dict(row) -> dict:
-    return dict(row) if not isinstance(row, dict) else row
+from .normalizers import as_dict as _as_dict
 
 
 def _canonical_id(value: str, field: str) -> str:
@@ -716,6 +725,16 @@ class TagsIn(BaseModel):
         return _normalize_tags(value)
 
 
+class AudioClassificationEnqueueIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    object_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class AudioClassificationReviewIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["accept", "reject"]
+
+
 class SubtitleIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     subtitle_object_id: Uuid4 | None = None
@@ -754,10 +773,17 @@ class CollectionItemsIn(BaseModel):
 
 
 class ProgressIn(BaseModel):
-    """Playback position posted by the public player (CSRF-protected)."""
+    """Playback position posted by the public player (CSRF-protected).
+
+    ``kind`` is advisory: the server decides ``start`` for a first sample or a
+    backward seek, and only accepts ``end`` from the player. ``client_event_id``
+    is an optional deduplication key for retried samples (#320).
+    """
     model_config = ConfigDict(extra="forbid")
     object_id: Uuid4
     position_seconds: float = Field(ge=0, le=864000)
+    kind: Literal["start", "position", "end"] = "position"
+    client_event_id: str = Field(default="", max_length=120)
 
 
 class BookmarkIn(BaseModel):
@@ -828,13 +854,7 @@ class FolderShareIn(BaseModel):
     max_uses: int | None = Field(default=None, ge=1, le=1_000_000)
 
 
-class ObjectPatchIn(BaseModel):
-    # Object reassignment into a logical folder (#62). `model_fields_set`
-    # distinguishes "not sent" from an explicit null (which unfiles the object
-    # back to the root level).
-    model_config = ConfigDict(extra="forbid")
-    folder_id: Uuid4 | None = None
-
+from .routes_objects_mutations import ObjectPatchIn  # noqa: E402
 
 class ApplicationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1892,7 +1912,7 @@ def _portal_csp() -> str:
     s3 = f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
     media = f"'self' {s3}".strip()
     return (
-        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; "
         "style-src-attr 'unsafe-inline'; "
         f"img-src {media}; media-src {media}; connect-src {media}; "
         "manifest-src 'self'; worker-src 'self'; "
@@ -2036,8 +2056,26 @@ def _split_audio_name(display_name: str) -> tuple[str, str]:
     stem = display_name.rsplit(".", 1)[0] if "." in display_name else display_name
     if " - " in stem:
         author, title = stem.split(" - ", 1)
-        return author.strip(), title.strip()
-    return "", stem.strip()
+        author, title = author.strip(), title.strip()
+        # `06 - Titre` is an episode number, not an author.
+        if author.isdigit():
+            return "", title
+        return author, title
+    # `001_Titre` and `06 - Titre` fall back to a clean, unnumbered title.
+    stem = re.sub(r"^\d{1,3}\s*[-_]\s*", "", stem)
+    return "", stem.replace("_", " ").strip()
+
+
+def _folder_names(folder_ids: list[str]) -> dict:
+    ids = list({fid for fid in folder_ids if fid})
+    if not ids:
+        return {}
+    mark = "?" if settings.db_backend == "sqlite" else "%s"
+    placeholders = ",".join(mark for _ in ids)
+    rows = repo.conn.execute(
+        f"SELECT id, name FROM folders WHERE id IN ({placeholders})", tuple(ids),
+    ).fetchall()
+    return {r["id"]: r["name"] for r in rows}
 
 
 def _library_items(col: dict, only_published: bool = False) -> list:
@@ -2051,8 +2089,9 @@ def _library_items(col: dict, only_published: bool = False) -> list:
         if only_published and not published:
             continue
         rows.append((pos, row, published))
-    # One query for every chapter of the pack instead of one per book.
+    # One query for every chapter and folder name instead of one per book.
     chapters = repo.get_audio_chapters_map([row["id"] for _, row, _ in rows])
+    folder_names = _folder_names([row.get("folder_id") for _, row, _ in rows])
     items = []
     for pos, row, published in rows:
         author, title = _split_audio_name(row["display_name"])
@@ -2062,6 +2101,9 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             "display_name": row["display_name"],
             "title": title,
             "author": author,
+            "series": public_series.series_for_folder(
+                folder_names.get(row.get("folder_id"), "")
+            ),
             "created_at": row.get("created_at"),
             "content_type": row["content_type"],
             "size_bytes": row["size_bytes"],
@@ -2069,6 +2111,7 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             "chapters": chapters.get(row["id"], []),
             "published_slug": row.get("public_slug"),
             "cover_url": f"/covers/{row['id']}.jpg" if row.get("cover_key") else None,
+            "emblematic_cover": bool(row.get("emblematic_cover")),
             "url": f"/m/{row['public_slug']}" if published else None,
             "subtitle_url": (
                 f"/m/{row['public_slug']}/subtitles.vtt"
@@ -2076,6 +2119,22 @@ def _library_items(col: dict, only_published: bool = False) -> list:
             ),
         })
     return items
+
+
+def _attach_public_facets(collections: list) -> list:
+    """Attach only approved public facets, loading tags in bounded batches."""
+    object_ids = list({
+        item["id"] for col in collections for item in col.get("items", [])
+    })
+    tags_by_object: dict[str, list[str]] = {}
+    for start in range(0, len(object_ids), 500):
+        tags_by_object.update(repo.list_tags_for_objects(object_ids[start:start + 500]))
+    for col in collections:
+        col["items"] = [
+            public_facets.enrich_public_item(item, tags_by_object.get(item["id"], []))
+            for item in col.get("items", [])
+        ]
+    return collections
 
 
 def _public_catalog() -> list:
@@ -2089,7 +2148,7 @@ def _public_catalog() -> list:
             "updated_at": col["updated_at"],
             "items": _library_items(col, only_published=True),
         })
-    return collections
+    return _attach_public_facets(collections)
 
 
 def _public_collections(principal: dict) -> list:
@@ -2108,23 +2167,47 @@ def _public_collections(principal: dict) -> list:
 def _filter_collections(
     collections: list, query: str, author: str, sort: str = "",
     *, min_seconds: int | None = None, max_seconds: int | None = None,
+    collection: str = "", category: str = "", theme: str = "",
+    language: str = "", media_format: str = "",
 ) -> list:
-    """Search (accent-insensitive, every word must match), author filter and sort."""
-    words = public_ui.fold(query).split()
+    """Search and combine public facets with AND semantics."""
+    # Query and indexed text share the same canonicalisation, so « polar »
+    # finds a book tagged « thriller » while unknown words keep plain matching.
+    from . import portal_search
+    words = portal_search.search_tokens(query)
+    raw_format = (media_format or "").strip().lower()
+    wanted_format = public_facets.normalize_format(raw_format, unknown=raw_format) if raw_format else ""
+    wanted_author = public_ui.fold(author) if author else ""
     out = []
     for col in collections:
-        items = col["items"]
-        if words:
-            items = [
-                i for i in items
-                if all(w in public_ui.fold(f'{i["display_name"]} {i["author"]}') for w in words)
-            ]
-        if author:
-            items = [i for i in items if i["author"] == author]
-        if min_seconds is not None:
-            items = [i for i in items if float(i.get("duration_seconds") or 0) >= min_seconds]
-        if max_seconds is not None:
-            items = [i for i in items if 0 < float(i.get("duration_seconds") or 0) <= max_seconds]
+        if collection and col.get("slug") != collection:
+            continue
+        prepared = []
+        for item in col["items"]:
+            facets = public_facets.item_facets(item)
+            searchable = portal_search.canonicalize(
+                f'{item.get("display_name", "")} {item.get("author", "")} '
+                f'{item.get("title", "")} {" ".join(facets["categories"])} '
+                f'{" ".join(facets["themes"])}'
+            )
+            prepared.append((item, facets, searchable, float(item.get("duration_seconds") or 0)))
+        items = [
+            item for item, facets, searchable, duration in prepared
+            if (not words or all(word in searchable for word in words))
+            and (not wanted_author or public_ui.fold(item.get("author", "")) == wanted_author)
+            and (not category or category in facets["categories"])
+            and (not theme or theme in facets["themes"])
+            and (not language or language in facets["languages"])
+            and (not wanted_format or facets["format"] == wanted_format)
+            and (
+                (min_seconds is None and max_seconds is None)
+                or (
+                    duration > 0
+                    and (min_seconds is None or duration >= min_seconds)
+                    and (max_seconds is None or duration <= max_seconds)
+                )
+            )
+        ]
         if items:
             out.append({**col, "items": public_ui.sort_items(items, sort)})
     return out
@@ -2135,8 +2218,54 @@ def _sort_param(request: Request) -> str:
     return value if value in {v for _, v in public_ui.SORTS} else ""
 
 
+def _catalog_filter_state(request: Request, intent) -> tuple[dict, dict, str]:
+    """Parse explicit URL facets; explicit duration bounds override NLP ones."""
+    params = request.query_params
+    raw_format = (params.get("format") or "").strip().lower()
+    active = {
+        "collection": (params.get("collection") or "").strip()[:120],
+        "category": (params.get("categorie") or "").strip().lower()[:64],
+        "theme": (params.get("theme") or "").strip().lower()[:64],
+        "language": (params.get("langue") or "").strip().lower()[:16],
+        "format": public_facets.normalize_format(raw_format, unknown=raw_format)[:32],
+        "duration_min": (params.get("duree_min") or "").strip()[:6],
+        "duration_max": (params.get("duree_max") or "").strip()[:6],
+    }
+    error = ""
+    try:
+        explicit_min = public_facets.minutes_to_seconds(active["duration_min"])
+        explicit_max = public_facets.minutes_to_seconds(active["duration_max"])
+        min_seconds = explicit_min if active["duration_min"] else intent.min_seconds
+        max_seconds = explicit_max if active["duration_max"] else intent.max_seconds
+        # The form works in whole minutes. Round NLP-derived bounds down before
+        # filtering so submitting the form later cannot silently change results.
+        if not active["duration_min"] and min_seconds is not None:
+            min_seconds = (min_seconds // 60) * 60
+        if not active["duration_max"] and max_seconds is not None:
+            max_seconds = (max_seconds // 60) * 60
+        if min_seconds is not None and max_seconds is not None and min_seconds > max_seconds:
+            raise ValueError("duration")
+    except ValueError:
+        min_seconds = max_seconds = None
+        error = "Durée invalide : indiquez des minutes entières et une borne minimale inférieure à la maximale."
+    if not active["duration_min"] and min_seconds is not None:
+        active["duration_min"] = str(min_seconds // 60)
+    if not active["duration_max"] and max_seconds is not None:
+        active["duration_max"] = str(max_seconds // 60)
+    return active, {"min_seconds": min_seconds, "max_seconds": max_seconds}, error
+
+
 def _catalog_authors(collections: list) -> list:
     return sorted({i["author"] for col in collections for i in col["items"] if i["author"]})
+
+
+def _catalog_author_counts(collections: list) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in public_facets.unique_items(collections):
+        author = str(item.get("author") or "").strip()
+        if author:
+            counts[author] = counts.get(author, 0) + 1
+    return counts
 
 
 @app.get("/api/public/library")
@@ -2161,9 +2290,29 @@ def public_progress(
     row = _as_dict(row) if row is not None else None
     if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
         raise HTTPException(status_code=404, detail="object not found")
-    repo.save_progress(
-        principal["id"], oid, body.position_seconds, int(time.time())
+    now = int(time.time())
+    uid = principal["id"]
+    previous_position = repo.get_progress_map(uid, [oid]).get(oid, 0.0)
+    last_event_at = repo.last_listen_event_at(uid, oid)
+    # A first sample, or a backward seek (a new playback session), starts a
+    # session; the player may explicitly close one with ``end``. A plain sample
+    # counts at most the elapsed wall-clock time, so seeking forward cannot be
+    # reported as listening (#320).
+    if last_event_at <= 0 or body.position_seconds < float(previous_position):
+        kind = "start"
+    elif body.kind == "end":
+        kind = "end"
+    else:
+        kind = "position"
+    elapsed = max(0, now - last_event_at) if last_event_at else 0
+    delta = (
+        listen_events.listened_delta(float(previous_position), body.position_seconds, elapsed)
+        if kind != "start" else 0.0
     )
+    repo.record_listen_event(
+        uid, oid, kind, body.position_seconds, delta, now, body.client_event_id
+    )
+    repo.save_progress(uid, oid, body.position_seconds, now)
     return {"object_id": oid, "position_seconds": body.position_seconds}
 
 
@@ -2271,10 +2420,12 @@ async def public_playlist_delete_form(
 
 
 def _public_listening_stats(principal: dict) -> dict:
-    """Lightweight listener stats, derived from data the portal already stores.
+    """Listener stats: a measured projection plus the legacy estimate.
 
-    Only the latest position is kept per book, so the listened time is an
-    estimate from saved positions, never a claim of exact playback duration.
+    ``estimated_listened_seconds`` still sums the latest saved positions for
+    compatibility, but it is only an estimate. ``measured_listened_seconds``
+    sums the capped deltas of the append-only events (#320) within the retention
+    window; the profile labels whichever figure it displays accordingly.
     """
     collections = _public_collections(principal)
     items = [item for col in collections for item in col["items"]]
@@ -2303,9 +2454,15 @@ def _public_listening_stats(principal: dict) -> dict:
                 "started": len(started),
                 "total": len(col_items),
             })
+    totals = repo.listening_totals(
+        principal["id"], int(time.time()),
+        settings.listen_event_retention_days * 86400,
+    )
     return {
         "items_in_library": len(items),
         "estimated_listened_seconds": int(listened),
+        "measured_listened_seconds": totals["listened_seconds"],
+        "listen_events": totals["samples"],
         "completed": completed,
         "favorites": len(favourites),
         "bookmarks": bookmarks,
@@ -2423,9 +2580,7 @@ def public_portal(request: Request):
         query = intent.q
         author = author or intent.author
         sort = sort or intent.sort
-    duration_filters = dict(
-        min_seconds=intent.min_seconds, max_seconds=intent.max_seconds,
-    )
+    active_facets, duration_filters, filter_error = _catalog_filter_state(request, intent)
     if principal is None:
         if not settings.public_browse:
             return HTMLResponse(
@@ -2433,21 +2588,55 @@ def public_portal(request: Request):
                 headers=_public_profile_headers(),
             )
         catalog = _public_catalog()
+        facet_options = public_facets.catalog_facets(catalog)
+        filtered = _filter_collections(
+            catalog, query, author, sort, **duration_filters,
+            collection=active_facets["collection"],
+            category=active_facets["category"],
+            theme=active_facets["theme"],
+            language=active_facets["language"],
+            media_format=active_facets["format"],
+        )
+        filters_active = bool(
+            query or author or sort or filter_error or
+            duration_filters["min_seconds"] is not None or
+            duration_filters["max_seconds"] is not None or
+            any(active_facets[key] for key in (
+                "collection", "category", "theme", "language", "format",
+                "duration_min", "duration_max",
+            ))
+        )
+        try:
+            page = max(1, int(request.query_params.get("page", "1")))
+        except ValueError:
+            page = 1
         return HTMLResponse(
             public_book.landing_page(
-                _filter_collections(catalog, query, author, sort, **duration_filters),
-                query=query, search_note=search_note,
+                filtered, query=query, search_note=search_note,
                 authors=_catalog_authors(catalog), active_author=author, sort=sort,
+                author_counts=_catalog_author_counts(catalog),
+                facet_options=facet_options, active_facets=active_facets,
+                filter_error=filter_error,
                 base_url=_public_base_url(), with_email=magic_link.enabled(settings),
+                page=page,
             ),
-            headers=_public_profile_headers(indexable=not (query or author or sort)),
+            headers=_public_profile_headers(indexable=not filters_active),
         )
-    view = request.query_params.get("vue", "liste").strip().lower()
+    view = request.query_params.get("vue", "grille").strip().lower()
     if view not in ("liste", "grille", "immersif"):
         view = "liste"
     collections = _public_collections(principal)
     authors = _catalog_authors(collections)
-    collections = _filter_collections(collections, query, author, sort, **duration_filters)
+    author_counts = _catalog_author_counts(collections)
+    facet_options = public_facets.catalog_facets(collections)
+    collections = _filter_collections(
+        collections, query, author, sort, **duration_filters,
+        collection=active_facets["collection"],
+        category=active_facets["category"],
+        theme=active_facets["theme"],
+        language=active_facets["language"],
+        media_format=active_facets["format"],
+    )
     try:
         page = max(1, int(request.query_params.get("page", "1")))
     except ValueError:
@@ -2460,6 +2649,9 @@ def public_portal(request: Request):
         public_ui.catalog_page(
             principal, collections, query=query, view=view, search_note=search_note,
             authors=authors, active_author=author, sort=sort,
+            author_counts=author_counts,
+            facet_options=facet_options, active_facets=active_facets,
+            filter_error=filter_error,
             premium=str(principal.get("plan") or "free").lower() == "premium",
             page=page, recommend_fn=recommend_fn,
         ),
@@ -2513,6 +2705,7 @@ def _find_public_book(oid: str):
     for col_row in repo.get_published_collections_for_object(oid):
         col = _as_dict(col_row)
         items = _library_items(col, only_published=True)
+        items = _attach_public_facets([{"items": items}])[0]["items"]
         item = next((i for i in items if i["id"] == oid), None)
         if item is not None:
             return item, {
@@ -3897,6 +4090,144 @@ def list_objects(
     }
 
 
+# ---------------------------------------------------------------------------
+# Authoritative duplicate scan. The browser sends one fingerprint per file it
+# is about to import; the API answers with the *actual* available objects in
+# each destination folder. Matching stays in the client: this route supplies
+# catalogue truth only, and never guesses a folder from a matching leaf name.
+# ---------------------------------------------------------------------------
+_DUPLICATE_SCAN_MAX_ITEMS = 5000
+_DUPLICATE_SCAN_PAGE = 1000
+_DUPLICATE_SCAN_CAP = 20000
+_SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _normalize_parent_path(value: str) -> str:
+    """Exact backend twin of web/src/lib/folderTree.ts::normalizeRelativePath."""
+    return "/".join(
+        part for part in value.replace("\\", "/").split("/")
+        if part not in ("", ".", "..")
+    )
+
+
+class DuplicateScanItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    parentPath: str
+    name: str = Field(min_length=1)
+    sizeBytes: int = Field(ge=0)
+    sha256: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be empty")
+        return value
+
+    @field_validator("sha256")
+    @classmethod
+    def _sha256(cls, value: str | None) -> str | None:
+        if value is not None and not _SHA256_HEX.fullmatch(value):
+            raise ValueError("sha256 must be 64 hexadecimal characters")
+        return value
+
+
+class DuplicateScanIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[DuplicateScanItemIn] = Field(max_length=_DUPLICATE_SCAN_MAX_ITEMS)
+
+
+def _resolve_duplicate_scan_paths(
+    *, owner_id: str, paths: list[str],
+) -> tuple[dict[str, str | None], list[str]]:
+    """Resolve normalized paths to folder ids through one strict parent chain.
+
+    ``repo.list_folders`` is owner-scoped; a child is only looked up under the
+    parent id resolved on the previous step. A missing ancestor therefore puts
+    the whole path in ``unresolved`` instead of guessing from a same-named
+    folder elsewhere in the tree. The empty path (space root) maps to ``None``.
+    """
+    by_parent: dict[str | None, dict[str, str]] = {}
+
+    def children(parent_id: str | None) -> dict[str, str]:
+        if parent_id not in by_parent:
+            by_parent[parent_id] = {
+                row["name"]: row["id"]
+                for row in repo.list_folders(owner_id=owner_id, parent_id=parent_id)
+            }
+        return by_parent[parent_id]
+
+    resolved: dict[str, str | None] = {}
+    unresolved: list[str] = []
+    for path in paths:
+        if not path:
+            resolved[path] = None
+            continue
+        current: str | None = None
+        for part in path.split("/"):
+            found = children(current).get(part)
+            if found is None:
+                break
+            current = found
+        else:
+            resolved[path] = current
+            continue
+        unresolved.append(path)
+    return resolved, unresolved
+
+
+def _duplicate_scan_objects(scope: dict, folder_filter: str) -> list[dict]:
+    """All available objects in one destination, paged with a hard cap."""
+    rows: list[dict] = []
+    for offset in range(0, _DUPLICATE_SCAN_CAP, _DUPLICATE_SCAN_PAGE):
+        page = repo.list_objects(
+            **scope, folder_id=folder_filter, status="available",
+            limit=_DUPLICATE_SCAN_PAGE, offset=offset,
+            sort="created_at", order="asc",
+        )
+        rows.extend(
+            {
+                "id": row["id"],
+                "display_name": row["display_name"],
+                "size_bytes": row["size_bytes"],
+                "checksum_sha256": row["checksum_sha256"],
+            }
+            for row in page
+        )
+        if len(page) < _DUPLICATE_SCAN_PAGE:
+            break
+    return rows
+
+
+@app.post("/api/v1/objects/duplicate-scan")
+def duplicate_scan(
+    body: DuplicateScanIn,
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+):
+    # Normalize exactly like the browser planner, then collapse duplicates: one
+    # authoritative listing per destination path, whatever the item count.
+    paths = list(dict.fromkeys(
+        _normalize_parent_path(item.parentPath) for item in body.items
+    ))
+    resolved, unresolved = _resolve_duplicate_scan_paths(
+        owner_id=principal["id"], paths=paths,
+    )
+    unresolved_set = set(unresolved)
+    scope = _object_scope(principal)
+    by_parent: dict[str, list[dict]] = {}
+    for path in paths:
+        if path in unresolved_set:
+            continue
+        # repo.list_objects reads "" as "folder_id IS NULL"; None would mean
+        # "no folder filter" and leak objects filed elsewhere in the space.
+        by_parent[path] = _duplicate_scan_objects(scope, resolved[path] or "")
+    audit_event("duplicate-scan", principal["id"], "success", {
+        "item_count": len(body.items),
+        "unresolved_count": len(unresolved),
+    })
+    return {"byParent": by_parent, "unresolved": sorted(unresolved)}
+
+
 @app.get("/api/v1/objects/tags")
 def list_object_tags(
     principal: dict = Depends(authorize(OBJECTS_READ)),
@@ -3911,6 +4242,138 @@ def list_object_tags(
     """
     rows = repo.list_tag_counts(**_object_scope(principal), limit=limit)
     return {"items": [{"tag": row["tag"], "count": row["n"]} for row in rows]}
+
+
+def _audio_job_public(row: dict) -> dict:
+    return {
+        "id": row.get("id"),
+        "object_id": row.get("object_id"),
+        "space_id": row.get("space_id"),
+        "status": row.get("status"),
+        "attempts": row.get("attempts", 0),
+        "provider": row.get("provider"),
+        "model": row.get("model"),
+        "confidence": row.get("confidence"),
+        "suggested_category": row.get("suggested_category"),
+        "suggested_themes": json.loads(row["suggested_themes"]) if row.get("suggested_themes") else [],
+        "suggested_language": row.get("suggested_language"),
+        "suggested_folder": row.get("suggested_folder"),
+        "quality": json.loads(row["quality_json"]) if row.get("quality_json") else None,
+        "transcript_excerpt": row.get("transcript_excerpt"),
+        "reason": row.get("reason"),
+        "error": row.get("error"),
+        "reviewed_by": row.get("reviewed_by"),
+        "reviewed_at": row.get("reviewed_at"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "object": {
+            "display_name": row.get("display_name"),
+            "content_type": row.get("content_type"),
+            "size_bytes": row.get("size_bytes"),
+        } if row.get("display_name") is not None else None,
+    }
+
+
+@app.get("/api/v1/audio-classifications")
+def list_audio_classifications(
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    rows = repo.list_audio_classification_jobs(
+        principal["space_id"], status=status, limit=limit, offset=offset
+    )
+    return {"items": [_audio_job_public(r) for r in rows]}
+
+
+@app.get("/api/v1/audio-classifications/{jid}")
+def get_audio_classification(jid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
+    jid = _canonical_id(jid, "job id")
+    row = repo.get_audio_classification_job(jid)
+    if row is None or row.get("space_id") != principal["space_id"]:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _audio_job_public(row)
+
+
+@app.post("/api/v1/audio-classifications/enqueue")
+def enqueue_audio_classifications(
+    body: AudioClassificationEnqueueIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    if not settings.ai_classification_enabled:
+        raise HTTPException(status_code=409, detail="audio classification is disabled")
+    enqueued = []
+    skipped = []
+    for raw in body.object_ids:
+        try:
+            oid = _canonical_id(raw, "object id")
+        except Exception:
+            skipped.append({"id": raw, "reason": "invalid_id"})
+            continue
+        row = repo.get_object(oid, **_object_scope(principal))
+        if row is None:
+            skipped.append({"id": oid, "reason": "not_found"})
+            continue
+        row = _as_dict(row)
+        if row.get("status") != "available":
+            skipped.append({"id": oid, "reason": "not_available"})
+            continue
+        if not str(row.get("content_type") or "").startswith("audio/"):
+            skipped.append({"id": oid, "reason": "not_audio"})
+            continue
+        jid = repo.enqueue_audio_classification(ids.new_id(), oid, principal["space_id"])
+        enqueued.append({"object_id": oid, "job_id": jid})
+    if enqueued:
+        audit_event("audio_classification.enqueue", principal.get("sub") or principal.get("id"), "ok",
+                    {"count": len(enqueued), "space_id": principal.get("space_id")})
+    return {"enqueued": enqueued, "skipped": skipped}
+
+
+@app.post("/api/v1/audio-classifications/{jid}/review")
+def review_audio_classification(
+    jid: str,
+    body: AudioClassificationReviewIn,
+    principal: dict = Depends(authorize(OBJECTS_WRITE)),
+):
+    jid = _canonical_id(jid, "job id")
+    row = repo.get_audio_classification_job(jid)
+    if row is None or row.get("space_id") != principal["space_id"]:
+        raise HTTPException(status_code=404, detail="job not found")
+    status = "accepted" if body.action == "accept" else "rejected"
+    ok = repo.review_audio_classification_job(jid, status=status, reviewed_by=principal.get("sub") or principal.get("id"))
+    if not ok:
+        raise HTTPException(status_code=409, detail="job cannot be reviewed")
+    # On accept, apply suggested tags as metadata (no move).
+    if status == "accepted":
+        oid = row.get("object_id")
+        obj = repo.get_object_global(oid) if oid else None
+        if obj is not None:
+            tags = []
+            cat = row.get("suggested_category")
+            if cat:
+                tags.append(f"categorie-{cat}")
+            try:
+                themes = json.loads(row.get("suggested_themes") or "[]")
+            except Exception:
+                themes = []
+            for t in themes[:3]:
+                t = str(t).strip().lower().replace(" ", "-")
+                if t:
+                    tags.append(f"theme-{t}")
+            lang = row.get("suggested_language")
+            if lang:
+                tags.append(f"langue-{lang}")
+            existing = repo.get_object_tags(oid)
+            merged = list(existing)
+            for t in tags:
+                if t not in merged:
+                    merged.append(t)
+            repo.set_object_tags(oid, merged[:20])
+    fresh = repo.get_audio_classification_job(jid)
+    audit_event("audio_classification.review", principal.get("sub") or principal.get("id"), "ok",
+                {"job_id": jid, "action": body.action, "space_id": principal.get("space_id")})
+    return _audio_job_public(fresh or row)
 
 
 @app.get("/api/v1/objects/{oid}")
@@ -3975,95 +4438,6 @@ def get_transfer(tid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
         # 404 (not 403) so a caller cannot probe another owner's/space's ids.
         raise HTTPException(status_code=404, detail="transfer not found")
     return _transfer_public(row)
-
-
-@app.get("/api/v1/objects/{oid}/analytics")
-def object_analytics(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
-    """This month's views/downloads/share opens and lifetime totals."""
-    oid = _canonical_id(oid, "object id")
-    if repo.get_object(oid, **_object_scope(principal)) is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    period = _usage_period()
-    month = repo.get_object_usage(oid, period) or {}
-    totals = repo.get_object_usage_totals(oid)
-    return {
-        "object_id": oid, "period": period,
-        "month": {
-            "views": int(month.get("views") or 0),
-            "downloads": int(month.get("downloads") or 0),
-            "share_opens": int(month.get("share_opens") or 0),
-            "egress_bytes": int(month.get("egress_bytes") or 0),
-        },
-        "totals": {
-            "views": int(totals.get("views") or 0),
-            "downloads": int(totals.get("downloads") or 0),
-            "share_opens": int(totals.get("share_opens") or 0),
-            "egress_bytes": int(totals.get("egress_bytes") or 0),
-        },
-        "last_access_at": totals.get("last_access_at"),
-    }
-
-
-@app.delete("/api/v1/objects/{oid}")
-def soft_delete_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(row)
-    if row["status"] not in ("available", "pending"):
-        raise HTTPException(status_code=409, detail="object not deletable")
-    if row["status"] == "pending":
-        # Parts of an unfinished multipart upload are not an object yet: free them.
-        _abort_multipart_session(row)
-    repo.set_status(oid, "deleted")
-    audit_event("delete", principal["id"], "success", {"object_id": oid})
-    return {"id": oid, "status": "deleted"}
-
-
-@app.post("/api/v1/objects/{oid}/restore")
-def restore_object(oid: str, principal: dict = Depends(authorize(OBJECTS_DELETE))):
-    # Undo a soft delete (trash). Same scope as the delete it reverses. Only a
-    # committed object can come back: a pending intent that was soft-deleted
-    # never received its bytes (size_bytes stays -1), so it is not restorable.
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(row)
-    if row["status"] != DELETED:
-        raise HTTPException(status_code=409, detail="object is not in the trash")
-    if row["size_bytes"] < 0:
-        raise HTTPException(status_code=409, detail="object was never uploaded")
-    repo.set_status(oid, AVAILABLE)
-    audit_event("restore", principal["id"], "success", {"object_id": oid})
-    return _object_public(repo.get_object(oid, **_object_scope(principal)))
-
-
-@app.patch("/api/v1/objects/{oid}")
-def update_object(
-    oid: str, body: ObjectPatchIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    # File an object into a logical folder (or unfile it). Folders are owned by a
-    # human user (#61), so this metadata move is a human-only capability; a
-    # service identity has no folder to target and is refused by `human=True`.
-    oid = _canonical_id(oid, "object id")
-    if "folder_id" not in body.model_fields_set:
-        raise HTTPException(status_code=422, detail="no fields to update")
-    if repo.get_object(oid, **_object_scope(principal)) is None:
-        # 404 (not 403) so the caller cannot probe for objects outside its scope.
-        raise HTTPException(status_code=404, detail="object not found")
-    if body.folder_id is not None and repo.get_folder(
-        body.folder_id, owner_id=principal["id"]
-    ) is None:
-        # The target folder is owner-scoped: a foreign/unknown id is a 404.
-        raise HTTPException(status_code=404, detail="folder not found")
-    repo.set_object_folder(oid, folder_id=body.folder_id)
-    audit_event("object.move", principal["id"], "success", {
-        "object_id": oid, "folder_id": body.folder_id,
-    })
-    return _object_public(repo.get_object(oid, **_object_scope(principal)))
 
 
 @app.post("/api/v1/objects/{oid}/share")
@@ -4459,6 +4833,28 @@ def object_thumbnail(oid: str, principal: dict = Depends(authorize(OBJECTS_READ)
     })
 
 
+def _classify_published_audio(row: dict) -> bool:
+    """Add missing public facets to a newly published audio object."""
+    if not str(row.get("content_type") or "").lower().startswith("audio/"):
+        return False
+    folder_name = ""
+    if row.get("folder_id"):
+        mark = "?" if settings.db_backend == "sqlite" else "%s"
+        folder = repo.conn.execute(
+            f"SELECT name FROM folders WHERE id = {mark}", (row["folder_id"],),
+        ).fetchone()
+        folder_name = str(folder["name"]) if folder else ""
+    classification = public_classification.classify_public_item(
+        row["display_name"], folder_name,
+    )
+    existing = repo.get_object_tags(row["id"])
+    merged = public_classification.merge_public_tags(existing, classification)
+    if set(merged) == set(existing):
+        return False
+    repo.set_object_tags(row["id"], merged)
+    return True
+
+
 @app.put("/api/v1/objects/{oid}/publication")
 def set_object_publication(
     oid: str, body: PublicationIn,
@@ -4484,9 +4880,10 @@ def set_object_publication(
             raise HTTPException(status_code=409, detail="slug already in use")
     published_at = int(time.time()) if body.published else None
     repo.set_object_publication(oid, body.slug, published_at)
+    classified = _classify_published_audio(row) if body.published else False
     audit_event("object.publish" if body.published else "object.unpublish",
                 principal["id"], "success",
-                {"object_id": oid, "slug": body.slug})
+                {"object_id": oid, "slug": body.slug, "classified": classified})
     return _object_public(repo.get_object(oid, **_object_scope(principal)))
 
 
@@ -5353,8 +5750,1075 @@ def revoke_folder_share(
     return {"id": sid, "revoked": True, "revoked_at": now}
 
 
-from .routes_admin import router as admin_router  # noqa: E402
-app.include_router(admin_router)
+# ---------------------------------------------------------------------------
+# Administration (#35, #36, #38): require the admin:* capabilities.
+# ---------------------------------------------------------------------------
+class CoverSelectionIn(BaseModel):
+    object_id: str = Field(min_length=1, max_length=64)
+    candidate_url: str | None = Field(default=None, max_length=2048)
+    model_config = ConfigDict(extra="forbid")
+
+
+class CoverSearchIn(BaseModel):
+    object_id: str = Field(min_length=1, max_length=64)
+    isbn: str | None = Field(default=None, max_length=32)
+    limit: int = Field(default=12, ge=1, le=20)
+    model_config = ConfigDict(extra="forbid")
+
+
+class CoverApplyIn(BaseModel):
+    dry_run: bool = True
+    confirm: bool = False
+    limit: int = Field(default=50, ge=1, le=200)
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmblematicCoverIn(BaseModel):
+    emblematic: bool
+    model_config = ConfigDict(extra="forbid")
+
+
+@app.get("/api/v1/admin/cover-candidates")
+def admin_cover_candidates(principal: dict = Depends(authorize(ADMIN_READ))):
+    """Operator review of external cover candidates. Never publishes anything."""
+    from . import cover_review as cr
+
+    review = cr.public_review(cr.read_review())
+    # Display policy, not review state: read the curation flag from the
+    # catalogue so the admin can toggle real artwork per book.
+    for book in review["books"]:
+        obj = repo.get_object_unscoped(str(book.get("object_id") or ""))
+        book["emblematic_cover"] = bool(obj and obj.get("emblematic_cover"))
+    return review
+
+
+@app.put("/api/v1/admin/objects/{oid}/emblematic-cover")
+def admin_set_emblematic_cover(
+    oid: str, body: EmblematicCoverIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Curate whether one book may show its real cover art on the portal."""
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    repo.set_object_emblematic(oid, body.emblematic)
+    audit_event("admin.cover.emblematic", principal["id"], "success", {
+        "object_id": oid,
+        "emblematic": bool(body.emblematic),
+    })
+    return {"id": oid, "emblematic_cover": bool(body.emblematic)}
+
+
+@app.post("/api/v1/admin/covers/select")
+def admin_select_cover(body: CoverSelectionIn,
+                       principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Record or clear one operator decision. The cover is not published yet."""
+    from . import cover_review as cr
+
+    path = cr.review_path()
+    with cr.review_lock(path):
+        review = cr.read_review(path, strict=True)
+        try:
+            book = cr.select_cover(review, body.object_id, body.candidate_url)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="book not in review")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        cr.write_review(review, path)
+    audit_event("admin.cover.select", principal["id"], "success", {
+        "object_id": body.object_id,
+        "chosen": bool(body.candidate_url),
+    })
+    return {"book": cr.public_review({"books": [book]})["books"][0]}
+
+
+@app.post("/api/v1/admin/covers/search")
+def admin_search_cover(body: CoverSearchIn,
+                       principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Search new candidates for one book; ISBN first, then title + author."""
+    from . import cover_enrichment as ce
+    from . import cover_review as cr
+
+    isbn = (body.isbn or "").strip()
+    if isbn and not re.fullmatch(r"[0-9Xx\- ]{8,20}", isbn):
+        raise HTTPException(status_code=400, detail="invalid ISBN")
+    path = cr.review_path()
+    with cr.review_lock(path):
+        review = cr.read_review(path, strict=True)
+        book = cr.find_book(review, body.object_id)
+        if book is None:
+            raise HTTPException(status_code=404, detail="book not in review")
+        title, author = _split_audio_name(
+            str(book.get("display_name") or book.get("title") or "")
+        )
+        found = ce.search_candidates(title, author, isbn, body.limit)
+        chosen_url = book.get("chosen_url")
+        if chosen_url and not any(candidate.get("url") == chosen_url for candidate in found):
+            previous = next(
+                (candidate for candidate in (book.get("candidates") or [])
+                 if candidate.get("url") == chosen_url),
+                None,
+            )
+            if previous:
+                found.append(previous)
+        merged = []
+        seen_urls = set()
+        for candidate in found + list(book.get("candidates") or []):
+            url = candidate.get("url")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            merged.append(candidate)
+        book["candidates"] = merged
+        book["last_search_at"] = int(time.time())
+        book["search_isbn"] = isbn or None
+        book["search_title"] = title
+        book["search_author"] = author
+        cr.write_review(review, path)
+        updated = cr.public_review({"books": [book]})["books"][0]
+    audit_event("admin.cover.search", principal["id"], "success", {
+        "object_id": body.object_id, "isbn": bool(isbn),
+        "candidates": len(updated["candidates"]),
+    })
+    return {"book": updated}
+
+
+@app.post("/api/v1/admin/covers/apply")
+def admin_apply_covers(body: CoverApplyIn,
+                       principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Publish the explicitly selected candidates, bounded and resumable."""
+    from . import cover_review as cr
+
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="confirm must be true")
+    path = cr.review_path()
+    with cr.review_lock(path):
+        review = cr.read_review(path, strict=True)
+        out = cr.apply_selected(
+            review, dry_run=body.dry_run, limit=body.limit,
+        )
+        if not body.dry_run:
+            cr.write_review(review, path)
+    audit_event("admin.cover.apply", principal["id"], "success", out)
+    return out
+
+
+@app.post("/api/v1/admin/reconcile")
+def reconcile(limit: int = 500,
+              principal: dict = Depends(authorize(ADMIN_WRITE))):
+    # Bounded sweep (#87): at most `limit` stale intents per run so a huge
+    # backlog cannot monopolize the API; repeat until expired is 0.
+    limit = max(1, min(limit, 5000))
+    # Derive the staleness window from the same settings that govern intent
+    # death (commit is accepted until intent_ttl + intent_grace_s), plus the
+    # same safety margin as the automatic sweep. Without the extra margin a
+    # commit starting at the last second could be deleted under itself.
+    expire_after_s = (
+        settings.intent_ttl + settings.intent_grace_s + settings.reconcile_extra_grace_s
+    )
+    out = reconcile_pending(
+        repo, s3ops, expire_after_s=expire_after_s, limit=limit,
+        multipart_expired_before=int(time.time()) - settings.intent_grace_s,
+    )
+    # Finish purges a crashed process left half-done (two-phase purge).
+    from .lifecycle import resume_purges
+    out.update(resume_purges(repo, s3ops, limit=limit))
+    # Retention window for the append-only transfer journal (#246).
+    out.update(purge_transfer_history(
+        repo, retention_days=settings.transfer_history_retention_days,
+        limit=limit,
+    ))
+    audit_event("admin.reconcile", principal["id"], "success", out)
+    return out
+
+
+@app.post("/api/v1/admin/reconcile-terminal")
+def reconcile_terminal_route(limit: int = 500,
+                            principal: dict = Depends(authorize(ADMIN_WRITE))):
+    limit = max(1, min(limit, 5000))
+    out = reconcile_terminal(repo, s3ops, limit=limit)
+    audit_event("admin.reconcile_terminal", principal["id"], "success", out)
+    return out
+
+
+@app.post("/api/v1/admin/reconcile-reverse")
+def reconcile_reverse_route(dry_run: bool = True,
+                           principal: dict = Depends(authorize(ADMIN_WRITE))):
+    out = reconcile_reverse(repo, s3ops, dry_run=dry_run)
+    audit_event("admin.reconcile_reverse", principal["id"], "success", out)
+    return out
+
+
+@app.get("/api/v1/admin/integrity")
+def integrity_report(limit: int = 100,
+                     principal: dict = Depends(authorize(ADMIN_READ))):
+    """Periodic scrub results: counts per result and the objects at fault.
+
+    ``mismatch`` means the stored bytes no longer match the SHA-256 verified at
+    import; ``missing`` means the storage lost the object. Both call for a
+    restore from backup; nothing is changed automatically.
+    """
+    limit = max(1, min(limit, 500))
+    summary = repo.integrity_summary()
+    problems = [_as_dict(r) for r in repo.list_integrity_problems(limit=limit)]
+    return {
+        "interval_days": settings.scrub_interval_days,
+        "results": summary,
+        "problems": problems,
+    }
+
+
+@app.post("/api/v1/admin/integrity/scrub")
+def integrity_scrub_now(principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Run one bounded scrub pass now (same byte budget as the periodic one)."""
+    from .scrubber import scrub_run
+    out = scrub_run(repo, s3ops, settings, audit=audit_event)
+    audit_event("admin.scrub", principal["id"], "success", out)
+    return out
+
+
+@app.post("/api/v1/admin/objects/{oid}/reverify")
+def reverify_object(oid: str, principal: dict = Depends(authorize(ADMIN_WRITE))):
+    """Re-hash one published object and leave ``suspect``/``failed`` if it matches.
+
+    A single divergent HEAD used to freeze an object forever: no route could
+    restore it. The operator re-reads the bytes from storage (never trusting a
+    cached copy), compares the SHA-256 with the catalogue and either publishes
+    it again or leaves it ``suspect`` with an explicit 409.
+    """
+    oid = _canonical_id(oid, "object id")
+    row = repo.get_object(oid, **_object_scope(principal))
+    if row is None:
+        raise HTTPException(status_code=404, detail="object not found")
+    row = _as_dict(row)
+    if row["status"] not in ("available", "suspect", "failed"):
+        raise HTTPException(status_code=409, detail="object is not published")
+    max_bytes = settings.max_object_bytes
+    if row.get("multipart_part_bytes"):
+        max_bytes = max(max_bytes, settings.multipart_max_object_bytes)
+    try:
+        head = s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
+        body = s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
+        total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes)
+    except ObjectTooLarge:
+        raise HTTPException(status_code=413, detail="object exceeds the configured cap")
+    except Exception:
+        audit_event("admin.reverify", principal["id"], "storage_failure",
+                    {"object_id": oid})
+        raise HTTPException(status_code=502, detail="storage unavailable")
+
+    expected = (row.get("checksum_sha256") or "").lower()
+    size_ok = int(head.get("ContentLength", -1)) == total
+    if not size_ok or (expected and digest != expected):
+        repo.set_status(oid, "suspect", allowed_from=("available", "suspect", "failed"))
+        audit_event("admin.reverify", principal["id"], "mismatch", {
+            "object_id": oid, "size_bytes": total,
+        })
+        return JSONResponse(status_code=409, content={
+            "id": oid, "status": "suspect", "reason": "checksum_mismatch",
+            "size_bytes": total, "checksum_sha256": digest,
+        })
+    repo.mark_reverified(oid, total, digest)
+    audit_event("admin.reverify", principal["id"], "success", {"object_id": oid})
+    return {"id": oid, "status": "available", "size_bytes": total,
+            "checksum_sha256": digest}
+
+
+@app.get("/api/v1/admin/orphans")
+def list_orphan_candidates(limit: int = 100,
+                           principal: dict = Depends(authorize(ADMIN_READ))):
+    """Read-only orphan candidates (#87): `available` rows whose bytes are
+    missing at storage. Candidates only — nothing is ever deleted on this
+    signal alone; a transient outage also produces candidates, so an operator
+    confirms before any destructive action. Bounded scan, oldest first.
+    """
+    limit = max(1, min(limit, 1000))
+    checked = 0
+    candidates = []
+    for row in repo.list_available(limit=limit):
+        row = _as_dict(row)
+        checked += 1
+        try:
+            s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
+        except Exception:
+            candidates.append({
+                "id": row["id"], "display_name": row["display_name"],
+                "space_id": row["space_id"],
+                "application_id": row["application_id"],
+                "size_bytes": row["size_bytes"],
+                "updated_at": row["updated_at"],
+            })
+    return {"checked": checked, "candidates": candidates,
+            "checked_at": int(time.time())}
+
+
+@app.get("/api/v1/admin/storage-orphans")
+def storage_orphans(
+    bucket: str | None = Query(default=None, max_length=63),
+    start_after: str | None = Query(default=None, max_length=1024),
+    max_keys: int = 5000,
+    principal: dict = Depends(authorize(ADMIN_READ)),
+):
+    """Read-only: storage bytes the catalogue does not account for (#87).
+
+    Bounded per call (``max_keys`` per bucket) and resumable with the returned
+    ``next_start_after``. Only registered buckets are scanned.
+    """
+    from .storage_reconcile import scan_bucket, scan_multipart
+    max_keys = max(1, min(max_keys, 50_000))
+    names = [b["name"] for b in repo.list_all_buckets()]
+    if bucket is not None:
+        if bucket not in names:
+            raise HTTPException(status_code=404, detail="bucket not registered")
+        names = [bucket]
+    out = []
+    for name in names:
+        try:
+            report = scan_bucket(repo, s3ops, name, grace_s=settings.orphan_grace_s,
+                                 max_keys=max_keys, start_after=start_after)
+            report["stale_uploads"] = scan_multipart(
+                repo, s3ops, name, grace_s=settings.orphan_grace_s,
+            )
+        except Exception:
+            out.append({"bucket": name, "error": "storage unavailable"})
+            continue
+        out.append(report)
+    return {"grace_seconds": settings.orphan_grace_s, "buckets": out,
+            "checked_at": int(time.time())}
+
+
+class OrphanUploadIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(min_length=1, max_length=1024)
+    upload_id: str = Field(min_length=1, max_length=1024)
+
+
+class OrphanCleanupIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    bucket: str = Field(min_length=1, max_length=63)
+    keys: list[str] = Field(default_factory=list, max_length=100)
+    uploads: list[OrphanUploadIn] = Field(default_factory=list, max_length=100)
+
+
+@app.post("/api/v1/admin/storage-orphans/cleanup")
+def storage_orphans_cleanup(
+    body: OrphanCleanupIn, principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Destructive, explicit: remove listed orphan keys / abort listed uploads.
+
+    Each item is re-checked just before acting (still unaccounted for, older
+    than the grace period, inside the AURA key prefix); anything else is
+    skipped with a reason. At most 100 keys and 100 uploads per call.
+    """
+    from .storage_reconcile import remove_orphans
+    if body.bucket not in {b["name"] for b in repo.list_all_buckets()}:
+        raise HTTPException(status_code=404, detail="bucket not registered")
+    out = remove_orphans(
+        repo, s3ops, body.bucket, body.keys,
+        [u.model_dump() for u in body.uploads], grace_s=settings.orphan_grace_s,
+    )
+    audit_event("admin.storage-orphans.cleanup", principal["id"], "success", {
+        "bucket": body.bucket, "removed": len(out["removed"]),
+        "aborted_uploads": len(out["aborted_uploads"]), "skipped": len(out["skipped"]),
+    })
+    return out
+
+
+@app.get("/api/v1/admin/stats")
+def admin_stats(principal: dict = Depends(authorize(ADMIN_READ))):
+    return repo.stats()
+
+
+# ---------------------------------------------------------------------------
+# Observability (M07): audit search, usage, supervision. Reads require
+# admin:read; retention pruning requires admin:write. Every value returned is
+# measured live from the catalogue, the audit file or the OS — see
+# docs/OBSERVABILITY.md for what is (and is not) available.
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/admin/audit")
+def search_audit(
+    since: int | None = Query(default=None, ge=0),
+    until: int | None = Query(default=None, ge=0),
+    actor: str | None = Query(default=None, max_length=200),
+    action: str | None = Query(default=None, max_length=100),
+    result: str | None = Query(default=None, max_length=50),
+    space_id: str | None = None,
+    application_id: str | None = None,
+    request_id: str | None = Query(default=None, max_length=128),
+    limit: int = 100,
+    offset: int = 0,
+    principal: dict = Depends(authorize(ADMIN_READ)),
+):
+    # Search the append-only audit log newest-first. `total` counts matches
+    # inside the scanned tail window; `truncated` warns that older history
+    # exists beyond it. A missing log file is an empty history, never an
+    # error. Pagination: limit is clamped to 1..500, offset counts matches.
+    if space_id is not None:
+        space_id = _canonical_id(space_id, "space id")
+    if application_id is not None:
+        application_id = _canonical_id(application_id, "application id")
+    if since is not None and until is not None and since > until:
+        raise HTTPException(
+            status_code=422, detail="since must not exceed until"
+        )
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    out = query_audit_log(
+        since=since, until=until, actor=actor or None, action=action or None,
+        result=result or None, space_id=space_id,
+        application_id=application_id, request_id=request_id or None,
+        limit=limit, offset=offset,
+        max_scan_lines=settings.audit_max_scan_lines,
+    )
+    return {
+        **out, "retention_days": settings.audit_retention_days,
+        "queried_at": int(time.time()),
+    }
+
+
+@app.post("/api/v1/admin/audit/prune")
+def prune_audit(principal: dict = Depends(authorize(ADMIN_WRITE))):
+    # Enforce the retention window: drop lines older than
+    # AURA_AUDIT_RETENTION_DAYS. Lines without a valid timestamp are kept,
+    # so audit data is never deleted silently.
+    try:
+        out = prune_audit_log(retention_days=settings.audit_retention_days)
+    except OSError:
+        raise HTTPException(status_code=503, detail="audit log unavailable")
+    audit_event("admin.audit.prune", principal["id"], "success", out)
+    return out
+
+
+@app.get("/api/v1/admin/portal-stats")
+def admin_portal_stats(principal: dict = Depends(authorize(ADMIN_READ))):
+    """What the public portal is used for: per-book listeners, completions, favourites.
+
+    Counts only, computed from the listening-progress and favourites tables; no
+    visitor, e-mail or listening history is returned or stored for this purpose.
+    A book is "completed" once a visitor reached 90 % of its duration.
+    """
+    period = _usage_period()
+    raw = repo.portal_stats(period, AVAILABLE)
+    books = []
+    for row in raw["books"]:
+        author, title = _split_audio_name(row["display_name"])
+        listeners, completed = int(row["listeners"]), int(row["completed"])
+        books.append({
+            "id": row["id"], "title": title or row["display_name"], "author": author or "",
+            "listeners": listeners, "completed": completed,
+            "completion_rate": round(completed / listeners, 3) if listeners else 0.0,
+            "favorites": int(row["favorites"]), "views_month": int(row["views_month"]),
+        })
+    books.sort(key=lambda b: (-b["listeners"], -b["favorites"], -b["views_month"], b["title"].lower()))
+    return {
+        "measured_at": int(time.time()), "period": period,
+        "totals": {
+            "accounts": int(raw["accounts"]), "published_books": len(books),
+            "listeners": sum(b["listeners"] for b in books),
+            "completed": sum(b["completed"] for b in books),
+            "favorites": sum(b["favorites"] for b in books),
+            "views_month": sum(b["views_month"] for b in books),
+        },
+        "books": books[:50],
+    }
+
+
+@app.get("/api/v1/admin/usage")
+def admin_usage(
+    space_id: str | None = None,
+    principal: dict = Depends(authorize(ADMIN_READ)),
+):
+    # Real consumption from the catalogue (M07): verified bytes are
+    # `available` objects only; pending intents carry no committed bytes.
+    # `measured_at` is the live query time (freshness), `limits` the
+    # configured technical ceilings. No bandwidth or capacity figures exist
+    # offline — they are documented as unavailable, never invented.
+    if space_id is not None:
+        space_id = _canonical_id(space_id, "space id")
+        space = repo.get_space(space_id)
+        if space is None:
+            raise HTTPException(status_code=404, detail="space not found")
+        spaces = [space]
+    else:
+        spaces = repo.list_spaces()
+    applications = {a["id"]: a for a in repo.list_applications()}
+    items = []
+    totals_by_status: dict[str, int] = {}
+    total_bytes = 0
+    total_available = 0
+    total_pending = 0
+    period = _usage_period()
+    total_egress = 0
+    for space in spaces:
+        space = _as_dict(space)
+        usage = repo.space_usage(space["id"])
+        for status, count in usage["objects_by_status"].items():
+            totals_by_status[status] = totals_by_status.get(status, 0) + count
+        total_bytes += usage["stored_bytes"]
+        total_available += usage["available_count"]
+        total_pending += usage["pending_count"]
+        month = _space_month_usage(space["id"], period)
+        total_egress += month["egress_bytes"]
+        application = applications.get(space["application_id"])
+        items.append({
+            "space_id": space["id"], "space_name": space["name"],
+            "environment": space["environment"],
+            "application_id": space["application_id"],
+            "application_name": application["name"] if application else None,
+            **usage,
+            # Monthly counters are estimates from issued intents/redemptions
+            # (the API never proxies bytes). Quotas are null when unset.
+            "month": month,
+            "quota": _space_quota(space["id"]),
+        })
+    return {
+        "measured_at": int(time.time()),
+        "period": period,
+        "limits": {
+            # Multipart lifts the declarable ceiling to its own cap; reporting
+            # the single-PUT limit here would make the client guard reject
+            # files the API would accept.
+            "max_object_bytes": _upload_ceiling(),
+            "max_pending_intents": settings.max_pending_intents,
+            "intent_ttl": settings.intent_ttl,
+            "allow_empty_objects": settings.allow_empty_objects,
+        },
+        # Capacity guard (null when AURA_STORAGE_CAPACITY_BYTES is not set).
+        "capacity": _capacity(),
+        "totals": {
+            "objects_by_status": totals_by_status,
+            "available_count": total_available,
+            "pending_count": total_pending,
+            "stored_bytes": total_bytes,
+            "egress_bytes_month": total_egress,
+        },
+        "spaces": items,
+    }
+
+
+@app.get("/api/v1/admin/health")
+def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
+    """Supervision snapshot (M07): process, database, storage, local disk.
+
+    Always 200 with per-component statuses (`ok`/`down`); the top-level
+    status is `degraded` when any dependency fails. The storage check proves
+    S3 reachability, not a full upload/download round-trip — that proof is
+    the live S3 smoke test, unavailable offline.
+    """
+    checked_at = int(time.time())
+    components: dict[str, dict] = {
+        "api": {
+            "status": "ok", "uptime_s": checked_at - _BOOT_TIME,
+            "version": app.version,
+        },
+    }
+    start = time.monotonic()
+    try:
+        repo.ping()
+        components["database"] = {
+            "status": "ok",
+            "latency_ms": int((time.monotonic() - start) * 1000),
+        }
+    except Exception:
+        components["database"] = {"status": "down", "error": "unreachable"}
+    start = time.monotonic()
+    try:
+        s3probe.list_buckets()
+        components["storage"] = {
+            "status": "ok",
+            "latency_ms": int((time.monotonic() - start) * 1000),
+            "note": "S3 reachable; not a full upload/download round-trip",
+        }
+    except Exception:
+        components["storage"] = {"status": "down", "error": "unreachable"}
+    try:
+        disk = shutil.disk_usage(audit_path())
+        components["disk"] = {
+            "status": "ok", "total_bytes": disk.total,
+            "used_bytes": disk.used, "free_bytes": disk.free,
+            "note": "local process volume; not the object-store capacity",
+        }
+    except OSError:
+        components["disk"] = {"status": "down", "error": "unreadable"}
+    # The automatic reconciliation sweep (#144): its last counters show that it
+    # runs without an operator. Never fatal for the service: a failed sweep is
+    # reported, the next one retries.
+    from .reconciler import last_sweep
+    sweep = last_sweep()
+    components["reconcile"] = {
+        "status": "ok",
+        "enabled": settings.reconcile_enabled,
+        "interval_s": settings.reconcile_interval_s,
+        "last_sweep": sweep,
+        "note": None if sweep else "no sweep yet",
+    }
+    errors, scanned = recent_error_events(
+        window_s=settings.audit_error_window_s, limit=5,
+        max_scan_lines=settings.audit_error_scan_lines,
+    )
+    degraded = any(c.get("status") != "ok" for c in components.values())
+    return {
+        "status": "degraded" if degraded else "ok",
+        "checked_at": checked_at,
+        "components": components,
+        "recent_errors": {
+            "window_s": settings.audit_error_window_s,
+            "events": errors, "scanned": scanned,
+        },
+        "note": (
+            "Degraded storage means uploads/downloads will fail; full "
+            "data-plane proof requires the live S3 smoke test."
+        ),
+    }
+
+
+@app.post("/api/v1/admin/applications")
+def create_application(body: ApplicationIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
+    if repo.get_application_by_name(body.name) is not None:
+        raise HTTPException(status_code=409, detail="application already exists")
+    aid = repo.create_application(body.name)
+    audit_event("admin.application.create", principal["id"], "success", {"application_id": aid})
+    return _application_public(repo.get_application(aid))
+
+
+@app.get("/api/v1/admin/applications")
+def list_applications(principal: dict = Depends(authorize(ADMIN_READ))):
+    return {"items": [_application_public(a) for a in repo.list_applications()]}
+
+
+@app.get("/api/v1/admin/applications/{aid}")
+def get_application(aid: str, principal: dict = Depends(authorize(ADMIN_READ))):
+    aid = _canonical_id(aid, "application id")
+    row = repo.get_application(aid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="application not found")
+    # The stable identifier is returned verbatim; it is never derived from name.
+    out = _application_public(row)
+    out["space_count"] = repo.count_spaces_for_application(aid)
+    return out
+
+
+@app.patch("/api/v1/admin/applications/{aid}")
+def update_application(
+    aid: str, body: ApplicationPatchIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    aid = _canonical_id(aid, "application id")
+    row = repo.get_application(aid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="application not found")
+    fields = body.model_fields_set
+    if not fields:
+        raise HTTPException(status_code=422, detail="no fields to update")
+    if "name" in fields and body.name is None:
+        raise HTTPException(status_code=422, detail="name cannot be null")
+    if "status" in fields and body.status is None:
+        raise HTTPException(status_code=422, detail="status cannot be null")
+    if "name" in fields and body.name != row["name"]:
+        if repo.application_name_exists(body.name, exclude_id=aid):
+            raise HTTPException(status_code=409, detail="application name already exists")
+    repo.update_application(
+        aid,
+        name=body.name if "name" in fields else None,
+        status=body.status if "status" in fields else None,
+    )
+    audit_event("admin.application.update", principal["id"], "success",
+                {"application_id": aid})
+    out = _application_public(repo.get_application(aid))
+    out["space_count"] = repo.count_spaces_for_application(aid)
+    return out
+
+
+def _space_detail(sid: str) -> dict:
+    """Space detail with its application, buckets and attachment counts."""
+    row = repo.get_space(sid)
+    out = _space_public(row)
+    application = repo.get_application(row["application_id"])
+    out["application_name"] = application["name"] if application else None
+    out["buckets"] = [_bucket_public(b) for b in repo.list_buckets(sid)]
+    out["counts"] = repo.space_counts(sid)
+    return out
+
+
+@app.post("/api/v1/admin/spaces")
+def create_space(body: SpaceIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
+    application = repo.get_application(body.application_id)
+    if application is None:
+        raise HTTPException(status_code=404, detail="application not found")
+    if application["status"] != "active":
+        # A space may only be attached to an allowed (active) application.
+        raise HTTPException(status_code=409, detail="application is not active")
+    if repo.space_exists(body.application_id, body.name, body.environment):
+        # The unique (application_id, name, environment) is enforced up front so a
+        # duplicate is a 409, never a database integrity error.
+        raise HTTPException(status_code=409, detail="space already exists")
+    bucket = body.default_bucket or f"aura-{body.name}-{body.environment}"
+    if not is_valid_bucket_name(bucket):
+        # Refuse up front rather than register a bucket name S3 will reject (#41).
+        raise HTTPException(status_code=422, detail="invalid bucket name")
+    if repo.get_bucket_by_name(bucket) is not None:
+        raise HTTPException(status_code=409, detail="bucket name already in use")
+    sid = repo.create_space(body.application_id, body.name, body.environment)
+    repo.create_bucket(sid, bucket, is_default=True)
+    audit_event("admin.space.create", principal["id"], "success", {"space_id": sid})
+    return {**_space_detail(sid), "bucket": bucket}
+
+
+@app.get("/api/v1/admin/spaces")
+def list_spaces(principal: dict = Depends(authorize(ADMIN_READ))):
+    return {"items": [_space_public(s) for s in repo.list_spaces()]}
+
+
+@app.get("/api/v1/admin/spaces/{sid}")
+def get_space(sid: str, principal: dict = Depends(authorize(ADMIN_READ))):
+    sid = _canonical_id(sid, "space id")
+    if repo.get_space(sid) is None:
+        raise HTTPException(status_code=404, detail="space not found")
+    return _space_detail(sid)
+
+
+@app.patch("/api/v1/admin/spaces/{sid}")
+def update_space(
+    sid: str, body: SpacePatchIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    sid = _canonical_id(sid, "space id")
+    row = repo.get_space(sid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="space not found")
+    fields = body.model_fields_set
+    if not fields:
+        raise HTTPException(status_code=422, detail="no fields to update")
+    if "name" in fields and body.name is None:
+        raise HTTPException(status_code=422, detail="name cannot be null")
+    if "environment" in fields and body.environment is None:
+        raise HTTPException(status_code=422, detail="environment cannot be null")
+    if "status" in fields and body.status is None:
+        raise HTTPException(status_code=422, detail="status cannot be null")
+    new_name = body.name if "name" in fields else row["name"]
+    new_environment = (
+        body.environment if "environment" in fields else row["environment"]
+    )
+    # `application_id` is immutable (it is not an editable field), so uniqueness
+    # is only ever re-checked inside the same application.
+    if (new_name, new_environment) != (row["name"], row["environment"]):
+        if repo.space_exists(
+            row["application_id"], new_name, new_environment, exclude_id=sid
+        ):
+            raise HTTPException(status_code=409, detail="space already exists")
+    repo.update_space(
+        sid,
+        name=new_name if "name" in fields else None,
+        environment=new_environment if "environment" in fields else None,
+        status=body.status if "status" in fields else None,
+    )
+    audit_event("admin.space.update", principal["id"], "success", {"space_id": sid})
+    return _space_detail(sid)
+
+
+@app.put("/api/v1/admin/spaces/{sid}/quotas")
+def set_space_quotas(
+    sid: str, body: SpaceQuotasIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Replace the monthly quotas of a space. Null clears a ceiling."""
+    sid = _canonical_id(sid, "space id")
+    if repo.get_space(sid) is None:
+        raise HTTPException(status_code=404, detail="space not found")
+    repo.set_space_quotas(
+        sid, body.storage_bytes, body.egress_bytes_monthly, principal["id"]
+    )
+    audit_event("admin.space.quotas", principal["id"], "success", {
+        "space_id": sid,
+        "storage_bytes": body.storage_bytes,
+        "egress_bytes_monthly": body.egress_bytes_monthly,
+    })
+    return {"space_id": sid, **_space_quota(sid)}
+
+
+@app.post("/api/v1/admin/spaces/{sid}/buckets")
+def create_space_bucket(
+    sid: str, body: BucketIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    # Register an extra bucket for a space. The bucket name is validated against
+    # the S3 rules and must be globally unique; a bucket is never made the default
+    # here (that is an explicit, separate action) and never deleted (#M04).
+    sid = _canonical_id(sid, "space id")
+    if repo.get_space(sid) is None:
+        raise HTTPException(status_code=404, detail="space not found")
+    if not is_valid_bucket_name(body.name):
+        raise HTTPException(status_code=422, detail="invalid bucket name")
+    if repo.get_bucket_by_name(body.name) is not None:
+        raise HTTPException(status_code=409, detail="bucket name already in use")
+    bid = repo.create_bucket(sid, body.name, is_default=False)
+    audit_event("admin.bucket.create", principal["id"], "success",
+                {"bucket_id": bid, "space_id": sid})
+    return _bucket_public(repo.get_bucket(bid))
+
+
+@app.get("/api/v1/admin/buckets")
+def list_buckets(principal: dict = Depends(authorize(ADMIN_READ))):
+    # Every registered bucket with its space/application attachment. The payload
+    # has no S3 credential field: only the bucket name and its owner are exposed.
+    spaces = {s["id"]: s for s in repo.list_spaces()}
+    applications = {a["id"]: a for a in repo.list_applications()}
+    items = []
+    for bucket in repo.list_all_buckets():
+        space = spaces.get(bucket["space_id"])
+        application = applications.get(space["application_id"]) if space else None
+        items.append({
+            **_bucket_public(bucket),
+            "space_name": space["name"] if space else None,
+            "environment": space["environment"] if space else None,
+            "application_id": space["application_id"] if space else None,
+            "application_name": application["name"] if application else None,
+        })
+    return {"items": items}
+
+
+@app.patch("/api/v1/admin/buckets/{bid}")
+def update_bucket(
+    bid: str, body: BucketPatchIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    # Toggle the default flag. Setting a bucket default clears the flag on the
+    # other buckets of the same space, so exactly one default is possible; the
+    # existing objects keep their own bucket locator, so the change is reversible.
+    bid = _canonical_id(bid, "bucket id")
+    bucket = repo.get_bucket(bid)
+    if bucket is None:
+        raise HTTPException(status_code=404, detail="bucket not found")
+    repo.set_default_bucket(bucket["space_id"], bid, is_default=body.is_default)
+    audit_event("admin.bucket.default", principal["id"], "success", {
+        "bucket_id": bid, "space_id": bucket["space_id"],
+        "is_default": body.is_default,
+    })
+    return _bucket_public(repo.get_bucket(bid))
+
+
+def _create_service_identity(
+    principal: dict, space_id: str, name: str, scopes_in: list[str],
+    ttl_seconds: int | None,
+) -> dict:
+    """Validate and persist a data-plane identity; returns its one-time token.
+
+    Shared by the identity route and the partner-site route so both enforce the
+    same rules (active space, known scopes, service scopes only).
+    """
+    space = repo.get_space(space_id)
+    if space is None:
+        raise HTTPException(status_code=404, detail="space not found")
+    if space.get("status") not in (None, "active"):
+        # No new identity may be minted for a disabled space (#M04).
+        raise HTTPException(status_code=409, detail="space is not active")
+    scopes = set(scopes_in)
+    unknown = scopes - ALL_SCOPES
+    if unknown:
+        raise HTTPException(status_code=422, detail="unknown scopes requested")
+    forbidden = scopes - SERVICE_SCOPES
+    if forbidden:
+        # Machine identities are data-plane only: administration stays with a
+        # human operator/admin session (see docs/AUTHORIZATION-MATRIX.md).
+        raise HTTPException(
+            status_code=422, detail="scopes not allowed for service identities"
+        )
+    if not scopes:
+        raise HTTPException(status_code=422, detail="at least one scope is required")
+    identity_id = repo.new_id()
+    secret = new_secret()
+    expires_at = int(time.time()) + ttl_seconds if ttl_seconds else None
+    repo.create_identity(
+        identity_id, space["application_id"], space_id, name,
+        fingerprint(secret), ",".join(sorted(scopes)), expires_at,
+    )
+    audit_event("admin.identity.create", principal["id"], "success",
+                {"identity_id": identity_id, "space_id": space_id})
+    return {
+        "id": identity_id, "name": name, "space_id": space_id,
+        "application_id": space["application_id"], "scopes": sorted(scopes),
+        "expires_at": expires_at,
+        # The token is returned exactly once; it is never logged or stored in clear.
+        "token": format_token(identity_id, secret),
+    }
+
+
+@app.post("/api/v1/admin/identities")
+def create_identity(body: IdentityIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
+    return _create_service_identity(
+        principal, body.space_id, body.name, body.scopes, body.ttl_seconds
+    )
+
+
+@app.get("/api/v1/admin/identities")
+def list_identities(space_id: str | None = None,
+                    principal: dict = Depends(authorize(ADMIN_READ))):
+    if space_id is not None:
+        space_id = _canonical_id(space_id, "space id")
+    items = []
+    for i in repo.list_identities(space_id):
+        items.append({
+            "id": i["id"], "name": i["name"], "space_id": i["space_id"],
+            "application_id": i["application_id"],
+            "scopes": sorted(s for s in (i.get("scopes") or "").split(",") if s),
+            "created_at": i["created_at"], "expires_at": i.get("expires_at"),
+            "last_used_at": i.get("last_used_at"), "revoked_at": i.get("revoked_at"),
+            "rotated_at": i.get("rotated_at"),
+        })
+    return {"items": items}
+
+
+def _partner_public(row: dict) -> dict:
+    """Site metadata plus the live state of its identity (never the secret)."""
+    return {
+        "id": row["id"], "name": row["name"], "site_url": row["site_url"],
+        "space_id": row["space_id"], "identity_id": row["identity_id"],
+        "default_ttl_seconds": row.get("default_ttl_seconds"),
+        "notes": row.get("notes") or "",
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+        "identity": {
+            "name": row.get("identity_name"),
+            "scopes": sorted(
+                s for s in (row.get("identity_scopes") or "").split(",") if s
+            ),
+            "expires_at": row.get("identity_expires_at"),
+            "last_used_at": row.get("identity_last_used_at"),
+            "revoked_at": row.get("identity_revoked_at"),
+            "rotated_at": row.get("identity_rotated_at"),
+        },
+    }
+
+
+@app.get("/api/v1/admin/partner-sites")
+def list_partner_sites(principal: dict = Depends(authorize(ADMIN_READ))):
+    """Partner integrations with the state of their service identity."""
+    return {"items": [_partner_public(r) for r in repo.list_partner_sites()]}
+
+
+@app.post("/api/v1/admin/partner-sites")
+def create_partner_site(
+    body: PartnerSiteIn, principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Create the site metadata and its dedicated identity in one step.
+
+    The identity token is returned exactly once, like the identity route. A
+    failed metadata insert revokes the fresh identity so no orphan credential
+    keeps working without a visible owner.
+    """
+    for existing in repo.list_partner_sites():
+        if (
+            existing["space_id"] == body.space_id
+            and existing["name"].casefold() == body.name.casefold()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="a partner site with this name already exists in the space",
+            )
+    identity = _create_service_identity(
+        principal, body.space_id, body.name, body.scopes, body.ttl_seconds
+    )
+    pid = repo.new_id()
+    try:
+        repo.create_partner_site(
+            pid, body.space_id, identity["id"], body.name, body.site_url,
+            body.default_ttl_seconds, body.notes, principal["id"],
+        )
+    except Exception:
+        repo.revoke_identity(identity["id"])
+        raise
+    audit_event("admin.partner.create", principal["id"], "success", {
+        "partner_id": pid, "space_id": body.space_id,
+        "identity_id": identity["id"],
+    })
+    return {**_partner_public(repo.get_partner_site(pid)), "token": identity["token"]}
+
+
+@app.patch("/api/v1/admin/partner-sites/{pid}")
+def update_partner_site(
+    pid: str, body: PartnerSitePatchIn,
+    principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Edit metadata only. Moving the trust to another space means a new key."""
+    pid = _canonical_id(pid, "partner id")
+    row = repo.get_partner_site(pid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="partner site not found")
+    fields = body.model_fields_set
+    name = body.name if "name" in fields and body.name is not None else row["name"]
+    site_url = (
+        body.site_url if "site_url" in fields and body.site_url is not None
+        else row["site_url"]
+    )
+    ttl = (
+        body.default_ttl_seconds if "default_ttl_seconds" in fields
+        else row.get("default_ttl_seconds")
+    )
+    notes = body.notes if "notes" in fields and body.notes is not None else row.get("notes") or ""
+    if name.casefold() != row["name"].casefold():
+        for existing in repo.list_partner_sites():
+            if (
+                existing["id"] != pid
+                and existing["space_id"] == row["space_id"]
+                and existing["name"].casefold() == name.casefold()
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="a partner site with this name already exists in the space",
+                )
+    repo.update_partner_site(pid, name, site_url, ttl, notes)
+    audit_event("admin.partner.update", principal["id"], "success", {
+        "partner_id": pid, "space_id": row["space_id"],
+    })
+    return _partner_public(repo.get_partner_site(pid))
+
+
+@app.delete("/api/v1/admin/partner-sites/{pid}")
+def delete_partner_site(
+    pid: str, principal: dict = Depends(authorize(ADMIN_WRITE)),
+):
+    """Remove an integration and revoke its key in one step.
+
+    Revocation comes first so a failure to delete the metadata can never leave a
+    working credential without a visible owner. The identity row is kept
+    (revoked) so the audit trail still resolves; only the site metadata is
+    deleted.
+    """
+    pid = _canonical_id(pid, "partner id")
+    row = repo.get_partner_site(pid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="partner site not found")
+    repo.revoke_identity(row["identity_id"])
+    repo.delete_partner_site(pid)
+    audit_event("admin.partner.delete", principal["id"], "success", {
+        "partner_id": pid, "space_id": row["space_id"],
+        "identity_id": row["identity_id"],
+    })
+    return {"id": pid, "deleted": True, "identity_revoked": True}
+
+
+@app.post("/api/v1/admin/identities/{iid}/rotate")
+def rotate_identity(iid: str, principal: dict = Depends(authorize(ADMIN_WRITE))):
+    iid = _canonical_id(iid, "identity id")
+    row = repo.get_identity(iid)
+    if row is None or row.get("revoked_at"):
+        raise HTTPException(status_code=404, detail="identity not found")
+    secret = new_secret()
+    repo.update_identity_secret(iid, fingerprint(secret))
+    audit_event("admin.identity.rotate", principal["id"], "success", {"identity_id": iid})
+    return {"id": iid, "token": format_token(iid, secret)}
+
+
+@app.post("/api/v1/admin/identities/{iid}/revoke")
+def revoke_identity(iid: str, principal: dict = Depends(authorize(ADMIN_WRITE))):
+    iid = _canonical_id(iid, "identity id")
+    row = repo.get_identity(iid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="identity not found")
+    repo.revoke_identity(iid)
+    audit_event("admin.identity.revoke", principal["id"], "success", {"identity_id": iid})
+    return {"id": iid, "revoked": True}
+
 
 # --- Import jobs ----------------------------------------------------------
 
@@ -5661,3 +7125,6 @@ def restore_object_revision(
         "head_revision_number": next_no,
         "status": "available",
     }
+
+from .routes_objects_mutations import router as objects_mutations_router  # noqa: E402
+app.include_router(objects_mutations_router)

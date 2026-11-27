@@ -1,0 +1,15 @@
+{
+  "generated_at": "2026-11-27T08:53:59Z",
+  "source": "ETAT-DES-FONCTIONNALITES.md",
+  "routes_http": 156,
+  "tests_backend_functions": 654,
+  "tests_frontend_files": 14,
+  "tests_frontend_cases": 102,
+  "feature_states_in_source_of_truth": {
+    "Implémenté": 53,
+    "Non exécuté": 1,
+    "Non vérifié": 1,
+    "Ouvert": 3,
+    "Partiel": 4
+  }
+}

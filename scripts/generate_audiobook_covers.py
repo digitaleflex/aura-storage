@@ -7,12 +7,15 @@ with no cover yet, this script tries in order:
 1. every early artwork stream embedded in the audio file (ID3 APIC / MP4 cover),
    not only the first video stream;
 2. an image object stored beside the audio in the same bucket (``cover.jpg``,
-   ``folder.jpg``, an image with the same stem, ...).
+   ``folder.jpg``, an image with the same stem, ...);
+3. otherwise a deterministic AURA jacket rendered locally from the title and
+   author, using the same palette as the portal's typographic fallback.
 
-The chosen image is resized with ffmpeg and stored as
-``{object_key}.cover.jpg`` with the same SSE settings as the payload. The
+Local artwork is resized with ffmpeg and stored as ``{object_key}.cover.jpg``.
+A generated jacket is stored as ``{object_key}.jacket.jpg`` so a real cover can
+still replace it later. Both use the same SSE settings as the payload. The
 catalogue column ``cover_key`` is then set so ``/covers/{oid}.jpg`` can redirect
-to it. Files with no local artwork keep the typographic fallback.
+to it. Use ``--no-jacket`` to keep the previous "no cover" behaviour.
 
 Bounded and resumable: only objects with no cover_key and no previous probe are
 considered, at most --limit per run. Dry-run by default; pass --apply to write.
@@ -34,6 +37,10 @@ def main() -> int:
     parser.add_argument(
         "--reprobe", action="store_true",
         help="also retry objects already probed by the old first-stream-only script",
+    )
+    parser.add_argument(
+        "--no-jacket", action="store_true",
+        help="do not generate a local AURA jacket when no artwork is found",
     )
     args = parser.parse_args()
 
@@ -62,8 +69,14 @@ def main() -> int:
                 if jpeg:
                     source = f"image sœur {candidate['object_key']}"
                     break
+        generated = False
+        if not jpeg and not args.no_jacket:
+            jpeg = ce.render_jacket(row)
+            if jpeg:
+                source = "jaquette AURA générée"
+                generated = True
         if jpeg:
-            key = ce.publish_cover(row, jpeg, client, args.apply)
+            key = ce.publish_cover(row, jpeg, client, args.apply, generated=generated)
             print(f"  couverture ({source}): {row['display_name']} -> {key}")
             made += 1
         else:

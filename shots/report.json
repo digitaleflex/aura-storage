@@ -1,0 +1,28 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 500,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "eyebrow",
+        "label": "标题上方的眉标",
+        "count": 1,
+        "examples": [
+          "p.kicker「LA BIBLIOTHÈQUE AUDIO」"
+        ]
+      },
+      {
+        "rule": "tightLeading",
+        "label": "多行正文行高过紧",
+        "count": 1,
+        "examples": [
+          "span.book-card-title「Objectivité, apprendre à」（1.18）"
+        ]
+      }
+    ]
+  }
+]

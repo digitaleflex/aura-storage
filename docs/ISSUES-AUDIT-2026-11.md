@@ -2,7 +2,7 @@
 
 > **Statut : archive historique. Ne pas utiliser comme source de vérité.**
 > **Source de vérité : [`ETAT-DES-FONCTIONNALITES.md`](ETAT-DES-FONCTIONNALITES.md)** (état réel, preuves, inconnues) et le tracker GitHub.
-> **Révision 2026-11-24 :** la roadmap portail #293-#306 est terminée ; les suivis actifs sont dans le milestone 27 / issues #314+. Ce fichier conserve l'instantané d'audit du 2026-11-05 et peut contenir des statuts périmés ou contradictoires.
+> **Révision 2026-11-27 :** chiffres régénérés depuis le code dans [`CODE-METRICS.md`](CODE-METRICS.md) (156 routes, 641 fonctions de test Python) ; la roadmap portail #293-#306 est terminée et les suivis actifs sont dans le tracker GitHub. Ce fichier conserve l'instantané d'audit du 2026-11-05 et peut contenir des statuts périmés ou contradictoires.
 
 Ce fichier recense **toutes les issues identifiées** lors de l'audit de l'application dans son état actuel. Il sert de référence pour créer les issues réelles sur GitHub.
 

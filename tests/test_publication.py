@@ -83,6 +83,38 @@ def test_publish_redirects_and_unpublish_404(monkeypatch):
     assert client.get(f"/m/{slug}", follow_redirects=False).status_code == 302
 
 
+def test_audio_names_do_not_treat_episode_numbers_as_authors():
+    assert main._split_audio_name("06 - Objectivité, apprendre à voir.mp3") == (
+        "", "Objectivité, apprendre à voir",
+    )
+    assert main._split_audio_name("001_Les_Meditations_Guidees.mp3") == (
+        "", "Les Meditations Guidees",
+    )
+    assert main._split_audio_name("Robert Greene - Stratégie.mp3") == (
+        "Robert Greene", "Stratégie",
+    )
+
+
+def test_publish_audio_adds_missing_public_facets_and_preserves_manual_tags():
+    c, headers = _admin()
+    oid = _object(
+        c, headers, name="Robert Kiyosaki - Intelligence financière.mp3",
+        content_type="audio/mpeg",
+    )
+    assert _publish(c, headers, oid, f"finance-{uuid.uuid4().hex[:8]}").status_code == 200
+    tags = main.repo.get_object_tags(oid)
+    assert "categorie-finance" in tags
+    assert "theme-argent" in tags
+    assert "langue-fr" in tags
+
+    manual = _object(c, headers, name="Roman personnel.mp3", content_type="audio/mpeg")
+    main.repo.set_object_tags(manual, ["categorie-roman", "interne"])
+    assert _publish(c, headers, manual, f"manuel-{uuid.uuid4().hex[:8]}").status_code == 200
+    tags = main.repo.get_object_tags(manual)
+    assert "categorie-roman" in tags and "interne" in tags
+    assert "categorie-developpement" not in tags
+
+
 def test_slug_is_unique_validated_and_human_only():
     c, headers = _admin()
     a, b = _object(c, headers), _object(c, headers)
