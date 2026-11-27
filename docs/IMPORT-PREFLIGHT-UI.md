@@ -24,7 +24,10 @@ Pendant un transfert, le bouton devient **« Mettre en attente »**. Le backlog 
 - Nom + taille pour les gros fichiers lorsque le hash coûteux n'est pas nécessaire.
 - SHA-256 pour les petits fichiers, afin de détecter aussi les contenus identiques renommés.
 - SHA-256 ciblé pour les gros fichiers déjà plausibles par nom + taille.
-- Comparaison limitée au dossier de destination.
+- Le navigateur envoie les empreintes calculées à `POST /api/v1/objects/duplicate-scan` : le catalogue courant est la source de vérité, pas le cache du navigateur.
+- L'arborescence cible est résolue strictement côté serveur : un dossier parent introuvable rend ses enfants « non résolus », jamais comparés à un dossier du même nom ailleurs.
+- Comparaison limitée au dossier de destination de chaque fichier, y compris les sous-dossiers.
+- Les fichiers au-delà de la profondeur maximale sont marqués « À revérifier » et bloqués avant l'import.
 - Objets existants filtrés sur le statut `available`.
 - Un échec de hash produit un état « À revérifier » et bloque l'import tant que la vérification n'a pas réussi.
 
@@ -49,7 +52,7 @@ Pendant un transfert, le bouton devient **« Mettre en attente »**. Le backlog 
 ## Validation
 
 - `npx tsc --noEmit` : réussi.
-- `npm run test:unit` : **85 tests réussis**.
+- `npm run test:unit` : **109 tests réussis**.
 - `npm run lint` : aucune erreur, 13 avertissements préexistants hors nouvelle logique.
 - `git diff --check` : réussi.
 - E2E Playwright : non exécutés ; Chromium ne démarre pas car plusieurs bibliothèques système manquent (`libatk`, `libgbm`, `libasound`, etc.).
