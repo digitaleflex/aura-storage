@@ -27,6 +27,8 @@
 - [Verification log — portail, transfert et perf, 2026-11-24](docs/verification-log-2026-11-24-portail-perf.md)
 - [Audit de sécurité et durcissement, 2026-11-26](docs/verification-log-2026-11-26-security-hardening.md) — brute-force SSH, fail2ban, UFW et durcissement SSH vérifiés
 - [Feature status (source of truth)](docs/ETAT-DES-FONCTIONNALITES.md)
+- [Regenerated code metrics (routes, tests, statuses)](docs/CODE-METRICS.md)
+- [PostgreSQL connection pool and load test](docs/POSTGRES-POOL-2026-11-27.md)
 - [Public portal roadmap and issue status](docs/PUBLIC-PORTAL-ROADMAP.md)
 - [Operations: vacuum, HTTP/3 and media caching](docs/OPERATIONS.md)
 - [Multipart compatibility verification log — SeaweedFS 4.48, 2026-10-25](docs/verification-log-2026-10-25-multipart-compat-4.48.md)

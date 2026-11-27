@@ -29,18 +29,118 @@ from .transfer import (
 SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
 
 
-@synchronized
 class Repository:
+    """PostgreSQL catalogue backed by a bounded, shared connection pool (#325).
+
+    The old implementation held one connection per process and serialized every
+    method with ``@synchronized``. The pool gives each worker thread its own
+    checkout (with a bounded acquisition timeout), so uploads, commits and URL
+    issuance no longer queue behind one connection. ``self.conn`` remains a
+    compatibility handle for bootstrap migrations and the few legacy callers
+    that issue raw statements; hot-path methods use ``_connection()``.
+    """
+
     dialect = "postgres"
 
-    def __init__(self, dsn: str):
-        # psycopg connections are not thread-safe and FastAPI runs sync endpoints
-        # in a threadpool, so `_lock` serializes access; see api/dblock.py.
+    def __init__(
+        self, dsn: str, pool_min: Optional[int] = None,
+        pool_max: Optional[int] = None, pool_timeout: Optional[float] = None,
+    ):
+        # Same environment contract as api/config.py, but read locally so the
+        # repository stays importable in standalone parity tests (no full API
+        # environment required).
+        min_size = int(os.environ.get("AURA_DB_POOL_MIN", "2")) if pool_min is None else int(pool_min)
+        max_size = int(os.environ.get("AURA_DB_POOL_MAX", "10")) if pool_max is None else int(pool_max)
+        timeout = float(os.environ.get("AURA_DB_POOL_TIMEOUT", "5")) if pool_timeout is None else float(pool_timeout)
+        if min_size < 1 or max_size < min_size or timeout <= 0:
+            raise RuntimeError("invalid PostgreSQL pool configuration")
+        self.pool_min = min_size
+        self.pool_max = max_size
+        self.pool_timeout = timeout
+        self._local = threading.local()
+        # A few endpoints still use a process-local admission lock (upload
+        # intents); keep the same attribute as the SQLite repository so the
+        # PostgreSQL backend follows identical code paths.
         self._lock = threading.RLock()
+        self._timeout_lock = threading.Lock()
+        self._timeouts = 0
+        # One dedicated connection for schema bootstrap/legacy raw callers. It is
+        # never used by the repository methods below, so the pool limits stay
+        # meaningful (total backend connections = pool_size + 1).
         self.conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
-        with self.conn.cursor() as cur:
-            cur.execute(SCHEMA)
-        apply_migrations(self.conn, "postgres")
+        self.pool = ConnectionPool(
+            conninfo=dsn,
+            min_size=min_size,
+            max_size=max_size,
+            timeout=timeout,
+            open=True,
+            name="aura-catalogue",
+            kwargs={"row_factory": dict_row, "autocommit": True},
+        )
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(SCHEMA)
+            apply_migrations(conn, "postgres")
+
+    @contextmanager
+    def _connection(self):
+        """Check out a pool connection for one operation.
+
+        If a transaction has pinned a connection to this thread, reuse it so
+        multi-statement operations stay atomic and nested calls share it.
+        """
+        pinned = getattr(self._local, "conn", None)
+        if pinned is not None:
+            yield pinned
+            return
+        try:
+            conn = self.pool.getconn()
+        except Exception:
+            with self._timeout_lock:
+                self._timeouts += 1
+            raise
+        try:
+            yield conn
+        except BaseException:
+            self.pool.putconn(conn, close=True)
+            raise
+        else:
+            self.pool.putconn(conn)
+
+    @contextmanager
+    def _transaction(self):
+        with self._connection() as conn:
+            previous = getattr(self._local, "conn", None)
+            self._local.conn = conn
+            try:
+                with conn.transaction():
+                    yield
+            finally:
+                self._local.conn = previous
+
+    def pool_metrics(self) -> dict:
+        """Bounded pool figures for logs/monitoring (no DSN, no credentials)."""
+        stats = self.pool.get_stats()
+        acquisitions = int(stats.get("requests_num") or 0)
+        waited_ms = float(stats.get("requests_wait_ms") or 0)
+        return {
+            "min": int(stats.get("pool_min", self.pool_min)),
+            "max": int(stats.get("pool_max", self.pool_max)),
+            "size": int(stats.get("pool_size") or 0),
+            "available": int(stats.get("pool_available") or 0),
+            "waiting": int(stats.get("requests_waiting") or 0),
+            "acquisitions": acquisitions,
+            "queued": int(stats.get("requests_queued") or 0),
+            "timeouts": self._timeouts,
+            "avg_acquire_ms": round(waited_ms / acquisitions, 2) if acquisitions else 0.0,
+            "opens": int(stats.get("connections_num") or 0),
+            "open_ms_total": int(stats.get("connections_ms") or 0),
+            "usage_ms_total": int(stats.get("usage_ms") or 0),
+        }
+
+    def close_pool(self) -> None:
+        """Release pool connections (used by tests and clean process shutdown)."""
+        self.pool.close()
 
     def now(self) -> int:
         return int(time.time())
@@ -49,23 +149,27 @@ class Repository:
         return ids.new_id()
 
     def _one(self, sql: str, params: tuple = ()) -> Optional[dict]:
-        with self.conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchone()
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchone()
 
     def _all(self, sql: str, params: tuple = ()) -> list:
-        with self.conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchall()
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchall()
 
     def _run(self, sql: str, params: tuple = ()) -> int:
-        with self.conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.rowcount
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.rowcount
 
     def _run_many(self, sql: str, params_seq) -> None:
-        with self.conn.cursor() as cur:
-            cur.executemany(sql, params_seq)
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, params_seq)
 
     # -- users ------------------------------------------------------------
     def get_user_by_name(self, username: str) -> Optional[dict]:
@@ -815,15 +919,16 @@ class Repository:
     def consume_share(self, sid: str, now: int) -> bool:
         # See api/db.py: the guard is part of the UPDATE so a last use cannot be
         # redeemed twice by concurrent requests.
-        with self.conn.cursor() as cur:
-            cur.execute(
-                "UPDATE object_shares SET use_count = use_count + 1, "
-                "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
-                "AND expires_at > %s "
-                "AND (max_uses IS NULL OR use_count < max_uses)",
-                (now, sid, now),
-            )
-            return cur.rowcount == 1
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE object_shares SET use_count = use_count + 1, "
+                    "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
+                    "AND expires_at > %s "
+                    "AND (max_uses IS NULL OR use_count < max_uses)",
+                    (now, sid, now),
+                )
+                return cur.rowcount == 1
 
     def revoke_share(self, sid: str, now: int) -> None:
         self._run(
@@ -868,15 +973,16 @@ class Repository:
         )
 
     def consume_folder_share(self, sid: str, now: int) -> bool:
-        with self.conn.cursor() as cur:
-            cur.execute(
-                "UPDATE folder_shares SET use_count = use_count + 1, "
-                "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
-                "AND expires_at > %s "
-                "AND (max_uses IS NULL OR use_count < max_uses)",
-                (now, sid, now),
-            )
-            return cur.rowcount == 1
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE folder_shares SET use_count = use_count + 1, "
+                    "last_used_at = %s WHERE id = %s AND revoked_at IS NULL "
+                    "AND expires_at > %s "
+                    "AND (max_uses IS NULL OR use_count < max_uses)",
+                    (now, sid, now),
+                )
+                return cur.rowcount == 1
 
     def revoke_folder_share(self, sid: str, now: int) -> None:
         self._run(
@@ -1055,7 +1161,7 @@ class Repository:
         self._run(f"UPDATE objects SET {column} = %s WHERE id = %s", (now, oid))
 
     def replace_audio_chapters(self, oid: str, chapters: list[dict]) -> None:
-        with self.conn.transaction():
+        with self._transaction():
             self._run("DELETE FROM audio_chapters WHERE object_id = %s", (oid,))
             self._run_many(
                 "INSERT INTO audio_chapters "
@@ -1091,7 +1197,7 @@ class Repository:
         return result
 
     def replace_object_content(self, target_id: str, source_id: str, source: dict) -> None:
-        with self.conn.transaction():
+        with self._transaction():
             self._run("DELETE FROM objects WHERE id = %s", (source_id,))
             self._run(
                 "UPDATE objects SET bucket = %s, object_key = %s, size_bytes = %s, "
@@ -1850,7 +1956,7 @@ class Repository:
         )
 
     def replace_collection_items(self, cid: str, object_ids: list) -> None:
-        with self.conn.transaction():
+        with self._transaction():
             self._run("DELETE FROM collection_items WHERE collection_id = %s", (cid,))
             self._run_many(
                 "INSERT INTO collection_items (collection_id, object_id, position) "
@@ -1870,7 +1976,7 @@ class Repository:
         )
 
     def delete_collection(self, cid: str) -> None:
-        with self.conn.transaction():
+        with self._transaction():
             self._run("DELETE FROM collection_items WHERE collection_id = %s", (cid,))
             self._run("DELETE FROM collections WHERE id = %s", (cid,))
 

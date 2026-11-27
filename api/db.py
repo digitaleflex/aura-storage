@@ -44,6 +44,19 @@ class Repository:
         self.conn.commit()
         apply_migrations(self.conn, "sqlite")
 
+    def pool_metrics(self) -> dict:
+        """SQLite parity stub: there is one shared connection, no pool (#325)."""
+        return {
+            "backend": "sqlite", "min": 1, "max": 1, "size": 1,
+            "available": 1, "waiting": 0, "acquisitions": 0, "queued": 0,
+            "avg_acquire_ms": 0.0, "timeouts": 0, "opens": 1,
+            "open_ms_total": 0, "usage_ms_total": 0,
+        }
+
+    def close_pool(self) -> None:
+        """SQLite parity stub: nothing to release, the connection stays open."""
+        return None
+
     def now(self) -> int:
         return int(time.time())
 

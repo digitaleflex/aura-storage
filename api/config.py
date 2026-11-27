@@ -19,6 +19,16 @@ def _int(name: str, default: int) -> int:
         raise RuntimeError(f"Environment variable {name} must be an integer")
 
 
+def _float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise RuntimeError(f"Environment variable {name} must be a number")
+
+
 def _csv_lower(name: str) -> tuple[str, ...]:
     """Parse a comma-separated setting into normalized, non-empty values."""
     return tuple(
@@ -49,6 +59,12 @@ class Settings:
     # PostgreSQL DSN, e.g. postgresql://aura:PASSWORD@localhost:5432/aura.
     # Only used when backend is 'postgres'. Never logged.
     db_dsn: str = os.environ.get("AURA_API_DSN", "")
+    # Integrated PostgreSQL pool (#325). A single VPS has no separate proxy:
+    # psycopg_pool keeps a bounded set of connections per process and reports
+    # acquisitions/timeouts through Repository.pool_metrics().
+    db_pool_min: int = _int("AURA_DB_POOL_MIN", 2)
+    db_pool_max: int = _int("AURA_DB_POOL_MAX", 10)
+    db_pool_timeout_s: float = _float("AURA_DB_POOL_TIMEOUT", 5.0)
     # Lifetimes (seconds).
     # Human session cookie lifetime: 8 hours by default (audit H6 kept the
     # default short). A longer session (e.g. 2592000 = 30 days) widens the window
