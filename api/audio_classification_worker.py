@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .audio_ai import analyze_audio_file
 from .config import settings
+from .normalizers import as_dict
 from .s3 import make_clients
 from .store import repo
 
@@ -50,7 +51,11 @@ def process_one() -> bool:
     tmp = None
     try:
         row = repo.get_object_global(oid)
-        if row is None or row.get("status") != "available":
+        if row is None:
+            repo.fail_audio_classification_job(jid, "object_not_found")
+            return True
+        row = as_dict(row)
+        if row.get("status") != "available":
             repo.fail_audio_classification_job(jid, "object_not_available")
             return True
         ctype = str(row.get("content_type") or "")

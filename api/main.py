@@ -5,6 +5,7 @@ and S3 through short-lived presigned URLs. The API never stores a browser sessio
 token in the response body and never puts S3 credentials in the frontend.
 """
 import hashlib
+import json
 import logging
 import os
 import re
@@ -4176,6 +4177,7 @@ def enqueue_audio_classifications(
         if row is None:
             skipped.append({"id": oid, "reason": "not_found"})
             continue
+        row = _as_dict(row)
         if row.get("status") != "available":
             skipped.append({"id": oid, "reason": "not_available"})
             continue
@@ -4186,7 +4188,7 @@ def enqueue_audio_classifications(
         enqueued.append({"object_id": oid, "job_id": jid})
     if enqueued:
         audit_event("audio_classification.enqueue", principal.get("sub") or principal.get("id"), "ok",
-                    count=len(enqueued), space_id=principal.get("space_id"))
+                    {"count": len(enqueued), "space_id": principal.get("space_id")})
     return {"enqueued": enqueued, "skipped": skipped}
 
 
@@ -4232,7 +4234,7 @@ def review_audio_classification(
             repo.set_object_tags(oid, merged[:20])
     fresh = repo.get_audio_classification_job(jid)
     audit_event("audio_classification.review", principal.get("sub") or principal.get("id"), "ok",
-                job_id=jid, action=body.action, space_id=principal.get("space_id"))
+                {"job_id": jid, "action": body.action, "space_id": principal.get("space_id")})
     return _audio_job_public(fresh or row)
 
 

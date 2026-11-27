@@ -2178,7 +2178,7 @@ class Repository:
         changed = self._run(
             "UPDATE audio_classification_jobs SET status = %s, reviewed_by = %s, "
             "reviewed_at = %s, updated_at = %s WHERE id = %s "
-            "AND status IN ('needs_review', 'failed', 'accepted', 'rejected')",
+            "AND status IN ('needs_review', 'failed')",
             (status, reviewed_by, self.now(), self.now(), jid),
         )
         return bool(changed)

@@ -2365,7 +2365,7 @@ class Repository:
         cur = self.conn.execute(
             "UPDATE audio_classification_jobs SET status = ?, reviewed_by = ?, "
             "reviewed_at = ?, updated_at = ? WHERE id = ? "
-            "AND status IN ('needs_review', 'failed', 'accepted', 'rejected')",
+            "AND status IN ('needs_review', 'failed')",
             (status, reviewed_by, self.now(), self.now(), jid),
         )
         self.conn.commit()
