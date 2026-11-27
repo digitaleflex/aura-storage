@@ -95,4 +95,23 @@ test("create, rename, deactivate and configure applications, spaces and buckets"
     .getByRole("button", { name: "Définir par défaut" })
     .click();
   await expect(bucketRow.getByText("Oui")).toBeVisible();
+
+  // 4. A disabled space must not be offered for new identities or partners.
+  await page.getByRole("tab", { name: "Applications et espaces" }).click();
+  await spaceRow.getByRole("button", { name: "Désactiver" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Désactiver" })
+    .click();
+  await expect(spaceRow.getByText("Désactivé")).toBeVisible();
+
+  await page.getByRole("tab", { name: "Identités de service" }).click();
+  await expect(
+    page.getByRole("option", { name: new RegExp(spaceName) }),
+  ).toHaveCount(0);
+
+  await page.getByRole("tab", { name: "Intégrations" }).click();
+  await expect(
+    page.getByRole("option", { name: new RegExp(spaceName) }),
+  ).toHaveCount(0);
 });

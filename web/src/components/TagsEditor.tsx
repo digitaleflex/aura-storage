@@ -4,6 +4,21 @@ import { api } from "../lib/api";
 import type { ObjectItem } from "../lib/api";
 import { describeError } from "../lib/errors";
 
+const QUICK_PUBLIC_TAGS = [
+  { tag: "categorie-developpement", label: "Développement personnel" },
+  { tag: "categorie-finance", label: "Finance & entrepreneuriat" },
+  { tag: "categorie-leadership", label: "Leadership & productivité" },
+  { tag: "categorie-psychologie", label: "Psychologie & relations" },
+  { tag: "categorie-spiritualite", label: "Spiritualité & bien-être" },
+  { tag: "categorie-cybersecurite", label: "Cybersécurité & technologie" },
+  { tag: "categorie-litterature", label: "Littérature & philosophie" },
+  { tag: "categorie-meditation", label: "Méditation & audio guidé" },
+  { tag: "theme-intelligence-artificielle", label: "Intelligence artificielle" },
+  { tag: "theme-histoire", label: "Histoire" },
+  { tag: "langue-fr", label: "Français" },
+  { tag: "langue-en", label: "Anglais" },
+];
+
 /** Inline tag editor used in the details drawer. */
 export function TagsEditor({
   item,
@@ -21,6 +36,15 @@ export function TagsEditor({
 }) {
   const [value, setValue] = useState((item.tags ?? []).join(", "));
   const [error, setError] = useState<string | null>(null);
+  const currentTags = value.split(",").map((tag) => tag.trim()).filter(Boolean);
+
+  function toggleQuickTag(tag: string) {
+    const next = currentTags.includes(tag)
+      ? currentTags.filter((current) => current !== tag)
+      : [...currentTags, tag];
+    setValue(next.join(", "));
+    setError(null);
+  }
 
   useEffect(() => {
     setValue((item.tags ?? []).join(", "));
@@ -51,14 +75,28 @@ export function TagsEditor({
         <input
           type="text"
           value={value}
-          placeholder="maths, l1, video"
+          placeholder="categorie-finance, theme-argent, langue-fr"
+          aria-describedby="public-tag-help"
           onChange={(e) => setValue(e.target.value)}
-          onBlur={() => {
-            const next = value.trim();
-            if (next !== (item.tags ?? []).join(", ")) save.mutate();
-          }}
         />
       </label>
+      <p id="public-tag-help" className="hint">
+        Pour le catalogue public : <code>categorie-finance</code>, <code>theme-argent</code>,
+        <code>langue-fr</code>. Les autres étiquettes restent privées.
+      </p>
+      <div className="tag-suggestions" role="group" aria-label="Classification publique rapide">
+        {QUICK_PUBLIC_TAGS.map(({ tag, label }) => (
+          <button
+            key={tag}
+            type="button"
+            className="tag-chip"
+            aria-pressed={currentTags.includes(tag)}
+            onClick={() => toggleQuickTag(tag)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       {onFilterTag && (item.tags ?? []).length > 0 ? (
         <div className="tag-chips" aria-label="Étiquettes enregistrées">
           {(item.tags ?? []).map((tag) => (

@@ -122,8 +122,13 @@ test("imports a folder tree and uploads files into the recreated folders", async
 
   await page.getByTestId("folder-input").setInputFiles(root);
 
+  const preflight = page.getByTestId("import-preflight");
+  await expect(preflight.getByTestId("preflight-item")).toHaveCount(3);
+  await expect(preflight.locator('[data-status="ready"]')).toHaveCount(3);
+
   // Nothing is created before the user confirms.
   expect(state.folders).toHaveLength(0);
+  await page.getByRole("button", { name: "Importer et valider" }).click();
 
   // Wait for the tree to be recreated: parents before children.
   await expect.poll(() => state.folders.length).toBe(3);

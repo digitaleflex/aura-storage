@@ -107,7 +107,7 @@ test("a file whose upload died with the link is replayed when the network return
     mimeType: "application/pdf",
     buffer: Buffer.from("aaaa"),
   });
-  await expect(page.locator(".pending-item")).toHaveCount(1);
+  await expect(page.getByTestId("preflight-item")).toHaveCount(1);
   await page.getByRole("button", { name: "Importer et valider" }).click();
 
   const status = page.getByTestId("transfer-status");
