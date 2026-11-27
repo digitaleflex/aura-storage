@@ -2371,6 +2371,26 @@ class Repository:
         self.conn.commit()
         return cur.rowcount > 0
 
+    def save_audio_classification_correction(self, jid: str, correction_json: str) -> None:
+        self.conn.execute(
+            "UPDATE audio_classification_jobs SET result_json = ?, updated_at = ? WHERE id = ?",
+            (correction_json, self.now(), jid),
+        )
+        self.conn.commit()
+
+    def list_unclassified_audio_object_ids(self, space_id: str, *, limit: int = 100) -> list[str]:
+        limit = max(1, min(int(limit), 500))
+        rows = self.conn.execute(
+            "SELECT o.id FROM objects o "
+            "WHERE o.space_id = ? AND o.status = 'available' AND o.content_type LIKE 'audio/%' "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM audio_classification_jobs j "
+            "  WHERE j.object_id = o.id AND j.status IN ('queued','processing','needs_review','accepted')"
+            ") ORDER BY o.created_at DESC LIMIT ?",
+            (space_id, limit),
+        ).fetchall()
+        return [r["id"] for r in rows]
+
     def stats(self) -> dict:
         objects = {
             row["status"]: row["n"]
