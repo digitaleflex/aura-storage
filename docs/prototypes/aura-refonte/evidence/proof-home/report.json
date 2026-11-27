@@ -1,0 +1,213 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 463,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "eyebrow",
+        "label": "标题上方的眉标",
+        "count": 5,
+        "examples": [
+          "p.eyebrow「LA BIBLIOTHÈQUE AUDIO · 」",
+          "p.eyebrow「LA SÉLECTION DE LA RÉDAC」",
+          "p.eyebrow「EN COURS」"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "page-@2x.png",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 2,
+    "animationWaitMs": 632,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "eyebrow",
+        "label": "标题上方的眉标",
+        "count": 5,
+        "examples": [
+          "p.eyebrow「LA BIBLIOTHÈQUE AUDIO · 」",
+          "p.eyebrow「LA SÉLECTION DE LA RÉDAC」",
+          "p.eyebrow「EN COURS」"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "motion-probe",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "motion": {
+      "load": {
+        "elements": 6,
+        "loops": 0,
+        "maxMove": 17,
+        "maxSize": 0,
+        "maxOpacity": 1,
+        "top": [
+          {
+            "el": "div.hero-note",
+            "move": 17,
+            "size": 0,
+            "opacity": 1,
+            "loop": false,
+            "sources": [
+              "css:rise"
+            ]
+          },
+          {
+            "el": "div.hero-cover",
+            "move": 10,
+            "size": 0,
+            "opacity": 0.9,
+            "loop": false,
+            "sources": [
+              "css:fadeIn"
+            ]
+          },
+          {
+            "el": "div.hero-cover",
+            "move": 6,
+            "size": 0,
+            "opacity": 0.99,
+            "loop": false,
+            "sources": [
+              "css:fadeIn"
+            ]
+          },
+          {
+            "el": "div.hero-cover",
+            "move": 2,
+            "size": 0,
+            "opacity": 1,
+            "loop": false,
+            "sources": [
+              "css:fadeIn"
+            ]
+          },
+          {
+            "el": "div",
+            "move": 10,
+            "size": 0,
+            "opacity": 0.6,
+            "loop": false,
+            "sources": [
+              "css:rise"
+            ]
+          },
+          {
+            "el": "div.hero-figure",
+            "move": 10,
+            "size": 0,
+            "opacity": 0.6,
+            "loop": false,
+            "sources": [
+              "css:rise"
+            ]
+          }
+        ]
+      },
+      "hero": {
+        "elements": 1,
+        "loops": 0,
+        "maxMove": 1181,
+        "maxSize": 0,
+        "maxOpacity": 1,
+        "top": [
+          {
+            "el": "section#decouvrir.section.reveal",
+            "move": 1181,
+            "size": 0,
+            "opacity": 1,
+            "loop": false,
+            "sources": [
+              "transition:transform",
+              "transition:opacity"
+            ]
+          }
+        ],
+        "layers": 1
+      },
+      "scroll": {
+        "elements": 2,
+        "loops": 0,
+        "maxMove": 14,
+        "maxSize": 0,
+        "maxOpacity": 1,
+        "top": [
+          {
+            "el": "section#tous.section.section-tint",
+            "move": 14,
+            "size": 0,
+            "opacity": 1,
+            "loop": false,
+            "sources": [
+              "transition:transform",
+              "transition:opacity"
+            ]
+          },
+          {
+            "el": "section#reprise.section.section-tint",
+            "move": 13,
+            "size": 0,
+            "opacity": 0.99,
+            "loop": false,
+            "sources": [
+              "transition:transform",
+              "transition:opacity"
+            ]
+          }
+        ],
+        "scrollable": true
+      }
+    },
+    "issues": []
+  },
+  {
+    "file": "motion-entry-end.jpg",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "group": "entry",
+    "issues": [
+      "录屏：没装 ffmpeg，只留了 motion-entry-start/mid/end.jpg 三帧"
+    ],
+    "frames": {
+      "start": {
+        "file": "motion-entry-start.jpg",
+        "source": "Page.screencastFrame",
+        "timeMs": 375
+      },
+      "mid": {
+        "file": "motion-entry-mid.jpg",
+        "source": "Page.screencastFrame",
+        "timeMs": 842
+      },
+      "end": {
+        "file": "motion-entry-end.jpg",
+        "source": "Page.captureScreenshot",
+        "timeMs": 2697
+      }
+    },
+    "sampling": {
+      "mode": "entry"
+    },
+    "durationMs": 2697,
+    "consistency": {
+      "status": "matched",
+      "reference": "motion-entry-end.jpg",
+      "different": false,
+      "changedPixels": 0,
+      "maxTilePixels": 0,
+      "pixelRatio": 0
+    },
+    "failed": true
+  }
+]

@@ -20,7 +20,9 @@ fi
 
 LIMIT="${AURA_REFRESH_LIMIT:-20}"
 CONTAINER_ROOT=/srv/api
-COVER_LOCK_FILE="${TMPDIR:-/tmp}/aura-cover-review.lock"
+REVIEW_FILE="${AURA_COVER_REVIEW_FILE:-${AURA_DATA_DIR:-/srv/aura-storage}/cover-review/cover-candidates.json}"
+COVER_LOCK_FILE="${REVIEW_FILE}.lock"
+mkdir -p "$(dirname "$COVER_LOCK_FILE")"
 exec 8>"$COVER_LOCK_FILE"
 
 echo "== public library refresh $(date -u +%FT%TZ) =="

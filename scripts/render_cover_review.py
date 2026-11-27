@@ -9,13 +9,17 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import re
 import unicodedata
 from pathlib import Path
 from urllib.parse import urlparse
 
 AUTHOR_STOPWORDS = {"and", "de", "du", "et", "la", "le", "les", "the"}
-COVER_HOST_RULES = ("covers.openlibrary.org", ".mzstatic.com")
+COVER_HOST_RULES = (
+    "covers.openlibrary.org", ".mzstatic.com",
+    "books.google.com", ".googleusercontent.com", ".gstatic.com",
+)
 
 
 def reject_constant(value: str):
@@ -251,7 +255,13 @@ updateCounter();
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", nargs="?", default="/srv/aura-storage/cover-candidates.json")
+    parser.add_argument(
+        "input", nargs="?",
+        default=(
+            os.environ.get("AURA_COVER_REVIEW_FILE")
+            or f"{os.environ.get('AURA_DATA_DIR', '/srv/aura-storage')}/cover-review/cover-candidates.json"
+        ),
+    )
     parser.add_argument("--output", default="/srv/aura-storage/cover-review.html")
     args = parser.parse_args()
     source = Path(args.input)
