@@ -1050,7 +1050,10 @@ export function startUploadQueue(
   interface Internal {
     id: string;
     key: string | undefined;
-    idempotencyKey: string;
+    /** Caller-supplied key, kept across every retry (journal resume). */
+    idempotencyKey: string | undefined;
+    /** Key minted by the queue; kept for automatic replays, renewed manually. */
+    generatedIdempotencyKey?: string;
     file: File;
     folderId: string | null;
     replaceTargetId: string | undefined;
@@ -1074,10 +1077,7 @@ export function startUploadQueue(
     return {
       id: queueItemId(),
       key: input.key,
-      // One key per file for its whole life, including automatic replays: a
-      // resumed verification must target the object already stored instead of
-      // creating (and uploading) a second one.
-      idempotencyKey: input.idempotencyKey ?? queueItemId(),
+      idempotencyKey: input.idempotencyKey,
       replaceTargetId: input.replaceTargetId,
       file: input.file,
       folderId: input.folderId !== undefined ? input.folderId : defaultFolder,
@@ -1324,9 +1324,11 @@ export function startUploadQueue(
     let slotReleased = false;
     item.state = { ...idleTransfer(item.file), phase: "requesting-intent" };
     emit();
+    const idempotencyKey =
+      item.idempotencyKey ?? (item.generatedIdempotencyKey ??= queueItemId());
     runTransfer(item.file, tracked, {
       folderId: item.folderId,
-      idempotencyKey: item.idempotencyKey,
+      idempotencyKey,
       signal: controller.signal,
       config: options.config,
       now,
@@ -1612,6 +1614,10 @@ export function startUploadQueue(
           item.paused = false;
           item.reconnectRetries = 0;
           item.autoRetries = 0;
+          // A manual retry is a new submission: mint a fresh key when the
+          // caller did not supply one. Automatic replays keep the generated
+          // key so a slow verification resumes the stored object.
+          item.generatedIdempotencyKey = undefined;
           requeued = true;
         }
       }
@@ -1632,6 +1638,9 @@ export function startUploadQueue(
       // budgets, as before.
       item.reconnectRetries = 0;
       item.autoRetries = 0;
+      // Manual retry = fresh submission when the queue minted the key; an
+      // explicit key (journal resume) is preserved.
+      item.generatedIdempotencyKey = undefined;
       item.state = idleTransfer(item.file);
       item.settled = false;
       item.reserved = false;

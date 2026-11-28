@@ -179,14 +179,17 @@ describe("startUploadQueue — automatic batch retry", () => {
     vi.useFakeTimers();
     const objectStatus = vi.fn(async () => ({ status: "verifying" }));
     const upload = vi.fn(async () => {});
+    const keys: string[] = [];
     let intents = 0;
     const deps = makeDeps({
       // The replay carries the same idempotency key: the API answers with the
       // object already being verified, not with a second upload URL.
-      requestIntent: async () =>
-        intents++ === 0
+      requestIntent: async (input) => {
+        keys.push(input.idempotencyKey);
+        return intents++ === 0
           ? makeIntent()
-          : makeIntent({ status: "verifying", upload_url: null }),
+          : makeIntent({ status: "verifying", upload_url: null });
+      },
       commit: async () => ({ status: "verifying" }) as CommitResponse,
       objectStatus,
       upload,
@@ -203,8 +206,10 @@ describe("startUploadQueue — automatic batch retry", () => {
 
     expect(onAutoRetry).toHaveBeenCalledTimes(1);
     // The bytes were already stored by the first attempt: the replay only
-    // resumes the server-side verification.
+    // resumes the server-side verification, under the same idempotency key.
     expect(upload).toHaveBeenCalledTimes(1);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
     const final = await queue.done;
     expect(final.items[0]?.state.failureKind).toBe("verify-timeout");
   });
