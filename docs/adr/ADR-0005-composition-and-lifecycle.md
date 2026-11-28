@@ -1,6 +1,7 @@
 # ADR-0005 — Composition, injection de dépendances et lifecycle
 
-- Statut: Proposé
+- Statut: Accepté
+- Approuvé le: 2026-11-28
 - Date: 2026-11-26
 - Issue: #332
 

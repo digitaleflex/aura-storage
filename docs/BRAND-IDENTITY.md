@@ -10,13 +10,14 @@ Les fichiers sont dans [`web/public/brand/`](../web/public/brand/) :
 | --- | --- |
 | `aura-mark-halo.svg` | Direction A recommandée — monogramme seul |
 | `aura-lockup-halo.svg` | Direction A — verrouillage horizontal (icône + wordmark) |
-| `aura-mark-sentinel.svg` | Direction B — bouclier et couches |
-| `aura-mark-orbits.svg` | Direction C — orbites et noyau-coffre, sans fond |
+| `alternatives/aura-mark-sentinel.svg` | Direction B — bouclier et couches (archivée) |
+| `alternatives/aura-mark-orbits.svg` | Direction C — orbites et noyau-coffre, sans fond (archivée) |
 | `aura-mark-mono.svg` | Version monochrome (`currentColor`) |
 | `aura-favicon.svg` | Favicon 32 px simplifié |
-| `aura-mark-dash.svg` | Phase 1 — A1 : traverse en trois tirets |
-| `aura-mark-reveal.svg` | Phase 1 — A2 : révélation animée par couches |
-| `aura-icons-system.svg` | Phase 1 — A3 : famille de quatre icônes |
+| `alternatives/aura-mark-dash.svg` | Phase 1 — A1 : traverse en trois tirets (archivée) |
+| `alternatives/aura-mark-reveal.svg` | Phase 1 — A2 : révélation animée par couches (archivée) |
+| `alternatives/aura-icons-system.svg` | Phase 1 — A3 : famille de quatre icônes (archivée) |
+| `alternatives/` | Variantes non retenues, conservées pour comparaison |
 | `gallery.html` | Page de comparaison visuelle à ouvrir dans un navigateur |
 
 ## Directions proposées

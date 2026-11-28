@@ -28,6 +28,10 @@ jobs:
       # Bloquant : règles de pyproject.toml (vrais défauts, 0 cas aujourd'hui).
       - name: Ruff (blocking rules)
         run: ruff check api audiobook scripts tests
+      # Bloquant : aucune dépendance de module vers le point de composition
+      # `api.main` (ADR-0004, issue #331).
+      - name: Architecture import guard
+        run: python3 scripts/check_architecture_imports.py
       # Avertissement : compte par règle, pour suivre la réduction de la dette.
       - name: Ruff (advisory, counts per rule)
         continue-on-error: true

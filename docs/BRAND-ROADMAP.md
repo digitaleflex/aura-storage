@@ -43,7 +43,7 @@ Trois pistes dessinées en SVG, dans `web/public/brand/` :
 | **A2 — Reveal** | Le `A` se construit par révélation progressive des couches (à utiliser en état de chargement/transfert). | Dashlane : « révéler / cacher » ; Skiff : surfaces qui apparaissent/disparaissent. |
 | **A3 — System** | Le monogramme devient une famille : icônes dérivées (fichier, dossier, partage, coffre) sur la même grille. | Modex : géométrie modulaire ; Astio : langage systémique. |
 
-- **Livrables** : `aura-mark-dash.svg`, `aura-mark-reveal.svg` (state statique + animation CSS de démonstration), `aura-icons-system.svg`, mise à jour de `gallery.html`.
+- **Livrables archivés** : `alternatives/aura-mark-dash.svg`, `alternatives/aura-mark-reveal.svg` (state statique + animation CSS de démonstration), `alternatives/aura-icons-system.svg`, mise à jour de `gallery.html`.
 - **Critère d'acceptation** : chaque piste est lisible en 24 px et reconnaissable comme un `A` ; aucune ne reprend un tracé de marque existante.
 
 ### Phase 2 — Validation technique — 🔄 en cours (contrôle statique fait, rendu à faire)
