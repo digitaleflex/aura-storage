@@ -12,7 +12,6 @@ from . import ids, shares
 from .audit import audit_event, set_request_principal
 from .authz import ADMIN_READ, ADMIN_WRITE, OBJECTS_READ, authorize, effective_scopes
 from .config import settings
-from .s3 import presigned_get
 from .store import repo
 from .transfer import AVAILABLE
 
@@ -84,7 +83,10 @@ def redeem_share(token: str, request: Request):
         audit_event("share-access", None, "denied", {"share_id": row["id"], "reason": "object_unavailable"})
         raise _share_not_found()
     obj = _as_dict(target)
-    from .main import _require_premium, _check_egress_quota, _record_egress, _record_object_event, s3
+    from .main import (
+        _require_premium, _check_egress_quota, _record_egress,
+        _record_object_event, presigned_get, s3,
+    )
     if settings.public_download_require_premium and obj.get("published_at"):
         try:
             _require_premium(request)
@@ -220,7 +222,10 @@ def get_transfer(tid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
 
 @router.post("/api/v1/objects/{oid}/download-intent")
 def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
-    from .main import _assert_bytes_intact, _check_egress_quota, _record_egress, _record_object_event, s3
+    from .main import (
+        _assert_bytes_intact, _check_egress_quota, _record_egress,
+        _record_object_event, presigned_get, s3,
+    )
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
@@ -247,7 +252,10 @@ def download_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))
 
 @router.post("/api/v1/objects/{oid}/preview-intent")
 def preview_intent(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
-    from .main import _assert_bytes_intact, _check_egress_quota, _record_egress, _record_object_event, s3
+    from .main import (
+        _assert_bytes_intact, _check_egress_quota, _record_egress,
+        _record_object_event, presigned_get, s3,
+    )
     oid = _canonical_id(oid, "object id")
     row = repo.get_object(oid, **_object_scope(principal))
     if row is None:
