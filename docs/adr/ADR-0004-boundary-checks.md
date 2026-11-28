@@ -1,6 +1,7 @@
 # ADR-0004 — Contrôles automatiques des frontières de modules
 
-- Statut: Proposé
+- Statut: Accepté
+- Approuvé le: 2026-11-28
 - Date: 2026-11-26
 - Issue: #331
 

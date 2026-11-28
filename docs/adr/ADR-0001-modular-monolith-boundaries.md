@@ -1,6 +1,7 @@
 # ADR-0001 — Frontières d’architecture du monolithe modulaire AURA
 
-- Statut: Proposé
+- Statut: Accepté
+- Approuvé le: 2026-11-28
 - Date: 2026-11-26
 - Issues: #337, #329
 - Portée: backend API AURA (`api/`), sans changement applicatif

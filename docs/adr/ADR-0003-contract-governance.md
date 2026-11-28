@@ -1,6 +1,7 @@
 # ADR-0003 — Gouvernance des contrats et compatibilité
 
-- Statut: Proposé
+- Statut: Accepté
+- Approuvé le: 2026-11-28
 - Date: 2026-11-26
 - Issue: #330
 

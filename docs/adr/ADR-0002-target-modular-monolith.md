@@ -1,6 +1,7 @@
 # ADR-0002 — Architecture cible évolutive du monolithe modulaire AURA
 
-- Statut: Proposé
+- Statut: Accepté
+- Approuvé le: 2026-11-28
 - Date: 2026-11-26
 - Issue: #329
 
