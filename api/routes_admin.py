@@ -10,25 +10,9 @@ from . import ids
 from .audit import audit_event
 from .authz import ADMIN_READ, ADMIN_WRITE, authorize, effective_scopes
 from .config import settings
-from .lifecycle import purge_object, purge_transfer_history, reconcile_pending, reconcile_reverse, reconcile_terminal, resume_purges
+from .lifecycle import resume_purges
 from .store import repo
 from .transfer import EXPIRED
-
-# This extracted route module is not registered by api.main, so importing its
-# helpers back from main is safe and keeps the extraction faithful to the
-# original endpoint bodies.
-from .main import (  # noqa: E402
-    ALL_SCOPES, AVAILABLE, SERVICE_SCOPES,
-    ApplicationIn, ApplicationPatchIn, BucketIn, BucketPatchIn, IdentityIn,
-    ObjectTooLarge, PartnerSiteIn, PartnerSitePatchIn, SpaceIn, SpacePatchIn,
-    SpaceQuotasIn,
-    _BOOT_TIME, _application_public, _bucket_public, _capacity,
-    _space_month_usage, _space_public, _space_quota, _split_audio_name,
-    _upload_ceiling, _usage_period,
-    JSONResponse, app, audit_path, fingerprint, format_token,
-    is_valid_bucket_name, new_secret, prune_audit_log, query_audit_log,
-    recent_error_events, s3probe, shutil, stream_sha256,
-)
 
 
 def _main():
@@ -72,14 +56,14 @@ def reconcile(limit: int = 500,
     expire_after_s = (
         settings.intent_ttl + settings.intent_grace_s + settings.reconcile_extra_grace_s
     )
-    out = reconcile_pending(
-        repo, _main.s3ops, expire_after_s=expire_after_s, limit=limit,
+    out = _main().reconcile_pending(
+        repo, _main().s3ops, expire_after_s=expire_after_s, limit=limit,
         multipart_expired_before=int(time.time()) - settings.intent_grace_s,
     )
     # Finish purges a crashed process left half-done (two-phase purge).
-    out.update(resume_purges(repo, _main.s3ops, limit=limit))
+    out.update(resume_purges(repo, _main().s3ops, limit=limit))
     # Retention window for the append-only transfer journal (#246).
-    out.update(purge_transfer_history(
+    out.update(_main().purge_transfer_history(
         repo, retention_days=settings.transfer_history_retention_days,
         limit=limit,
     ))
@@ -91,7 +75,7 @@ def reconcile(limit: int = 500,
 def reconcile_terminal_route(limit: int = 500,
                             principal: dict = Depends(authorize(ADMIN_WRITE))):
     limit = max(1, min(limit, 5000))
-    out = reconcile_terminal(repo, _main.s3ops, limit=limit)
+    out = _main().reconcile_terminal(repo, _main().s3ops, limit=limit)
     audit_event("admin.reconcile_terminal", principal["id"], "success", out)
     return out
 
@@ -99,7 +83,7 @@ def reconcile_terminal_route(limit: int = 500,
 @router.post("/api/v1/admin/reconcile-reverse")
 def reconcile_reverse_route(dry_run: bool = True,
                            principal: dict = Depends(authorize(ADMIN_WRITE))):
-    out = reconcile_reverse(repo, _main.s3ops, dry_run=dry_run)
+    out = _main().reconcile_reverse(repo, _main().s3ops, dry_run=dry_run)
     audit_event("admin.reconcile_reverse", principal["id"], "success", out)
     return out
 
@@ -127,7 +111,7 @@ def integrity_report(limit: int = 100,
 def integrity_scrub_now(principal: dict = Depends(authorize(ADMIN_WRITE))):
     """Run one bounded scrub pass now (same byte budget as the periodic one)."""
     from .scrubber import scrub_run
-    out = scrub_run(repo, _main.s3ops, settings, audit=audit_event)
+    out = scrub_run(repo, _main().s3ops, settings, audit=audit_event)
     audit_event("admin.scrub", principal["id"], "success", out)
     return out
 
@@ -152,10 +136,10 @@ def reverify_object(oid: str, principal: dict = Depends(authorize(ADMIN_WRITE)))
     if row.get("multipart_part_bytes"):
         max_bytes = max(max_bytes, settings.multipart_max_object_bytes)
     try:
-        head = _main.s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
-        body = _main.s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
-        total, digest = stream_sha256(body, max_bytes, settings.commit_chunk_bytes)
-    except ObjectTooLarge:
+        head = _main().s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
+        body = _main().s3ops.get_object(Bucket=row["bucket"], Key=row["object_key"])["Body"]
+        total, digest = _main().stream_sha256(body, max_bytes, settings.commit_chunk_bytes)
+    except _main().ObjectTooLarge:
         raise HTTPException(status_code=413, detail="object exceeds the configured cap")
     except Exception:
         audit_event("admin.reverify", principal["id"], "storage_failure",
@@ -169,7 +153,7 @@ def reverify_object(oid: str, principal: dict = Depends(authorize(ADMIN_WRITE)))
         audit_event("admin.reverify", principal["id"], "mismatch", {
             "object_id": oid, "size_bytes": total,
         })
-        return JSONResponse(status_code=409, content={
+        return _main().JSONResponse(status_code=409, content={
             "id": oid, "status": "suspect", "reason": "checksum_mismatch",
             "size_bytes": total, "checksum_sha256": digest,
         })
@@ -194,7 +178,7 @@ def list_orphan_candidates(limit: int = 100,
         row = _as_dict(row)
         checked += 1
         try:
-            _main.s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
+            _main().s3ops.head_object(Bucket=row["bucket"], Key=row["object_key"])
         except Exception:
             candidates.append({
                 "id": row["id"], "display_name": row["display_name"],
@@ -229,10 +213,10 @@ def storage_orphans(
     out = []
     for name in names:
         try:
-            report = scan_bucket(repo, _main.s3ops, name, grace_s=settings.orphan_grace_s,
+            report = scan_bucket(repo, _main().s3ops, name, grace_s=settings.orphan_grace_s,
                                  max_keys=max_keys, start_after=start_after)
             report["stale_uploads"] = scan_multipart(
-                repo, _main.s3ops, name, grace_s=settings.orphan_grace_s,
+                repo, _main().s3ops, name, grace_s=settings.orphan_grace_s,
             )
         except Exception:
             out.append({"bucket": name, "error": "storage unavailable"})
@@ -269,7 +253,7 @@ def storage_orphans_cleanup(
     if body.bucket not in {b["name"] for b in repo.list_all_buckets()}:
         raise HTTPException(status_code=404, detail="bucket not registered")
     out = remove_orphans(
-        repo, _main.s3ops, body.bucket, body.keys,
+        repo, _main().s3ops, body.bucket, body.keys,
         [u.model_dump() for u in body.uploads], grace_s=settings.orphan_grace_s,
     )
     audit_event("admin.storage-orphans.cleanup", principal["id"], "success", {
@@ -318,7 +302,7 @@ def search_audit(
         )
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
-    out = query_audit_log(
+    out = _main().query_audit_log(
         since=since, until=until, actor=actor or None, action=action or None,
         result=result or None, space_id=space_id,
         application_id=application_id, request_id=request_id or None,
@@ -337,7 +321,7 @@ def prune_audit(principal: dict = Depends(authorize(ADMIN_WRITE))):
     # AURA_AUDIT_RETENTION_DAYS. Lines without a valid timestamp are kept,
     # so audit data is never deleted silently.
     try:
-        out = prune_audit_log(retention_days=settings.audit_retention_days)
+        out = _main().prune_audit_log(retention_days=settings.audit_retention_days)
     except OSError:
         raise HTTPException(status_code=503, detail="audit log unavailable")
     audit_event("admin.audit.prune", principal["id"], "success", out)
@@ -352,11 +336,11 @@ def admin_portal_stats(principal: dict = Depends(authorize(ADMIN_READ))):
     visitor, e-mail or listening history is returned or stored for this purpose.
     A book is "completed" once a visitor reached 90 % of its duration.
     """
-    period = _usage_period()
-    raw = repo.portal_stats(period, AVAILABLE)
+    period = _main()._usage_period()
+    raw = repo.portal_stats(period, _main().AVAILABLE)
     books = []
     for row in raw["books"]:
-        author, title = _split_audio_name(row["display_name"])
+        author, title = _main()._split_audio_name(row["display_name"])
         listeners, completed = int(row["listeners"]), int(row["completed"])
         books.append({
             "id": row["id"], "title": title or row["display_name"], "author": author or "",
@@ -402,7 +386,7 @@ def admin_usage(
     total_bytes = 0
     total_available = 0
     total_pending = 0
-    period = _usage_period()
+    period = _main()._usage_period()
     total_egress = 0
     for space in spaces:
         space = _as_dict(space)
@@ -412,7 +396,7 @@ def admin_usage(
         total_bytes += usage["stored_bytes"]
         total_available += usage["available_count"]
         total_pending += usage["pending_count"]
-        month = _space_month_usage(space["id"], period)
+        month = _main()._space_month_usage(space["id"], period)
         total_egress += month["egress_bytes"]
         application = applications.get(space["application_id"])
         items.append({
@@ -424,7 +408,7 @@ def admin_usage(
             # Monthly counters are estimates from issued intents/redemptions
             # (the API never proxies bytes). Quotas are null when unset.
             "month": month,
-            "quota": _space_quota(space["id"]),
+            "quota": _main()._space_quota(space["id"]),
         })
     return {
         "measured_at": int(time.time()),
@@ -433,13 +417,13 @@ def admin_usage(
             # Multipart lifts the declarable ceiling to its own cap; reporting
             # the single-PUT limit here would make the client guard reject
             # files the API would accept.
-            "max_object_bytes": _upload_ceiling(),
+            "max_object_bytes": _main()._upload_ceiling(),
             "max_pending_intents": settings.max_pending_intents,
             "intent_ttl": settings.intent_ttl,
             "allow_empty_objects": settings.allow_empty_objects,
         },
         # Capacity guard (null when AURA_STORAGE_CAPACITY_BYTES is not set).
-        "capacity": _capacity(),
+        "capacity": _main()._capacity(),
         "totals": {
             "objects_by_status": totals_by_status,
             "available_count": total_available,
@@ -463,8 +447,8 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
     checked_at = int(time.time())
     components: dict[str, dict] = {
         "api": {
-            "status": "ok", "uptime_s": checked_at - _BOOT_TIME,
-            "version": app.version,
+            "status": "ok", "uptime_s": checked_at - _main()._BOOT_TIME,
+            "version": _main().app.version,
         },
     }
     start = time.monotonic()
@@ -478,7 +462,7 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
         components["database"] = {"status": "down", "error": "unreachable"}
     start = time.monotonic()
     try:
-        s3probe.list_buckets()
+        _main().s3probe.list_buckets()
         components["storage"] = {
             "status": "ok",
             "latency_ms": int((time.monotonic() - start) * 1000),
@@ -487,7 +471,7 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
     except Exception:
         components["storage"] = {"status": "down", "error": "unreachable"}
     try:
-        disk = shutil.disk_usage(audit_path())
+        disk = _main().shutil.disk_usage(_main().audit_path())
         components["disk"] = {
             "status": "ok", "total_bytes": disk.total,
             "used_bytes": disk.used, "free_bytes": disk.free,
@@ -507,7 +491,7 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
         "last_sweep": sweep,
         "note": None if sweep else "no sweep yet",
     }
-    errors, scanned = recent_error_events(
+    errors, scanned = _main().recent_error_events(
         window_s=settings.audit_error_window_s, limit=5,
         max_scan_lines=settings.audit_error_scan_lines,
     )
@@ -528,17 +512,17 @@ def admin_health(principal: dict = Depends(authorize(ADMIN_READ))):
 
 
 @router.post("/api/v1/admin/applications")
-def create_application(body: ApplicationIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
+def create_application(body: _main().ApplicationIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
     if repo.get_application_by_name(body.name) is not None:
         raise HTTPException(status_code=409, detail="application already exists")
     aid = repo.create_application(body.name)
     audit_event("admin.application.create", principal["id"], "success", {"application_id": aid})
-    return _application_public(repo.get_application(aid))
+    return _main()._application_public(repo.get_application(aid))
 
 
 @router.get("/api/v1/admin/applications")
 def list_applications(principal: dict = Depends(authorize(ADMIN_READ))):
-    return {"items": [_application_public(a) for a in repo.list_applications()]}
+    return {"items": [_main()._application_public(a) for a in repo.list_applications()]}
 
 
 @router.get("/api/v1/admin/applications/{aid}")
@@ -548,14 +532,14 @@ def get_application(aid: str, principal: dict = Depends(authorize(ADMIN_READ))):
     if row is None:
         raise HTTPException(status_code=404, detail="application not found")
     # The stable identifier is returned verbatim; it is never derived from name.
-    out = _application_public(row)
+    out = _main()._application_public(row)
     out["space_count"] = repo.count_spaces_for_application(aid)
     return out
 
 
 @router.patch("/api/v1/admin/applications/{aid}")
 def update_application(
-    aid: str, body: ApplicationPatchIn,
+    aid: str, body: _main().ApplicationPatchIn,
     principal: dict = Depends(authorize(ADMIN_WRITE)),
 ):
     aid = _canonical_id(aid, "application id")
@@ -579,7 +563,7 @@ def update_application(
     )
     audit_event("admin.application.update", principal["id"], "success",
                 {"application_id": aid})
-    out = _application_public(repo.get_application(aid))
+    out = _main()._application_public(repo.get_application(aid))
     out["space_count"] = repo.count_spaces_for_application(aid)
     return out
 
@@ -587,16 +571,16 @@ def update_application(
 def _space_detail(sid: str) -> dict:
     """Space detail with its application, buckets and attachment counts."""
     row = repo.get_space(sid)
-    out = _space_public(row)
+    out = _main()._space_public(row)
     application = repo.get_application(row["application_id"])
     out["application_name"] = application["name"] if application else None
-    out["buckets"] = [_bucket_public(b) for b in repo.list_buckets(sid)]
+    out["buckets"] = [_main()._bucket_public(b) for b in repo.list_buckets(sid)]
     out["counts"] = repo.space_counts(sid)
     return out
 
 
 @router.post("/api/v1/admin/spaces")
-def create_space(body: SpaceIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
+def create_space(body: _main().SpaceIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
     application = repo.get_application(body.application_id)
     if application is None:
         raise HTTPException(status_code=404, detail="application not found")
@@ -608,7 +592,7 @@ def create_space(body: SpaceIn, principal: dict = Depends(authorize(ADMIN_WRITE)
         # duplicate is a 409, never a database integrity error.
         raise HTTPException(status_code=409, detail="space already exists")
     bucket = body.default_bucket or f"aura-{body.name}-{body.environment}"
-    if not is_valid_bucket_name(bucket):
+    if not _main().is_valid_bucket_name(bucket):
         # Refuse up front rather than register a bucket name S3 will reject (#41).
         raise HTTPException(status_code=422, detail="invalid bucket name")
     if repo.get_bucket_by_name(bucket) is not None:
@@ -621,7 +605,7 @@ def create_space(body: SpaceIn, principal: dict = Depends(authorize(ADMIN_WRITE)
 
 @router.get("/api/v1/admin/spaces")
 def list_spaces(principal: dict = Depends(authorize(ADMIN_READ))):
-    return {"items": [_space_public(s) for s in repo.list_spaces()]}
+    return {"items": [_main()._space_public(s) for s in repo.list_spaces()]}
 
 
 @router.get("/api/v1/admin/spaces/{sid}")
@@ -634,7 +618,7 @@ def get_space(sid: str, principal: dict = Depends(authorize(ADMIN_READ))):
 
 @router.patch("/api/v1/admin/spaces/{sid}")
 def update_space(
-    sid: str, body: SpacePatchIn,
+    sid: str, body: _main().SpacePatchIn,
     principal: dict = Depends(authorize(ADMIN_WRITE)),
 ):
     sid = _canonical_id(sid, "space id")
@@ -673,7 +657,7 @@ def update_space(
 
 @router.put("/api/v1/admin/spaces/{sid}/quotas")
 def set_space_quotas(
-    sid: str, body: SpaceQuotasIn,
+    sid: str, body: _main().SpaceQuotasIn,
     principal: dict = Depends(authorize(ADMIN_WRITE)),
 ):
     """Replace the monthly quotas of a space. Null clears a ceiling."""
@@ -688,12 +672,12 @@ def set_space_quotas(
         "storage_bytes": body.storage_bytes,
         "egress_bytes_monthly": body.egress_bytes_monthly,
     })
-    return {"space_id": sid, **_space_quota(sid)}
+    return {"space_id": sid, **_main()._space_quota(sid)}
 
 
 @router.post("/api/v1/admin/spaces/{sid}/buckets")
 def create_space_bucket(
-    sid: str, body: BucketIn,
+    sid: str, body: _main().BucketIn,
     principal: dict = Depends(authorize(ADMIN_WRITE)),
 ):
     # Register an extra bucket for a space. The bucket name is validated against
@@ -702,14 +686,14 @@ def create_space_bucket(
     sid = _canonical_id(sid, "space id")
     if repo.get_space(sid) is None:
         raise HTTPException(status_code=404, detail="space not found")
-    if not is_valid_bucket_name(body.name):
+    if not _main().is_valid_bucket_name(body.name):
         raise HTTPException(status_code=422, detail="invalid bucket name")
     if repo.get_bucket_by_name(body.name) is not None:
         raise HTTPException(status_code=409, detail="bucket name already in use")
     bid = repo.create_bucket(sid, body.name, is_default=False)
     audit_event("admin.bucket.create", principal["id"], "success",
                 {"bucket_id": bid, "space_id": sid})
-    return _bucket_public(repo.get_bucket(bid))
+    return _main()._bucket_public(repo.get_bucket(bid))
 
 
 @router.get("/api/v1/admin/buckets")
@@ -723,7 +707,7 @@ def list_buckets(principal: dict = Depends(authorize(ADMIN_READ))):
         space = spaces.get(bucket["space_id"])
         application = applications.get(space["application_id"]) if space else None
         items.append({
-            **_bucket_public(bucket),
+            **_main()._bucket_public(bucket),
             "space_name": space["name"] if space else None,
             "environment": space["environment"] if space else None,
             "application_id": space["application_id"] if space else None,
@@ -734,7 +718,7 @@ def list_buckets(principal: dict = Depends(authorize(ADMIN_READ))):
 
 @router.patch("/api/v1/admin/buckets/{bid}")
 def update_bucket(
-    bid: str, body: BucketPatchIn,
+    bid: str, body: _main().BucketPatchIn,
     principal: dict = Depends(authorize(ADMIN_WRITE)),
 ):
     # Toggle the default flag. Setting a bucket default clears the flag on the
@@ -749,7 +733,7 @@ def update_bucket(
         "bucket_id": bid, "space_id": bucket["space_id"],
         "is_default": body.is_default,
     })
-    return _bucket_public(repo.get_bucket(bid))
+    return _main()._bucket_public(repo.get_bucket(bid))
 
 
 def _create_service_identity(
@@ -768,10 +752,10 @@ def _create_service_identity(
         # No new identity may be minted for a disabled space (#M04).
         raise HTTPException(status_code=409, detail="space is not active")
     scopes = set(scopes_in)
-    unknown = scopes - ALL_SCOPES
+    unknown = scopes - _main().ALL_SCOPES
     if unknown:
         raise HTTPException(status_code=422, detail="unknown scopes requested")
-    forbidden = scopes - SERVICE_SCOPES
+    forbidden = scopes - _main().SERVICE_SCOPES
     if forbidden:
         # Machine identities are data-plane only: administration stays with a
         # human operator/admin session (see docs/AUTHORIZATION-MATRIX.md).
@@ -781,11 +765,11 @@ def _create_service_identity(
     if not scopes:
         raise HTTPException(status_code=422, detail="at least one scope is required")
     identity_id = repo.new_id()
-    secret = new_secret()
+    secret = _main().new_secret()
     expires_at = int(time.time()) + ttl_seconds if ttl_seconds else None
     repo.create_identity(
         identity_id, space["application_id"], space_id, name,
-        fingerprint(secret), ",".join(sorted(scopes)), expires_at,
+        _main().fingerprint(secret), ",".join(sorted(scopes)), expires_at,
     )
     audit_event("admin.identity.create", principal["id"], "success",
                 {"identity_id": identity_id, "space_id": space_id})
@@ -794,12 +778,12 @@ def _create_service_identity(
         "application_id": space["application_id"], "scopes": sorted(scopes),
         "expires_at": expires_at,
         # The token is returned exactly once; it is never logged or stored in clear.
-        "token": format_token(identity_id, secret),
+        "token": _main().format_token(identity_id, secret),
     }
 
 
 @router.post("/api/v1/admin/identities")
-def create_identity(body: IdentityIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
+def create_identity(body: _main().IdentityIn, principal: dict = Depends(authorize(ADMIN_WRITE))):
     return _create_service_identity(
         principal, body.space_id, body.name, body.scopes, body.ttl_seconds
     )
@@ -852,7 +836,7 @@ def list_partner_sites(principal: dict = Depends(authorize(ADMIN_READ))):
 
 @router.post("/api/v1/admin/partner-sites")
 def create_partner_site(
-    body: PartnerSiteIn, principal: dict = Depends(authorize(ADMIN_WRITE)),
+    body: _main().PartnerSiteIn, principal: dict = Depends(authorize(ADMIN_WRITE)),
 ):
     """Create the site metadata and its dedicated identity in one step.
 
@@ -890,7 +874,7 @@ def create_partner_site(
 
 @router.patch("/api/v1/admin/partner-sites/{pid}")
 def update_partner_site(
-    pid: str, body: PartnerSitePatchIn,
+    pid: str, body: _main().PartnerSitePatchIn,
     principal: dict = Depends(authorize(ADMIN_WRITE)),
 ):
     """Edit metadata only. Moving the trust to another space means a new key."""
@@ -957,10 +941,10 @@ def rotate_identity(iid: str, principal: dict = Depends(authorize(ADMIN_WRITE)))
     row = repo.get_identity(iid)
     if row is None or row.get("revoked_at"):
         raise HTTPException(status_code=404, detail="identity not found")
-    secret = new_secret()
-    repo.update_identity_secret(iid, fingerprint(secret))
+    secret = _main().new_secret()
+    repo.update_identity_secret(iid, _main().fingerprint(secret))
     audit_event("admin.identity.rotate", principal["id"], "success", {"identity_id": iid})
-    return {"id": iid, "token": format_token(iid, secret)}
+    return {"id": iid, "token": _main().format_token(iid, secret)}
 
 
 @router.post("/api/v1/admin/identities/{iid}/revoke")
