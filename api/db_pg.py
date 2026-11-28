@@ -1364,6 +1364,13 @@ class Repository:
             (since,),
         ) is not None
 
+    def has_verifying_before(self, cutoff: int) -> bool:
+        """True if an object has been waiting for verification since ``cutoff``."""
+        return self._one(
+            "SELECT 1 AS n FROM objects WHERE status = 'verifying' AND updated_at <= %s LIMIT 1",
+            (cutoff,),
+        ) is not None
+
     def claim_scrub(self, now: int, lease_until: int, checked_before: int):
         """Take the available object checked longest ago (never-checked first),
         under a lease, if it is due (checked before ``checked_before``)."""

@@ -150,6 +150,10 @@ class Settings:
     openrouter_model: str = os.environ.get("AURA_OPENROUTER_MODEL", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free")
     ai_confidence_threshold: float = _float("AURA_AI_CONFIDENCE_THRESHOLD", 0.80)
     ai_timeout_s: int = _int("AURA_AI_TIMEOUT_S", 120)
+    asr_enabled: bool = os.environ.get("AURA_ASR_ENABLED", "0") == "1"
+    asr_model: str = os.environ.get("AURA_ASR_MODEL", "small")
+    asr_device: str = os.environ.get("AURA_ASR_DEVICE", "cpu")
+    asr_compute_type: str = os.environ.get("AURA_ASR_COMPUTE_TYPE", "int8")
     multipart_threshold_bytes: int = _int("AURA_MULTIPART_THRESHOLD_BYTES", 100 * 1024 * 1024)
     # Each part is one request through the edge proxy: keep part / slowest
     # supported rate well under Traefik's readTimeout (see the plan).
@@ -174,6 +178,11 @@ class Settings:
     # the window counts as a running upload; abandoned ones age out of it.
     verify_pause_while_uploading: bool = _int("AURA_VERIFY_PAUSE_WHILE_UPLOADING", 1) != 0
     verify_pause_window_s: int = _int("AURA_VERIFY_PAUSE_WINDOW_S", 300)
+    # Anti-starvation: a long batch keeps pending intents inside the pause
+    # window for hours, leaving committed objects unverified until it ends.
+    # Once an object has waited this long, verify one anyway (the uploads keep
+    # running; the check just stops being postponed indefinitely).
+    verify_max_starvation_s: int = _int("AURA_VERIFY_MAX_STARVATION_S", 300)
     # "inline": a worker thread inside the API process (default). "off": run
     # `python -m api.verifier` as its own process instead.
     verify_worker: str = os.environ.get("AURA_VERIFY_WORKER", "inline")

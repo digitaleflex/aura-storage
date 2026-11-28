@@ -52,11 +52,13 @@ function describeItem(item: QueueItem, waitingAhead: number): string | null {
     case "failed":
       return st.failureKind === "retryable"
         ? "Interrompu par un incident réseau ou serveur : « Relancer » reprend ce fichier."
-        : st.failureKind === "expired"
-          ? "L'autorisation d'envoi a expiré trop de fois : « Relancer » en demande une nouvelle."
-          : st.failureKind === "fatal"
-            ? "Refusé par le serveur : réessayer ne changera pas le résultat sans corriger la cause."
-            : null;
+        : st.failureKind === "verify-timeout"
+          ? "Vérification d'intégrité encore en cours : une nouvelle tentative est programmée automatiquement."
+          : st.failureKind === "expired"
+            ? "L'autorisation d'envoi a expiré trop de fois : « Relancer » en demande une nouvelle."
+            : st.failureKind === "fatal"
+              ? "Refusé par le serveur : réessayer ne changera pas le résultat sans corriger la cause."
+              : null;
     case "cancelled":
       return "Annulé par vous. « Relancer » le remet dans la file.";
     default:

@@ -328,6 +328,8 @@ export function failureTitle(item: QueueItem): string {
   switch (item.state.failureKind) {
     case "retryable":
       return "Interrompu par un incident réseau ou serveur.";
+    case "verify-timeout":
+      return "La vérification d'intégrité n'est pas encore terminée.";
     case "expired":
       return "L'autorisation d'envoi a expiré.";
     case "fatal":
@@ -343,6 +345,8 @@ export function failureKindLabel(item: QueueItem): string {
   switch (item.state.failureKind) {
     case "retryable":
       return "Incident réseau ou serveur (nouvelle tentative possible)";
+    case "verify-timeout":
+      return "Vérification toujours en cours (reprise automatique)";
     case "expired":
       return "Autorisation d'envoi expirée";
     case "fatal":

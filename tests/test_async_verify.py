@@ -223,6 +223,38 @@ def test_a_reload_after_upload_does_not_send_the_bytes_again(_setup):
     assert r.json()["upload_url"] is None
 
 
+def test_a_long_upload_batch_cannot_starve_verification(_setup, monkeypatch):
+    import threading
+
+    from api.verifier import run_forever
+
+    monkeypatch.setattr(main.settings, "verify_poll_s", 0.05)
+    monkeypatch.setattr(main.settings, "verify_max_starvation_s", 60)
+    # Pending intents left by other test modules would keep the worker waiting.
+    _sql("UPDATE objects SET status = 'aborted' WHERE status = 'pending'")
+    c, headers = _admin()
+    oid = _upload(c, headers)
+    assert c.post(f"/api/v1/objects/{oid}/commit", headers=headers).status_code == 202
+    running = _upload(c, headers)  # the batch is still sending files
+    # This object has already waited far longer than the starvation budget.
+    _sql("UPDATE objects SET updated_at = updated_at - 3600 WHERE id = ?", (oid,))
+
+    stop = threading.Event()
+    t = threading.Thread(target=run_forever, args=(main.repo, _setup, main.settings),
+                         kwargs={"stop": stop}, daemon=True)
+    t.start()
+    try:
+        for _ in range(100):
+            if _status(oid) == "available":
+                break
+            time.sleep(0.05)
+        assert _status(oid) == "available"
+        assert _status(running) == "pending"
+    finally:
+        stop.set()
+        t.join(timeout=2)
+
+
 def test_verifying_objects_cannot_be_deleted_or_aborted(_setup):
     c, headers = _admin()
     oid = _upload(c, headers)

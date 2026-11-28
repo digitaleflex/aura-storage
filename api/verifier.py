@@ -163,8 +163,15 @@ def run_forever(repo, s3ops, settings, *, stop: threading.Event | None = None,
     last_purge_sweep = 0.0
     while not stop.is_set():
         try:
-            if settings.verify_pause_while_uploading and repo.has_pending_uploads(
-                int(time.time()) - settings.verify_pause_window_s
+            now = int(time.time())
+            if (
+                settings.verify_pause_while_uploading
+                and repo.has_pending_uploads(now - settings.verify_pause_window_s)
+                # A batch can keep the pause window open for hours. Once the
+                # oldest committed object has waited too long, verify one
+                # anyway: an object must never stay invisible indefinitely
+                # because uploads keep arriving.
+                and not repo.has_verifying_before(now - settings.verify_max_starvation_s)
             ):
                 # Uploads are running: verify once they are done (the re-read
                 # would compete with the PUTs for the disk).

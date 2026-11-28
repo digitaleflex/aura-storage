@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, PresignedUploadError } from "./api";
 import type { CommitResponse, UploadIntentResponse } from "./api";
-import { runTransfer, startUploadQueue } from "./transfer";
+import { classifyError, runTransfer, startUploadQueue } from "./transfer";
 import type { TransferDeps, TransferState } from "./transfer";
 
 const FILE = { name: "gros.bin", size: 1000, type: "application/octet-stream" } as unknown as File;
@@ -43,8 +43,17 @@ function run(deps: TransferDeps, config: Record<string, unknown> = {}, states: T
   });
 }
 
+describe("classifyError — expiry is not a permission refusal", () => {
+  it("keeps an expired S3 URL replayable but treats an API 403 as final", () => {
+    expect(classifyError(new PresignedUploadError("rejected", 403, "AccessDenied"))).toBe("expired");
+    expect(classifyError(new PresignedUploadError("expired", 403, "URL expirée."))).toBe("expired");
+    // The API answered "Action non autorisée": renewing the URL cannot help.
+    expect(classifyError(new ApiError(403, "forbidden"))).toBe("fatal");
+  });
+});
+
 describe("runTransfer — bounded verification follow-up", () => {
-  it("gives up after maxVerifyPolls instead of holding a slot forever", async () => {
+  it("leaves a replayable outcome after maxVerifyPolls instead of holding a slot forever", async () => {
     const objectStatus = vi.fn(async () => ({ status: "verifying" }));
     const deps = makeDeps({
       commit: async () => ({ status: "verifying" }) as CommitResponse,
@@ -56,7 +65,9 @@ describe("runTransfer — bounded verification follow-up", () => {
     expect(objectStatus).toHaveBeenCalledTimes(3);
     expect(result.state.phase).toBe("failed");
     expect(result.state.error).toContain("3 contrôles");
-    expect(result.state.failureKind).toBe("fatal");
+    // The server has not refused anything: the object is stored and queued for
+    // the check, so the queue may resume watching it automatically.
+    expect(result.state.failureKind).toBe("verify-timeout");
   });
 
   it("still accepts a late 'available' verdict", async () => {
@@ -162,6 +173,40 @@ describe("startUploadQueue — automatic batch retry", () => {
 
     const final = await queue.done;
     expect(final.items.map((item) => item.state.phase)).toEqual(["available", "available"]);
+  });
+
+  it("replays a verification timeout without resending the bytes", async () => {
+    vi.useFakeTimers();
+    const objectStatus = vi.fn(async () => ({ status: "verifying" }));
+    const upload = vi.fn(async () => {});
+    let intents = 0;
+    const deps = makeDeps({
+      // The replay carries the same idempotency key: the API answers with the
+      // object already being verified, not with a second upload URL.
+      requestIntent: async () =>
+        intents++ === 0
+          ? makeIntent()
+          : makeIntent({ status: "verifying", upload_url: null }),
+      commit: async () => ({ status: "verifying" }) as CommitResponse,
+      objectStatus,
+      upload,
+    });
+    const onAutoRetry = vi.fn();
+    const queue = startUploadQueue([file("a.bin")], deps, {
+      ...options(onAutoRetry),
+      config: { maxAttempts: 1, maxVerifyPolls: 1 },
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onAutoRetry).toHaveBeenCalledTimes(1);
+    // The bytes were already stored by the first attempt: the replay only
+    // resumes the server-side verification.
+    expect(upload).toHaveBeenCalledTimes(1);
+    const final = await queue.done;
+    expect(final.items[0]?.state.failureKind).toBe("verify-timeout");
   });
 
   it("stops at maxAutoRetries instead of looping forever", async () => {

@@ -181,6 +181,7 @@ describe("failureTitle", () => {
   it("maps failure kinds to French titles", () => {
     expect(failureTitle(makeItem({ state: { phase: "failed", failureKind: "fatal" } as never }))).toContain("refusé");
     expect(failureTitle(makeItem({ state: { phase: "failed", failureKind: "retryable" } as never }))).toContain("réseau");
+    expect(failureTitle(makeItem({ state: { phase: "failed", failureKind: "verify-timeout" } as never }))).toContain("vérification");
   });
 });
 
