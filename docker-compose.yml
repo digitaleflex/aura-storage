@@ -306,6 +306,12 @@ services:
       AURA_ANTHROPIC_MODEL: ${AURA_ANTHROPIC_MODEL:-claude-sonnet-4-6}
       AURA_OPENROUTER_API_KEY: ${AURA_OPENROUTER_API_KEY:-}
       AURA_OPENROUTER_MODEL: ${AURA_OPENROUTER_MODEL:-nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}
+      AURA_ASR_ENABLED: ${AURA_ASR_ENABLED:-0}
+      AURA_ASR_MODEL: ${AURA_ASR_MODEL:-small}
+      AURA_ASR_DEVICE: ${AURA_ASR_DEVICE:-cpu}
+      AURA_ASR_COMPUTE_TYPE: ${AURA_ASR_COMPUTE_TYPE:-int8}
+      HF_HOME: /var/cache/huggingface
+      HF_HUB_DISABLE_XET: "1"
       AURA_AI_CONFIDENCE_THRESHOLD: ${AURA_AI_CONFIDENCE_THRESHOLD:-0.80}
       AURA_AI_TIMEOUT_S: ${AURA_AI_TIMEOUT_S:-120}
       GOOGLE_ALLOWED_EMAIL_DOMAINS: ${GOOGLE_ALLOWED_EMAIL_DOMAINS:-}
@@ -413,6 +419,7 @@ services:
     volumes:
       - audit-log:/var/lib/aura/audit
       - ${AURA_DATA_DIR:-./data}/cover-review:/var/lib/aura/cover-review
+      - ${AURA_DATA_DIR:-./data}/hf-cache:/var/cache/huggingface
     networks:
       - storage
       # `docs` is a dedicated internal network shared with Traefik only. It lets

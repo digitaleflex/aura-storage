@@ -23,6 +23,8 @@ from typing import Any
 from .config import settings
 
 log = logging.getLogger("uvicorn.error")
+_asr_model = None
+_asr_lock = __import__("threading").Lock()
 
 CATEGORIES = [
     "meditation", "developpement_personnel", "formation", "business",
@@ -197,65 +199,143 @@ def _load_rule_keywords() -> list[tuple[str, list[str]]]:
                             out.append((item["category"].strip().lower(), kws))
                 if out:
                     return out
+            log.warning("audio_rules.json invalid format, using built-in defaults: %s", _RULES_FILE)
     except Exception as e:
-        log.warning("audio_rules.json load failed: %s", e)
+        log.warning("audio_rules.json load failed, using built-in defaults: %s", e)
     return list(_DEFAULT_RULE_KEYWORDS)
+
+def _get_asr_model():
+    global _asr_model
+    if _asr_model is not None:
+        return _asr_model
+    with _asr_lock:
+        if _asr_model is not None:
+            return _asr_model
+        from faster_whisper import WhisperModel
+        _asr_model = WhisperModel(
+            settings.asr_model,
+            device=settings.asr_device,
+            compute_type=settings.asr_compute_type,
+        )
+        log.info("ASR model loaded: %s (%s/%s)", settings.asr_model, settings.asr_device, settings.asr_compute_type)
+        return _asr_model
+
+
+def transcribe_excerpt(path: str, *, max_seconds: int = 480) -> dict[str, Any]:
+    """Transcribe an audio excerpt locally with faster-whisper. Returns dict with text/lang/error."""
+    if not settings.asr_enabled:
+        return {"ok": False, "error": "asr_disabled"}
+    try:
+        model = _get_asr_model()
+        # Decode via ffmpeg to avoid PyAV version incompatibilities.
+        import numpy as np
+        cmd = ["ffmpeg", "-v", "error", "-i", path, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-f", "s16le", "-"]
+        r = _run(cmd, timeout=max(120, max_seconds))
+        if r.returncode != 0 or not r.stdout:
+            raise RuntimeError("ffmpeg_decode_failed")
+        audio = np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+        try:
+            segments, info = model.transcribe(audio, beam_size=1, vad_filter=True)
+        except Exception:
+            segments, info = model.transcribe(audio, beam_size=1, vad_filter=False)
+        parts = []
+        total = 0.0
+        for seg in segments:
+            text = (seg.text or "").strip()
+            if text:
+                parts.append(text)
+            total = max(total, float(getattr(seg, "end", 0) or 0))
+            if total >= max_seconds:
+                break
+        text = " ".join(parts).strip()
+        return {
+            "ok": True,
+            "text": text[:4000],
+            "language": getattr(info, "language", None),
+            "language_probability": getattr(info, "language_probability", None),
+            "duration_s": total,
+        }
+    except Exception as e:
+        log.warning("ASR failed: %s", e)
+        return {"ok": False, "error": str(e)[:300]}
+
 
 def classify_with_rules(*, metadata: dict[str, Any], quality: dict[str, Any]) -> dict[str, Any]:
     """Deterministic classification from metadata/tags/filename/quality. No external AI."""
     tags = (quality.get("tags") or {}) if isinstance(quality, dict) else {}
-    parts = [
-        str(metadata.get("display_name") or ""),
-        str(metadata.get("folder_name") or ""),
-        str(tags.get("title") or ""),
-        str(tags.get("album") or ""),
-        str(tags.get("artist") or ""),
-        str(tags.get("genre") or ""),
-        str(tags.get("comment") or ""),
+    sources = [
+        ("genre", str(tags.get("genre") or ""), 4),
+        ("title_album", " ".join([str(tags.get("title") or ""), str(tags.get("album") or "")]), 3),
+        ("transcript", str(metadata.get("transcript_excerpt") or ""), 3),
+        ("filename", str(metadata.get("display_name") or ""), 2),
+        ("folder", str(metadata.get("folder_name") or ""), 2),
+        ("comment_artist", " ".join([str(tags.get("comment") or ""), str(tags.get("artist") or "")]), 1),
     ]
-    hay = _norm_text(" ".join(parts))
     rule_keywords = _load_rule_keywords()
-    scores: dict[str, int] = {c: 0 for c, _ in rule_keywords}
+    scores: dict[str, float] = {c: 0.0 for c, _ in rule_keywords}
+    evidence: dict[str, list[str]] = {c: [] for c, _ in rule_keywords}
     matched: dict[str, list[str]] = {c: [] for c, _ in rule_keywords}
-    for cat, kws in rule_keywords:
-        for kw in kws:
-            nkw = _norm_text(kw)
-            if nkw and nkw in hay:
-                scores[cat] += 2 if " " in nkw else 1
+
+    for src_name, raw, weight in sources:
+        hay = _norm_text(raw)
+        if not hay:
+            continue
+        for cat, kws in rule_keywords:
+            for kw in kws:
+                nkw = _norm_text(kw)
+                if not nkw or nkw not in hay:
+                    continue
+                occ = 1
+                if src_name == "transcript":
+                    occ = min(hay.count(nkw), 3)  # cap frequency boost
+                pts = weight * (2 if " " in nkw else 1) * occ
+                scores[cat] += pts
                 if kw not in matched[cat]:
                     matched[cat].append(kw)
-    # Genre tag strong signal
-    genre_tag = _norm_text(str(tags.get("genre") or ""))
-    for cat, kws in rule_keywords:
-        for kw in kws:
-            if _norm_text(kw) and _norm_text(kw) in genre_tag:
-                scores[cat] += 3
+                ev = f"{src_name}:{kw}(+{pts})"
+                if ev not in evidence[cat]:
+                    evidence[cat].append(ev)
 
-    best_cat = max(scores, key=lambda c: scores[c])
-    best_score = scores[best_cat]
-    second = sorted(scores.values(), reverse=True)[1] if len(scores) > 1 else 0
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    best_cat, best_score = ranked[0] if ranked else ("autre", 0.0)
+    second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+    third = ranked[2] if len(ranked) > 2 else None
+
     reasons = []
-    confidence = 0.25
+    confidence = 0.20
     if best_score > 0:
-        # confidence from keyword strength and margin
-        confidence = min(0.92, 0.45 + best_score * 0.07 + (best_score - second) * 0.03)
-        reasons.append(f"mots-clés: {', '.join(matched[best_cat][:5])}")
+        margin = best_score - second_score
+        # Calibrated confidence: strength + margin, capped.
+        confidence = 0.35 + min(best_score / 40.0, 0.40) + min(margin / 20.0, 0.20)
+        confidence = max(0.0, min(0.95, confidence))
+        reasons.append("top=" + ", ".join([f"{c}:{int(s)}" for c, s in ranked[:3] if s > 0]))
+        reasons.append("signaux=" + "; ".join(evidence.get(best_cat, [])[:6]))
     else:
         best_cat = "autre"
         confidence = 0.20
-        reasons.append("aucun mot-clé métier détecté")
+        reasons.append("aucun signal mots-clés")
 
     duration = float((quality.get("duration_s") or 0) if isinstance(quality, dict) else 0)
     if duration >= 20 * 60:
         reasons.append(f"durée longue ({int(duration//60)} min)")
         if best_cat == "autre":
             confidence = max(confidence, 0.30)
-    if duration and duration < 180:
+    elif duration and duration < 180:
         reasons.append("durée courte (<3 min)")
-        if best_cat == "autre":
-            scores_music = scores.get("musique", 0)
-            if scores_music == 0:
-                confidence = min(confidence, 0.35)
+        if best_cat in ("litterature", "formation", "histoire_societe"):
+            confidence = min(confidence, 0.55)
+
+    # Simple conflict guard: chapter/livre audio often means literature, but history keywords win.
+    if best_cat == "litterature" and scores.get("histoire_societe", 0) >= best_score * 0.8 and scores.get("histoire_societe", 0) > 0:
+        reasons.append("conflit litterature/histoire_societe: revue recommandée")
+        confidence = min(confidence, 0.70)
+
+    if confidence < 0.60:
+        reasons.append("confiance<0.60: incertain")
+    elif confidence < 0.80:
+        reasons.append("confiance 0.60-0.79: revue")
+    else:
+        reasons.append("confiance>=0.80: suggestion forte")
 
     themes = matched.get(best_cat, [])[:5]
     folder = f"Audiobooks/{best_cat.replace('_', ' ').title().replace(' ', '-')}"
@@ -266,11 +346,11 @@ def classify_with_rules(*, metadata: dict[str, Any], quality: dict[str, Any]) ->
             "langue": str(tags.get("language") or "fr")[:8],
             "confiance": round(confidence, 2),
             "dossier_suggere": folder,
-            "raison": "Règles déterministes: " + "; ".join(reasons),
+            "raison": "Règles déterministes: " + " | ".join(reasons),
             "transcription_courte": "",
         },
         provider="rules",
-        model="rules-v1",
+        model="rules-v2",
         quality=quality,
     )
 
@@ -536,6 +616,16 @@ def analyze_audio_file(path: str, *, metadata: dict[str, Any]) -> dict[str, Any]
             if extract_sample(path, tmp_sample, max_seconds=max_s, start_seconds=start):
                 sample_path = tmp_sample
                 sample_mime = "audio/mpeg"
+        # 1b) Optional local ASR on excerpt (no external API).
+        asr = {"ok": False, "error": "asr_disabled"}
+        if settings.asr_enabled:
+            asr = transcribe_excerpt(sample_path, max_seconds=480)
+            if asr.get("ok") and asr.get("text"):
+                metadata = {**metadata, "transcript_excerpt": asr.get("text", "")}
+                if asr.get("language") and not metadata.get("language"):
+                    metadata["language"] = asr.get("language")
+        quality = {**quality, "asr": {"ok": asr.get("ok"), "language": asr.get("language"), "chars": len(asr.get("text") or ""), "error": asr.get("error")}}
+
         # 1) Deterministic rules first (no external AI, fast, explainable).
         rules = classify_with_rules(metadata=metadata, quality=quality)
         rules_conf = float(rules.get("confidence") or 0)

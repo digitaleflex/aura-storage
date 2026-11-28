@@ -1474,10 +1474,22 @@ export const api = {
     });
   },
 
-  reviewAudioClassification(jobId: string, action: "accept" | "reject", csrf: string): Promise<AudioClassificationJob> {
+  getAudioClassificationFeedback(limit = 500): Promise<{
+    total: number; by_status: Record<string, number>; by_category: Record<string, number>;
+    rejected: Array<Record<string, unknown>>; low_confidence: Array<Record<string, unknown>>; hint?: string;
+  }> {
+    return request(`/api/v1/audio-classifications/feedback?limit=${limit}`);
+  },
+
+  reviewAudioClassification(
+    jobId: string,
+    action: "accept" | "reject",
+    csrf: string,
+    correction?: { corrected_category?: string; corrected_themes?: string[]; corrected_folder?: string },
+  ): Promise<AudioClassificationJob> {
     return request<AudioClassificationJob>(`/api/v1/audio-classifications/${encodeURIComponent(jobId)}/review`, {
       method: "POST",
-      body: { action },
+      body: { action, ...(correction || {}) },
       csrf,
     });
   },

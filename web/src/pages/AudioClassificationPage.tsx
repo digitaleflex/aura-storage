@@ -38,6 +38,9 @@ export function AudioClassificationPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [enqueuing, setEnqueuing] = useState(false);
+  const [edits, setEdits] = useState<Record<string, { category: string; themes: string; folder: string }>>({});
+  const [feedback, setFeedback] = useState<any>(null);
+  const [showFeedback, setShowFeedback] = useState(false);
   const transfers = useTransfers();
   const enqueuedObjectIds = useRef<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -54,8 +57,22 @@ export function AudioClassificationPage() {
         api.listAudioClassifications({ status: status || undefined, limit: 200 }),
       ]);
       setCsrf(me.csrf_token ?? null);
-      setJobs(res.items ?? []);
+      const items = res.items ?? [];
+      setJobs(items);
       setSelected({});
+      setEdits((prev) => {
+        const next = { ...prev };
+        for (const j of items) {
+          if (!next[j.id]) {
+            next[j.id] = {
+              category: j.suggested_category ?? "",
+              themes: (j.suggested_themes ?? []).join(", "),
+              folder: j.suggested_folder ?? "",
+            };
+          }
+        }
+        return next;
+      });
     } catch (e) {
       notify("error", e instanceof Error ? e.message : "Chargement impossible");
     } finally {
@@ -109,9 +126,15 @@ export function AudioClassificationPage() {
     if (!csrf) return;
     setBusyId(jobId);
     try {
-      const updated = await api.reviewAudioClassification(jobId, action, csrf);
+      const e = edits[jobId];
+      const correction = e ? {
+        corrected_category: e.category.trim() || undefined,
+        corrected_themes: e.themes.split(",").map((t) => t.trim()).filter(Boolean),
+        corrected_folder: e.folder.trim() || undefined,
+      } : undefined;
+      const updated = await api.reviewAudioClassification(jobId, action, csrf, correction);
       setJobs((current) => current.map((j) => (j.id === jobId ? { ...j, ...updated } : j)));
-      const tagMsg = action === "accept" && updated.applied_tags === false ? " (tags non appliqués: confiance < 80%)" : "";
+      const tagMsg = action === "accept" && updated.applied_tags === false ? " (tags non appliqués: confiance < 80% ou correction)" : "";
       notify("ok", (action === "accept" ? "Classification acceptée" : "Classification rejetée") + tagMsg);
     } catch (e) {
       notify("error", e instanceof Error ? e.message : "Action impossible");
@@ -128,7 +151,13 @@ export function AudioClassificationPage() {
     let ok = 0, err = 0;
     for (const id of ids) {
       try {
-        const updated = await api.reviewAudioClassification(id, action, csrf);
+        const e = edits[id];
+        const correction = e ? {
+          corrected_category: e.category.trim() || undefined,
+          corrected_themes: e.themes.split(",").map((t) => t.trim()).filter(Boolean),
+          corrected_folder: e.folder.trim() || undefined,
+        } : undefined;
+        const updated = await api.reviewAudioClassification(id, action, csrf, correction);
         setJobs((current) => current.map((j) => (j.id === id ? { ...j, ...updated } : j)));
         ok++;
       } catch { err++; }
@@ -160,6 +189,31 @@ export function AudioClassificationPage() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
+  async function loadFeedback() {
+    try {
+      const f = await api.getAudioClassificationFeedback(500);
+      setFeedback(f);
+      setShowFeedback(true);
+    } catch (e) {
+      notify("error", e instanceof Error ? e.message : "Feedback impossible");
+    }
+  }
+
+  function exportFeedback(format: "json" | "csv") {
+    if (!feedback) return;
+    const rows = [...(feedback.rejected || []), ...(feedback.low_confidence || [])];
+    if (format === "json") {
+      const blob = new Blob([JSON.stringify({ ...feedback, exported_rows: rows }, null, 2)], { type: "application/json" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "audio-classification-feedback.json"; a.click();
+      return;
+    }
+    const keys = ["id","object_id","display_name","status","suggested_category","confidence","provider","reason"];
+    const esc = (v: any) => `"${String(v ?? "").replace(/"/g,'""')}"`;
+    const csv = [keys.join(","), ...rows.map((r:any) => keys.map((k)=>esc(r[k])).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "audio-classification-feedback.csv"; a.click();
+  }
+
   const allSelected = filtered.length > 0 && filtered.every((j) => selected[j.id]);
 
   return (
@@ -186,6 +240,7 @@ export function AudioClassificationPage() {
           <button className="btn btn-ghost" onClick={() => void enqueueUnclassified()} disabled={!csrf || enqueuing}>
             {enqueuing ? "Envoi…" : "Analyser les audios non classés"}
           </button>
+          <button className="btn btn-ghost" onClick={() => void loadFeedback()}>Feedback/erreurs</button>
           <button className="btn btn-ghost" onClick={() => void load()} disabled={loading}>Rafraîchir</button>
         </div>
       </div>
@@ -215,6 +270,41 @@ export function AudioClassificationPage() {
         <button className="btn btn-ghost" disabled={!csrf || busyId === "bulk" || !Object.values(selected).some(Boolean)} onClick={() => void bulkReview("reject")}>Rejeter sélection</button>
       </div>
 
+      {showFeedback && feedback ? (
+        <div className="surface-panel" style={{ padding: 16, border: "1px solid var(--border, #333)", borderRadius: 12, marginBottom: 16 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <strong>Feedback / erreurs</strong>
+            <span style={{ opacity: 0.7 }}>total {feedback.total}</span>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => exportFeedback("csv")}>Export CSV</button>
+              <button className="btn btn-ghost" onClick={() => exportFeedback("json")}>Export JSON</button>
+              <button className="btn btn-ghost" onClick={() => setShowFeedback(false)}>Fermer</button>
+            </div>
+          </div>
+          <div style={{ fontSize: 13, opacity: 0.8, marginTop: 8 }}>
+            Statuts: {Object.entries(feedback.by_status || {}).map(([k,v]) => `${k}:${v}`).join(" · ")}
+          </div>
+          <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>
+            Catégories: {Object.entries(feedback.by_category || {}).map(([k,v]) => `${k}:${v}`).join(" · ")}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, marginTop: 12 }}>
+            <div>
+              <strong>Rejetés ({(feedback.rejected || []).length})</strong>
+              <div style={{ maxHeight: 180, overflow: "auto", fontSize: 12 }}>
+                {(feedback.rejected || []).slice(0,20).map((r:any) => <div key={r.id}>{r.display_name || r.object_id} — {r.suggested_category} ({Math.round((r.confidence||0)*100)}%)</div>)}
+              </div>
+            </div>
+            <div>
+              <strong>Faible confiance ({(feedback.low_confidence || []).length})</strong>
+              <div style={{ maxHeight: 180, overflow: "auto", fontSize: 12 }}>
+                {(feedback.low_confidence || []).slice(0,20).map((r:any) => <div key={r.id}>{r.display_name || r.object_id} — {r.suggested_category} ({Math.round((r.confidence||0)*100)}%)</div>)}
+              </div>
+            </div>
+          </div>
+          {feedback.hint ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>{feedback.hint}</div> : null}
+        </div>
+      ) : null}
+
       {loading ? <p>Chargement…</p> : filtered.length === 0 ? (
         <p style={{ opacity: 0.75 }}>Aucun job de classification pour ces filtres.</p>
       ) : (
@@ -232,6 +322,7 @@ export function AudioClassificationPage() {
                     <div style={{ fontSize: 13, opacity: 0.75 }}>
                       {statusLabel(job.status)} · {job.provider ?? "—"} {job.model ?? ""} · confiance {job.confidence != null ? `${Math.round(job.confidence * 100)}%` : "—"}
                       {lowConf && job.status === "needs_review" ? <span style={{ color: "var(--warning, #f90)", marginLeft: 8 }}>⚠ &lt; 80%: tags non appliqués à l’acceptation</span> : null}
+                      {(() => { const e = edits[job.id]; const changed = e && (e.category !== (job.suggested_category ?? "") || e.themes !== (job.suggested_themes ?? []).join(", ") || e.folder !== (job.suggested_folder ?? "")); return changed ? <span style={{ marginLeft: 8, color: "var(--accent, #4af)" }}>✎ corrigé</span> : null; })()}
                     </div>
                     {job.error ? <div style={{ color: "var(--danger, #f66)", fontSize: 13, marginTop: 6 }}>Erreur : {job.error}</div> : null}
                   </div>
@@ -240,11 +331,17 @@ export function AudioClassificationPage() {
                     <button className="btn btn-ghost" disabled={!csrf || busyId === job.id || job.status === "rejected"} onClick={() => void review(job.id, "reject")}>Rejeter</button>
                   </div>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 12, fontSize: 14 }}>
-                  <div><strong>Catégorie</strong><div>{job.suggested_category ?? "—"}</div></div>
-                  <div><strong>Thèmes</strong><div>{job.suggested_themes?.join(", ") || "—"}</div></div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8, marginTop: 12, fontSize: 14 }}>
+                  <label><strong>Catégorie</strong>
+                    <input value={edits[job.id]?.category ?? job.suggested_category ?? ""} onChange={(ev) => setEdits((s) => ({ ...s, [job.id]: { ...(s[job.id] ?? { category: job.suggested_category ?? "", themes: (job.suggested_themes ?? []).join(", "), folder: job.suggested_folder ?? "" }), category: ev.target.value } }))} style={{ width: "100%" }} />
+                  </label>
+                  <label><strong>Thèmes (virgules)</strong>
+                    <input value={edits[job.id]?.themes ?? (job.suggested_themes ?? []).join(", ")} onChange={(ev) => setEdits((s) => ({ ...s, [job.id]: { ...(s[job.id] ?? { category: job.suggested_category ?? "", themes: (job.suggested_themes ?? []).join(", "), folder: job.suggested_folder ?? "" }), themes: ev.target.value } }))} style={{ width: "100%" }} />
+                  </label>
                   <div><strong>Langue</strong><div>{job.suggested_language ?? "—"}</div></div>
-                  <div><strong>Dossier suggéré</strong><div>{job.suggested_folder ?? "—"}</div></div>
+                  <label><strong>Dossier suggéré</strong>
+                    <input value={edits[job.id]?.folder ?? job.suggested_folder ?? ""} onChange={(ev) => setEdits((s) => ({ ...s, [job.id]: { ...(s[job.id] ?? { category: job.suggested_category ?? "", themes: (job.suggested_themes ?? []).join(", "), folder: job.suggested_folder ?? "" }), folder: ev.target.value } }))} style={{ width: "100%" }} />
+                  </label>
                 </div>
                 <details style={{ marginTop: 10, fontSize: 13 }}>
                   <summary style={{ cursor: "pointer" }}>Détails qualité / technique</summary>

@@ -4215,6 +4215,61 @@ def audio_classification_feedback(
     }
 
 
+@app.get("/api/v1/audio-classifications/rule-suggestions")
+def audio_classification_rule_suggestions(
+    principal: dict = Depends(authorize(OBJECTS_READ)),
+    limit: int = Query(default=500, ge=1, le=1000),
+):
+    import re, unicodedata
+    from collections import Counter, defaultdict
+    rows = repo.list_audio_classification_jobs(principal["space_id"], limit=limit, offset=0)
+    stop = {"pour","avec","dans","les","des","une","sur","par","est","que","qui","du","de","la","le","un","et","en","au","aux","mp3","wav","m4a","audio","livre"}
+    def norm(s):
+        s = unicodedata.normalize("NFKD", s or "")
+        s = "".join(c for c in s if not unicodedata.combining(c))
+        return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+    # Load existing keywords
+    existing = set()
+    try:
+        from .audio_ai import _load_rule_keywords
+        for _, kws in _load_rule_keywords():
+            for kw in kws:
+                existing.add(norm(kw))
+    except Exception:
+        pass
+    suggestions = defaultdict(Counter)
+    examples = defaultdict(list)
+    for r in rows:
+        r = _as_dict(r)
+        status = r.get("status")
+        suggested = str(r.get("suggested_category") or "autre")
+        correction = {}
+        try:
+            res = json.loads(r.get("result_json") or "{}")
+            correction = res.get("correction") or {}
+        except Exception:
+            pass
+        target = correction.get("corrected_category")
+        if not target and status == "rejected":
+            continue  # rejected without correction: unknown target
+        if not target:
+            continue
+        target = str(target).strip().lower()
+        name = norm(str(r.get("display_name") or ""))
+        toks = [t for t in name.split() if len(t) >= 4 and t not in stop and t not in existing]
+        for t in toks:
+            suggestions[target][t] += 1
+            if len(examples[target]) < 5:
+                examples[target].append(r.get("display_name"))
+    out = []
+    for cat, ctr in suggestions.items():
+        for tok, count in ctr.most_common(10):
+            if count >= 1:
+                out.append({"category": cat, "keyword": tok, "count": count, "examples": examples[cat][:3]})
+    out.sort(key=lambda x: (-x["count"], x["category"], x["keyword"]))
+    return {"suggestions": out[:100], "total_jobs_scanned": len(rows)}
+
+
 @app.get("/api/v1/audio-classifications/{jid}")
 def get_audio_classification(jid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
     jid = _canonical_id(jid, "job id")

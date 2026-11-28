@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "description": "Gold set pour évaluer la classification audio AURA. Ajouter des cas réels annotés manuellement.",
+  "schema": {
+    "id": "string unique",
+    "display_name": "nom fichier",
+    "tags": "tags ffprobe optionnels",
+    "duration_s": "durée en secondes",
+    "expected_category": "catégorie attendue",
+    "expected_themes": ["thèmes optionnels"],
+    "notes": "optionnel"
+  },
+  "cases": [
+    {"id": "g001", "display_name": "Méditation guidée pour dormir.mp3", "duration_s": 1800, "expected_category": "meditation", "expected_themes": ["sommeil", "relaxation"]},
+    {"id": "g002", "display_name": "Podcast interview épisode 12.mp3", "duration_s": 2400, "expected_category": "podcast", "expected_themes": ["interview"]},
+    {"id": "g003", "display_name": "Cours Python Module 1.mp3", "duration_s": 3600, "expected_category": "formation", "expected_themes": ["cours"]},
+    {"id": "g004", "display_name": "Roman audio chapitre 3.mp3", "duration_s": 2700, "expected_category": "litterature", "expected_themes": ["chapitre"]},
+    {"id": "g005", "display_name": "Musique ambient relaxation.mp3", "duration_s": 600, "expected_category": "musique", "expected_themes": ["ambient"]},
+    {"id": "g006", "display_name": "Séance respiration anti-stress.mp3", "duration_s": 900, "expected_category": "meditation", "expected_themes": ["respiration"]},
+    {"id": "g007", "display_name": "Stratégie marketing pour startup.mp3", "duration_s": 3000, "expected_category": "business", "expected_themes": ["marketing"]},
+    {"id": "g008", "display_name": "Prière du matin guidance spirituelle.mp3", "duration_s": 1200, "expected_category": "spiritualite", "expected_themes": ["priere"]},
+    {"id": "g009", "display_name": "Nutrition et sommeil réparateur.mp3", "duration_s": 1800, "expected_category": "sante_bien_etre", "expected_themes": ["nutrition", "sommeil"]},
+    {"id": "g010", "display_name": "Histoire de la civilisation romaine.mp3", "duration_s": 3600, "expected_category": "histoire_societe", "expected_themes": ["histoire"]}
+  ]
+}

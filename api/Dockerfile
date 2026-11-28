@@ -6,7 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /srv/api
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir --no-deps faster-whisper==1.1.1 \
+    && pip install --no-cache-dir ctranslate2 "huggingface-hub<1.0" tokenizers av requests tqdm
 
 # ffmpeg/ffprobe generate video posters and durations. They run only in the
 # background worker (or the lazy thumbnail route), never in a commit request.
