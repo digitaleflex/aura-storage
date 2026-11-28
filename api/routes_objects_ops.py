@@ -131,5 +131,12 @@ def set_object_publication(oid: str, body: PublicationIn, principal: dict = Depe
             raise HTTPException(status_code=409, detail="slug already in use")
     published_at = int(time.time()) if body.published else None
     repo.set_object_publication(oid, body.slug, published_at)
-    audit_event("object.publish" if body.published else "object.unpublish", principal["id"], "success", {"object_id": oid, "slug": body.slug})
+    # Publishing an audiobook may kick off its metadata classification (#398).
+    from .main import _classify_published_audio
+    classified = _classify_published_audio(row) if body.published else False
+    audit_event(
+        "object.publish" if body.published else "object.unpublish",
+        principal["id"], "success",
+        {"object_id": oid, "slug": body.slug, "classified": classified},
+    )
     return _object_public(repo.get_object(oid, **_object_scope(principal)))

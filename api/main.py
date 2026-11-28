@@ -2527,30 +2527,8 @@ def _bulk_purge(ids: list[str], principal: dict) -> dict:
     return {"purged": purged, "not_found": not_found, "failed": failed}
 
 
-@app.post("/api/v1/objects/bulk-purge")
-def bulk_purge(body: BulkIdsIn, principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
-    """Master mode: purge many objects in one call, no per-item confirmation."""
-    _require_master(principal)
-    if len(body.ids) > settings.master_bulk_max:
-        raise HTTPException(status_code=422, detail=f"at most {settings.master_bulk_max} ids per call")
-    return _bulk_purge(body.ids, principal)
 
 
-@app.post("/api/v1/objects/trash/empty")
-def empty_trash(principal: dict = Depends(authorize(OBJECTS_PURGE, human=True))):
-    """Master mode: purge the caller's trash (at most master_bulk_max per call)."""
-    _require_master(principal)
-    # Deliberately owner-scoped even for an operator/admin: "empty my trash"
-    # must never silently destroy every user's deleted objects in the space.
-    scope = {"space_id": principal["space_id"], "owner_id": principal["id"]}
-    rows = repo.list_objects(
-        **scope, status=DELETED, limit=settings.master_bulk_max,
-    )
-    ids = [_as_dict(r)["id"] for r in rows]
-    out = _bulk_purge(ids, principal)
-    # More than one call's worth: the client simply calls again.
-    out["more"] = bool(repo.list_objects(**scope, status=DELETED, limit=1))
-    return out
 
 
 def _upload_headers(content_type: str) -> dict:
@@ -3598,49 +3576,8 @@ def _require_public_access_scopes(principal: dict) -> None:
         raise HTTPException(status_code=403, detail="forbidden")
 
 
-@app.post("/api/v1/objects/{oid}/public-access")
-def create_public_access(
-    oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
-):
-    """Mint a short revocable public URL after an external entitlement decision.
-
-    Reserved for machine identities acting as a trusted service (the audiobook
-    API). The returned token is shown once; only its SHA-256 is stored.
-    """
-    _require_public_access_scopes(principal)
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(row)
-    if row["status"] != AVAILABLE:
-        raise HTTPException(status_code=409, detail="object not available")
-    token = secrets.token_urlsafe(32)
-    now = int(time.time())
-    expires_at = now + settings.public_access_grant_ttl
-    repo.create_public_access_grant(
-        hashlib.sha256(token.encode("utf-8")).hexdigest(),
-        oid, row["space_id"], principal["id"], now, expires_at,
-    )
-    audit_event("public-access-grant", principal["id"], "created",
-                {"object_id": oid, "expires_at": expires_at})
-    return {"token": token, "url": f"/a/{token}", "expires_at": expires_at}
 
 
-@app.delete("/api/v1/objects/{oid}/public-access")
-def revoke_public_access(
-    oid: str, principal: dict = Depends(authorize(OBJECTS_WRITE)),
-):
-    """Revoke every outstanding public grant for one object."""
-    _require_public_access_scopes(principal)
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    revoked = repo.revoke_public_access_grants_for_object(oid, int(time.time()))
-    audit_event("public-access-grant", principal["id"], "revoked",
-                {"object_id": oid, "count": revoked})
-    return {"revoked": revoked}
 
 
 def _query_tags(value: str | None) -> list[str]:
@@ -3657,53 +3594,6 @@ def _query_tags(value: str | None) -> list[str]:
     return out
 
 
-@app.get("/api/v1/objects")
-def list_objects(
-    principal: dict = Depends(authorize(OBJECTS_READ)), limit: int = 50, offset: int = 0,
-    folder_id: str | None = None,
-    q: str | None = Query(default=None, max_length=200),
-    search: str | None = Query(default=None, max_length=200),
-    status: ObjectStatus | None = None,
-    content_type: str | None = Query(default=None, max_length=1000),
-    min_size: int | None = Query(default=None, ge=0),
-    max_size: int | None = Query(default=None, ge=0),
-    created_after: int | None = Query(default=None, ge=0),
-    created_before: int | None = Query(default=None, ge=0),
-    tag: str | None = Query(default=None, max_length=32),
-    tags: str | None = Query(default=None, max_length=400),
-    tag_mode: Literal["all", "any"] = "all",
-    sort: ObjectSort = "created_at",
-    order: SortOrder = "desc",
-):
-    limit = max(1, min(limit, 100))
-    offset = max(0, offset)
-    # ``folder_id`` is an optional catalogue filter (#62): the literal "root"
-    # selects objects not filed in any folder; a canonical uuid selects that
-    # folder. Unknown or foreign folder ids simply match nothing (no leak).
-    folder_filter: str | None = None
-    if folder_id is not None:
-        folder_filter = "" if folder_id == "root" else _canonical_id(folder_id, "folder id")
-    # ``q`` is a case-insensitive display-name substring. It never touches the
-    # internal object key, and a blank value is treated as "no search".
-    needle = (q or "").strip() or None
-    search_needle = (search or "").strip() or None
-    rows = repo.list_objects(
-        **_object_scope(principal), folder_id=folder_filter, q=needle,
-        search=search_needle,
-        status=status, hide_deleted=status is None,
-        content_type=(content_type or None),
-        min_size=min_size, max_size=max_size,
-        created_after=created_after, created_before=created_before,
-        tag=(tag.strip().lower() or None) if tag else None,
-        tags=_query_tags(tags), tag_mode=tag_mode,
-        sort=sort, order=order, limit=limit, offset=offset,
-    )
-    tag_map = repo.list_tags_for_objects([r["id"] for r in rows])
-    return {
-        "items": [
-            _object_public(r, tag_map.get(r["id"])) for r in rows
-        ]
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -4060,13 +3950,6 @@ def review_audio_classification(
     return out
 
 
-@app.get("/api/v1/objects/{oid}")
-def get_object(oid: str, principal: dict = Depends(authorize(OBJECTS_READ))):
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    return _object_public(row, repo.get_object_tags(oid))
 
 
 
@@ -4293,36 +4176,6 @@ def _classify_published_audio(row: dict) -> bool:
     return True
 
 
-@app.put("/api/v1/objects/{oid}/publication")
-def set_object_publication(
-    oid: str, body: PublicationIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    """Publish/unpublish an object under a stable slug (human only).
-
-    Unpublishing keeps the slug reserved so the same URL can be re-enabled;
-    the public route requires `published_at`, so it answers 404 meanwhile.
-    """
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    row = _as_dict(row)
-    if row["status"] != AVAILABLE:
-        raise HTTPException(status_code=409, detail="object not available")
-    if body.published and not body.slug:
-        raise HTTPException(status_code=422, detail="slug is required to publish")
-    if body.slug:
-        existing = repo.get_object_by_slug(body.slug)
-        if existing is not None and existing["id"] != oid:
-            raise HTTPException(status_code=409, detail="slug already in use")
-    published_at = int(time.time()) if body.published else None
-    repo.set_object_publication(oid, body.slug, published_at)
-    classified = _classify_published_audio(row) if body.published else False
-    audit_event("object.publish" if body.published else "object.unpublish",
-                principal["id"], "success",
-                {"object_id": oid, "slug": body.slug, "classified": classified})
-    return _object_public(repo.get_object(oid, **_object_scope(principal)))
 
 
 @app.post("/api/v1/objects/{oid}/replace")
@@ -5472,3 +5325,7 @@ from .routes_bookmarks_playlists import router as bookmarks_playlists_router  # 
 app.include_router(bookmarks_playlists_router)
 from .routes_admin import router as admin_router  # noqa: E402
 app.include_router(admin_router)
+from .routes_objects import router as objects_router  # noqa: E402
+app.include_router(objects_router)
+from .routes_objects_ops import router as objects_ops_router  # noqa: E402
+app.include_router(objects_ops_router)
