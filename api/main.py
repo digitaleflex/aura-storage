@@ -106,6 +106,12 @@ from .app_factory import create_app
 
 app = create_app()
 
+# `GET /api/v1/objects/tags` must be registered before the dynamic
+# `/api/v1/objects/{oid}` route, so this router is included here rather than
+# with the other extracted routers at the bottom of the module.
+from .routes_collections import router as collections_router  # noqa: E402
+app.include_router(collections_router)
+
 # Server-side idempotent response cache (D2): short-lived memo of commit/abort
 # results keyed by (route, idempotency-key, object id) so a client retry does
 # not re-run the integrity check. TTL is short; the catalogue remains the truth.
@@ -2041,35 +2047,10 @@ def _published_book_or_404(oid: str) -> str:
 
 
 
-@app.get("/api/public/bookmarks")
-def public_bookmarks(object_id: str, principal: dict = Depends(require_public)):
-    oid = _published_book_or_404(object_id)
-    return {"object_id": oid, "bookmarks": repo.list_bookmarks(principal["id"], oid)}
 
 
-@app.post("/api/public/bookmarks")
-def public_bookmark_add(body: BookmarkIn, request: Request, principal: dict = Depends(require_public)):
-    _public_rate_check("progress", request)
-    oid = _published_book_or_404(body.object_id)
-    note = "".join(ch for ch in body.note if ch.isprintable()).strip()
-    saved = repo.add_bookmark(
-        principal["id"], oid, round(body.position_seconds, 1), note, int(time.time()),
-        _BOOKMARKS_PER_BOOK,
-    )
-    if saved is None:
-        raise HTTPException(status_code=409, detail="too many bookmarks on this book")
-    return saved
 
 
-@app.delete("/api/public/bookmarks/{bookmark_id}")
-def public_bookmark_delete(
-    bookmark_id: str, request: Request, principal: dict = Depends(require_public),
-):
-    _public_rate_check("progress", request)
-    bid = _canonical_id(bookmark_id, "bookmark id")
-    if not repo.delete_bookmark(principal["id"], bid):
-        raise HTTPException(status_code=404, detail="bookmark not found")
-    return {"ok": True}
 
 
 def _set_public_favorite(oid: str, request: Request, principal: dict, favorite: bool) -> dict:
@@ -2174,77 +2155,18 @@ def _public_listening_stats(principal: dict) -> dict:
 
 
 
-@app.get("/api/public/playlists")
-def public_playlists(principal: dict = Depends(require_public)):
-    """The visitor's private playlists, newest activity first."""
-    return {"playlists": repo.list_listen_playlists(principal["id"])}
 
 
-@app.post("/api/public/playlists")
-def public_playlist_create(
-    body: PlaylistIn, request: Request, principal: dict = Depends(require_public),
-):
-    _public_rate_check("progress", request)
-    name = " ".join(body.name.split())
-    if not name:
-        raise HTTPException(status_code=422, detail="name must not be empty")
-    return {"playlist": repo.create_listen_playlist(principal["id"], name, int(time.time()))}
 
 
-@app.patch("/api/public/playlists/{pid}")
-def public_playlist_rename(
-    pid: str, body: PlaylistIn, request: Request, principal: dict = Depends(require_public),
-):
-    _public_rate_check("progress", request)
-    current = _own_playlist_or_404(pid, principal)
-    name = " ".join(body.name.split())
-    if not name:
-        raise HTTPException(status_code=422, detail="name must not be empty")
-    if not repo.rename_listen_playlist(principal["id"], current["id"], name, int(time.time())):
-        raise HTTPException(status_code=404, detail="playlist not found")
-    return {"playlist": {"id": current["id"], "name": name}}
 
 
-@app.delete("/api/public/playlists/{pid}")
-def public_playlist_delete(
-    pid: str, request: Request, principal: dict = Depends(require_public),
-):
-    _public_rate_check("progress", request)
-    current = _own_playlist_or_404(pid, principal)
-    if not repo.delete_listen_playlist(principal["id"], current["id"]):
-        raise HTTPException(status_code=404, detail="playlist not found")
-    return {"ok": True}
 
 
-@app.get("/api/public/playlists/{pid}/items")
-def public_playlist_items(pid: str, principal: dict = Depends(require_public)):
-    current = _own_playlist_or_404(pid, principal)
-    return {"playlist_id": current["id"], "items": repo.list_listen_playlist_items(current["id"])}
 
 
-@app.put("/api/public/playlists/{pid}/items/{oid}")
-def public_playlist_add_item(
-    pid: str, oid: str, request: Request, principal: dict = Depends(require_public),
-):
-    _public_rate_check("progress", request)
-    current = _own_playlist_or_404(pid, principal)
-    oid = _published_book_or_404(oid)
-    items = repo.list_listen_playlist_items(current["id"])
-    position = max((int(i["position"]) for i in items), default=-1) + 1
-    added = repo.add_listen_playlist_item(current["id"], oid, position, int(time.time()))
-    return {"object_id": oid, "added": added}
 
 
-@app.delete("/api/public/playlists/{pid}/items/{oid}")
-def public_playlist_remove_item(
-    pid: str, oid: str, request: Request, principal: dict = Depends(require_public),
-):
-    _public_rate_check("progress", request)
-    current = _own_playlist_or_404(pid, principal)
-    oid = _canonical_id(oid, "object id")
-    if not repo.remove_listen_playlist_item(current["id"], oid, int(time.time())):
-        raise HTTPException(status_code=404, detail="item not found in playlist")
-    return {"ok": True}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -3922,20 +3844,6 @@ def duplicate_scan(
     return {"byParent": by_parent, "unresolved": sorted(unresolved)}
 
 
-@app.get("/api/v1/objects/tags")
-def list_object_tags(
-    principal: dict = Depends(authorize(OBJECTS_READ)),
-    limit: int = Query(default=200, ge=1, le=500),
-):
-    """Distinct tags the caller may see, with the count of visible objects.
-
-    Declared before ``/objects/{oid}`` so "tags" is never parsed as an id. Uses
-    the same space/owner and hide-deleted rules as the object list: a tag must
-    not disclose an object the caller cannot list. No folder filter — this is
-    the caller's whole tag vocabulary, not the current folder's.
-    """
-    rows = repo.list_tag_counts(**_object_scope(principal), limit=limit)
-    return {"items": [{"tag": row["tag"], "count": row["n"]} for row in rows]}
 
 
 def _audio_job_public(row: dict) -> dict:
@@ -4854,136 +4762,20 @@ def _owned_collection(cid: str, principal: dict) -> dict:
     return _as_dict(col)
 
 
-@app.put("/api/v1/objects/{oid}/tags")
-def set_object_tags(
-    oid: str, body: TagsIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    """Replace an object's tags (normalized, deduplicated, max 20)."""
-    oid = _canonical_id(oid, "object id")
-    row = repo.get_object(oid, **_object_scope(principal))
-    if row is None:
-        raise HTTPException(status_code=404, detail="object not found")
-    repo.set_object_tags(oid, body.tags)
-    audit_event("object.tags", principal["id"], "success",
-                {"object_id": oid, "tags": body.tags})
-    fresh = repo.get_object(oid, **_object_scope(principal))
-    return _object_public(fresh, repo.get_object_tags(oid))
 
 
-@app.get("/api/v1/collections")
-def list_collections(principal: dict = Depends(authorize(OBJECTS_READ, human=True))):
-    items = repo.list_collections(principal["space_id"], owner_id=principal["id"])
-    return {"items": [_collection_public(c) for c in items]}
 
 
-@app.post("/api/v1/collections")
-def create_collection(
-    body: CollectionIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    if repo.get_collection_by_slug(body.slug) is not None:
-        raise HTTPException(status_code=409, detail="slug already in use")
-    cid = repo.new_id()
-    repo.create_collection(
-        cid, principal["space_id"], principal["id"], body.slug,
-        body.title, body.description,
-    )
-    audit_event("collection.create", principal["id"], "success",
-                {"collection_id": cid, "slug": body.slug})
-    return _collection_public(repo.get_collection(cid))
 
 
-@app.get("/api/v1/collections/{cid}")
-def get_collection(cid: str, principal: dict = Depends(authorize(OBJECTS_READ, human=True))):
-    col = _owned_collection(cid, principal)
-    items = repo.get_collection_items(col["id"])
-    return {
-        **_collection_public({**col, "item_count": len(items)}),
-        "items": [_object_public(row) for row in items],
-    }
 
 
-@app.patch("/api/v1/collections/{cid}")
-def update_collection(
-    cid: str, body: CollectionPatchIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    col = _owned_collection(cid, principal)
-    fields = body.model_fields_set
-    title = body.title if "title" in fields and body.title is not None else col["title"]
-    description = (
-        body.description if "description" in fields and body.description is not None
-        else (col.get("description") or "")
-    )
-    published_at = col.get("published_at")
-    if "published" in fields and body.published is not None:
-        if body.published:
-            if not repo.get_collection_items(col["id"]):
-                raise HTTPException(status_code=422, detail="a pack needs items to be published")
-            published_at = published_at or int(time.time())
-        else:
-            published_at = None
-    repo.update_collection(col["id"], " ".join(title.split()), description, published_at)
-    audit_event("collection.update", principal["id"], "success", {
-        "collection_id": col["id"], "published": published_at is not None,
-    })
-    return _collection_public(repo.get_collection(col["id"]))
 
 
-@app.put("/api/v1/collections/{cid}/items")
-def set_collection_items(
-    cid: str, body: CollectionItemsIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    col = _owned_collection(cid, principal)
-    seen: list[str] = []
-    for oid in body.object_ids:
-        row = repo.get_object(oid, **_object_scope(principal))
-        if row is None or row["status"] != AVAILABLE:
-            raise HTTPException(status_code=404, detail="object not found or available")
-        if oid not in seen:
-            seen.append(oid)
-    repo.replace_collection_items(col["id"], seen)
-    audit_event("collection.items", principal["id"], "success", {
-        "collection_id": col["id"], "count": len(seen),
-    })
-    fresh = repo.get_collection(col["id"])
-    return _collection_public({**fresh, "item_count": len(seen)})
 
 
-@app.delete("/api/v1/collections/{cid}")
-def delete_collection(cid: str, principal: dict = Depends(authorize(OBJECTS_WRITE, human=True))):
-    col = _owned_collection(cid, principal)
-    repo.delete_collection(col["id"])
-    audit_event("collection.delete", principal["id"], "success",
-                {"collection_id": col["id"], "slug": col["slug"]})
-    return {"id": col["id"], "deleted": True}
 
 
-@app.get("/p/{slug}.json")
-def public_collection_manifest(slug: str):
-    """Published pack manifest for a course site (no auth, JSON).
-
-    Ordering is the pack order. Each item exposes its stable `/m/<slug>` URL only
-    when that object is itself published; otherwise the item is listed without a
-    URL, so a manifest never leaks an unpublished object.
-    """
-    if not _PUBLIC_SLUG_RE.fullmatch(slug or ""):
-        raise HTTPException(status_code=404, detail="not found")
-    col = repo.get_collection_by_slug(slug)
-    if col is None or not col.get("published_at"):
-        raise HTTPException(status_code=404, detail="not found")
-    set_request_principal(col["space_id"], None)
-    items = _library_items(col)
-    audit_event("collection.access", None, "success", {
-        "collection_id": col["id"], "slug": slug,
-    })
-    return {
-        "slug": col["slug"], "title": col["title"],
-        "description": col.get("description") or "",
-        "updated_at": col["updated_at"], "items": items,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -6425,3 +6217,5 @@ from .routes_public_profile import router as public_profile_router  # noqa: E402
 app.include_router(public_profile_router)
 from .routes_public_library import router as public_library_router  # noqa: E402
 app.include_router(public_library_router)
+from .routes_bookmarks_playlists import router as bookmarks_playlists_router  # noqa: E402
+app.include_router(bookmarks_playlists_router)
