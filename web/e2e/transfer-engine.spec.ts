@@ -381,7 +381,10 @@ test("classifyError maps transport and API errors to retry decisions", () => {
   // must never be fatal (2026-10-25 proxy verification).
   expect(classifyError(new ApiError(499, "x"))).toBe("retryable");
   expect(classifyError(new PresignedUploadError("rejected", 499, "x"))).toBe("retryable");
-  expect(classifyError(new ApiError(403, "x"))).toBe("expired");
+  // A 403 from the S3 URL is an expired signature; a 403 from our API is an
+  // authorization refusal and retrying it cannot change the answer.
+  expect(classifyError(new PresignedUploadError("rejected", 403, "x"))).toBe("expired");
+  expect(classifyError(new ApiError(403, "x"))).toBe("fatal");
   expect(classifyError(new ApiError(404, "x"))).toBe("fatal");
   expect(classifyError(new Error("boom"))).toBe("fatal");
 });

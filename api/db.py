@@ -1451,6 +1451,17 @@ class Repository:
             (since,),
         ).fetchone() is not None
 
+    def has_verifying_before(self, cutoff: int) -> bool:
+        """True if an object has been waiting for verification since ``cutoff``.
+
+        Used to stop the "pause while uploading" heuristic from starving the
+        verifier behind a long upload batch.
+        """
+        return self.conn.execute(
+            "SELECT 1 FROM objects WHERE status = 'verifying' AND updated_at <= ? LIMIT 1",
+            (cutoff,),
+        ).fetchone() is not None
+
     def claim_scrub(self, now: int, lease_until: int, checked_before: int):
         """Take the available object checked longest ago (never-checked first),
         under a lease, if it is due (checked before ``checked_before``)."""

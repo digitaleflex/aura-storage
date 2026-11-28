@@ -47,12 +47,14 @@ export interface TransferState {
   intentId: string | null;
   error: string | null;
   /**
-   * Why a failed transfer stopped. Only `retryable` is worth an automatic
-   * retry once the link comes back: `fatal` (rejected bytes, storage full),
+   * Why a failed transfer stopped. `retryable` is worth an automatic retry
+   * once the link comes back; `verify-timeout` is replayed automatically too,
+   * because the bytes are already stored and a new attempt only resumes
+   * watching the same object. `fatal` (rejected bytes, storage full),
    * `expired` (URL renewed too many times) and `aborted` need a decision or
    * a fresh submission, not a silent replay.
    */
-  failureKind?: "retryable" | "expired" | "fatal" | "aborted";
+  failureKind?: "retryable" | "verify-timeout" | "expired" | "fatal" | "aborted";
   /**
    * Durées du commit serveur, transportées telles quelles depuis la réponse de
    * commit pour que l'affichage puisse les lire sur l'état de l'upload.
@@ -192,8 +194,20 @@ export function backoffDelay(
 
 type Classification = "retryable" | "expired" | "aborted" | "fatal";
 
+/**
+ * Failures the queue may replay without asking: a transport incident, or a
+ * server-side integrity check that is still running when the client's polling
+ * budget runs out. In the second case the bytes are already stored, so the
+ * replay only resumes watching the same object (same idempotency key).
+ */
+function isAutoReplayable(kind: TransferState["failureKind"]): boolean {
+  return kind === "retryable" || kind === "verify-timeout";
+}
+
 function classifyHttp(status: number): Classification {
-  if (status === 403) return "expired";
+  // A presigned URL refused with 403 is an expired signature (see
+  // `classifyError`). A 403 from our own API is an authorization refusal:
+  // replaying it only renews an intent that the account is not allowed to use.
   // 507: the server refused the upload because the storage is full. Retrying
   // cannot help until space is freed.
   if (status === 507) return "fatal";
@@ -215,6 +229,9 @@ export function classifyError(err: unknown): Classification {
     if (err.kind === "network") return "retryable";
     // Corps tronqué (S3 `IncompleteBody`) : le PUT est rejouable tel quel.
     if (err.kind === "incomplete") return "retryable";
+    // S3 answers 403 when the presigned signature has expired. This is the
+    // transport's expiry, not an account permission refusal (ApiError 403).
+    if (err.status === 403) return "expired";
     return classifyHttp(err.status);
   }
   if (err instanceof ApiError) {
@@ -531,15 +548,25 @@ export async function runTransfer(
       }
     }
     if (current.status !== "available") {
-      emit({
-        phase: "failed",
-        error:
-          current.status === "verifying"
-            ? `Vérification d'intégrité toujours en cours après ${config.maxVerifyPolls} contrôles ; vérifiez le serveur.`
-            : "La vérification d'intégrité a échoué.",
-        // A server-side verdict does not change by retrying the same bytes.
-        failureKind: "fatal",
-      });
+      // Still `verifying` after the poll budget means the server has not
+      // answered yet, not that it refused the bytes: the object is stored and
+      // the check is queued (the worker deliberately pauses during uploads).
+      // Replaying resumes the follow-up with the same idempotency key; the
+      // queue bounds the number of automatic replays.
+      if (current.status === "verifying") {
+        emit({
+          phase: "failed",
+          error: `Vérification d'intégrité toujours en cours après ${config.maxVerifyPolls} contrôles ; reprise automatique.`,
+          failureKind: "verify-timeout",
+        });
+      } else {
+        emit({
+          phase: "failed",
+          error: "La vérification d'intégrité a échoué.",
+          // A server-side verdict does not change by retrying the same bytes.
+          failureKind: "fatal",
+        });
+      }
       return { state, objectId: id };
     }
     emit({
@@ -788,7 +815,8 @@ export interface QueueOptions {
    */
   maxReconnectRetries?: number;
   /**
-   * When true a batch of files that ended on a retryable failure is re-queued
+   * When true a batch of files that ended on a retryable failure -- or on a
+   * verification that outlived the client's polling budget -- is re-queued
    * automatically after a short backoff — no click needed. Fatal rejections
    * and cancellations are never replayed. Opt-in (default false).
    */
@@ -1022,7 +1050,10 @@ export function startUploadQueue(
   interface Internal {
     id: string;
     key: string | undefined;
+    /** Caller-supplied key, kept across every retry (journal resume). */
     idempotencyKey: string | undefined;
+    /** Key minted by the queue; kept for automatic replays, renewed manually. */
+    generatedIdempotencyKey?: string;
     file: File;
     folderId: string | null;
     replaceTargetId: string | undefined;
@@ -1147,7 +1178,7 @@ export function startUploadQueue(
       items.some(
         (item) =>
           item.state.phase === "failed" &&
-          item.state.failureKind === "retryable" &&
+          isAutoReplayable(item.state.failureKind) &&
           item.autoRetries < maxAutoRetries,
       ));
 
@@ -1198,14 +1229,15 @@ export function startUploadQueue(
   };
 
   /**
-   * Replay retryable failures as one batch. A single debounced timer serves
-   * every file that settled close together; its delay grows with the attempt
-   * number (equal jitter, like the transfer's backoff) so a broken endpoint is
-   * never hammered. Fatal failures and cancellations are left untouched.
+   * Replay retryable failures (and verification timeouts) as one batch. A
+   * single debounced timer serves every file that settled close together; its
+   * delay grows with the attempt number (equal jitter, like the transfer's
+   * backoff) so a broken endpoint is never hammered. Fatal failures and
+   * cancellations are left untouched.
    */
   const scheduleAutoRetry = (item: Internal): void => {
     if (!autoRetryFailures || maxAutoRetries === 0) return;
-    if (item.state.phase !== "failed" || item.state.failureKind !== "retryable") return;
+    if (item.state.phase !== "failed" || !isAutoReplayable(item.state.failureKind)) return;
     if (item.autoRetries >= maxAutoRetries || autoRetryTimer !== null) return;
     const ceiling = Math.min(30_000, autoRetryDelayMs * 2 ** item.autoRetries);
     const delay = Math.round(ceiling * (0.5 + Math.random() * 0.5));
@@ -1217,7 +1249,7 @@ export function startUploadQueue(
       let requeued = 0;
       for (const candidate of items) {
         if (candidate.state.phase !== "failed") continue;
-        if (candidate.state.failureKind !== "retryable") continue;
+        if (!isAutoReplayable(candidate.state.failureKind)) continue;
         if (candidate.autoRetries >= maxAutoRetries) continue;
         candidate.autoRetries += 1;
         candidate.state = idleTransfer(candidate.file);
@@ -1292,9 +1324,11 @@ export function startUploadQueue(
     let slotReleased = false;
     item.state = { ...idleTransfer(item.file), phase: "requesting-intent" };
     emit();
+    const idempotencyKey =
+      item.idempotencyKey ?? (item.generatedIdempotencyKey ??= queueItemId());
     runTransfer(item.file, tracked, {
       folderId: item.folderId,
-      idempotencyKey: item.idempotencyKey ?? queueItemId(),
+      idempotencyKey,
       signal: controller.signal,
       config: options.config,
       now,
@@ -1339,7 +1373,7 @@ export function startUploadQueue(
             .catch(() => undefined);
         }
         adaptToOutcome(item, lastError);
-        if (item.state.phase === "failed" && item.state.failureKind === "retryable") {
+        if (item.state.phase === "failed" && isAutoReplayable(item.state.failureKind)) {
           scheduleAutoRetry(item);
         }
         emit();
@@ -1580,6 +1614,10 @@ export function startUploadQueue(
           item.paused = false;
           item.reconnectRetries = 0;
           item.autoRetries = 0;
+          // A manual retry is a new submission: mint a fresh key when the
+          // caller did not supply one. Automatic replays keep the generated
+          // key so a slow verification resumes the stored object.
+          item.generatedIdempotencyKey = undefined;
           requeued = true;
         }
       }
@@ -1600,6 +1638,9 @@ export function startUploadQueue(
       // budgets, as before.
       item.reconnectRetries = 0;
       item.autoRetries = 0;
+      // Manual retry = fresh submission when the queue minted the key; an
+      // explicit key (journal resume) is preserved.
+      item.generatedIdempotencyKey = undefined;
       item.state = idleTransfer(item.file);
       item.settled = false;
       item.reserved = false;

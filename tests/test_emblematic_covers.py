@@ -95,10 +95,14 @@ def test_emblematic_cover_endpoint_requires_admin_write_and_csrf():
     client, csrf = _admin()
     oid = str(uuid.uuid4())
     _application_id, space_id = main.repo.default_scope()
+    # The suite also runs against PostgreSQL, whose driver does not accept the
+    # SQLite ``?`` placeholder.
+    placeholder = "?" if main.repo.dialect == "sqlite" else "%s"
     main.repo.conn.execute(
         "INSERT INTO objects (id, bucket, object_key, display_name, content_type, "
-        "status, space_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, "
-        "'available', ?, 1, 1)",
+        "status, space_id, created_at, updated_at) VALUES "
+        f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, "
+        f"{placeholder}, 'available', {placeholder}, 1, 1)",
         (oid, "aura", f"{oid}.mp3", "Livre.mp3", "audio/mpeg", space_id),
     )
     main.repo.conn.commit()
