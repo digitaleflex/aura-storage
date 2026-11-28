@@ -4672,142 +4672,14 @@ def _folder_subtree_height(fid: str, owner_id: str) -> int:
     return height
 
 
-@app.get("/api/v1/folders")
-def list_folders(
-    parent_id: str | None = None,
-    all: bool = False,
-    principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
-):
-    owner_id = _folder_owner(principal)
-    if all and parent_id is not None:
-        raise HTTPException(
-            status_code=422, detail="all cannot be combined with parent_id"
-        )
-    if all:
-        # Flat tree in a single request: the client rebuilds the hierarchy from
-        # parent_id instead of walking the per-level endpoint (#62 follow-up).
-        rows = repo.list_all_folders(owner_id=owner_id)
-        return {
-            "items": [
-                _folder_public(r, size_bytes=repo.get_folder_size(folder_id=r["id"], owner_id=owner_id))
-                for r in rows
-            ]
-        }
-    if parent_id is not None:
-        parent_id = _canonical_id(parent_id, "parent id")
-        if repo.get_folder(parent_id, owner_id=owner_id) is None:
-            raise HTTPException(status_code=404, detail="folder not found")
-    rows = repo.list_folders(owner_id=owner_id, parent_id=parent_id)
-    return {
-        "items": [
-            _folder_public(r, size_bytes=repo.get_folder_size(folder_id=r["id"], owner_id=owner_id))
-            for r in rows
-        ]
-    }
 
 
-@app.get("/api/v1/folders/{fid}")
-def get_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_READ, human=True))):
-    fid = _canonical_id(fid, "folder id")
-    owner_id = _folder_owner(principal)
-    row = repo.get_folder(fid, owner_id=owner_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="folder not found")
-    return _folder_public(
-        row, size_bytes=repo.get_folder_size(folder_id=fid, owner_id=owner_id)
-    )
 
 
-@app.post("/api/v1/folders")
-def create_folder(body: FolderIn, principal: dict = Depends(authorize(OBJECTS_WRITE, human=True))):
-    owner_id = _folder_owner(principal)
-    if body.parent_id is not None:
-        if repo.get_folder(body.parent_id, owner_id=owner_id) is None:
-            raise HTTPException(status_code=404, detail="parent folder not found")
-        if _folder_depth(body.parent_id, owner_id) >= MAX_FOLDER_DEPTH:
-            raise HTTPException(status_code=409, detail="folder depth limit reached")
-    if repo.folder_name_exists(owner_id=owner_id, parent_id=body.parent_id, name=body.name):
-        raise HTTPException(status_code=409, detail="folder name already exists")
-    fid = repo.create_folder(owner_id, body.name, body.parent_id)
-    audit_event("folder.create", principal["id"], "success", {"folder_id": fid})
-    return _folder_public(repo.get_folder(fid, owner_id=owner_id))
 
 
-@app.patch("/api/v1/folders/{fid}")
-def update_folder(
-    fid: str, body: FolderPatchIn,
-    principal: dict = Depends(authorize(OBJECTS_WRITE, human=True)),
-):
-    fid = _canonical_id(fid, "folder id")
-    owner_id = _folder_owner(principal)
-    row = repo.get_folder(fid, owner_id=owner_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="folder not found")
-    fields = body.model_fields_set
-    if not fields:
-        raise HTTPException(status_code=422, detail="no fields to update")
-    if "name" in fields and body.name is None:
-        raise HTTPException(status_code=422, detail="name cannot be null")
-    new_name = body.name if "name" in fields else row["name"]
-    new_parent = body.parent_id if "parent_id" in fields else row["parent_id"]
-
-    if "parent_id" in fields and new_parent is not None:
-        if new_parent == fid:
-            raise HTTPException(status_code=409, detail="folder cannot be its own parent")
-        # Walk up from the prospective parent: reaching `fid` would create a cycle.
-        current: str | None = new_parent
-        depth = 0
-        while current is not None:
-            if current == fid:
-                raise HTTPException(
-                    status_code=409, detail="cannot move a folder into its own subtree"
-                )
-            depth += 1
-            if depth > MAX_FOLDER_DEPTH:
-                raise HTTPException(status_code=409, detail="folder depth limit reached")
-            parent_row = repo.get_folder(current, owner_id=owner_id)
-            if parent_row is None:
-                raise HTTPException(status_code=404, detail="parent folder not found")
-            current = parent_row["parent_id"]
-        # Moving the whole subtree here must not push any descendant past the cap.
-        if depth + _folder_subtree_height(fid, owner_id) > MAX_FOLDER_DEPTH:
-            raise HTTPException(status_code=409, detail="folder depth limit reached")
-
-    if (new_name != row["name"] or new_parent != row["parent_id"]) and (
-        repo.folder_name_exists(
-            owner_id=owner_id, parent_id=new_parent, name=new_name, exclude_id=fid
-        )
-    ):
-        raise HTTPException(status_code=409, detail="folder name already exists")
-
-    if "name" in fields and new_name != row["name"]:
-        repo.rename_folder(fid, owner_id=owner_id, name=new_name)
-    if "parent_id" in fields and new_parent != row["parent_id"]:
-        repo.set_folder_parent(fid, owner_id=owner_id, parent_id=new_parent)
-    audit_event("folder.update", principal["id"], "success", {"folder_id": fid})
-    return _folder_public(repo.get_folder(fid, owner_id=owner_id))
 
 
-@app.delete("/api/v1/folders/{fid}")
-def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, human=True))):
-    fid = _canonical_id(fid, "folder id")
-    owner_id = _folder_owner(principal)
-    if repo.get_folder(fid, owner_id=owner_id) is None:
-        raise HTTPException(status_code=404, detail="folder not found")
-    if repo.folder_child_count(fid, owner_id=owner_id) > 0:
-        raise HTTPException(status_code=409, detail="folder is not empty")
-    if repo.folder_object_count(fid, owner_id=owner_id) > 0:
-        raise HTTPException(status_code=409, detail="folder is not empty")
-    # No live object remains (committed or in-flight); the leftovers (deleted,
-    # failed, aborted, expired) are hidden from every listing, so the folder
-    # reads as empty. Detach them and mark them deleted before removing the row,
-    # otherwise the objects_folder_id_fkey constraint refuses the delete on
-    # PostgreSQL and they would resurface as unfiled rows in the root listing.
-    # The rows survive until an explicit purge of the trash.
-    repo.release_folder_objects(fid, owner_id=owner_id)
-    repo.delete_folder(fid, owner_id=owner_id)
-    audit_event("folder.delete", principal["id"], "success", {"folder_id": fid})
-    return {"id": fid, "status": "deleted"}
 
 
 # ---------------------------------------------------------------------------
@@ -4815,114 +4687,10 @@ def delete_folder(fid: str, principal: dict = Depends(authorize(OBJECTS_DELETE, 
 # object share, but scoped to a folder subtree (subfolders are always included).
 # The public routes live outside /api/v1 under /f/.
 # ---------------------------------------------------------------------------
-@app.post("/api/v1/folders/{fid}/share")
-def create_folder_share(
-    fid: str, body: FolderShareIn,
-    principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
-):
-    """Mint a public, read-only link for a folder and its subfolders.
-
-    Human-only for the same reason as object links: a leaked machine token must
-    not create links that outlive its own revocation. Expiry is bounded
-    server-side; the token is returned once and only its fingerprint is stored.
-    """
-    fid = _canonical_id(fid, "folder id")
-    if repo.get_folder(fid, owner_id=_folder_owner(principal)) is None:
-        raise HTTPException(status_code=404, detail="folder not found")
-    if not principal.get("space_id"):
-        # A folder only exists inside a human account, so this is a catalogue
-        # inconsistency rather than a client error: refuse instead of writing a
-        # share row that could never resolve an object.
-        raise HTTPException(status_code=409, detail="account has no space")
-
-    expires_in = (
-        settings.share_ttl_default if body.expires_in is None else body.expires_in
-    )
-    if expires_in > settings.share_ttl_max:
-        raise HTTPException(
-            status_code=422,
-            detail="expires_in exceeds the maximum share lifetime",
-        )
-
-    token = shares.new_token()
-    expires_at = int(time.time()) + expires_in
-    sid = repo.create_folder_share(
-        folder_id=fid,
-        space_id=principal["space_id"],
-        created_by=principal["id"],
-        created_by_kind=principal["kind"],
-        token_hash=shares.fingerprint(token),
-        expires_at=expires_at,
-        max_uses=body.max_uses,
-    )
-    audit_event("folder-share-create", principal["id"], "success", {
-        "folder_id": fid, "folder_share_id": sid, "expires_in": expires_in,
-        "max_uses": body.max_uses,
-    })
-    path = f"/f/{token}"
-    return {
-        "id": sid, "folder_id": fid,
-        "url": f"{settings.share_base_url}{path}" if settings.share_base_url else path,
-        # Returned exactly once: the catalogue only keeps the SHA-256 fingerprint.
-        "token": token,
-        "expires_in": expires_in, "expires_at": expires_at,
-        "max_uses": body.max_uses,
-    }
 
 
-@app.get("/api/v1/folders/{fid}/shares")
-def list_folder_shares(
-    fid: str, principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
-):
-    """List the links created for a folder (never the tokens themselves)."""
-    fid = _canonical_id(fid, "folder id")
-    if repo.get_folder(fid, owner_id=_folder_owner(principal)) is None:
-        raise HTTPException(status_code=404, detail="folder not found")
-    now = int(time.time())
-    items = []
-    for row in repo.list_folder_shares(fid):
-        row = _as_dict(row)
-        max_uses = row["max_uses"]
-        items.append({
-            "id": row["id"], "folder_id": row["folder_id"],
-            "created_by": row["created_by"], "created_by_kind": row["created_by_kind"],
-            "created_at": row["created_at"], "expires_at": row["expires_at"],
-            "max_uses": max_uses, "use_count": row["use_count"],
-            "last_used_at": row["last_used_at"], "revoked_at": row["revoked_at"],
-            # Computed server-side so a client never re-implements the rules.
-            "active": (
-                row["revoked_at"] is None
-                and int(row["expires_at"]) > now
-                and (max_uses is None or int(row["use_count"]) < int(max_uses))
-            ),
-        })
-    return {"items": items}
 
 
-@app.delete("/api/v1/folders/{fid}/shares/{sid}")
-def revoke_folder_share(
-    fid: str, sid: str,
-    principal: dict = Depends(authorize(OBJECTS_READ, human=True)),
-):
-    """Revoke a folder link immediately. Idempotent, creator only."""
-    fid = _canonical_id(fid, "folder id")
-    sid = _canonical_id(sid, "share id")
-    if repo.get_folder(fid, owner_id=_folder_owner(principal)) is None:
-        raise HTTPException(status_code=404, detail="folder not found")
-    found = repo.get_folder_share(sid)
-    if found is None or found["folder_id"] != fid:
-        raise HTTPException(status_code=404, detail="share not found")
-    row = _as_dict(found)
-    if row["created_by"] != principal["id"]:
-        raise HTTPException(status_code=403, detail="forbidden")
-    if row["revoked_at"] is not None:
-        return {"id": sid, "revoked": True, "revoked_at": row["revoked_at"]}
-    now = int(time.time())
-    repo.revoke_folder_share(sid, now)
-    audit_event("folder-share-revoke", principal["id"], "success", {
-        "folder_id": fid, "folder_share_id": sid,
-    })
-    return {"id": sid, "revoked": True, "revoked_at": now}
 
 
 # ---------------------------------------------------------------------------
@@ -5329,3 +5097,5 @@ from .routes_objects import router as objects_router  # noqa: E402
 app.include_router(objects_router)
 from .routes_objects_ops import router as objects_ops_router  # noqa: E402
 app.include_router(objects_ops_router)
+from .routes_folders import router as folders_router  # noqa: E402
+app.include_router(folders_router)
