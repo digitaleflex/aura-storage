@@ -1647,61 +1647,12 @@ def _clean_display_name(value: str) -> str:
     return cleaned[:80]
 
 
-@app.get("/api/public/me")
-def public_me(request: Request, response: Response, principal: dict = Depends(require_public)):
-    sid = request.cookies.get(settings.public_session_cookie)
-    session_id = principal.get("session_id")
-    if sid and session_id:
-        now = int(time.time())
-        expires_at = now + settings.public_session_ttl
-        repo.extend_session(session_id, expires_at)
-        response.set_cookie(
-            settings.public_session_cookie, sid, httponly=True,
-            secure=settings.cookie_secure, samesite="lax",
-            max_age=settings.public_session_ttl, path="/",
-        )
-    return {
-        "id": principal["id"],
-        "name": principal.get("name"),
-        "display_name": principal.get("display_name", ""),
-        "email": principal.get("email"),
-        "role": principal["role"],
-        "plan": principal.get("plan", "free"),
-        "csrf_token": principal["csrf"],
-    }
 
 
-@app.patch("/api/public/me")
-def public_me_patch(body: PublicProfilePatch, principal: dict = Depends(require_public)):
-    display_name = _clean_display_name(body.display_name)
-    repo.update_user_display_name(principal["id"], display_name)
-    audit_event("public-profile", principal["id"], "success", {"action": "update"})
-    return {"ok": True, "display_name": display_name}
 
 
-@app.delete("/api/public/me")
-def public_me_delete(principal: dict = Depends(require_public)):
-    uid = principal["id"]
-    repo.delete_public_account(uid)
-    audit_event("public-account-delete", uid, "success")
-    out = JSONResponse({"ok": True})
-    out.delete_cookie(
-        settings.public_session_cookie, path="/", httponly=True,
-        secure=settings.cookie_secure, samesite="lax",
-    )
-    return out
 
 
-@app.post("/api/public/logout")
-def public_logout(principal: dict = Depends(require_public)):
-    repo.delete_session(principal["session_id"])
-    audit_event("public-logout", principal["id"], "success")
-    out = RedirectResponse("/", status_code=303)
-    out.delete_cookie(
-        settings.public_session_cookie, path="/", httponly=True,
-        secure=settings.cookie_secure, samesite="lax",
-    )
-    return out
 
 
 def _portal_csp() -> str:
@@ -2072,52 +2023,8 @@ def _catalog_author_counts(collections: list) -> dict[str, int]:
     return counts
 
 
-@app.get("/api/public/library")
-def public_library(principal: dict = Depends(require_public)):
-    """Published catalogue for signed-in visitors (no object capability)."""
-    collections = _public_collections(principal)
-    set_request_principal(principal.get("space_id"), principal.get("application_id"))
-    audit_event("public-library", principal["id"], "success")
-    return {"collections": collections}
 
 
-@app.post("/api/public/progress")
-def public_progress(
-    body: ProgressIn, request: Request, principal: dict = Depends(require_public),
-):
-    """Persist a listening position for the signed-in visitor."""
-    _public_rate_check("progress", request)
-    oid = _canonical_id(body.object_id, "object id")
-    # Public users are not scoped to the publisher's space: they may only save
-    # progress for an object that is actually published, nothing else.
-    row = repo.get_object_unscoped(oid)
-    row = _as_dict(row) if row is not None else None
-    if row is None or not row.get("published_at") or row["status"] != AVAILABLE:
-        raise HTTPException(status_code=404, detail="object not found")
-    now = int(time.time())
-    uid = principal["id"]
-    previous_position = repo.get_progress_map(uid, [oid]).get(oid, 0.0)
-    last_event_at = repo.last_listen_event_at(uid, oid)
-    # A first sample, or a backward seek (a new playback session), starts a
-    # session; the player may explicitly close one with ``end``. A plain sample
-    # counts at most the elapsed wall-clock time, so seeking forward cannot be
-    # reported as listening (#320).
-    if last_event_at <= 0 or body.position_seconds < float(previous_position):
-        kind = "start"
-    elif body.kind == "end":
-        kind = "end"
-    else:
-        kind = "position"
-    elapsed = max(0, now - last_event_at) if last_event_at else 0
-    delta = (
-        listen_events.listened_delta(float(previous_position), body.position_seconds, elapsed)
-        if kind != "start" else 0.0
-    )
-    repo.record_listen_event(
-        uid, oid, kind, body.position_seconds, delta, now, body.client_event_id
-    )
-    repo.save_progress(uid, oid, body.position_seconds, now)
-    return {"object_id": oid, "position_seconds": body.position_seconds}
 
 
 _BOOKMARKS_PER_BOOK = 50
@@ -2132,12 +2039,6 @@ def _published_book_or_404(oid: str) -> str:
     return oid
 
 
-@app.get("/api/public/progress")
-def public_progress_get(object_id: str, principal: dict = Depends(require_public)):
-    """Where the visitor stopped on a book (used to offer 'resume from your other device')."""
-    oid = _published_book_or_404(object_id)
-    position = repo.get_progress_map(principal["id"], [oid]).get(oid, 0)
-    return {"object_id": oid, "position_seconds": position}
 
 
 @app.get("/api/public/bookmarks")
@@ -2182,15 +2083,8 @@ def _set_public_favorite(oid: str, request: Request, principal: dict, favorite: 
     return {"object_id": oid, "favorite": favorite}
 
 
-@app.put("/api/public/favorites/{oid}")
-def public_favorite_add(oid: str, request: Request, principal: dict = Depends(require_public)):
-    """Put a published book in the visitor's favourites (CSRF-protected)."""
-    return _set_public_favorite(oid, request, principal, True)
 
 
-@app.delete("/api/public/favorites/{oid}")
-def public_favorite_remove(oid: str, request: Request, principal: dict = Depends(require_public)):
-    return _set_public_favorite(oid, request, principal, False)
 
 
 # --- Private playlists (#302) -------------------------------------------
@@ -2278,10 +2172,6 @@ def _public_listening_stats(principal: dict) -> dict:
     }
 
 
-@app.get("/api/public/stats")
-def public_stats(principal: dict = Depends(require_public)):
-    """The listener's own listening summary (never another visitor's data)."""
-    return _public_listening_stats(principal)
 
 
 @app.get("/api/public/playlists")
@@ -6531,3 +6421,7 @@ from .routes_import_jobs import router as import_jobs_router  # noqa: E402
 app.include_router(import_jobs_router)
 from .routes_revisions import router as revisions_router  # noqa: E402
 app.include_router(revisions_router)
+from .routes_public_profile import router as public_profile_router  # noqa: E402
+app.include_router(public_profile_router)
+from .routes_public_library import router as public_library_router  # noqa: E402
+app.include_router(public_library_router)
