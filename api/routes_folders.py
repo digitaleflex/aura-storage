@@ -8,16 +8,23 @@ from __future__ import annotations
 import time
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from . import ids, shares
-from .audit import audit_event
+from . import folder_shares, ids, shares
+from .audit import audit_event, set_request_principal
 from .authz import OBJECTS_DELETE, OBJECTS_READ, OBJECTS_WRITE, authorize
 from .config import settings
 from .store import repo
+from .transfer import AVAILABLE
 
 MAX_FOLDER_DEPTH = 32
+
+
+def _main():
+    import api.main as m
+    return m
 
 
 def _canonical_uuid(value: str) -> str:
@@ -350,3 +357,159 @@ def revoke_folder_share(
         "folder_id": fid, "folder_share_id": sid,
     })
     return {"id": sid, "revoked": True, "revoked_at": now}
+
+
+# --- Public folder share redemption (no auth, uniform 404 page) -------------
+def _public_page_headers() -> dict:
+    return {
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": (
+            "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; "
+            "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        ),
+    }
+
+
+def _resolve_folder_share(token: str):
+    if not shares.is_well_formed(token):
+        return None, None, "unknown"
+    found = repo.get_folder_share_by_token_hash(shares.fingerprint(token))
+    if found is None:
+        return None, None, "unknown"
+    row = _as_dict(found)
+    if row.get("revoked_at"):
+        return row, None, "revoked"
+    if int(row["expires_at"]) <= int(time.time()):
+        return row, None, "expired"
+    max_uses = row["max_uses"]
+    if max_uses is not None and int(row["use_count"]) >= int(max_uses):
+        return row, None, "exhausted"
+    folder = repo.get_folder(row["folder_id"], owner_id=row["created_by"])
+    if folder is None:
+        return row, None, "folder_missing"
+    set_request_principal(row["space_id"], None)
+    return row, _as_dict(folder), None
+
+
+def _folder_share_denied(reason: str, row: dict | None = None) -> HTMLResponse:
+    extra: dict = {"reason": reason}
+    if row is not None:
+        extra["folder_share_id"] = row["id"]
+        extra["folder_id"] = row["folder_id"]
+    audit_event("folder-share-access", None, "denied", extra)
+    return HTMLResponse(
+        folder_shares.render_not_found(),
+        status_code=404,
+        headers=_public_page_headers(),
+    )
+
+
+@router.get("/f/{token}")
+def view_folder_share(
+    token: str,
+    d: str | None = None,
+    page: int = Query(default=0, ge=0, le=1000),
+):
+    row, folder, reason = _resolve_folder_share(token)
+    if row is None or folder is None:
+        return _folder_share_denied(reason or "unknown", row)
+
+    owner_id = folder["owner_id"]
+    root_id = folder["id"]
+    current_id = root_id
+    if d is not None:
+        canonical = ids.canonical(d)
+        if canonical is None or not folder_shares.folder_in_subtree(
+            repo, canonical, root_id, owner_id
+        ):
+            return _folder_share_denied("outside_share", row)
+        current_id = canonical
+
+    chain = folder_shares.folder_path(repo, current_id, root_id, owner_id)
+    if chain is None:
+        return _folder_share_denied("outside_share", row)
+
+    folders = [
+        _as_dict(f)
+        for f in repo.list_folders(owner_id=owner_id, parent_id=current_id)
+    ]
+    rows = repo.list_objects(
+        space_id=row["space_id"], owner_id=owner_id, folder_id=current_id,
+        status=AVAILABLE, sort="display_name", order="asc",
+        limit=folder_shares.PAGE_SIZE + 1, offset=page * folder_shares.PAGE_SIZE,
+    )
+    objects = [_as_dict(o) for o in rows[: folder_shares.PAGE_SIZE]]
+    has_next = len(rows) > folder_shares.PAGE_SIZE
+
+    audit_event("folder-share-open", None, "success", {
+        "folder_share_id": row["id"], "folder_id": current_id,
+        "page": page, "folders": len(folders), "files": len(objects),
+    })
+    return HTMLResponse(
+        folder_shares.render_page(
+            token=token, folder=folder, chain=chain, folders=folders,
+            objects=objects, page=page, has_next=has_next,
+            expires_at=int(row["expires_at"]), now=int(time.time()),
+            inline_allowed=shares.inline_allowed,
+        ),
+        headers=_public_page_headers(),
+    )
+
+
+@router.get("/f/{token}/o/{oid}")
+def redeem_folder_share_object(
+    token: str, oid: str, request: Request, download: bool = False,
+):
+    row, folder, reason = _resolve_folder_share(token)
+    if row is None or folder is None:
+        return _folder_share_denied(reason or "unknown", row)
+
+    canonical = ids.canonical(oid)
+    if canonical is None:
+        return _folder_share_denied("object_unavailable", row)
+    target = repo.get_object(
+        canonical, space_id=row["space_id"], owner_id=folder["owner_id"]
+    )
+    if target is None or target["status"] != AVAILABLE:
+        return _folder_share_denied("object_unavailable", row)
+    obj = _as_dict(target)
+    if not folder_shares.folder_in_subtree(
+        repo, obj["folder_id"], folder["id"], folder["owner_id"]
+    ):
+        return _folder_share_denied("outside_share", row)
+
+    if settings.public_download_require_premium and obj.get("published_at"):
+        try:
+            _main()._require_premium(request)
+        except HTTPException:
+            return _folder_share_denied("premium_required", row)
+
+    try:
+        _main()._check_egress_quota(row["space_id"], int(obj["size_bytes"]))
+    except HTTPException:
+        return _folder_share_denied("egress_quota", row)
+
+    now = int(time.time())
+    if not repo.consume_folder_share(row["id"], now):
+        return _folder_share_denied("exhausted", row)
+
+    inline = shares.inline_allowed(obj["content_type"])
+    disposition = "attachment" if download or not inline else "inline"
+    url = _main().presigned_get(
+        _main().s3, obj["bucket"], obj["object_key"], settings.share_presign_ttl,
+        content_disposition=shares.content_disposition_header(
+            disposition, obj["display_name"]
+        ),
+        content_type=obj["content_type"],
+    )
+    _main()._record_egress(row["space_id"], int(obj["size_bytes"]), "share")
+    _main()._record_object_event(obj["id"], int(obj["size_bytes"]), "share")
+    audit_event("folder-share-access", None, "success", {
+        "folder_share_id": row["id"], "folder_id": obj["folder_id"],
+        "object_id": obj["id"], "use_count": int(row["use_count"]) + 1,
+        "content_disposition": disposition,
+    })
+    return RedirectResponse(url, status_code=302, headers=_public_page_headers())
